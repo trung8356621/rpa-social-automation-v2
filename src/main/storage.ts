@@ -16,6 +16,12 @@ export function validatePayload(p: Payload) {
   if (p.action === "TYPE_ONLY" && (!p.text || p.text.length > 20000))
     throw new Error("TYPE_ONLY cần text, tối đa 20.000 ký tự.");
   if (
+    p.inputMethod !== undefined &&
+    (p.action !== "TYPE_ONLY" ||
+      !["keyboard", "clipboard"].includes(p.inputMethod))
+  )
+    throw new Error("Phương thức nhập TYPE_ONLY không hợp lệ.");
+  if (
     ["CLICK_TARGET", "WAIT_VERIFY"].includes(p.action) &&
     (!p.target || !/^[a-f0-9-]+\.png$/.test(p.target.asset))
   )

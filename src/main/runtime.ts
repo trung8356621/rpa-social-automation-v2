@@ -2,7 +2,7 @@ import path from "node:path";
 import { readFile, writeFile } from "node:fs/promises";
 import { randomUUID } from "node:crypto";
 import type { Payload, Result } from "../shared/contracts.js";
-import { BrowserCore } from "./browser-core.js";
+import { BrowserCore, InputNotReady } from "./browser-core.js";
 import { Store } from "./storage.js";
 import { localOcr, type OcrEngine } from "./ocr.js";
 import { resolveVisualTarget, TargetNotConfident } from "./target-resolver.js";
@@ -21,40 +21,96 @@ export class Runtime {
     version: number,
     overrideId?: string,
   ): Promise<Result[]> {
+    return this.testRequests([{ stepId, version, overrideId }]);
+  }
+  async testPair(
+    firstId: string,
+    secondId: string,
+    delayMs: number,
+  ): Promise<Result[]> {
+    const flow = this.store.flow();
+    const index = flow?.steps.findIndex((s) => s.id === firstId) ?? -1;
+    if (
+      !flow ||
+      index < 0 ||
+      flow.steps[index + 1]?.id !== secondId ||
+      !Number.isInteger(delayMs) ||
+      delayMs < 0 ||
+      delayMs > 10000
+    )
+      throw new Error(
+        "Cần hai Step Base liên tiếp trong flow, delay 0–10000ms.",
+      );
+    const first = flow.steps[index],
+      second = flow.steps[index + 1];
+    if (
+      this.store.step(first.id, first.version).payload.action !==
+        "CLICK_TARGET" ||
+      this.store.step(second.id, second.version).payload.action !== "TYPE_ONLY"
+    )
+      throw new Error("Cặp test chỉ hỗ trợ CLICK_TARGET → TYPE_ONLY đã lưu.");
+    return this.testRequests(
+      [
+        { stepId: first.id, version: first.version },
+        { stepId: second.id, version: second.version },
+      ],
+      delayMs,
+    );
+  }
+  private async testRequests(
+    requests: { stepId: string; version: number; overrideId?: string }[],
+    delayMs = 0,
+  ): Promise<Result[]> {
     if (this.busy) throw new Error("Đang có một tác vụ chạy.");
     const flow = this.store.flow();
-    if (!flow || !flow.steps.some((s) => s.id === stepId))
+    if (
+      !flow ||
+      requests.some((r) => !flow.steps.some((s) => s.id === r.stepId))
+    )
       throw new Error("Step không thuộc flow.");
     if (flow.zoom !== this.browser.zoom)
       throw new Error("Zoom flow không khớp browser.");
-    const step = this.store.step(stepId, version);
-    const override = overrideId
-      ? this.store.overrides().find((o) => o.id === overrideId)
-      : undefined;
-    if (
-      overrideId &&
-      (!override ||
-        override.stepId !== stepId ||
-        override.baseVersion !== version)
-    )
-      throw new Error(
-        "Override khác Base version; cần test lại/tạo override mới.",
-      );
+    const plans = requests.map(({ stepId, version, overrideId }) => {
+      const step = this.store.step(stepId, version);
+      const override = overrideId
+        ? this.store.overrides().find((o) => o.id === overrideId)
+        : undefined;
+      if (
+        overrideId &&
+        (!override ||
+          override.stepId !== stepId ||
+          override.baseVersion !== version)
+      )
+        throw new Error(
+          "Override khác Base version; cần test lại/tạo override mới.",
+        );
+      return {
+        stepId,
+        version,
+        overrideId,
+        payloads: override?.segment || [step.payload],
+        source: override ? ("override" as const) : ("base" as const),
+      };
+    });
     this.busy = true;
     this.latestRuns.clear();
     try {
       const results: Result[] = [];
-      for (const payload of override?.segment || [step.payload]) {
-        const result = await this.execute(
-          payload,
-          stepId,
-          version,
-          override ? "override" : "base",
-          overrideId,
-        );
-        results.push(result);
-        this.latestRuns.add(result.id);
-        if (!result.ok) break;
+      for (let i = 0; i < plans.length; i++) {
+        const { stepId, version, overrideId, payloads, source } = plans[i];
+        if (i && delayMs) await new Promise((r) => setTimeout(r, delayMs));
+        for (const payload of payloads) {
+          const result = await this.execute(
+            payload,
+            stepId,
+            version,
+            source,
+            overrideId,
+          );
+          results.push(result);
+          this.latestRuns.add(result.id);
+          if (!result.ok) return results;
+        }
       }
       return results;
     } finally {
@@ -78,7 +134,7 @@ export class Runtime {
     const result: Result = JSON.parse(row.payload);
     const flow = this.store.flow();
     if (
-      result.action !== "CLICK_TARGET" ||
+      !["CLICK_TARGET", "TYPE_ONLY"].includes(result.action) ||
       result.status !== "ACTION_SENT" ||
       result.review ||
       !flow ||
@@ -125,10 +181,12 @@ export class Runtime {
       : await this.browser.capture();
     let status: Result["status"] = "FAILED",
       message = "Input đã gửi; cần VERIFY riêng để xác nhận nghiệp vụ.",
-      match: Result["match"];
+      match: Result["match"],
+      input: Result["input"];
     try {
       if (payload.action === "TYPE_ONLY") {
-        await this.browser.typeOnly(payload.text!);
+        input = await this.browser.typeOnly(payload.text!, payload.inputMethod);
+        message = `Đã gửi ${input.method === "clipboard" ? "clipboard paste" : "native text + phím Shift+Enter"}; caret chưa được tự kiểm chứng. Quan sát chữ và xác nhận thủ công hoặc VERIFY riêng.${input.warning ? ` ${input.warning}` : ""}`;
         status = "ACTION_SENT";
       } else if (payload.action === "SCROLL") {
         this.browser.scroll(payload.deltaY!);
@@ -170,15 +228,19 @@ export class Runtime {
             : `Click đã gửi tại ${match.x}, ${match.y}; chưa xác nhận kết quả nghiệp vụ.`;
       }
     } catch (e) {
-      status = e instanceof TargetNotConfident ? "BLOCKED" : "FAILED";
+      status =
+        e instanceof TargetNotConfident || e instanceof InputNotReady
+          ? "BLOCKED"
+          : "FAILED";
+      if (e instanceof InputNotReady)
+        input = { method: payload.inputMethod ?? "keyboard", focus: e.focus };
       message = (e as Error).message;
     }
     await new Promise((r) => setTimeout(r, 120));
-    // Keep the live page/focus after click. Evidence capture is an explicit user action.
-    const after =
-      payload.action === "CLICK_TARGET"
-        ? undefined
-        : await this.browser.capture();
+    // Keep the live page/focus after input. Evidence capture is an explicit user action.
+    const after = ["CLICK_TARGET", "TYPE_ONLY"].includes(payload.action)
+      ? undefined
+      : await this.browser.capture();
     const result: Result = {
       id: randomUUID(),
       ok: status === "ACTION_SENT" || status === "VERIFIED",
@@ -188,6 +250,7 @@ export class Runtime {
       before,
       after,
       match,
+      input,
       source,
       stepId,
       version,

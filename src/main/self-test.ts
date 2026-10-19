@@ -350,7 +350,7 @@ export async function runSelfTest(ctx: {
     );
     assert.match(
       await uiEval('document.querySelector(".result")?.textContent || ""'),
-      /FAILED/,
+      /BLOCKED/,
     );
     passed("ui-type-only-refuses-stolen-focus");
     window.focus();
@@ -388,7 +388,7 @@ export async function runSelfTest(ctx: {
     const preview = await sharp((await window.capturePage()).toPNG())
       .composite([
         {
-          input: Buffer.from(typed[0].after!.dataUrl.split(",")[1], "base64"),
+          input: browser.captureBuffer((await browser.capture()).id),
           left: browser.bounds.x,
           top: browser.bounds.y,
         },

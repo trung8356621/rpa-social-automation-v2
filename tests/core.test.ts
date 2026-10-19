@@ -52,6 +52,18 @@ test("redesign preserves original, rollback pins version, override is bound to b
 });
 test("action-first payload requires target only for click and verify", () => {
   validatePayload({ action: "TYPE_ONLY", text: "draft" });
+  validatePayload({
+    action: "TYPE_ONLY",
+    text: "draft",
+    inputMethod: "clipboard",
+  });
+  assert.throws(() =>
+    validatePayload({
+      action: "TYPE_ONLY",
+      text: "draft",
+      inputMethod: "invalid" as "keyboard",
+    }),
+  );
   validatePayload({ action: "SCROLL", deltaY: -400 });
   assert.throws(() => validatePayload({ action: "CLICK_TARGET" }));
   assert.throws(() => validatePayload({ action: "WAIT_VERIFY" }));

@@ -2,6 +2,13 @@ import { createServer } from "node:http";
 export async function startFixture(port: number) {
   const server = createServer((req, res) => {
     res.setHeader("Content-Type", "text/html; charset=utf-8");
+    if (req.url?.startsWith("/typing")) {
+      res.end(`<!doctype html><meta charset="utf-8"><style>body{margin:0;background:#f4f6f9;font:20px Arial}button{position:absolute;left:120px;top:100px;width:360px;height:64px;background:#123d72;color:white;border:3px solid #709eca;font:28px Arial}#editor{display:none;position:absolute;left:120px;top:220px;width:650px;min-height:200px;border:3px solid #123d72;background:white;padding:15px;white-space:pre-wrap}</style><button id="open">Open composer</button><div id="editor" contenteditable="true" role="textbox" aria-label="Draft"></div><script>
+      window.typingProbe={clicks:0,events:[]};const editor=document.querySelector('#editor');document.querySelector('#open').onclick=()=>{typingProbe.clicks++;setTimeout(()=>{editor.style.display='block';if(!location.search.includes('no-caret'))editor.focus()},200)};
+      for(const type of ['beforeinput','input','paste','keydown'])editor.addEventListener(type,e=>typingProbe.events.push({type,inputType:e.inputType||'',trusted:e.isTrusted}));
+      window.typingRead=()=>({text:editor.innerText.replace(/\\r/g,''),active:document.activeElement.id,...typingProbe});</script>`);
+      return;
+    }
     if (req.url?.startsWith("/ocr")) {
       res.end(`<!doctype html><html><head><meta charset="utf-8"><title>OCR fixture</title><style>
       body{margin:0;background:#f4f6f9;font:18px Arial}button{position:absolute;left:100px;width:360px;height:64px;background:white;color:#111;border:2px solid #333;font:32px Arial}#vi{top:110px}#en{top:260px}#icon{left:550px;top:110px;width:80px;height:80px;background:#173d82;border:0}#icon:before{content:'';position:absolute;left:20px;top:20px;width:36px;height:36px;border:6px solid white;border-radius:50%}#output{position:absolute;top:420px;left:100px}</style></head><body>

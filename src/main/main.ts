@@ -29,7 +29,7 @@ const dataPath = path.join(
   project,
   ".local",
   selfTest
-    ? ["ux", "ocr"].includes(phase)
+    ? ["ux", "ocr", "typing"].includes(phase)
       ? `test-${phase}-${process.pid}`
       : "test-session"
     : "creator",
@@ -76,11 +76,13 @@ async function boot() {
   const store = new Store(path.join(dataPath, "creator.sqlite"));
   const fixture = await startFixture(
     selfTest
-      ? phase === "ocr"
-        ? 47834
-        : phase === "ux"
-          ? 47833
-          : 47832
+      ? phase === "typing"
+        ? 47835
+        : phase === "ocr"
+          ? 47834
+          : phase === "ux"
+            ? 47833
+            : 47832
       : 47831,
   );
   const window = new BrowserWindow({
@@ -271,6 +273,12 @@ async function boot() {
           command.version,
           command.overrideId,
         );
+      case "testPair":
+        return runtime.testPair(
+          command.firstId,
+          command.secondId,
+          command.delayMs,
+        );
       case "disarmTest":
         armedTest = undefined;
         return;
@@ -372,11 +380,13 @@ async function boot() {
   if (selfTest) {
     try {
       const { runSelfTest } = await import(
-        phase === "ocr"
-          ? "./ocr-self-test.js"
-          : phase === "ux"
-            ? "./ux-self-test.js"
-            : "./self-test.js"
+        phase === "typing"
+          ? "./typing-self-test.js"
+          : phase === "ocr"
+            ? "./ocr-self-test.js"
+            : phase === "ux"
+              ? "./ux-self-test.js"
+              : "./self-test.js"
       );
       await runSelfTest({
         browser,

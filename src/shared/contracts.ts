@@ -21,6 +21,7 @@ export type VisualTarget = {
 export type Payload = {
   action: Action;
   text?: string;
+  inputMethod?: "keyboard" | "clipboard";
   target?: VisualTarget;
   method?: "image" | "ocr";
   deltaY?: number;
@@ -65,6 +66,17 @@ export type Result = {
   flowId?: string;
   overrideId?: string;
   targetAsset?: string;
+  input?: {
+    method: "keyboard" | "clipboard";
+    focus: {
+      browser: boolean;
+      editor: boolean;
+      route: string;
+      caret: "unknown";
+    };
+    clipboard?: "restored" | "changed" | "restore_failed";
+    warning?: string;
+  };
   action: Action;
   message: string;
   before?: Capture;
@@ -115,6 +127,7 @@ export type Command =
       segment: Payload[];
     }
   | { type: "test"; stepId: string; version: number; overrideId?: string }
+  | { type: "testPair"; firstId: string; secondId: string; delayMs: number }
   | { type: "reviewTest"; runId: string; verdict: "correct" | "incorrect" }
   | { type: "armTest"; stepId: string; version: number; overrideId?: string }
   | { type: "disarmTest" }

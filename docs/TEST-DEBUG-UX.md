@@ -1,5 +1,7 @@
 # Test & Debug — xác nhận kết quả trên browser live
 
+Bổ sung mới cho TYPE_ONLY: [keyboard, clipboard và test CLICK → TYPE liên tiếp](TYPE-ONLY-POC.md). TYPE cũng có xác nhận thủ công, không tự screenshot sau input và không dùng native focus để khẳng định caret đã sẵn sàng.
+
 ## Đường gọi đã kiểm tra
 
 Nút Test → IPC `test` → `Runtime.test` → nhận diện target từ screenshot → `BrowserCore.click` → focus chính `WebContentsView.webContents` đang hiển thị → `sendInputEvent(mouseMove/mouseDown/mouseUp)`. Phím tắt đi vào cùng runtime. Không có browser thứ hai, mô phỏng click hoặc DOM automation để thực thi action.

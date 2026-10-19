@@ -31,6 +31,10 @@ function Creator() {
     "Nội dung bản nháp kiểm thử — không xuất bản.",
   );
   const [delta, setDelta] = useState(-400);
+  const [inputMethod, setInputMethod] = useState<"keyboard" | "clipboard">(
+    "keyboard",
+  );
+  const [pairDelay, setPairDelay] = useState(800);
   const [target, setTarget] = useState<Payload["target"]>();
   const [targetImage, setTargetImage] = useState("");
   const [method, setMethod] = useState<"image" | "ocr">("image");
@@ -71,6 +75,7 @@ function Creator() {
     setOverrideId("");
     setResults([]);
     setAction("CLICK_TARGET");
+    setInputMethod("keyboard");
     setMessage(
       "Chọn Action cho Step tiếp theo từ trạng thái browser hiện tại. Không chạy lại flow.",
     );
@@ -167,6 +172,7 @@ function Creator() {
     setName(step.name);
     setAction(step.payload.action);
     setText(step.payload.text || "");
+    setInputMethod(step.payload.inputMethod ?? "keyboard");
     setDelta(step.payload.deltaY ?? -400);
     setTarget(step.payload.target);
     setMethod(step.payload.method ?? "image");
@@ -185,7 +191,7 @@ function Creator() {
   function payload(): Payload {
     return {
       action,
-      ...(action === "TYPE_ONLY" ? { text } : {}),
+      ...(action === "TYPE_ONLY" ? { text, inputMethod } : {}),
       ...(action === "SCROLL" ? { deltaY: delta } : {}),
       ...(["CLICK_TARGET", "WAIT_VERIFY"].includes(action)
         ? { target, method, threshold: 0.96, timeoutMs: 3000 }
@@ -306,6 +312,18 @@ function Creator() {
     };
   }
   const needsTarget = ["CLICK_TARGET", "WAIT_VERIFY"].includes(action);
+  const selectedIndex =
+    state?.flow?.steps.findIndex((s) => s.id === selected?.id) ?? -1;
+  const previousRef =
+    selectedIndex > 0 ? state?.flow?.steps[selectedIndex - 1] : undefined;
+  const previousClick = previousRef
+    ? state?.steps.find(
+        (s) =>
+          s.id === previousRef.id &&
+          s.version === previousRef.version &&
+          s.payload.action === "CLICK_TARGET",
+      )
+    : undefined;
   const locked = busy || !!shot;
   const field = (label: string, child: React.ReactNode) => (
     <label>
@@ -534,6 +552,24 @@ function Creator() {
         )}
         {action === "TYPE_ONLY" && (
           <>
+            <label>
+              Phương thức nhập
+              <select
+                aria-label="Phương thức nhập"
+                disabled={locked}
+                value={inputMethod}
+                onChange={(e) =>
+                  setInputMethod(e.target.value as "keyboard" | "clipboard")
+                }
+              >
+                <option value="keyboard">
+                  Keyboard · native text + Shift+Enter
+                </option>
+                <option value="clipboard">
+                  Clipboard paste · phục hồi clipboard
+                </option>
+              </select>
+            </label>
             <textarea
               aria-label="Nội dung TYPE_ONLY"
               disabled={locked}
@@ -542,8 +578,10 @@ function Creator() {
               onChange={(e) => setText(e.target.value)}
             />
             <p className="hint">
-              Chỉ gửi keyboard vào focus hiện tại. Lưu → click ô nhập trong web
-              → Ctrl+Shift+T. Không tự click/focus.
+              Gửi vào caret hiện tại; không tự click/focus. Native browser focus
+              không chứng minh caret sẵn sàng. Lưu → test cặp CLICK → TYPE bên
+              dưới, hoặc click thủ công ô nhập rồi Ctrl+Shift+T. Clipboard chỉ
+              phục hồi khi chưa bị thay đổi trong lúc paste.
             </p>
           </>
         )}
@@ -825,6 +863,58 @@ function Creator() {
                 . Thay đổi form cần lưu trước khi Test.
               </p>
             )}
+            {selected.payload.action === "TYPE_ONLY" && (
+              <section aria-label="Test hai Step" className="flow-guide">
+                <b>Test CLICK → TYPE liền nhau</b>
+                <p>
+                  Chạy Base đã lưu của Step CLICK ngay trước và Step TYPE này;
+                  không về sidebar hoặc chụp ảnh giữa hai Step. CLICK phải mở
+                  composer và đặt caret; nếu chỉ mở hộp thoại, hãy tạo CLICK
+                  riêng vào ô nhập trước TYPE. Kết quả vẫn cần xác nhận.
+                </p>
+                <label>
+                  Đợi sau click (ms)
+                  <input
+                    aria-label="Đợi sau click"
+                    disabled={locked}
+                    type="number"
+                    min={0}
+                    max={10000}
+                    value={pairDelay}
+                    onChange={(e) => setPairDelay(Number(e.target.value))}
+                  />
+                </label>
+                <button
+                  disabled={
+                    locked ||
+                    !previousClick ||
+                    state?.flow?.steps[selectedIndex]?.version !==
+                      selected.version
+                  }
+                  onClick={() =>
+                    void task(async () => {
+                      setResults([]);
+                      const r = await invoke<Result[]>({
+                        type: "testPair",
+                        firstId: previousClick!.id,
+                        secondId: selected.id,
+                        delayMs: pairDelay,
+                      });
+                      setResults(r);
+                      setMessage(r.map((r) => r.message).join("\n"));
+                    })
+                  }
+                >
+                  Test 2 Step · CLICK → TYPE (Base)
+                </button>
+                <p>
+                  {previousClick
+                    ? `${previousClick.name} v${previousClick.version} → ${selected.name} v${selected.version}. TYPE đã lưu: ${selected.payload.inputMethod ?? "keyboard"}. Override không áp dụng cho cặp này.`
+                    : "Cần Step Base CLICK_TARGET ngay trước TYPE_ONLY trong flow. Lưu/pin đúng version trước khi test cặp."}
+                </p>
+              </section>
+            )}
+
             <input
               aria-label="Ngữ cảnh Override"
               disabled={locked}
@@ -909,44 +999,69 @@ function Creator() {
                   </p>
                 </div>
               )}
+              {r.input && (
+                <div className="match-detail">
+                  <b>
+                    Phương thức nhập:{" "}
+                    {r.input.method === "clipboard"
+                      ? "Clipboard paste"
+                      : "Keyboard · native text + Shift+Enter"}
+                  </b>
+                  <p>
+                    Browser focus: {String(r.input.focus.browser)} · editor
+                    focus: {String(r.input.focus.editor)} · route:{" "}
+                    {r.input.focus.route}. Caret: chưa kiểm chứng.
+                  </p>
+                  {r.input.clipboard && (
+                    <p>
+                      Clipboard: {r.input.clipboard}. {r.input.warning}
+                    </p>
+                  )}
+                </div>
+              )}
               {r.status === "ACTION_SENT" && (
                 <p>
                   Chỉ mới gửi thao tác; chưa xác nhận kết quả nghiệp vụ. Quan
                   sát browser đang hiển thị và chờ giao diện phản hồi.
                 </p>
               )}
-              {r.action === "CLICK_TARGET" && !r.after && (
+              {["CLICK_TARGET", "TYPE_ONLY"].includes(r.action) && !r.after && (
                 <p>
-                  Browser live được giữ nguyên; không tự chụp ảnh sau click để
+                  Browser live được giữ nguyên; không tự chụp ảnh sau input để
                   tránh mất focus. Ảnh trước chỉ xem khi bạn yêu cầu. Nếu cần gõ
                   tiếp sau thao tác ở sidebar/chụp ảnh, click thủ công vào ô
                   nhập.
                 </p>
               )}
-              {r.status === "ACTION_SENT" && r.action === "CLICK_TARGET" && (
-                <div className="review-actions">
-                  <button
-                    disabled={
-                      locked ||
-                      selected?.id !== r.stepId ||
-                      selected.version !== r.version
-                    }
-                    onClick={() => void task(() => reviewClick(r, "correct"))}
-                  >
-                    Đúng — Hoàn thành Step
-                  </button>
-                  <button
-                    disabled={
-                      locked ||
-                      selected?.id !== r.stepId ||
-                      selected.version !== r.version
-                    }
-                    onClick={() => void task(() => reviewClick(r, "incorrect"))}
-                  >
-                    Sai — Redesign Step
-                  </button>
-                </div>
-              )}
+              {r.status === "ACTION_SENT" &&
+                ["CLICK_TARGET", "TYPE_ONLY"].includes(r.action) && (
+                  <div className="review-actions">
+                    <button
+                      disabled={
+                        locked ||
+                        !state?.flow?.steps.some(
+                          (s) => s.id === r.stepId && s.version === r.version,
+                        )
+                      }
+                      onClick={() => void task(() => reviewClick(r, "correct"))}
+                    >
+                      Đúng — Hoàn thành Step
+                    </button>
+                    <button
+                      disabled={
+                        locked ||
+                        !state?.flow?.steps.some(
+                          (s) => s.id === r.stepId && s.version === r.version,
+                        )
+                      }
+                      onClick={() =>
+                        void task(() => reviewClick(r, "incorrect"))
+                      }
+                    >
+                      Sai — Redesign Step
+                    </button>
+                  </div>
+                )}
               {r.review?.verdict === "correct" && (
                 <button disabled={locked} onClick={newStep}>
                   + Tạo Step tiếp theo từ browser hiện tại
