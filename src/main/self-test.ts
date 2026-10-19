@@ -59,7 +59,8 @@ export async function runSelfTest(ctx: {
     browser.view.webContents.executeJavaScript("window.fixtureRead()");
   await mkdir(path.join(project, "artifacts"), { recursive: true });
   assert.equal(window.isResizable(), false);
-  assert.equal(window.isMaximizable(), false);
+  assert.equal(window.isMaximizable(), true);
+  assert.equal(window.isFullScreenable(), true);
   passed("fixed-window", window.getContentSize());
   if (phase === "second") {
     const p = await probe();

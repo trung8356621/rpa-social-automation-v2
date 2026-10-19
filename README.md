@@ -13,15 +13,15 @@ Set-Location D:\workspace-2026\rpa\new
 npm start
 ```
 
-Ứng dụng có content window cố định 1344×648 DIP, sidebar 320 DIP và WebContentsView 1024×560 DIP. Không resize, maximize hoặc fullscreen. Work area cần tối thiểu 1360×688 DIP; app báo lỗi nếu không vừa, không âm thầm thu nhỏ web. Ở zoom 100%, web rộng 1024 CSS px; zoom 90/80% có CSS viewport rộng hơn. Zoom khóa sau khi flow có step; tạo flow mới để chọn môi trường khác.
+Ứng dụng mở ở content window 1344×648 DIP, sidebar 320 DIP và WebContentsView cố định 1024×560 DIP. Không resize thủ công; có thể maximize bằng nút cửa sổ và bật/tắt fullscreen bằng nút `Toàn màn hình` hoặc F11. Zoom, viewport web và gốc tọa độ crop/click không thay đổi khi chuyển chế độ; phần cửa sổ rộng thêm không scale trang web. Work area ban đầu cần tối thiểu 1360×688 DIP; app báo lỗi nếu không vừa, không âm thầm thu nhỏ web. Ở zoom 100%, web rộng 1024 CSS px; zoom 90/80% có CSS viewport rộng hơn. Zoom khóa sau khi flow có step; tạo flow mới để chọn môi trường khác.
 
 Electron 44.9.0, React 19, Vite 8, TypeScript, Sharp, SQLite tích hợp trong Node của Electron (`node:sqlite`). Không có Puppeteer hay browser thứ hai. Browser session, ảnh, DB và log development đều nằm trong `new/.local/creator/`. Không xóa thư mục này nếu cần giữ đăng nhập. `.local/` bị gitignore. Chưa đóng gói installer; vị trí dữ liệu này dành cho POC trong workspace.
 
 ## Cách dùng
 
-1. Tạo flow hoặc mở flow đã lưu. Chọn zoom trước khi lưu step đầu tiên.
+1. Tạo flow bằng nút `Tạo flow` hoặc chọn flow đã lưu ở Bước 1. Khi chưa có flow, ngay cạnh nút crop có lý do và nút `Đi tới bước 1`. Chọn zoom trước khi lưu step đầu tiên.
 2. Chọn Action trước. CLICK_TARGET và WAIT/VERIFY cần `Chụp & crop ROI`; TYPE_ONLY và SCROLL không cần target.
-3. Kéo ROI trên ảnh, chọn `Dùng ROI`, rồi `Lưu Base v1`. Ảnh crop PNG được lưu thật.
+3. Kéo ROI trên ảnh, chọn `Dùng ROI` ở thanh trên cùng, rồi `Lưu Base v1`. `Quay lại browser` hoặc Escape hủy crop mà không lưu step. Nút thoát luôn ở thanh trên cùng, kể cả khi sidebar cuộn xuống hoặc crop báo lỗi. Trong crop mode, Escape thoát crop trước; khi đang ở browser fullscreen, Escape thoát fullscreen. Ảnh crop PNG được lưu thật.
 4. Test step đã lưu. CLICK_TARGET gửi click nếu matching đạt ngưỡng; input gửi thành công không đồng nghĩa tác vụ nghiệp vụ thành công. WAIT/VERIFY xác nhận **ảnh** còn hiện diện, chưa có OCR/text assertion.
 5. TYPE_ONLY: lưu nội dung, click thủ công vào ô nhập trong browser, nhấn **Ctrl+Shift+T rồi thả các phím**. Action không tự tìm input, click hoặc focus. Nếu native focus không thuộc browser, runtime từ chối.
 6. Chỉnh form rồi `Lưu redesign` tạo version mới cùng stable ID. Chọn version cũ và `Ghim version` để rollback flow. V1 vẫn tồn tại trong SQLite.
@@ -48,6 +48,8 @@ npm run test:browser
 ```
 
 `test:browser` mở Electron thật, dùng session kiểm thử riêng `.local/test-session/`, chạy hai process liên tiếp. Không mở hay thao tác Facebook. Exit 0 nghĩa assertions tự động hoàn tất; các mục `limitation`/`manualRequired` vẫn khiến trạng thái POC là **PARTIAL**.
+
+Bộ test hiện chạy thêm process UX với session riêng `.local/test-ux-<pid>/`, kiểm tra tạo flow, hủy/lỗi crop, maximize/fullscreen/restore. Có thể chạy riêng sau build bằng `node scripts/browser-test.mjs ux`. Báo cáo sửa UX: [docs/UX-FIXES.md](docs/UX-FIXES.md); kết quả máy: `artifacts/browser-ux.json`.
 
 Bản chạy cuối: 4 unit tests qua; 29 checks Electron/UI qua qua hai process; 3 mục giới hạn/thủ công. Xem [báo cáo giai đoạn](docs/POC-REPORT.md), [report phiên đầu](artifacts/browser-first.json) và [report sau restart](artifacts/browser-second.json).
 

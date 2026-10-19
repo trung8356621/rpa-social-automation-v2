@@ -44,6 +44,7 @@ function Creator() {
   const [flowName, setFlowName] = useState("Facebook draft POC");
   const [context, setContext] = useState("Ngữ cảnh sửa lỗi");
   const drag = useRef<{ x: number; y: number } | undefined>(undefined);
+  const flowInput = useRef<HTMLInputElement>(null);
   const latest = useRef({ selected, overrideId, busy });
   latest.current = { selected, overrideId, busy };
 
@@ -81,6 +82,17 @@ function Creator() {
         overrideId: overrideId || undefined,
       }).catch((e) => setMessage(String(e)));
   }, [selected, overrideId]);
+  useEffect(() => {
+    if (!shot) return;
+    const escape = (event: KeyboardEvent) => {
+      if (event.key === "Escape" && !busy) {
+        event.preventDefault();
+        void task(closeShot);
+      }
+    };
+    window.addEventListener("keydown", escape);
+    return () => window.removeEventListener("keydown", escape);
+  }, [shot, busy]);
   async function loadStep(step: Step) {
     setSelected(step);
     setName(step.name);
@@ -130,11 +142,16 @@ function Creator() {
   }
   async function closeShot() {
     await invoke({ type: "browserVisible", visible: true });
+    drag.current = undefined;
     setShot(undefined);
     setCropMode(false);
     setRoi(undefined);
   }
   async function capture() {
+    if (!state?.flow) {
+      setMessage("Tạo hoặc chọn flow ở Bước 1 trước khi chụp ROI.");
+      return;
+    }
     const image = await invoke<Capture>({ type: "capture" });
     await invoke({ type: "browserVisible", visible: false });
     setShot(image);
@@ -148,6 +165,23 @@ function Creator() {
     await invoke({ type: "browserVisible", visible: false });
     setShot(image);
     setCropMode(false);
+  }
+  async function saveCrop() {
+    if (!shot || !roi) return;
+    const t = await invoke<{ asset: string; roi: Rect; dataUrl: string }>({
+      type: "crop",
+      captureId: shot.id,
+      roi,
+    });
+    setTarget({ asset: t.asset, roi: t.roi });
+    setTargetImage(t.dataUrl);
+    await closeShot();
+    setMessage("Ảnh target đã lưu. Lưu Base hoặc Override để gắn vào step.");
+  }
+  function goToFlow() {
+    flowInput.current?.scrollIntoView({ block: "center" });
+    flowInput.current?.focus();
+    setMessage("Bước 1: nhập tên và bấm Tạo flow, hoặc chọn một flow đã lưu.");
   }
   function point(e: React.PointerEvent) {
     const r = e.currentTarget.getBoundingClientRect();
@@ -175,58 +209,96 @@ function Creator() {
           ONE SESSION <i />
           1024 × {WEB_HEIGHT} DIP · {Math.round((state?.zoom || 1) * 100)}% zoom
         </div>
+        <button
+          className="window-mode"
+          onClick={() =>
+            void invoke({ type: "toggleFullscreen" }).catch((e) =>
+              setMessage(String(e)),
+            )
+          }
+        >
+          Toàn màn hình · F11
+        </button>
       </header>
       <nav>
-        <input
-          aria-label="URL"
-          value={url}
-          onChange={(e) => setUrl(e.target.value)}
-        />
-        <button
-          disabled={locked}
-          onClick={() =>
-            void task(async () =>
-              setState(await invoke<State>({ type: "navigate", url })),
-            )
-          }
-        >
-          Mở URL
-        </button>
-        <button
-          disabled={locked}
-          onClick={() =>
-            void task(async () =>
-              setState(await invoke<State>({ type: "fixture" })),
-            )
-          }
-        >
-          Trang kiểm chuẩn
-        </button>
-        <label>
-          Zoom
-          <select
-            aria-label="Zoom"
-            disabled={locked || !!state?.flow?.steps.length}
-            value={state?.zoom || 1}
-            onChange={(e) =>
-              void task(async () =>
-                setState(
-                  await invoke<State>({
-                    type: "environment",
-                    zoom: Number(e.target.value),
-                  }),
-                ),
-              )
-            }
-          >
-            <option value="1">100%</option>
-            <option value="0.9">90%</option>
-            <option value="0.8">80%</option>
-          </select>
-        </label>
+        {shot ? (
+          <>
+            <span className="capture-instructions" role="note">
+              {cropMode
+                ? "Kéo để chọn ROI trên ảnh. Esc để hủy."
+                : "Đang xem ảnh kiểm thử. Esc để quay lại."}
+            </span>
+            {cropMode && (
+              <button
+                className="primary"
+                disabled={!roi || roi.width < 4 || roi.height < 4 || busy}
+                onClick={() => void task(saveCrop)}
+              >
+                Dùng ROI {roi ? `${roi.width}×${roi.height}` : ""}
+              </button>
+            )}
+            <button disabled={busy} onClick={() => void task(closeShot)}>
+              Quay lại browser · Esc
+            </button>
+          </>
+        ) : (
+          <>
+            <input
+              aria-label="URL"
+              value={url}
+              onChange={(e) => setUrl(e.target.value)}
+            />
+            <button
+              disabled={locked}
+              onClick={() =>
+                void task(async () =>
+                  setState(await invoke<State>({ type: "navigate", url })),
+                )
+              }
+            >
+              Mở URL
+            </button>
+            <button
+              disabled={locked}
+              onClick={() =>
+                void task(async () =>
+                  setState(await invoke<State>({ type: "fixture" })),
+                )
+              }
+            >
+              Trang kiểm chuẩn
+            </button>
+            <label>
+              Zoom
+              <select
+                aria-label="Zoom"
+                disabled={locked || !!state?.flow?.steps.length}
+                value={state?.zoom || 1}
+                onChange={(e) =>
+                  void task(async () =>
+                    setState(
+                      await invoke<State>({
+                        type: "environment",
+                        zoom: Number(e.target.value),
+                      }),
+                    ),
+                  )
+                }
+              >
+                <option value="1">100%</option>
+                <option value="0.9">90%</option>
+                <option value="0.8">80%</option>
+              </select>
+            </label>
+          </>
+        )}
       </nav>
       <aside>
         <div className="eyebrow">01 / FLOW</div>
+        <p className="flow-guide">
+          Bước 1: tạo hoặc chọn flow. Sau đó chọn Action, crop target và lưu
+          step.
+        </p>
         <select
           aria-label="Flow đã lưu"
           disabled={locked}
@@ -252,6 +324,7 @@ function Creator() {
         </select>
         <div className="row">
           <input
+            ref={flowInput}
             aria-label="Tên flow mới"
             value={flowName}
             onChange={(e) => setFlowName(e.target.value)}
@@ -267,13 +340,20 @@ function Creator() {
                 setTarget(undefined);
                 setTargetImage("");
                 setResults([]);
-                setMessage("Flow đã lưu. Chọn zoom trước khi thêm step.");
+                setMessage(
+                  `Đã tạo flow “${flowName}”. Có thể chụp & crop ROI; chọn zoom trước khi lưu step đầu tiên.`,
+                );
               })
             }
           >
-            Tạo
+            Tạo flow
           </button>
         </div>
+        {state?.flow && (
+          <p className="flow-active" aria-live="polite">
+            Flow đang chọn: <b>{state.flow.name}</b>
+          </p>
+        )}
         <div className="steps">
           {state?.flow?.steps.map((ref, i) => {
             const s = state.steps.find(
@@ -366,10 +446,21 @@ function Creator() {
           <>
             <button
               disabled={locked || !state?.flow}
+              aria-describedby="roi-flow-help"
               onClick={() => void task(capture)}
             >
               Chụp & crop ROI
             </button>
+            <p id="roi-flow-help" className="hint">
+              {!state?.flow
+                ? "Chưa có flow: nhập tên và bấm Tạo flow ở Bước 1, hoặc chọn flow đã lưu để bật chụp ROI."
+                : "Chụp trang web hiện tại và kéo ROI; Dùng ROI để xác nhận hoặc Esc để hủy."}
+            </p>
+            {!state?.flow && (
+              <button className="link" disabled={locked} onClick={goToFlow}>
+                Đi tới bước 1
+              </button>
+            )}
             {targetImage && (
               <img alt="Target ROI" className="target" src={targetImage} />
             )}
@@ -380,35 +471,6 @@ function Creator() {
               Matching local ±64 DIP; chưa có OCR.
             </p>
           </>
-        )}
-        {shot && (
-          <div className="capture-controls">
-            {cropMode && (
-              <button
-                disabled={!roi || roi.width < 4 || roi.height < 4 || busy}
-                onClick={() =>
-                  void task(async () => {
-                    const t = await invoke<{
-                      asset: string;
-                      roi: Rect;
-                      dataUrl: string;
-                    }>({ type: "crop", captureId: shot.id, roi: roi! });
-                    setTarget({ asset: t.asset, roi: t.roi });
-                    setTargetImage(t.dataUrl);
-                    await closeShot();
-                    setMessage(
-                      "Ảnh target đã lưu. Lưu Base hoặc Override để gắn vào step.",
-                    );
-                  })
-                }
-              >
-                Dùng ROI {roi ? `${roi.width}×${roi.height}` : ""}
-              </button>
-            )}
-            <button disabled={busy} onClick={() => void task(closeShot)}>
-              Quay lại browser
-            </button>
-          </div>
         )}
         <button
           className="primary"
@@ -607,6 +669,13 @@ function Creator() {
             });
           }}
           onPointerUp={() => {
+            drag.current = undefined;
+          }}
+          onPointerCancel={() => {
+            drag.current = undefined;
+            setRoi(undefined);
+          }}
+          onLostPointerCapture={() => {
             drag.current = undefined;
           }}
         >

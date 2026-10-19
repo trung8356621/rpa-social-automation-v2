@@ -66,6 +66,7 @@ export type Command =
   | { type: "state" }
   | { type: "navigate"; url: string }
   | { type: "fixture" }
+  | { type: "toggleFullscreen" }
   | { type: "environment"; zoom: number }
   | { type: "newFlow"; name: string }
   | { type: "openFlow"; id: string }

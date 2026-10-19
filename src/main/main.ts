@@ -27,7 +27,11 @@ const phase =
 const dataPath = path.join(
   project,
   ".local",
-  selfTest ? "test-session" : "creator",
+  selfTest
+    ? phase === "ux"
+      ? `test-ux-${process.pid}`
+      : "test-session"
+    : "creator",
 );
 app.setPath("userData", dataPath);
 app.setPath("sessionData", path.join(dataPath, "chromium"));
@@ -69,14 +73,16 @@ async function boot() {
   for (const dir of [assetDir, evidenceDir, runDir])
     await mkdir(dir, { recursive: true });
   const store = new Store(path.join(dataPath, "creator.sqlite"));
-  const fixture = await startFixture(selfTest ? 47832 : 47831);
+  const fixture = await startFixture(
+    selfTest ? (phase === "ux" ? 47833 : 47832) : 47831,
+  );
   const window = new BrowserWindow({
     useContentSize: true,
     width: required.width,
     height: required.height,
     resizable: false,
-    maximizable: false,
-    fullscreenable: false,
+    maximizable: true,
+    fullscreenable: true,
     show: false,
     title: "RPA Creator V2 · POC",
     webPreferences: {
@@ -86,6 +92,14 @@ async function boot() {
       sandbox: true,
     },
   });
+  // On Windows, construction with resizable:false clears the maximize style.
+  // Re-enable the independent window-mode capabilities after initialization.
+  window.setMaximizable(true);
+  window.setFullScreenable(true);
+  // resizable:false also installs a maximum equal to the initial size on
+  // Windows. Clear that size cap so native maximize/fullscreen can fill the
+  // display; the independent resizable flag still blocks dragging the edges.
+  window.setMaximumSize(0, 0);
   if (
     window.getContentSize()[0] !== required.width ||
     window.getContentSize()[1] !== required.height
@@ -100,6 +114,25 @@ async function boot() {
     evidenceDir,
     "persist:creator-default",
   );
+  // Only the outer window changes size. Keep the web viewport and screenshot
+  // origin identical in normal, maximized and fullscreen modes.
+  window.on("resize", () => browser.view.setBounds(browser.bounds));
+  const windowKeys = (event: Electron.Event, input: Electron.Input) => {
+    if (input.type !== "keyDown") return;
+    if (input.key === "F11") {
+      event.preventDefault();
+      window.setFullScreen(!window.isFullScreen());
+    } else if (
+      input.key === "Escape" &&
+      browser.visible &&
+      window.isFullScreen()
+    ) {
+      event.preventDefault();
+      window.setFullScreen(false);
+    }
+  };
+  window.webContents.on("before-input-event", windowKeys);
+  browser.view.webContents.on("before-input-event", windowKeys);
   browser.setZoom(store.flow()?.zoom ?? Number(store.setting("zoom") || 1));
   const runtime = new Runtime(browser, store, assetDir, runDir);
   let armedTest:
@@ -130,6 +163,9 @@ async function boot() {
     switch (command.type) {
       case "state":
         return state();
+      case "toggleFullscreen":
+        window.setFullScreen(!window.isFullScreen());
+        return;
       case "navigate":
         isIdle();
         await browser.navigate(command.url);
@@ -312,7 +348,9 @@ async function boot() {
   window.show();
   if (selfTest) {
     try {
-      const { runSelfTest } = await import("./self-test.js");
+      const { runSelfTest } = await import(
+        phase === "ux" ? "./ux-self-test.js" : "./self-test.js"
+      );
       await runSelfTest({
         browser,
         store,

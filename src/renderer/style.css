@@ -225,9 +225,21 @@ aside > button {
   font-size: 11px;
   line-height: 1.5;
 }
-.capture-controls button {
-  width: 100%;
-  margin: 4px 0;
+.capture-instructions {
+  flex: 1;
+  color: #b9d8ef;
+}
+.flow-guide,
+.flow-active {
+  padding: 9px;
+  border-left: 3px solid #71b6e8;
+  background: #17283d;
+  line-height: 1.5;
+  font-size: 12px;
+}
+.window-mode {
+  padding: 3px 8px;
+  font-size: 11px;
 }
 .snapshot {
   position: absolute;
