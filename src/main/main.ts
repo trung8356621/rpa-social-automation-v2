@@ -12,6 +12,7 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import sharp from "sharp";
 import { randomUUID } from "node:crypto";
+import { CreatorOverlays } from "./creator-overlays.js";
 import { BrowserCore } from "./browser-core.js";
 import { Store } from "./storage.js";
 import { Runtime } from "./runtime.js";
@@ -38,7 +39,7 @@ const dataPath = path.join(
   project,
   ".local",
   selfTest
-    ? ["ux", "ocr", "typing", "upload", "address"].includes(phase)
+    ? ["overlay", "ux", "ocr", "typing", "upload", "address"].includes(phase)
       ? `test-${phase}-${process.pid}`
       : "test-session"
     : "creator",
@@ -136,6 +137,7 @@ async function boot() {
     evidenceDir,
     "persist:creator-default",
   );
+  const overlays = new CreatorOverlays(window, path.join(root, "preload/index.cjs"));
   // Only the outer window changes size. Keep the web viewport and screenshot
   // origin identical in normal, maximized and fullscreen modes.
   window.on("resize", () => browser.view.setBounds(browser.bounds));
@@ -389,6 +391,7 @@ async function boot() {
       .flush()
       .catch(console.error)
       .finally(() => {
+        overlays.close();
         browser.close();
         fixture.close();
         store.close();
@@ -427,7 +430,9 @@ async function boot() {
   if (selfTest) {
     try {
       const { runSelfTest } = await import(
-        phase === "address"
+        phase === "overlay"
+          ? "./overlay-self-test.js"
+          : phase === "address"
           ? "./address-self-test.js"
           : phase === "upload"
             ? "./upload-self-test.js"
@@ -440,6 +445,7 @@ async function boot() {
                   : "./self-test.js"
       );
       await runSelfTest({
+        overlays,
         browser,
         store,
         runtime,

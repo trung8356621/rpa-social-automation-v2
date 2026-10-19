@@ -8,7 +8,7 @@ const phases = process.argv.slice(2);
 if (
   phases.some(
     (phase) =>
-      !["first", "second", "ux", "ocr", "typing", "upload", "address"].includes(
+      !["overlay", "first", "second", "ux", "ocr", "typing", "upload", "address"].includes(
         phase,
       ),
   )
@@ -19,7 +19,7 @@ if (
 }
 for (const phase of phases.length
   ? phases
-  : ["first", "second", "ux", "ocr", "typing", "upload", "address"]) {
+  : ["overlay", "first", "second", "ux", "ocr", "typing", "upload", "address"]) {
   const started = Date.now();
   const code = await new Promise((resolve, reject) => {
     const env = { ...process.env };
