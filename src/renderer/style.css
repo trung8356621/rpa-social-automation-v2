@@ -279,6 +279,19 @@ aside > button {
   padding-top: 8px;
   overflow-wrap: anywhere;
 }
+.debug-details {
+  border-top: 1px solid #3a4c68;
+  margin: 9px 0;
+  padding-top: 8px;
+}
+.debug-details summary {
+  cursor: pointer;
+  color: #8ac9ff;
+}
+.resolver-trace {
+  margin-top: 8px;
+  overflow-wrap: anywhere;
+}
 .capture-instructions {
   flex: 1;
   color: #b9d8ef;

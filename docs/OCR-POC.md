@@ -1,5 +1,7 @@
 # Creator local OCR POC — 19/10/2026
 
+Quyết định mới nhất: [AUTO Resolver](AUTO-RESOLVER.md) ưu tiên ảnh và dùng OCR đã xác nhận khi cần, thay lựa chọn method thủ công bên dưới. Các phần mô tả không fallback sang ảnh từ OCR là lịch sử trước AUTO.
+
 OCR dùng Tesseract.js 7, xử lý ảnh bằng Sharp; model `vie` và `eng` đi cùng dependencies `@tesseract.js-data/vie` và `@tesseract.js-data/eng`. Worker Node/WASM và model đều đọc từ filesystem, không tải CDN hay gọi AI API trong lúc chạy. Model được copy vào `.local/ocr-models/` khi cần; thư mục này bị Git ignore. Chưa đóng gói installer; khi đóng gói cần mang theo worker/WASM/model và kiểm thử lại đường dẫn. Tesseract.js có license Apache-2.0; hai package model khai báo MIT theo package cài đặt.
 
 ## Tạo target

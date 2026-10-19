@@ -116,7 +116,7 @@ test("OCR exact match preserves accents and maps bbox to viewport, rejecting amb
     /confidence/,
   );
 });
-test("OCR failure has no image fallback; unconfirmed text cannot be saved", async () => {
+test("AUTO blocks when both image and OCR fail; unconfirmed legacy OCR cannot be saved", async () => {
   const target = {
     asset: "00000000-0000-0000-0000-000000000001.png",
     roi: { x: 0, y: 0, width: 250, height: 100 },
@@ -147,7 +147,7 @@ test("OCR failure has no image fallback; unconfirmed text cannot be saved", asyn
         },
       },
     ),
-    /Không fallback/,
+    /AUTO/,
   );
 });
 test("confirmed OCR and method survive step redesign, rollback and override without overwriting Base", () => {

@@ -1,5 +1,7 @@
 # CLICK_AND_TYPE — focus vùng nhập và nhập trong một lần Test
 
+Cập nhật mới nhất: [Resolver AUTO](AUTO-RESOLVER.md) thay phần chọn Image/OCR thủ công trong tài liệu này. Không cần Redesign chỉ để đổi engine; Action/cơ chế nhập và bảo toàn version vẫn giữ nguyên.
+
 ## Quyết định hiện tại
 
 Hai click thuộc **hai Step khác nhau**:

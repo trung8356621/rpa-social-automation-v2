@@ -24,7 +24,7 @@ export type Payload = {
   text?: string;
   inputMethod?: "keyboard" | "clipboard";
   target?: VisualTarget;
-  method?: "image" | "ocr";
+  method?: "auto" | "image" | "ocr";
   deltaY?: number;
   timeoutMs?: number;
   threshold?: number;
@@ -68,6 +68,7 @@ export type Result = {
   overrideId?: string;
   targetAsset?: string;
   clickSent?: boolean;
+  resolution?: ResolutionTrace;
   input?: {
     method: "keyboard" | "clipboard";
     focus: {
@@ -94,6 +95,23 @@ export type Result = {
   source: "base" | "override";
   stepId: string;
   version: number;
+};
+export type ResolutionTrace = {
+  mode: "auto";
+  legacyMethod?: "image" | "ocr";
+  selectedMethod?: "image" | "ocr";
+  fallbackReason?: string;
+  blockedReason?: string;
+  attempts: {
+    method: "image" | "ocr";
+    outcome:
+      "matched" | "not_confident" | "ambiguous" | "failed" | "unavailable";
+    reason?: string;
+    score?: number;
+    confidence?: number;
+    x?: number;
+    y?: number;
+  }[];
 };
 export type State = {
   flow: Flow | null;

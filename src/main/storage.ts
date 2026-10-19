@@ -37,7 +37,7 @@ export function validatePayload(p: Payload) {
     throw new Error("Action cần ảnh target được crop.");
   if (["CLICK_TARGET", "CLICK_AND_TYPE", "WAIT_VERIFY"].includes(p.action))
     validateRect(p.target!.roi, WEB_WIDTH, WEB_HEIGHT);
-  if (p.method !== undefined && !["image", "ocr"].includes(p.method))
+  if (p.method !== undefined && !["auto", "image", "ocr"].includes(p.method))
     throw new Error("Phương thức target không hợp lệ.");
   if (p.target?.ocr) {
     const o = p.target.ocr,

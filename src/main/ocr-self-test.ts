@@ -60,12 +60,6 @@ export async function runSelfTest({
       text,
     );
   };
-  const select = async (label: string, value: string) => {
-    await evaluate(
-      `(()=>{const s=document.querySelector('[aria-label="${label}"]');s.value=${JSON.stringify(value)};s.dispatchEvent(new Event('change',{bubbles:true}))})()`,
-    );
-    await wait();
-  };
   const crop = async (x: number, y: number, width: number, height: number) => {
     await click("Chụp & crop ROI");
     await until(
@@ -129,7 +123,6 @@ export async function runSelfTest({
   pass("Vietnamese-ROI-real-local-OCR-no-automatic-selection-image-only-save");
   await click("Đọc lại OCR");
   await click("Tạo bài viết");
-  await select("Phương thức nhận diện", "ocr");
   await click("Lưu redesign");
   assert.equal(store.step(id, 2).payload.target!.ocr!.text, "Tạo bài viết");
   assert.equal(store.step(id, 1).payload.target!.ocr, undefined);
@@ -141,7 +134,7 @@ export async function runSelfTest({
   assert.equal(probe.clicks, 1);
   assert.ok(probe.x > 100 && probe.x < 460 && probe.y > 110 && probe.y < 174);
   pass(
-    "confirmed-Vietnamese-version2-OCR-click-correct-bbox-ACTION_SENT-base-v1-retained",
+    "confirmed-Vietnamese-version2-AUTO-image-click-ACTION_SENT-base-v1-retained",
   );
   const verify = store.saveStep("verify", {
     ...store.step(id, 2).payload,
@@ -151,6 +144,9 @@ export async function runSelfTest({
   assert.equal((await runtime.test(verify.id, 1))[0].status, "VERIFIED");
   pass("WAIT_VERIFY-uses-same-OCR-runtime-and-verifies-only-target-presence");
   const original = localOcr.recognize.bind(localOcr);
+  await browser.view.webContents.executeJavaScript(
+    "document.querySelector('#vi').style.background='#c2d2e8'",
+  );
   try {
     for (const mode of ["low", "duplicate", "failure"]) {
       localOcr.recognize = async (image) => {
@@ -175,12 +171,11 @@ export async function runSelfTest({
     localOcr.recognize = original;
   }
   pass(
-    "runtime-blocks-low-confidence-duplicate-text-and-OCR-failure-without-click-or-image-fallback",
+    "runtime-blocks-weak-image-plus-low-confidence-duplicate-text-or-OCR-failure-before-click",
   );
   await click("Tạo flow");
   await crop(100, 260, 360, 64);
   await click("Create post");
-  await select("Phương thức nhận diện", "ocr");
   await click("Lưu Base v1");
   const english = store.flow()!.steps[0];
   assert.equal((await runtime.test(english.id, 1))[0].status, "ACTION_SENT");
@@ -188,7 +183,7 @@ export async function runSelfTest({
     (await browser.view.webContents.executeJavaScript("window.ocrProbe")).id,
     "en",
   );
-  pass("English-ROI-explicit-selection-save-and-real-OCR-runtime-click");
+  pass("English-ROI-explicit-selection-save-and-real-AUTO-runtime-click");
   // Exercise the real Test button, result review IPC and live browser continuity.
   const page = browser.view.webContents;
   const originalCapture = browser.capture.bind(browser);
@@ -224,7 +219,7 @@ export async function runSelfTest({
   );
   assert.match(
     await evaluate("document.querySelector('.match-detail').textContent"),
-    /OCR text matching.*Create post/s,
+    /Image Matching/s,
   );
   // Explicit test evidence only: compose shell + native view after focus assertions.
   await evaluate(
@@ -290,7 +285,7 @@ export async function runSelfTest({
   await click("Test step đã lưu");
   assert.match(
     await evaluate("document.querySelector('.match-detail').textContent"),
-    /Image Matching.*Không dùng OCR/s,
+    /Image Matching/s,
   );
   assert.ok(
     await evaluate(

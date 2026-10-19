@@ -37,7 +37,6 @@ function Creator() {
   const [pairDelay, setPairDelay] = useState(800);
   const [target, setTarget] = useState<Payload["target"]>();
   const [targetImage, setTargetImage] = useState("");
-  const [method, setMethod] = useState<"image" | "ocr">("image");
   const [ocrResult, setOcrResult] = useState<OcrResult>();
   const [ocrError, setOcrError] = useState("");
   const [ocrLoading, setOcrLoading] = useState(false);
@@ -85,7 +84,6 @@ function Creator() {
     setSelected(undefined);
     setTarget(undefined);
     setTargetImage("");
-    setMethod("image");
     setOcrResult(undefined);
     setOcrError("");
     setName("");
@@ -194,7 +192,6 @@ function Creator() {
     setInputMethod(step.payload.inputMethod ?? "keyboard");
     setDelta(step.payload.deltaY ?? -400);
     setTarget(step.payload.target);
-    setMethod(step.payload.method ?? "image");
     setOcrResult(undefined);
     setOcrError("");
     setOverrideId("");
@@ -215,7 +212,7 @@ function Creator() {
         : {}),
       ...(action === "SCROLL" ? { deltaY: delta } : {}),
       ...(["CLICK_TARGET", "CLICK_AND_TYPE", "WAIT_VERIFY"].includes(action)
-        ? { target, method, threshold: 0.96, timeoutMs: 3000 }
+        ? { target, method: "auto", threshold: 0.96, timeoutMs: 3000 }
         : {}),
     };
   }
@@ -276,7 +273,6 @@ function Creator() {
       roi,
     });
     setTarget({ asset: t.asset, roi: t.roi });
-    setMethod("image");
     setOcrResult(undefined);
     setOcrError("");
     setTargetImage(t.dataUrl);
@@ -317,7 +313,7 @@ function Creator() {
         : previous,
     );
     setMessage(
-      `Đã xác nhận chữ “${segment.text}”. Chọn phương thức OCR nếu muốn test bằng chữ; lưu để áp dụng.`,
+      `Đã xác nhận chữ “${segment.text}” để AUTO dùng khi cần. Lưu target để áp dụng.`,
     );
   }
   function goToFlow() {
@@ -469,7 +465,6 @@ function Creator() {
               setSelected(undefined);
               setTarget(undefined);
               setTargetImage("");
-              setMethod("image");
               setOcrResult(undefined);
               setOcrError("");
               setResults([]);
@@ -502,7 +497,6 @@ function Creator() {
                 setSelected(undefined);
                 setTarget(undefined);
                 setTargetImage("");
-                setMethod("image");
                 setOcrResult(undefined);
                 setOcrError("");
                 setResults([]);
@@ -555,7 +549,6 @@ function Creator() {
               setAction(e.target.value as Action);
               setTarget(undefined);
               setTargetImage("");
-              setMethod("image");
               setOcrResult(undefined);
               setOcrError("");
             }}
@@ -735,14 +728,15 @@ function Creator() {
                       const { ocr, ...rest } = previous;
                       return rest;
                     });
-                    setMethod("image");
                   }}
                 >
-                  Bỏ chữ, dùng image-only
+                  Bỏ chữ dự phòng
                 </button>
               </div>
             ) : (
-              <p className="hint">Image-only: chưa có chữ được bạn xác nhận.</p>
+              <p className="hint">
+                Chưa có chữ dự phòng được xác nhận; AUTO vẫn dùng ảnh.
+              </p>
             )}
             <button
               disabled={locked}
@@ -750,23 +744,9 @@ function Creator() {
             >
               Đọc lại OCR
             </button>
-            <label>
-              Phương thức nhận diện
-              <select
-                aria-label="Phương thức nhận diện"
-                disabled={locked}
-                value={method}
-                onChange={(e) => setMethod(e.target.value as "image" | "ocr")}
-              >
-                <option value="image">Image matching</option>
-                <option value="ocr" disabled={!target.ocr}>
-                  OCR text matching
-                </option>
-              </select>
-            </label>
             <p className="hint">
-              OCR chỉ dùng chữ bạn chọn; không fallback sang ảnh khi không chắc
-              chắn.
+              AUTO ưu tiên ảnh; dùng chữ bạn xác nhận khi ảnh chưa đủ rõ. Không
+              cần chọn engine hay lưu version mới khi engine đổi phương pháp.
             </p>
           </section>
         )}
@@ -885,14 +865,8 @@ function Creator() {
               selected.payload.action,
             ) && (
               <p className="hint saved-method">
-                Phương thức đã lưu:{" "}
-                {(
-                  state?.overrides.find((o) => o.id === overrideId)
-                    ?.segment[0] ?? selected.payload
-                ).method === "ocr"
-                  ? "OCR text matching"
-                  : "Image Matching"}
-                . Thay đổi form cần lưu trước khi Test.
+                Nhận diện AUTO, áp dụng cả Step cũ. Chỉ cần lưu khi sửa target,
+                nội dung hoặc Action; không cần lưu để đổi engine.
               </p>
             )}
             {selected.payload.action === "TYPE_ONLY" && (
@@ -1003,53 +977,94 @@ function Creator() {
                 Step {r.stepId.slice(0, 8)} · v{r.version} ·{" "}
                 {r.source === "override" ? "Override" : "Base"}
               </p>
-              {r.match && (
-                <div className="match-detail">
-                  <b>
-                    Đã dùng:{" "}
-                    {r.match.method === "ocr"
-                      ? "OCR text matching"
-                      : "Image Matching"}
-                  </b>
-                  {r.match.method === "ocr" ? (
-                    <p>
-                      Chữ tìm được: “{r.match.text}” · confidence{" "}
-                      {r.match.confidence?.toFixed(1)}%
-                    </p>
-                  ) : (
-                    <>
+              {(r.match || r.input || r.resolution) && (
+                <details className="debug-details">
+                  <summary>Debug</summary>
+                  {r.resolution && (
+                    <div className="resolver-trace">
+                      <b>
+                        Resolver AUTO · thực dùng:{" "}
+                        {r.resolution.selectedMethod ?? "không chọn"}
+                      </b>
+                      {r.resolution.legacyMethod && (
+                        <p>
+                          Hint cũ: {r.resolution.legacyMethod} (giữ trong Base;
+                          runtime dùng AUTO).
+                        </p>
+                      )}
+                      {r.resolution.fallbackReason && (
+                        <p>Lý do fallback: {r.resolution.fallbackReason}</p>
+                      )}
+                      {r.resolution.blockedReason && (
+                        <p>Lý do chặn: {r.resolution.blockedReason}</p>
+                      )}
+                      {r.resolution.attempts.map((a, i) => (
+                        <p key={i}>
+                          {a.method}: {a.outcome}
+                          {a.score !== undefined
+                            ? ` · score ${a.score.toFixed(4)}`
+                            : ""}
+                          {a.confidence !== undefined
+                            ? ` · confidence ${a.confidence.toFixed(1)}%`
+                            : ""}
+                          {a.x !== undefined
+                            ? ` · (${a.x.toFixed(1)}, ${a.y?.toFixed(1)}) DIP`
+                            : ""}
+                          . {a.reason}
+                        </p>
+                      ))}
+                    </div>
+                  )}
+                  {r.match && (
+                    <div className="match-detail">
+                      <b>
+                        Đã dùng:{" "}
+                        {r.match.method === "ocr"
+                          ? "OCR text matching"
+                          : "Image Matching"}
+                      </b>
+                      {r.match.method === "ocr" ? (
+                        <p>
+                          Chữ tìm được: “{r.match.text}” · confidence{" "}
+                          {r.match.confidence?.toFixed(1)}%
+                        </p>
+                      ) : (
+                        <>
+                          <p>
+                            Ảnh ROI đã khớp · score {r.match.score.toFixed(4)}.
+                            Vị trí cuối cùng chọn bằng ảnh; OCR có thể được dùng
+                            để đối chiếu an toàn.
+                          </p>
+                          <ResultTarget asset={r.targetAsset} />
+                        </>
+                      )}
                       <p>
-                        Ảnh ROI đã khớp · score {r.match.score.toFixed(4)}.
-                        Không dùng OCR cho lần test này.
+                        Tọa độ browser: ({r.match.x.toFixed(1)},{" "}
+                        {r.match.y.toFixed(1)}) DIP
                       </p>
-                      <ResultTarget asset={r.targetAsset} />
-                    </>
+                    </div>
                   )}
-                  <p>
-                    Tọa độ browser: ({r.match.x.toFixed(1)},{" "}
-                    {r.match.y.toFixed(1)}) DIP
-                  </p>
-                </div>
-              )}
-              {r.input && (
-                <div className="match-detail">
-                  <b>
-                    Phương thức nhập:{" "}
-                    {r.input.method === "clipboard"
-                      ? "Clipboard paste"
-                      : "Keyboard · native text + Shift+Enter"}
-                  </b>
-                  <p>
-                    Browser focus: {String(r.input.focus.browser)} · editor
-                    focus: {String(r.input.focus.editor)} · route:{" "}
-                    {r.input.focus.route}. Caret: chưa kiểm chứng.
-                  </p>
-                  {r.input.clipboard && (
-                    <p>
-                      Clipboard: {r.input.clipboard}. {r.input.warning}
-                    </p>
+                  {r.input && (
+                    <div className="match-detail">
+                      <b>
+                        Phương thức nhập:{" "}
+                        {r.input.method === "clipboard"
+                          ? "Clipboard paste"
+                          : "Keyboard · native text + Shift+Enter"}
+                      </b>
+                      <p>
+                        Browser focus: {String(r.input.focus.browser)} · editor
+                        focus: {String(r.input.focus.editor)} · route:{" "}
+                        {r.input.focus.route}. Caret: chưa kiểm chứng.
+                      </p>
+                      {r.input.clipboard && (
+                        <p>
+                          Clipboard: {r.input.clipboard}. {r.input.warning}
+                        </p>
+                      )}
+                    </div>
                   )}
-                </div>
+                </details>
               )}
               {r.status === "ACTION_SENT" && (
                 <p>

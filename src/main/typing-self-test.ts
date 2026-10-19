@@ -293,6 +293,9 @@ export async function runSelfTest({
     "click-only-opens-composer-without-caret-does-not-auto-focus-editable-or-claim-VERIFIED",
   );
   // Fail click closed; TYPE must never be attempted.
+  await browser.view.webContents.executeJavaScript(
+    "document.querySelector('#open').style.background='#c2d2e8'",
+  );
   const broken = store.saveStep(
     "Missing composer",
     {
@@ -319,6 +322,7 @@ export async function runSelfTest({
   pass("pair-stops-before-TYPE-on-blocked-click-and-rejects-invalid-order");
   // Composer is opened by its own CLICK; author/test the new action from sidebar.
   await browser.navigate("http://127.0.0.1:47835/typing?no-caret");
+  await wait(200);
   browser.click(300, 132);
   await wait(400);
   assert.equal((await read()).active, "open");
@@ -370,7 +374,6 @@ export async function runSelfTest({
     ),
   );
   await click("Viết bản nháp ở đây");
-  await select("Phương thức nhận diện", "ocr");
   await click("Lưu Base v1");
   const combinedRef = store.flow()!.steps[0];
   const combinedBase = store.step(combinedRef.id, 1);
@@ -405,7 +408,7 @@ export async function runSelfTest({
   );
   assert.match(
     await evaluate("document.querySelector('.result').textContent"),
-    /ACTION_SENT.*OCR text matching/s,
+    /ACTION_SENT.*Image Matching/s,
   );
   await click("Đúng — Hoàn thành Step");
   assert.match(
@@ -415,8 +418,54 @@ export async function runSelfTest({
   pass(
     "CLICK_AND_TYPE-authored-Action-first-crop-OCR-single-click-keyboard-from-sidebar-composer-open-no-manual-caret",
   );
+  // AUTO changes resolver at runtime, without saving/redesigning the Step.
+  await browser.navigate("http://127.0.0.1:47835/typing?no-caret");
+  await wait(200);
+  browser.click(300, 132);
+  await wait(400);
+  await browser.view.webContents.executeJavaScript(
+    "document.querySelector('#editor').style.background='#c2d2e8'",
+  );
+  assert.equal(
+    await evaluate(
+      "!!document.querySelector('[aria-label=\"Phương thức nhận diện\"]')",
+    ),
+    false,
+  );
+  await click("Test step đã lưu");
+  const fallbackRun = JSON.parse(
+    (
+      store.db
+        .prepare("SELECT payload FROM runs ORDER BY rowid DESC LIMIT 1")
+        .get() as { payload: string }
+    ).payload,
+  ) as Result;
+  assert.equal(fallbackRun.match!.method, "ocr");
+  assert.ok(fallbackRun.resolution!.fallbackReason);
+  assert.equal((await read()).text, text);
+  assert.equal((await read()).editorClicks, 1);
+  assert.equal((await read()).doubleClicks, 0);
+  assert.deepEqual(store.step(combinedRef.id, 1), combinedBase);
+  assert.equal(store.steps().filter((s) => s.id === combinedRef.id).length, 1);
+  assert.equal(
+    await evaluate("document.querySelector('.debug-details').open"),
+    false,
+  );
+  await evaluate("document.querySelector('.debug-details summary').click()");
+  assert.equal(
+    await evaluate("document.querySelector('.debug-details').open"),
+    true,
+  );
+  assert.match(
+    await evaluate("document.querySelector('.resolver-trace').textContent"),
+    /Lý do fallback:.*Image score/s,
+  );
+  pass(
+    "AUTO-image-to-OCR-fallback-same-Step-version-single-click-and-technical-trace-only-in-Debug",
+  );
   // Reset only as fixture setup; runtime never navigates or clears the page.
   await browser.navigate("http://127.0.0.1:47835/typing?no-caret");
+  await wait(200);
   browser.click(300, 132);
   await wait(400);
   const oldClipboard = await Promise.all(
@@ -461,8 +510,12 @@ export async function runSelfTest({
   try {
     for (const mode of ["low", "duplicate", "failure"]) {
       await browser.navigate("http://127.0.0.1:47835/typing?no-caret");
+      await wait(200);
       browser.click(300, 132);
       await wait(400);
+      await browser.view.webContents.executeJavaScript(
+        "document.querySelector('#editor').style.background='#c2d2e8'",
+      );
       const clicksBefore = (await read()).editorClicks,
         textBefore = (await read()).text;
       localOcr.recognize = async (image) => {
@@ -495,7 +548,7 @@ export async function runSelfTest({
       assert.equal(last.clickSent, false);
       assert.equal(last.input, undefined);
       assert.match(
-        last.message,
+        last.resolution!.attempts.at(-1)!.reason!,
         mode === "low"
           ? /confidence/
           : mode === "duplicate"
@@ -530,7 +583,9 @@ export async function runSelfTest({
     "CLICK_AND_TYPE-OCR-low-duplicate-error-block-before-click-and-type-open-Redesign-without-mutating-Base",
   );
   const base2 = store.step(combinedRef.id, 2);
-  await select("Phương thức nhận diện", "image");
+  await browser.view.webContents.executeJavaScript(
+    "document.querySelector('#editor').style.background=''",
+  );
   await click("Lưu form thành Override riêng");
   await click("Test step đã lưu");
   probe = await read();
@@ -551,6 +606,38 @@ export async function runSelfTest({
   pass(
     "CLICK_AND_TYPE-image-Override-single-click-paste-and-manual-rejection-preserve-Base",
   );
+  await browser.navigate("http://127.0.0.1:47835/typing?no-caret");
+  await wait(200);
+  browser.click(300, 132);
+  await wait(400);
+  try {
+    localOcr.recognize = async (image) => {
+      const result = await recognize(image);
+      return {
+        ...result,
+        segments: result.segments.map((s) => ({
+          ...s,
+          bbox: { ...s.bbox, x: s.bbox.x + 100 },
+        })),
+      };
+    };
+    await click("Test step đã lưu");
+    const conflict = JSON.parse(
+      (
+        store.db
+          .prepare("SELECT payload FROM runs ORDER BY rowid DESC LIMIT 1")
+          .get() as { payload: string }
+      ).payload,
+    ) as Result;
+    assert.equal(conflict.status, "BLOCKED");
+    assert.equal(conflict.clickSent, false);
+    assert.match(conflict.resolution!.blockedReason!, /mâu thuẫn/);
+    assert.equal((await read()).editorClicks, 0);
+    assert.equal((await read()).text, "");
+  } finally {
+    localOcr.recognize = recognize;
+  }
+  pass("AUTO-conflicting-image-and-OCR-block-before-any-click-or-input");
   await evaluate(
     "document.querySelector('.result').scrollIntoView({block:'start'})",
   );

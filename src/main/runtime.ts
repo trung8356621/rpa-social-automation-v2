@@ -185,6 +185,7 @@ export class Runtime {
       message = "Input đã gửi; cần VERIFY riêng để xác nhận nghiệp vụ.",
       match: Result["match"],
       input: Result["input"];
+    let resolution: Result["resolution"];
     let clickSent = false;
     try {
       if (payload.action === "TYPE_ONLY") {
@@ -204,12 +205,15 @@ export class Runtime {
         let current = before!;
         do {
           try {
-            match = await resolveVisualTarget(
+            const resolved = await resolveVisualTarget(
               this.browser.captureBuffer(current.id),
               template,
               payload,
               this.ocr,
             );
+            const { resolution: trace, ...position } = resolved;
+            match = position;
+            resolution = trace;
             break;
           } catch (error) {
             if (
@@ -234,7 +238,7 @@ export class Runtime {
         message =
           payload.action === "WAIT_VERIFY"
             ? `VERIFIED: điều kiện ${match.method === "ocr" ? `chữ “${match.text}”` : "ảnh"} đã khớp. Chỉ xác nhận điều kiện của step.`
-            : `Click một lần đã gửi tại ${match.x}, ${match.y}${input ? ` rồi nhập bằng ${input.method === "clipboard" ? "clipboard paste" : "keyboard"}` : ""}; chưa xác nhận kết quả nghiệp vụ.${input?.warning ? ` ${input.warning}` : ""}`;
+            : `Đã gửi click một lần${input ? " rồi gửi nội dung nhập" : ""}; chưa xác nhận kết quả nghiệp vụ.${input?.warning ? ` ${input.warning}` : ""}`;
       }
     } catch (e) {
       status =
@@ -243,7 +247,11 @@ export class Runtime {
           : "FAILED";
       if (e instanceof InputNotReady)
         input = { method: payload.inputMethod ?? "keyboard", focus: e.focus };
-      message = (e as Error).message;
+      message =
+        e instanceof TargetNotConfident
+          ? "Target chưa đủ rõ hoặc vị trí nhận diện không thống nhất. Chưa gửi thao tác; hãy Redesign target. Chi tiết trong Debug."
+          : (e as Error).message;
+      if (e instanceof TargetNotConfident) resolution = e.resolution;
       if (payload.action === "CLICK_AND_TYPE" && clickSent)
         message = `Đã click target một lần; nhập liệu chưa hoàn tất và có thể đã nhập một phần. ${message}`;
     }
@@ -271,6 +279,7 @@ export class Runtime {
       overrideId,
       targetAsset: payload.target?.asset,
       clickSent,
+      resolution,
     };
     // Store paths/metadata in history, not duplicate base64 screenshots in SQLite.
     const metadata = {
