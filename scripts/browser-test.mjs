@@ -8,18 +8,34 @@ const phases = process.argv.slice(2);
 if (
   phases.some(
     (phase) =>
-      !["overlay", "first", "second", "ux", "ocr", "typing", "upload", "address"].includes(
-        phase,
-      ),
+      ![
+        "overlay",
+        "first",
+        "second",
+        "ux",
+        "ocr",
+        "typing",
+        "upload",
+        "address",
+      ].includes(phase),
   )
 ) {
   throw new Error(
-    "Supported browser test phases: first, second, ux, ocr, typing, upload, address",
+    "Supported browser test phases: overlay, first, second, ux, ocr, typing, upload, address",
   );
 }
 for (const phase of phases.length
   ? phases
-  : ["overlay", "first", "second", "ux", "ocr", "typing", "upload", "address"]) {
+  : [
+      "overlay",
+      "first",
+      "second",
+      "ux",
+      "ocr",
+      "typing",
+      "upload",
+      "address",
+    ]) {
   const started = Date.now();
   const code = await new Promise((resolve, reject) => {
     const env = { ...process.env };

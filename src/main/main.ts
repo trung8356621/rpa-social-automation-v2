@@ -137,7 +137,10 @@ async function boot() {
     evidenceDir,
     "persist:creator-default",
   );
-  const overlays = new CreatorOverlays(window, path.join(root, "preload/index.cjs"));
+  const overlays =
+    selfTest && phase === "overlay"
+      ? new CreatorOverlays(window, path.join(root, "preload/index.cjs"))
+      : undefined;
   // Only the outer window changes size. Keep the web viewport and screenshot
   // origin identical in normal, maximized and fullscreen modes.
   window.on("resize", () => browser.view.setBounds(browser.bounds));
@@ -391,7 +394,7 @@ async function boot() {
       .flush()
       .catch(console.error)
       .finally(() => {
-        overlays.close();
+        overlays?.close();
         browser.close();
         fixture.close();
         store.close();
@@ -433,16 +436,16 @@ async function boot() {
         phase === "overlay"
           ? "./overlay-self-test.js"
           : phase === "address"
-          ? "./address-self-test.js"
-          : phase === "upload"
-            ? "./upload-self-test.js"
-            : phase === "typing"
-              ? "./typing-self-test.js"
-              : phase === "ocr"
-                ? "./ocr-self-test.js"
-                : phase === "ux"
-                  ? "./ux-self-test.js"
-                  : "./self-test.js"
+            ? "./address-self-test.js"
+            : phase === "upload"
+              ? "./upload-self-test.js"
+              : phase === "typing"
+                ? "./typing-self-test.js"
+                : phase === "ocr"
+                  ? "./ocr-self-test.js"
+                  : phase === "ux"
+                    ? "./ux-self-test.js"
+                    : "./self-test.js"
       );
       await runSelfTest({
         overlays,
