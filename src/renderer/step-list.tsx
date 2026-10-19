@@ -1,7 +1,8 @@
-import React, { useState } from "react";
+import type { StepPlayback } from "./playback";
+import React, { useEffect, useRef, useState } from "react";
 import { UiPopover, usePopover } from "./ui-popover";
 import { slugify } from "../shared/flow-model";
-import type { State, Step, Command } from "../shared/contracts";
+import type { State, Step, Command, StepGroup } from "../shared/contracts";
 const EditIcon = () => (
   <svg
     width="16"
@@ -48,7 +49,13 @@ export function StepList({
   select,
   edit,
   update,
+  play,
+  playback,
+  activeStepId,
 }: {
+  play: (step: Step) => void;
+  playback: Record<string, StepPlayback>;
+  activeStepId: string;
   state: State;
   selected?: Step;
   locked: boolean;
@@ -56,6 +63,30 @@ export function StepList({
   edit: (s: Step) => void;
   update: (c: Command) => Promise<void>;
 }) {
+  const [revealedGroup, setRevealedGroup] = useState("");
+  useEffect(() => {
+    setRevealedGroup("");
+  }, [state.flow?.id]);
+  useEffect(() => {
+    if (playback[activeStepId]?.status === "running")
+      setRevealedGroup(
+        state.flow?.groups?.find((g) => g.stepIds.includes(activeStepId))?.id ??
+          "",
+      );
+  }, [activeStepId, playback[activeStepId]?.status]);
+  const list = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    const container = list.current,
+      row = container?.querySelector<HTMLElement>(
+        `[data-step-id="${CSS.escape(activeStepId)}"]`,
+      );
+    if (!container || !row) return;
+    const r = row.getBoundingClientRect(),
+      bounds = container.getBoundingClientRect();
+    if (r.top < bounds.top + 4) container.scrollTop += r.top - bounds.top - 4;
+    else if (r.bottom > bounds.bottom - 4)
+      container.scrollTop += r.bottom - bounds.bottom + 4;
+  }, [activeStepId, playback[activeStepId]?.status, revealedGroup]);
   const popup = usePopover(update);
   const [menu, setMenu] = useState<{
     step?: Step;
@@ -67,6 +98,11 @@ export function StepList({
   const f = state.flow;
   if (!f) return null;
   const groups = f.groups ?? [];
+  const expanded = (g: StepGroup) =>
+    !g.collapsed ||
+    revealedGroup === g.id ||
+    (g.stepIds.includes(activeStepId) &&
+      playback[activeStepId]?.status === "running");
   const blocks: { group?: (typeof groups)[number]; refs: typeof f.steps }[] =
     [];
   for (const ref of f.steps) {
@@ -93,25 +129,58 @@ export function StepList({
     order.splice(after ? order.indexOf(after) + 1 : order.length, 0, s.id);
     void update({ type: "organize", groups: gs, stepIds: order });
   };
-  const row = (ref: (typeof f.steps)[number]) => {
+  const row = (ref: (typeof f.steps)[number], number: string) => {
     const s = state.steps.find(
       (s) => s.id === ref.id && s.version === ref.version,
     )!;
     return (
       <div
-        className={`step-row${selected?.id === s.id ? " selected" : ""}`}
+        className={`step-row${selected?.id === s.id ? " selected" : ""}${playback[s.id]?.status === "running" ? " is-running" : ""}`}
+        data-step-id={s.id}
+        data-play-status={playback[s.id]?.status ?? "idle"}
         key={s.id}
       >
+        <span className="step-number" aria-label={`Step ${number}`}>
+          {number}
+        </span>
         <button
           className={selected?.id === s.id ? "step active" : "step"}
           disabled={locked}
           onClick={() => select(s)}
           title={s.name}
         >
-          <span className="step-number">
-            {String(f.steps.indexOf(ref) + 1).padStart(2, "0")}
+          <span className="step-label">
+            <b>{s.name}</b>
+            {playback[s.id] && (
+              <small
+                className={`step-status ${playback[s.id].status}`}
+                title={`${playback[s.id].resultStatus ?? ""} ${playback[s.id].message}`}
+              >
+                {playback[s.id].status}
+                {playback[s.id].status === "pass" &&
+                playback[s.id].resultStatus === "ACTION_SENT"
+                  ? " · sent"
+                  : ""}
+              </small>
+            )}
           </span>
-          <b>{s.name}</b>
+        </button>
+        <button
+          className="icon-button step-play"
+          aria-label={`Play ${s.name}`}
+          title="Play step"
+          disabled={locked}
+          onClick={() => play(s)}
+        >
+          <svg
+            width="15"
+            height="15"
+            viewBox="0 0 24 24"
+            fill="currentColor"
+            aria-hidden="true"
+          >
+            <path d="M7 4v16l14-8Z" />
+          </svg>
         </button>
         <button
           className="icon-button"
@@ -139,16 +208,24 @@ export function StepList({
     );
   };
   return (
-    <div className="steps">
-      {blocks.map((b) =>
+    <div className="steps" ref={list}>
+      {blocks.map((b, blockIndex) =>
         b.group ? (
           <section key={b.group.id} className="step-group">
             <div className="folder-row">
+              <span className="step-number">
+                {String(blockIndex + 1).padStart(2, "0")}
+              </span>
               <button
                 className="folder-toggle"
                 disabled={locked}
-                aria-expanded={!b.group.collapsed}
-                onClick={() =>
+                aria-expanded={expanded(b.group)}
+                onClick={() => {
+                  if (b.group!.collapsed && revealedGroup === b.group!.id) {
+                    setRevealedGroup("");
+                    return;
+                  }
+                  setRevealedGroup("");
                   void update({
                     type: "organize",
                     groups: groups.map((g) =>
@@ -157,10 +234,10 @@ export function StepList({
                         : g,
                     ),
                     stepIds: f.steps.map((s) => s.id),
-                  })
-                }
+                  });
+                }}
               >
-                <span>{b.group.collapsed ? "▸" : "▾"}</span>
+                <span>{expanded(b.group) ? "▾" : "▸"}</span>
                 <FolderIcon />
                 <b>{b.group.name}</b>
                 <small>{b.refs.length}</small>
@@ -179,9 +256,14 @@ export function StepList({
                 <MoreIcon />
               </button>
             </div>
-            {!b.group.collapsed && (
+            {expanded(b.group) && (
               <div className="group-steps">
-                {b.refs.map(row)}
+                {b.refs.map((ref, i) =>
+                  row(
+                    ref,
+                    `${String(blockIndex + 1).padStart(2, "0")}.${i + 1}`,
+                  ),
+                )}
                 {!b.refs.length && (
                   <p className="hint empty-group">Empty group</p>
                 )}
@@ -189,7 +271,7 @@ export function StepList({
             )}
           </section>
         ) : (
-          row(b.refs[0])
+          row(b.refs[0], String(blockIndex + 1).padStart(2, "0"))
         ),
       )}
       {popup.anchor && (

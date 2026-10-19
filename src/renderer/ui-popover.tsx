@@ -20,7 +20,9 @@ export function UiPopover({
   close,
   children,
   className = "",
+  variant = "popover",
 }: {
+  variant?: "popover" | "drawer";
   anchor: DOMRect;
   label: string;
   close: () => void;
@@ -37,6 +39,7 @@ export function UiPopover({
     });
   useLayoutEffect(() => {
     const place = () => {
+      if (variant === "drawer") return;
       const r = ref.current!.getBoundingClientRect();
       setPosition({
         left: Math.max(8, Math.min(anchor.left, innerWidth - r.width - 8)),
@@ -117,8 +120,8 @@ export function UiPopover({
         role="dialog"
         aria-modal="true"
         aria-label={label}
-        className={`ui-popover ${className}`}
-        style={position}
+        className={`${variant === "drawer" ? "ui-drawer" : "ui-popover"} ${className}`}
+        style={variant === "drawer" ? undefined : position}
         onPointerDown={(e) => e.stopPropagation()}
       >
         {children}

@@ -45,6 +45,7 @@ const dataPath = path.join(
     ? [
         "creator-ui",
         "creator-native",
+        "playback-ui",
         "overlay",
         "ux",
         "ocr",
@@ -595,19 +596,21 @@ async function boot() {
   if (selfTest) {
     try {
       const { runSelfTest } = await import(
-        ["creator-ui", "creator-native"].includes(phase)
-          ? "./creator-ui-self-test.js"
-          : phase === "address"
-            ? "./address-self-test.js"
-            : phase === "upload"
-              ? "./upload-self-test.js"
-              : phase === "typing"
-                ? "./typing-self-test.js"
-                : phase === "ocr"
-                  ? "./ocr-self-test.js"
-                  : phase === "ux"
-                    ? "./ux-self-test.js"
-                    : "./self-test.js"
+        phase === "playback-ui"
+          ? "./playback-ui-self-test.js"
+          : ["creator-ui", "creator-native"].includes(phase)
+            ? "./creator-ui-self-test.js"
+            : phase === "address"
+              ? "./address-self-test.js"
+              : phase === "upload"
+                ? "./upload-self-test.js"
+                : phase === "typing"
+                  ? "./typing-self-test.js"
+                  : phase === "ocr"
+                    ? "./ocr-self-test.js"
+                    : phase === "ux"
+                      ? "./ux-self-test.js"
+                      : "./self-test.js"
       );
       await runSelfTest({
         overlays,

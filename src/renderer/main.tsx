@@ -1,3 +1,4 @@
+import { playSequential, playbackResult, type StepPlayback } from "./playback";
 import { StepList } from "./step-list";
 import { Variables, Groups } from "./flow-controls";
 import React, { useEffect, useRef, useState } from "react";
@@ -65,6 +66,26 @@ function Creator() {
   const [editorRevision, setEditorRevision] = useDraft("editorRevision", 0);
   const [editorExpanded, setEditorExpanded] = useDraft("editorExpanded", false);
   const [debugExpanded, setDebugExpanded] = useDraft("debugExpanded", true);
+  const [stepPlayback, setStepPlayback] = useState<
+    Record<string, StepPlayback>
+  >({});
+  const [activeStepId, setActiveStepId] = useState("");
+  const playLock = useRef(false);
+  const listRunIds = useRef(new Set<string>());
+  useEffect(() => {
+    setStepPlayback({});
+    setActiveStepId("");
+    listRunIds.current.clear();
+  }, [state?.flow?.id]);
+  useEffect(() => {
+    if (shell && !playLock.current && results.length)
+      setStepPlayback((previous) => ({
+        ...previous,
+        ...Object.fromEntries(
+          results.map((r) => [r.stepId, playbackResult([r])]),
+        ),
+      }));
+  }, [results]);
   const drag = useRef<{ x: number; y: number } | undefined>(undefined);
   const flowInput = useRef<HTMLInputElement>(null);
   const resultPanel = useRef<HTMLDivElement>(null);
@@ -84,6 +105,7 @@ function Creator() {
       (r) =>
         ["CLICK_AND_TYPE", "UPLOAD_FILE"].includes(r.action) &&
         r.status === "BLOCKED" &&
+        !listRunIds.current.has(r.id) &&
         !r.clickSent,
     );
     if (
@@ -328,6 +350,42 @@ function Creator() {
     } catch (e) {
       setMessage((e as Error).message);
     } finally {
+      setBusy(false);
+    }
+  }
+  async function playSteps(steps: Step[], all = false) {
+    if (busy || playLock.current || shot || !steps.length) return;
+    playLock.current = true;
+    setBusy(true);
+    setResults([]);
+    if (all) setStepPlayback({});
+    try {
+      await setEditorOpen(false);
+      setDebugExpanded(true);
+      await invoke({ type: "panel", panel: "debug", expanded: true });
+      await playSequential(
+        steps,
+        async (step) => {
+          await loadStep(step, false);
+          const next = await invoke<Result[]>({
+            type: "test",
+            stepId: step.id,
+            version: step.version,
+          });
+          next.forEach((result) => listRunIds.current.add(result.id));
+          setResults(next);
+          return next;
+        },
+        (step, progress) => {
+          setActiveStepId(step.id);
+          setStepPlayback((previous) => ({ ...previous, [step.id]: progress }));
+          setMessage(`${step.name}: ${progress.message}`);
+        },
+      );
+    } catch (error) {
+      setMessage(String(error));
+    } finally {
+      playLock.current = false;
       setBusy(false);
     }
   }
@@ -761,6 +819,19 @@ function Creator() {
             {state && (
               <Groups
                 newStep={newStep}
+                playAll={() =>
+                  void playSteps(
+                    state.flow?.steps
+                      .map((ref) =>
+                        state.steps.find(
+                          (step) =>
+                            step.id === ref.id && step.version === ref.version,
+                        )!,
+                      )
+                      .filter(Boolean) ?? [],
+                    true,
+                  )
+                }
                 state={state}
                 locked={locked}
                 update={async (c) => setState(await invoke<State>(c))}
@@ -770,6 +841,9 @@ function Creator() {
               <StepList
                 state={state}
                 selected={selected}
+                playback={stepPlayback}
+                activeStepId={activeStepId}
+                play={(step) => void playSteps([step])}
                 locked={locked}
                 update={async (c) => {
                   try {

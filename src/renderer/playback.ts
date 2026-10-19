@@ -1,0 +1,43 @@
+import type { Result, Step } from "../shared/contracts";
+export type StepPlayback = {
+  status: "running" | "pass" | "fail" | "blocked";
+  message: string;
+  resultStatus?: Result["status"];
+};
+export function playbackResult(results: Result[]): StepPlayback {
+  const failed = results.find((r) => !r.ok),
+    last = failed ?? results.at(-1);
+  if (!last) return { status: "fail", message: "Test returned no result." };
+  return {
+    status: last.status === "BLOCKED" ? "blocked" : last.ok ? "pass" : "fail",
+    message: last.message,
+    resultStatus: last.status,
+  };
+}
+/** UI sequencing only: every action is still sent through the existing Test API. */
+export async function playSequential(
+  steps: Step[],
+  execute: (step: Step) => Promise<Result[]>,
+  progress: (step: Step, state: StepPlayback) => void,
+) {
+  for (const step of steps) {
+    progress(step, { status: "running", message: "Running" });
+    let state: StepPlayback;
+    try {
+      state = playbackResult(await execute(step));
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      state = {
+        status:
+          /variable|Default Pattern|type mismatch|sai kiểu|Zoom|Viewport|không thuộc flow/i.test(
+            message,
+          )
+            ? "blocked"
+            : "fail",
+        message,
+      };
+    }
+    progress(step, state);
+    if (state.status !== "pass") return;
+  }
+}

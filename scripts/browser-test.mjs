@@ -11,6 +11,7 @@ if (
       ![
         "creator-ui",
         "creator-native",
+        "playback-ui",
         "first",
         "second",
         "ux",
@@ -22,13 +23,14 @@ if (
   )
 ) {
   throw new Error(
-    "Supported browser test phases: creator-ui, creator-native, first, second, ux, ocr, typing, upload, address",
+    "Supported browser test phases: creator-ui, creator-native, playback-ui, first, second, ux, ocr, typing, upload, address",
   );
 }
 for (const phase of phases.length
   ? phases
   : [
       "creator-ui",
+      "playback-ui",
       "first",
       "second",
       "ux",
@@ -63,7 +65,9 @@ for (const phase of phases.length
         ".",
         "--self-test",
         `--phase=${phase}`,
-        ...(phase === "creator-native" ? ["--pointer-trace"] : []),
+        ...(["creator-native", "playback-ui"].includes(phase)
+          ? ["--pointer-trace"]
+          : []),
       ],
       {
         cwd: process.cwd(),

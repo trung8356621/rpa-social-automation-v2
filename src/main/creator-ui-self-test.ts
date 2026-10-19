@@ -318,10 +318,10 @@ export async function runSelfTest({
   await until(async () => !browser.visible, "variables open");
   await byText(shell, "+ Variable");
   await shell.executeJavaScript(
-    `(()=>{const input=document.querySelector('[aria-label="Variable key"]');Object.getOwnPropertyDescriptor(HTMLInputElement.prototype,'value').set.call(input,'draft_text');input.dispatchEvent(new Event('input',{bubbles:true}));const value=document.querySelector('.variables-popover textarea');Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype,'value').set.call(value,'Default draft');value.dispatchEvent(new Event('input',{bubbles:true}));})()`,
+    `(()=>{const input=document.querySelector('[aria-label="Variable key"]');Object.getOwnPropertyDescriptor(HTMLInputElement.prototype,'value').set.call(input,'draft_text');input.dispatchEvent(new Event('input',{bubbles:true}));const value=document.querySelector('.variables-drawer textarea');Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype,'value').set.call(value,'Default draft');value.dispatchEvent(new Event('input',{bubbles:true}));})()`,
   );
   await wait(200);
-  await click(shell, ".variables-popover .popover-footer button:nth-child(2)");
+  await click(shell, ".variables-drawer .popover-footer button:nth-child(2)");
   await until(async () => browser.visible, "variables close");
   const variable = store
     .flow()!
@@ -550,7 +550,7 @@ export async function runSelfTest({
   );
   await byText(shell, "Variables");
   const popoverMetrics = await shell.executeJavaScript(
-    `(()=>{const p=document.querySelector('.variables-popover'),r=p.getBoundingClientRect(),t=document.querySelector('.variable-table-body');return{left:r.left,right:r.right,bottom:r.bottom,width:innerWidth,height:innerHeight,internalScroll:t.scrollHeight>t.clientHeight,hit:document.elementFromPoint(r.left+20,r.top+20)?.closest('.variables-popover')===p}})()`,
+    `(()=>{const p=document.querySelector('.variables-drawer'),r=p.getBoundingClientRect(),t=document.querySelector('.variable-table-body');return{left:r.left,right:r.right,bottom:r.bottom,width:innerWidth,height:innerHeight,internalScroll:t.scrollHeight>t.clientHeight,hit:document.elementFromPoint(r.left+20,r.top+20)?.closest('.variables-drawer')===p}})()`,
   );
   assert.ok(
     popoverMetrics.left >= 0 &&
@@ -563,7 +563,7 @@ export async function runSelfTest({
   await fill(".variable-row input", "caption");
   await fill(".variable-row textarea", "UI saved default draft");
   await click(shell, ".variable-row:last-child button");
-  await click(shell, ".variables-popover .popover-footer button:nth-child(2)");
+  await click(shell, ".variables-drawer .popover-footer button:nth-child(2)");
   await until(async () => browser.visible, "variables saved");
   assert.equal(
     store.flow()!.variables!.length,

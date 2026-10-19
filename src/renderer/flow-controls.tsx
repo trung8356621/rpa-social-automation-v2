@@ -40,17 +40,29 @@ export function Variables({ state, update, locked }: Props) {
           anchor={document
             .querySelector(".variables > button")!
             .getBoundingClientRect()}
+          variant="drawer"
           label="Variables"
           close={() =>
             void update({ type: "browserVisible", visible: true }).then(() =>
               setOpen(false),
             )
           }
-          className="variables-popover"
+          className="variables-drawer"
         >
           <div className="popover-heading">
             <b>Variables</b>
             <span>Default Pattern</span>
+            <button
+              className="icon-button"
+              aria-label="Close Variables"
+              onClick={() =>
+                void update({ type: "browserVisible", visible: true }).then(
+                  () => setOpen(false),
+                )
+              }
+            >
+              ×
+            </button>
           </div>
           <div className="variable-table">
             <div className="variable-columns">
@@ -184,7 +196,8 @@ export function Groups({
   update,
   locked,
   newStep,
-}: Props & { newStep: () => void }) {
+  playAll,
+}: Props & { newStep: () => void; playAll: () => void }) {
   const [name, setName] = useState(""),
     [slug, setSlug] = useState(""),
     [customSlug, setCustomSlug] = useState(false),
@@ -195,6 +208,14 @@ export function Groups({
     <>
       <div className="step-heading">
         <b>Steps</b>
+        <button
+          className="play-all"
+          aria-label="Play All"
+          disabled={locked || !f?.steps.length}
+          onClick={playAll}
+        >
+          ▶ Play All
+        </button>
         <button
           disabled={locked || !f}
           onClick={(e) => {
