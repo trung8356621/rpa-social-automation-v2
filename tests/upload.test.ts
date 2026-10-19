@@ -1,3 +1,4 @@
+import { resolvePayload } from "../src/shared/flow-model.js";
 import test from "node:test";
 import assert from "node:assert/strict";
 import { mkdir, writeFile } from "node:fs/promises";
@@ -67,14 +68,21 @@ test("UPLOAD_FILE target/files survive version and Override without changing leg
     });
     const v2 = store.saveStep(
       "Upload",
-      { ...v1.payload, files: [file, path.resolve(".local", "second.png")] },
+      {
+        ...v1.payload,
+        variableId: undefined,
+        files: [file, path.resolve(".local", "second.png")],
+      },
       v1.id,
     );
     const override = store.saveOverride(v1.id, 1, "Other image", [v2.payload]);
     assert.deepEqual(store.step(v1.id, 1), v1);
     assert.deepEqual(store.step(legacy.id, 1), legacy);
     assert.equal(v2.version, 2);
-    assert.equal(override.segment[0].files!.length, 2);
+    assert.equal(
+      resolvePayload(override.segment[0], store.flow()!).files!.length,
+      2,
+    );
   } finally {
     store.close();
   }

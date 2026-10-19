@@ -1,3 +1,4 @@
+import { resolvePayload } from "../shared/flow-model.js";
 import { fixtureUi } from "./fixture-ui.js";
 import assert from "node:assert/strict";
 import { mkdir, writeFile } from "node:fs/promises";
@@ -340,6 +341,12 @@ export async function runSelfTest({
     await wait();
   };
   await select("Action", "CLICK_AND_TYPE");
+  await evaluate(
+    `(async()=>{const state=await window.creator.invoke({type:"variables",variables:[{id:"combined-text",key:"draft",type:"text"}],values:{"combined-text":${JSON.stringify(text)}}});window.creator.writeDraft("state",state);window.creator.writeDraft("variableId","combined-text");})()`,
+  );
+  ui.reload();
+  await wait(500);
+
   await select("Phương thức nhập", "keyboard");
   await click("Chụp & crop ROI");
   await until(
@@ -384,7 +391,7 @@ export async function runSelfTest({
   const combinedRef = store.flow()!.steps[0];
   const combinedBase = store.step(combinedRef.id, 1);
   assert.equal(combinedBase.payload.action, "CLICK_AND_TYPE");
-  assert.equal(combinedBase.payload.text, text);
+  assert.equal(resolvePayload(combinedBase.payload, store.flow()!).text, text);
   captures = 0;
   browser.capture = async () => {
     captures++;

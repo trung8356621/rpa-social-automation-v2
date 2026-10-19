@@ -7,6 +7,7 @@ export class CreatorOverlays {
   readonly debug: WebContentsView;
   private expanded = { editor: false, debug: true };
   private visible = true;
+  scroll = {left: 0, top: 0};
   constructor(
     readonly window: BrowserWindow,
     preload: string,
@@ -43,6 +44,8 @@ export class CreatorOverlays {
       width,
       height,
     );
+    bounds.browser.x -= this.scroll.left;
+    bounds.browser.y -= this.scroll.top;
     Object.assign(this.browser.bounds, bounds.browser);
     this.browser.view.setBounds(bounds.browser);
     // This native surface exactly matches the visible Debug panel, including collapse.

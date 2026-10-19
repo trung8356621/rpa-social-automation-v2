@@ -1,3 +1,5 @@
+import { resolvePayload } from "../shared/flow-model.js";
+import { validatePayload } from "./storage.js";
 import path from "node:path";
 import { readFile, writeFile } from "node:fs/promises";
 import { randomUUID } from "node:crypto";
@@ -90,7 +92,11 @@ export class Runtime {
         stepId,
         version,
         overrideId,
-        payloads: override?.segment || [step.payload],
+        payloads: (override?.segment || [step.payload]).map((p) => {
+          const resolved = resolvePayload(p, flow);
+          validatePayload(resolved);
+          return resolved;
+        }),
         source: override ? ("override" as const) : ("base" as const),
       };
     });

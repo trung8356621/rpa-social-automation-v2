@@ -59,7 +59,7 @@ export async function runSelfTest(ctx: {
   const probe = () =>
     browser.view.webContents.executeJavaScript("window.fixtureRead()");
   await mkdir(path.join(project, "artifacts"), { recursive: true });
-  assert.equal(window.isResizable(), false);
+  assert.equal(window.isResizable(), true);
   assert.equal(window.isMaximizable(), true);
   assert.equal(window.isFullScreenable(), true);
   passed("fixed-window", window.getContentSize());
@@ -346,8 +346,10 @@ export async function runSelfTest(ctx: {
     passed("ui-redesign-to-v2");
     await uiSelect("Action", "TYPE_ONLY");
     await uiEval(
-      `(()=>{const t=document.querySelector('[aria-label="Nội dung TYPE_ONLY"]');Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype,'value').set.call(t,'Bản nháp UI 👋');t.dispatchEvent(new Event('input',{bubbles:true}));})()`,
+      `(async()=>{const state=await window.creator.invoke({type:"variables",variables:[{id:"fixture-text",key:"draft",type:"text"}],values:{"fixture-text":"Bản nháp UI 👋"}});window.creator.writeDraft("state",state);window.creator.writeDraft("variableId","fixture-text");})()`,
     );
+    ui.reload();
+    await wait(500);
     await wait();
     await uiClick("Lưu redesign");
     assert.equal(store.flow()?.steps[0].version, 3);

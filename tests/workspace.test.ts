@@ -31,8 +31,8 @@ test("Editor occupies only the column beside Step List; Debug collapse frees the
           ...(size as [number, number]),
         );
         assert.equal(layout.browser.height, 560);
-        assert.equal(layout.browser.width, editor ? 672 : 1024);
-        assert.equal(layout.browser.x, editor ? 672 : 320);
+        assert.equal(layout.browser.width, 1024);
+        assert.equal(layout.browser.x, editor && size[0] >= 1696 ? 672 : 320);
         assert.equal(layout.debug.x, layout.browser.x);
         assert.equal(layout.debug.y + layout.debug.height, size[1]);
         assert.equal(layout.debug.height, debug ? 200 : 36);
@@ -81,7 +81,7 @@ test("legacy targets retain 1024x560 at the flow zoom and never inherit current 
         ...env,
         zoom: 0.8,
       }),
-    /Ẩn Editor/,
+    /Crop lại/,
   );
   assert.doesNotThrow(() =>
     assertVisualEnvironment({ action: "CLICK_TARGET", target: legacy }, 0.8, {

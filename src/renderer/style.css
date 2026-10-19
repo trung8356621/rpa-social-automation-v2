@@ -544,3 +544,78 @@ body[data-panel="debug"] .panel {
   display: block;
   margin-top: 7px;
 }
+
+body[data-panel="shell"] {
+  width: max(100vw, 1344px);
+  height: 100vh;
+  overflow: auto;
+}
+.variables {
+  position: relative;
+}
+.variables-popover {
+  position: absolute;
+  right: 0;
+  top: 36px;
+  width: 620px;
+  max-height: 70vh;
+  overflow: auto;
+  z-index: 100;
+  padding: 16px;
+  background: #142238;
+  border: 1px solid #567;
+}
+.variable-row {
+  display: grid;
+  grid-template-columns: 1fr 90px 2fr 32px;
+  gap: 5px;
+  margin: 8px 0;
+}
+.groups {
+  margin-top: 12px;
+}
+.groups input {
+  margin-top: 4px;
+}
+.ocr-confirmed {
+  position: relative;
+  padding-right: 28px;
+}
+.ocr-clear {
+  position: absolute;
+  right: 0;
+  top: 0;
+  padding: 1px 5px;
+}
+
+body[data-panel="shell"] .editor-column {
+  left: var(--editor-left, 0px);
+  width: var(--editor-width, 320px);
+  z-index: 10;
+  background: #142238;
+}
+
+.step-group {
+  border: 1px solid #456;
+  margin: 12px 0;
+  padding: 5px;
+  min-width: 0;
+}
+.step-row {
+  padding-bottom: 8px;
+  border-bottom: 1px solid #283d56;
+}
+
+body[data-panel="shell"] main {
+  min-width: 1344px;
+  min-height: 648px;
+}
+
+.workspace-scroll {
+  display: flex;
+  gap: 4px;
+  position: sticky;
+  left: 4px;
+  z-index: 20;
+  background: #17263b;
+}

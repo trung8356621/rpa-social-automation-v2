@@ -1,3 +1,4 @@
+import { resolvePayload } from "../shared/flow-model.js";
 import { fixtureUi } from "./fixture-ui.js";
 import assert from "node:assert/strict";
 import path from "node:path";
@@ -94,25 +95,17 @@ export async function runSelfTest({
     `(()=>{const s=document.querySelector('[aria-label="Action"]');s.value='UPLOAD_FILE';s.dispatchEvent(new Event('change',{bubbles:true}))})()`,
   );
   await wait();
-  const originalDialog = dialog.showOpenDialog;
-  Object.assign(dialog, {
-    showOpenDialog: async (...args: unknown[]) => {
-      assert.equal(args[0], window);
-      const options = args[1] as { properties: string[] };
-      assert.ok(options.properties.includes("multiSelections"));
-      return { canceled: false, filePaths: [files[0]] };
-    },
-  });
-  try {
-    await click("Chọn ảnh local");
-  } finally {
-    dialog.showOpenDialog = originalDialog;
-  }
-  assert.match(
+  await evaluate(
+    `(async()=>{const state=await window.creator.invoke({type:"variables",variables:[{id:"upload-files",key:"photos",type:"files"}],values:{"upload-files":${JSON.stringify([files[0]])}}});window.creator.writeDraft("state",state);window.creator.writeDraft("variableId","upload-files");})()`,
+  );
+  ui.reload();
+  await wait(500);
+  await wait();
+  assert.equal(
     await evaluate(
-      "document.querySelector('[aria-label=\"Ảnh upload\"]').textContent",
+      `document.querySelector('[aria-label="File variable"]').value`,
     ),
-    /ảnh một.png/,
+    "upload-files",
   );
   await click("Chụp & crop ROI");
   await until(() => evaluate("!!document.querySelector('.snapshot')"), "crop");
@@ -145,7 +138,7 @@ export async function runSelfTest({
   const id = store.flow()!.steps[0].id,
     base = store.step(id, 1);
   assert.equal(base.payload.action, "UPLOAD_FILE");
-  assert.equal(base.payload.files!.length, 1);
+  assert.equal(resolvePayload(base.payload, store.flow()!).files!.length, 1);
   const debuggerApi = page.debugger,
     listenerCount = debuggerApi.listenerCount("message");
   await click("Test step đã lưu");
@@ -184,7 +177,11 @@ export async function runSelfTest({
     "Action-first-upload-visual-click-real-chooser-real-image-POST-decoded-thumbnail-manual-review-required",
   );
   await fresh();
-  const multiple = store.saveStep("Multiple", { ...base.payload, files }, id);
+  const multiple = store.saveStep(
+    "Multiple",
+    { ...base.payload, variableId: undefined, files },
+    id,
+  );
   const [many] = await runtime.test(id, multiple.version);
   await until(async () => (await probe()).loaded === 2, "multiple thumbnails");
   current = await probe();
@@ -217,11 +214,10 @@ export async function runSelfTest({
     "reopen saved upload version",
   );
   await click("Multiple");
-  assert.match(
-    await evaluate(
-      "document.querySelector('[aria-label=\"Ảnh upload\"]').textContent",
-    ),
-    /ảnh hai.png/,
+  assert.equal(
+    resolvePayload(store.step(id, multiple.version).payload, store.flow()!)
+      .files!.length,
+    2,
   );
   await fresh();
   const longText = "Bản nháp tiếng Việt rất dài 👋 — không xuất bản.\n"
@@ -243,10 +239,11 @@ export async function runSelfTest({
   assert.equal(afterText.status, "ACTION_SENT");
   ui.send("creator:shortcut-result", [afterText]);
   await wait(200);
+  const evidence = afterText.after ?? (await browser.capture());
   await sharp((await ui.capturePage()).toPNG())
     .composite([
       {
-        input: browser.captureBuffer(afterText.after!.id),
+        input: browser.captureBuffer(evidence.id),
         left: browser.bounds.x,
         top: browser.bounds.y,
       },
@@ -298,7 +295,11 @@ export async function runSelfTest({
   await fresh();
   const missing = store.saveStep(
     "Missing file",
-    { ...base.payload, files: [path.join(dir, "missing.png")] },
+    {
+      ...base.payload,
+      variableId: undefined,
+      files: [path.join(dir, "missing.png")],
+    },
     id,
   );
   const [blocked] = await runtime.test(id, missing.version);

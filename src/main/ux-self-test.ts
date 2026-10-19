@@ -276,10 +276,13 @@ export async function runSelfTest({
           "fullscreen fills display height",
         );
       }
-      assert.equal(window.isResizable(), false);
+      assert.equal(window.isResizable(), true);
       assert.equal(window.isMaximizable(), true);
       assert.equal(window.isFullScreenable(), true);
-      assert.deepEqual(browser.view.getBounds(), baseBounds);
+      assert.deepEqual(browser.view.getBounds(), {
+        ...baseBounds,
+        x: window.getContentSize()[0] >= 1696 ? 672 : 320,
+      });
       assert.equal(browser.view.webContents.getZoomFactor(), zoom);
       assert.equal(store.flow()!.zoom, zoom);
       const metrics = await browser.view.webContents.executeJavaScript(

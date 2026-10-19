@@ -1,3 +1,9 @@
+import {
+  resolvePayload,
+  validateVariables,
+  validateOrganization,
+} from "../shared/flow-model.js";
+import type { Variable, StepGroup } from "../shared/contracts.js";
 import { DatabaseSync } from "node:sqlite";
 import { randomUUID } from "node:crypto";
 import { validateUploadFileList } from "./upload-files.js";
@@ -22,9 +28,11 @@ export function validatePayload(p: Payload) {
     ].includes(p.action)
   )
     throw new Error("Action không hỗ trợ.");
-  if (p.action === "UPLOAD_FILE") validateUploadFileList(p.files);
+  if (p.action === "UPLOAD_FILE" && !p.variableId)
+    validateUploadFileList(p.files);
   if (
     ["TYPE_ONLY", "CLICK_AND_TYPE"].includes(p.action) &&
+    !p.variableId &&
     (!p.text || p.text.length > 20000)
   )
     throw new Error("Action nhập liệu cần text, tối đa 20.000 ký tự.");
@@ -106,13 +114,137 @@ export class Store {
   readonly db: DatabaseSync;
   constructor(file: string) {
     this.db = new DatabaseSync(file);
+    const schema = this.db.prepare("PRAGMA user_version").get() as {
+      user_version: number;
+    };
+    if (schema.user_version > 2) {
+      this.db.close();
+      throw new Error(
+        "Database schema is newer than this Creator; migration refused, data preserved.",
+      );
+    }
     this.db.exec(`PRAGMA journal_mode=WAL; PRAGMA foreign_keys=ON;
       CREATE TABLE IF NOT EXISTS settings(key TEXT PRIMARY KEY,value TEXT NOT NULL);
       CREATE TABLE IF NOT EXISTS flows(id TEXT PRIMARY KEY,payload TEXT NOT NULL);
       CREATE TABLE IF NOT EXISTS steps(id TEXT NOT NULL,version INTEGER NOT NULL,payload TEXT NOT NULL,PRIMARY KEY(id,version));
       CREATE TABLE IF NOT EXISTS overrides(id TEXT PRIMARY KEY,step_id TEXT NOT NULL,base_version INTEGER NOT NULL,payload TEXT NOT NULL,FOREIGN KEY(step_id,base_version) REFERENCES steps(id,version));
       CREATE TABLE IF NOT EXISTS runs(id TEXT PRIMARY KEY,payload TEXT NOT NULL);
-      PRAGMA user_version=1;`);
+      `);
+    try {
+      this.migrate();
+    } catch (e) {
+      this.db.close();
+      throw e;
+    }
+  }
+  private importLegacy(payload: Payload, f: Flow): Payload {
+    const p = { ...payload };
+    if (!["TYPE_ONLY", "CLICK_AND_TYPE", "UPLOAD_FILE"].includes(p.action))
+      return p;
+    if (!p.variableId) {
+      const value = p.action === "UPLOAD_FILE" ? p.files : p.text;
+      if (value === undefined)
+        throw new Error("Legacy action missing text/files; migration aborted");
+      const vars = (f.variables ??= []);
+      let n = vars.length + 1;
+      while (vars.some((v) => v.key === `legacy_${n}`)) n++;
+      const v: Variable = {
+        id: randomUUID(),
+        key: `legacy_${n}`,
+        type: p.action === "UPLOAD_FILE" ? "files" : "text",
+      };
+      vars.push(v);
+      (f.defaultPattern ??= { values: {} }).values[v.id] = value;
+      p.variableId = v.id;
+    }
+    const variable = f.variables?.find((v) => v.id === p.variableId);
+    if (!variable)
+      throw new Error("Referenced variable is missing; payload preserved");
+    const inline = p.action === "UPLOAD_FILE" ? p.files : p.text;
+    if (
+      inline !== undefined &&
+      JSON.stringify(inline) !==
+        JSON.stringify(f.defaultPattern?.values[variable.id])
+    )
+      throw new Error(
+        "Inline value conflicts with variable Default Pattern; payload preserved",
+      );
+    delete p.text;
+    delete p.files;
+    return p;
+  }
+  private migrate() {
+    this.db.exec("BEGIN IMMEDIATE");
+    try {
+      for (const f of this.flows()) {
+        f.variables ??= [];
+        f.defaultPattern ??= { values: {} };
+        f.groups ??= [];
+        for (const s of this.steps().filter((s) =>
+          f.steps.some((r) => r.id === s.id),
+        )) {
+          s.payload = this.importLegacy(s.payload, f);
+          this.db
+            .prepare("UPDATE steps SET payload=? WHERE id=? AND version=?")
+            .run(JSON.stringify(s), s.id, s.version);
+        }
+        for (const o of this.overrides().filter((o) =>
+          f.steps.some((r) => r.id === o.stepId),
+        )) {
+          o.segment = o.segment.map((p) => this.importLegacy(p, f));
+          this.db
+            .prepare("UPDATE overrides SET payload=? WHERE id=?")
+            .run(JSON.stringify(o), o.id);
+        }
+        this.db
+          .prepare("UPDATE flows SET payload=? WHERE id=?")
+          .run(JSON.stringify(f), f.id);
+      }
+      this.db.exec("PRAGMA user_version=2; COMMIT");
+    } catch (e) {
+      this.db.exec("ROLLBACK");
+      throw new Error(`Migration aborted; data preserved: ${String(e)}`);
+    }
+  }
+  updateVariables(
+    variables: Variable[],
+    values: Record<string, string | string[]>,
+  ) {
+    const f = this.flow();
+    if (!f) throw new Error("Create flow first");
+    validateVariables(variables, values);
+    const used = [
+      ...this.steps()
+        .filter((s) => f.steps.some((r) => r.id === s.id))
+        .map((s) => s.payload),
+      ...this.overrides()
+        .filter((o) => f.steps.some((r) => r.id === o.stepId))
+        .flatMap((o) => o.segment),
+    ];
+    for (const p of used)
+      if (
+        p.variableId &&
+        !variables.some(
+          (v) =>
+            v.id === p.variableId &&
+            v.type ===
+              f.variables?.find((old) => old.id === p.variableId)?.type,
+        )
+      )
+        throw new Error(
+          "Variable is used by a Step/version/Override; cannot delete or change type",
+        );
+    f.variables = variables;
+    f.defaultPattern = { values };
+    this.saveFlow(f);
+  }
+  organize(groups: StepGroup[], stepIds: string[]) {
+    const f = this.flow();
+    if (!f) throw new Error("Create flow first");
+    validateOrganization(f, groups, stepIds);
+    f.groups = groups;
+    f.steps = stepIds.map((id) => f.steps.find((s) => s.id === id)!);
+    this.saveFlow(f);
   }
   setting(key: string): string | undefined {
     return (
@@ -156,6 +288,9 @@ export class Store {
       name: name.trim() || "Untitled flow",
       zoom: validateZoom(zoom),
       steps: [],
+      groups: [],
+      variables: [],
+      defaultPattern: { values: {} },
     };
     this.saveFlow(f);
     return f;
@@ -178,6 +313,8 @@ export class Store {
     validatePayload(payload);
     const f = this.flow();
     if (!f) throw new Error("Tạo flow trước.");
+    payload = this.importLegacy(payload, f);
+    resolvePayload(payload, f);
     if (id && !f.steps.some((s) => s.id === id))
       throw new Error("Step không thuộc flow đang mở.");
     const version = id
@@ -235,6 +372,11 @@ export class Store {
     if (!Array.isArray(segment) || !segment.length || segment.length > 8)
       throw new Error("Override cần 1–8 action.");
     segment.forEach(validatePayload);
+    const flow = this.flow();
+    if (!flow || !flow.steps.some((s) => s.id === stepId))
+      throw new Error("Step outside flow");
+    segment = segment.map((p) => this.importLegacy(p, flow));
+    segment.forEach((p) => resolvePayload(p, flow));
     const o: Override = {
       id: randomUUID(),
       stepId,
@@ -242,9 +384,17 @@ export class Store {
       name: name.trim() || "Manual context",
       segment,
     };
-    this.db
-      .prepare("INSERT INTO overrides VALUES(?,?,?,?)")
-      .run(o.id, stepId, baseVersion, JSON.stringify(o));
+    this.db.exec("BEGIN");
+    try {
+      this.saveFlow(flow);
+      this.db
+        .prepare("INSERT INTO overrides VALUES(?,?,?,?)")
+        .run(o.id, stepId, baseVersion, JSON.stringify(o));
+      this.db.exec("COMMIT");
+    } catch (e) {
+      this.db.exec("ROLLBACK");
+      throw e;
+    }
     return o;
   }
   close() {

@@ -28,6 +28,8 @@ export type VisualTarget = {
 };
 export type Payload = {
   action: Action;
+  variableId?: string;
+  /** Legacy input, migrated by Store. */
   text?: string;
   inputMethod?: "keyboard" | "clipboard";
   files?: string[];
@@ -51,7 +53,23 @@ export type Override = {
   name: string;
   segment: Payload[];
 };
+export type Variable = {
+  id: string;
+  key: string;
+  type: "text" | "file" | "files";
+  description?: string;
+};
+export type StepGroup = {
+  id: string;
+  name: string;
+  slug: string;
+  collapsed: boolean;
+  stepIds: string[];
+};
 export type Flow = {
+  variables?: Variable[];
+  defaultPattern?: { values: Record<string, string | string[]> };
+  groups?: StepGroup[];
   id: string;
   name: string;
   zoom: number;
@@ -147,6 +165,13 @@ export type State = {
 };
 export type Command =
   | { type: "state" }
+  | { type: "workspaceScroll"; left: number; top: number }
+  | { type: "organize"; groups: StepGroup[]; stepIds: string[] }
+  | {
+      type: "variables";
+      variables: Variable[];
+      values: Record<string, string | string[]>;
+    }
   | { type: "pointerReport" }
   | { type: "panel"; panel: "editor" | "debug"; expanded: boolean }
   | { type: "focusFlow" }
@@ -183,6 +208,7 @@ export type Command =
   | { type: "disarmTest" }
   | { type: "browserVisible"; visible: boolean };
 export const DRAFT_KEYS = [
+  "variableId",
   "state",
   "action",
   "name",

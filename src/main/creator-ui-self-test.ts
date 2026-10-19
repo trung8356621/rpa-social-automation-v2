@@ -30,7 +30,8 @@ export async function runSelfTest({
   const shell = window.webContents,
     page = browser.view.webContents,
     debug = overlays.debug.webContents;
-  const native = phase === "creator-native",
+  // Native overlay hit testing requires OS input; sendInputEvent bypasses it.
+  const native = true,
     entries: string[] = [];
   const pass = (name: string) => {
     entries.push(name);
@@ -47,7 +48,7 @@ export async function runSelfTest({
     const p = await wc.executeJavaScript(
       `(()=>{const e=document.querySelector(${JSON.stringify(selector)});if(!e||e.disabled)throw Error('Missing/disabled '+${JSON.stringify(selector)});e.scrollIntoView({block:'nearest'});const r=e.getBoundingClientRect();return{x:Math.round(r.x+r.width/2),y:Math.round(r.y+r.height/2)}})()`,
     );
-    if (native) {
+    if (native || wc === page) {
       const offset =
         wc === page
           ? browser.bounds
@@ -59,17 +60,23 @@ export async function runSelfTest({
         x: origin.x + offset.x + p.x,
         y: origin.y + offset.y + p.y,
       });
-      await promisify(execFile)("powershell.exe", [
-        "-NoProfile",
-        "-File",
-        path.join(project, "scripts/native-click.ps1"),
-        "-X",
-        String(point.x),
-        "-Y",
-        String(point.y),
-      ]);
+      await promisify(execFile)(
+        "powershell.exe",
+        [
+          "-NoProfile",
+          "-File",
+          path.join(project, "scripts/native-click.ps1"),
+          "-X",
+          String(point.x),
+          "-Y",
+          String(point.y),
+        ],
+        { windowsHide: true },
+      );
     } else {
       wc.focus();
+      await wait(100);
+      wc.sendInputEvent({ type: "mouseMove", ...p });
       for (const type of ["mouseDown", "mouseUp"] as const)
         wc.sendInputEvent({ type, ...p, button: "left", clickCount: 1 });
     }
@@ -126,15 +133,15 @@ export async function runSelfTest({
     "editor opened",
   );
   assert.deepEqual(browser.view.getBounds(), {
-    x: 672,
+    x: 320,
     y: 88,
-    width: 672,
+    width: 1024,
     height: 560,
   });
   const editorRect = await shell.executeJavaScript(
     '(()=>{const r=document.querySelector(".editor-column").getBoundingClientRect();return{x:r.x,y:r.y,width:r.width,height:r.height}})()',
   );
-  assert.deepEqual(editorRect, { x: 320, y: 88, width: 352, height: 560 });
+  assert.deepEqual(editorRect, { x: 0, y: 88, width: 320, height: 560 });
   pass("editor-column-beside-list-browser-reflows-width-only");
   const openBounds = { ...browser.bounds };
   await click(debug, ".panel-heading button");
@@ -170,6 +177,7 @@ export async function runSelfTest({
   );
   assert.equal(navigations, 0);
   assert.equal(page.getURL(), url);
+  await click(shell, ".editor-column .panel-heading button");
   await byText(shell, "Tạo flow");
   await until(async () => !!store.flow(), "flow");
   await byText(shell, "+ Step mới");
@@ -211,7 +219,7 @@ export async function runSelfTest({
   await until(async () => store.flow()!.steps.length === 1, "saved");
   const step = store.step(store.flow()!.steps[0].id, 1);
   assert.deepEqual(step.payload.target!.environment, {
-    width: 672,
+    width: 1024,
     height: 560,
     zoom,
   });
@@ -233,32 +241,12 @@ export async function runSelfTest({
   await click(shell, '[aria-label="Mở/ẩn Step Editor"]');
   assert.equal(browser.bounds.width, 1024);
   assert.equal(page.getZoomFactor(), zoom);
-  let captures = 0;
-  const original = browser.capture.bind(browser);
-  browser.capture = async () => {
-    captures++;
-    return original();
-  };
-  try {
-    await assert.rejects(runtime.test(step.id, 1), /Viewport không khớp/);
-  } finally {
-    browser.capture = original;
-  }
-  assert.equal(captures, 0);
+  await runtime.test(step.id, 1);
   assert.equal(
     (await page.executeJavaScript("window.fixtureRead()")).clicks,
-    2,
+    3,
   );
-  pass("viewport-mismatch-blocks-before-capture-click-type-or-upload");
-  await until(
-    () =>
-      debug.executeJavaScript(
-        '!!document.querySelector(".environment-warning")',
-      ),
-    "mismatch guidance",
-  );
-  await byText(debug, "Khôi phục viewport target");
-  assert.deepEqual(browser.view.getBounds(), openBounds);
+  pass("editor-toggle-preserves-viewport-and-target-coordinates");
   await byText(debug, "Test step đã lưu");
   await until(
     () =>
@@ -277,13 +265,13 @@ export async function runSelfTest({
   );
   await click(shell, "header > .primary");
   await until(async () => store.flow()!.steps[0].version === 2, "version");
-  assert.equal(store.step(step.id, 1).payload.target!.environment!.width, 672);
+  assert.equal(store.step(step.id, 1).payload.target!.environment!.width, 1024);
   const override = store.saveOverride(step.id, 2, "legacy target", [
     {
       ...step.payload,
       target: {
         ...step.payload.target!,
-        environment: { width: 1024, height: 560, zoom },
+        environment: { width: 672, height: 560, zoom },
       },
     },
   ]);
@@ -292,11 +280,21 @@ export async function runSelfTest({
     /Viewport không khớp/,
   );
   pass("restore-retest-review-version-and-override-retain-environment-guard");
+  if (overlays.editorOpen)
+    await click(shell, ".editor-column .panel-heading button");
+  const beforeSelection = (await page.executeJavaScript("window.fixtureRead()"))
+    .clicks;
   await click(shell, ".step");
-  assert.equal(overlays.editorOpen, true);
+  assert.equal(
+    (await page.executeJavaScript("window.fixtureRead()")).clicks,
+    beforeSelection,
+  );
+  assert.equal(overlays.debugOpen, true);
+  assert.equal(overlays.editorOpen, false);
   window.setFullScreen(true);
   await wait(300);
-  assert.deepEqual(browser.view.getBounds(), openBounds);
+  assert.equal(browser.bounds.width, 1024);
+  assert.equal(browser.bounds.height, 560);
   assert.equal(
     overlays.debug.getBounds().y + overlays.debug.getBounds().height,
     window.getContentSize()[1],
@@ -306,6 +304,74 @@ export async function runSelfTest({
   assert.equal(browser.bounds.height, 560);
   assert.equal(page.getZoomFactor(), zoom);
   pass("fullscreen-bottom-anchor-and-step-selection-preserve-height-zoom");
+  // Fixture-only modal proves panel changes retain the live document and modal.
+  await page.executeJavaScript(
+    `{const d=document.createElement('dialog');d.id='panel-modal';d.textContent='Fixture modal';document.body.append(d);d.showModal();}`,
+  );
+  await byText(shell, "Variables");
+  await until(async () => !browser.visible, "variables open");
+  await byText(shell, "+ Variable");
+  await shell.executeJavaScript(
+    `(()=>{const input=document.querySelector('[aria-label="Variable key"]');Object.getOwnPropertyDescriptor(HTMLInputElement.prototype,'value').set.call(input,'draft_text');input.dispatchEvent(new Event('input',{bubbles:true}));const value=document.querySelector('.variables-popover textarea');Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype,'value').set.call(value,'Default draft');value.dispatchEvent(new Event('input',{bubbles:true}));})()`,
+  );
+  await wait(200);
+  await click(shell, ".variables-popover button:nth-last-of-type(2)");
+  await until(async () => browser.visible, "variables close");
+  const variable = store
+    .flow()!
+    .variables!.find((v) => v.key === "draft_text")!;
+  assert.equal(
+    store.flow()!.defaultPattern!.values[variable.id],
+    "Default draft",
+  );
+  assert.equal(
+    await page.executeJavaScript(`document.querySelector('#panel-modal').open`),
+    true,
+  );
+  assert.equal(navigations, 0);
+  await page.executeJavaScript(
+    `document.querySelector('#panel-modal').close()`,
+  );
+  pass(
+    "variables-popover-saves-template-default-pattern-and-preserves-session-modal",
+  );
+  const variableStep = store.saveStep("Variable input", {
+    action: "TYPE_ONLY",
+    variableId: variable.id,
+  });
+  store.updateVariables(store.flow()!.variables!, {});
+  const beforeMissing = (await page.executeJavaScript("window.fixtureRead()"))
+    .clicks;
+  await assert.rejects(
+    runtime.testPair(step.id, variableStep.id, 0),
+    /missing Default Pattern/,
+  );
+  assert.equal(
+    (await page.executeJavaScript("window.fixtureRead()")).clicks,
+    beforeMissing,
+  );
+  await assert.rejects(
+    runtime.test(variableStep.id, 1),
+    /missing Default Pattern/,
+  );
+  store.updateVariables(store.flow()!.variables!, {
+    [variable.id]: "Changed default",
+  });
+  assert.equal(store.step(variableStep.id, 1).version, 1);
+  pass(
+    "missing-default-blocks-before-runtime-and-default-edit-keeps-Step-version",
+  );
+  window.setContentSize(1100, 648);
+  await wait(300);
+  await shell.executeJavaScript(`window.scrollTo(200,0)`);
+  await until(async () => browser.bounds.x === 120, "workspace scroll");
+  assert.equal(browser.bounds.width, 1024);
+  assert.equal(browser.bounds.height, 560);
+  assert.equal(page.getZoomFactor(), zoom);
+  await shell.executeJavaScript(`window.scrollTo(0,0)`);
+  window.setContentSize(1344, 648);
+  await wait(300);
+  pass("narrow-workspace-scroll-repositions-browser-without-resizing-viewport");
   const layers = [
     {
       input: (await page.capturePage()).toPNG(),
@@ -335,6 +401,7 @@ export async function runSelfTest({
         fixtureOnly: true,
         facebookTested: false,
         nativeInput: native,
+        pageInput: "physical Windows mouse",
       },
       null,
       2,

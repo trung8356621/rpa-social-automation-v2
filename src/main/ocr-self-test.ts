@@ -101,12 +101,14 @@ export async function runSelfTest({
   window.setAlwaysOnTop(true);
   await browser.navigate("http://127.0.0.1:47834/ocr");
   await wait(300);
-  await window.webContents.executeJavaScript('window.creator.invoke({type:"panel",panel:"editor",expanded:true})');
+  await click("Tạo flow");
+  await window.webContents.executeJavaScript(
+    'window.creator.invoke({type:"panel",panel:"editor",expanded:true})',
+  );
   await until(
     () => evaluate(`!!document.querySelector('#roi-flow-help')`),
     "mounted",
   );
-  await click("Tạo flow");
   await crop(100, 110, 360, 64);
   assert.ok(
     await evaluate(
@@ -124,6 +126,30 @@ export async function runSelfTest({
   assert.equal(store.step(id, 1).payload.target!.ocr, undefined);
   pass("Vietnamese-ROI-real-local-OCR-no-automatic-selection-image-only-save");
   await click("Đọc lại OCR");
+  await click("Tạo bài viết");
+  const confirmedTarget = await evaluate(
+    `window.creator.readDraft("target").value`,
+  );
+  const clearPoint = await evaluate(
+    `(()=>{const e=document.querySelector('[aria-label="Clear confirmed OCR"]');e.scrollIntoView({block:'nearest'});const r=e.getBoundingClientRect();return{x:r.x+r.width/2,y:r.y+r.height/2}})()`,
+  );
+  ui.focus();
+  for (const type of ["mouseDown", "mouseUp"] as const)
+    ui.sendInputEvent({
+      type,
+      x: Math.round(clearPoint.x),
+      y: Math.round(clearPoint.y),
+      button: "left",
+      clickCount: 1,
+    });
+  await wait(200);
+  const clearedTarget = await evaluate(
+    `window.creator.readDraft("target").value`,
+  );
+  assert.equal(clearedTarget.ocr, undefined);
+  assert.equal(clearedTarget.asset, confirmedTarget.asset);
+  assert.deepEqual(clearedTarget.roi, confirmedTarget.roi);
+  pass("OCR-X-clears-only-confirmation-preserves-ROI-and-target-asset");
   await click("Tạo bài viết");
   await click("Lưu redesign");
   assert.equal(store.step(id, 2).payload.target!.ocr!.text, "Tạo bài viết");
@@ -273,7 +299,9 @@ export async function runSelfTest({
     await page.executeJavaScript("!!document.querySelector('#live-draft')"),
   );
   assert.match(
-    await evaluate(`document.querySelector('[aria-label="Step Editor"]').textContent`),
+    await evaluate(
+      `document.querySelector('[aria-label="Step Editor"]').textContent`,
+    ),
     /Lưu Base v1/,
   );
   pass(

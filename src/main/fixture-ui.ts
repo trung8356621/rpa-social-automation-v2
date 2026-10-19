@@ -63,6 +63,22 @@ export function fixtureUi(window: BrowserWindow) {
               `(()=>{const e=${text ? `[...document.querySelectorAll('button')].find(b=>b.textContent.includes(${text}))` : selector ? `document.querySelector(${JSON.stringify(selector)})` : "null"};for(let p=e?.parentElement;p;p=p.parentElement)if(p.tagName==='DETAILS')p.open=true;})()`,
             );
           }
+          // The narrow layout overlays the Step List. Reveal it before an
+          // existing fixture operates a sidebar control, using the real command.
+          if (
+            wc === window.webContents &&
+            code.includes("scrollIntoView") &&
+            overlays.editorOpen &&
+            overlays.browser.bounds.x === 320
+          ) {
+            const sidebar = await wc.executeJavaScript(
+              `(()=>{const e=${buttonText ? `[...document.querySelectorAll('button')].find(b=>b.textContent.includes(${buttonText}))` : selector ? `document.querySelector(${JSON.stringify(selector)})` : "null"};return !!e?.closest('aside')})()`,
+            );
+            if (sidebar)
+              await wc.executeJavaScript(
+                `window.creator.invoke({type:"panel",panel:"editor",expanded:false})`,
+              );
+          }
           const result = await wc.executeJavaScript(code);
           if (
             buttonText &&

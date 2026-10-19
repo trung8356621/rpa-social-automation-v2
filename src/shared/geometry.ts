@@ -53,19 +53,23 @@ export function imageToInput(
 }
 
 export const EDITOR_WIDTH = 352;
-/** Two canonical viewport widths, independent of fullscreen/restore. */
+/** Fixed browser viewport; narrow windows place Editor over the Step List. */
 export function workspaceLayout(
   editorOpen: boolean,
   debugOpen: boolean,
   contentWidth: number,
   contentHeight: number,
 ) {
-  const x = SIDE_WIDTH + (editorOpen ? EDITOR_WIDTH : 0);
+  const x =
+    SIDE_WIDTH +
+    (editorOpen && contentWidth >= SIDE_WIDTH + EDITOR_WIDTH + WEB_WIDTH
+      ? EDITOR_WIDTH
+      : 0);
   return {
     browser: {
       x,
       y: TOP_HEIGHT,
-      width: WEB_WIDTH - (editorOpen ? EDITOR_WIDTH : 0),
+      width: WEB_WIDTH,
       height: WEB_HEIGHT,
     },
     debug: {

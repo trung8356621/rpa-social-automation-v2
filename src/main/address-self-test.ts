@@ -1,3 +1,6 @@
+import { execFile } from "node:child_process";
+import { promisify } from "node:util";
+import { screen } from "electron";
 import assert from "node:assert/strict";
 import { mkdir, writeFile } from "node:fs/promises";
 import path from "node:path";
@@ -34,20 +37,32 @@ export async function runSelfTest({
       `(()=>{const r=document.querySelector(${JSON.stringify(selector)}).getBoundingClientRect();return{x:Math.round(r.x+r.width/2),y:Math.round(r.y+r.height/2)}})()`,
     );
     await new Promise((r) => setTimeout(r, 300));
-    contents.focus();
-    contents.sendInputEvent({ type: "mouseMove", ...p });
-    contents.sendInputEvent({
-      type: "mouseDown",
-      ...p,
-      button: "left",
-      clickCount: 1,
+    const origin = window.getContentBounds(),
+      offset = contents === page ? browser.bounds : { x: 0, y: 0 };
+    const point = screen.dipToScreenPoint({
+      x: origin.x + offset.x + p.x,
+      y: origin.y + offset.y + p.y,
     });
-    contents.sendInputEvent({
-      type: "mouseUp",
-      ...p,
-      button: "left",
-      clickCount: 1,
-    });
+    if (contents === page) {
+      // Wait for a composited frame after cross-document navigation. DOM ready
+      // alone can precede the native surface accepting pointer input.
+      await browser.capture();
+      browser.click(p.x, p.y);
+    } else {
+      await promisify(execFile)(
+        "powershell.exe",
+        [
+          "-NoProfile",
+          "-File",
+          path.join(project, "scripts/native-click.ps1"),
+          "-X",
+          String(point.x),
+          "-Y",
+          String(point.y),
+        ],
+        { windowsHide: true },
+      );
+    }
     await wait();
   };
   window.show();
@@ -107,7 +122,7 @@ export async function runSelfTest({
     ),
   );
   try {
-    await click("nav button:nth-of-type(2)");
+    await click("nav > button:nth-of-type(2)");
     await until(async () => (await clipboard.readText()) === page.getURL());
     assert.equal(await read(), draft);
     entries.push("Copy URL copies live URL without overwriting draft");
@@ -115,7 +130,7 @@ export async function runSelfTest({
     if ((await clipboard.readText()) === page.getURL())
       await clipboard.write(previous);
   }
-  await click("nav button");
+  await click("nav > button");
   await until(async () => page.getURL() === draft);
   await synced("manual open");
   await click("button:nth-of-type(2)", page);

@@ -1,3 +1,4 @@
+import { resolvePayload } from "../src/shared/flow-model.js";
 import test from "node:test";
 import assert from "node:assert/strict";
 import sharp from "sharp";
@@ -39,13 +40,19 @@ test("redesign preserves original, rollback pins version, override is bound to b
   );
   assert.equal(v2.version, 2);
   assert.equal(v2.id, v1.id);
-  assert.equal(store.step(v1.id, 1).payload.text, "original");
+  assert.equal(
+    resolvePayload(store.step(v1.id, 1).payload, store.flow()!).text,
+    "original",
+  );
   assert.equal(store.flow()?.steps[0].version, 2);
   const override = store.saveOverride(v1.id, 1, "English UI", [
     { action: "TYPE_ONLY", text: "override" },
   ]);
   assert.equal(override.baseVersion, 1);
-  assert.equal(store.step(v1.id, 1).payload.text, "original");
+  assert.equal(
+    resolvePayload(store.step(v1.id, 1).payload, store.flow()!).text,
+    "original",
+  );
   store.selectVersion(v1.id, 1);
   assert.equal(store.flow()?.steps[0].version, 1);
   store.close();

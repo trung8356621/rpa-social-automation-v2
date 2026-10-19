@@ -82,13 +82,6 @@ async function boot() {
     height: TOP_HEIGHT + WEB_HEIGHT,
   };
   const area = screen.getPrimaryDisplay().workAreaSize;
-  if (
-    !selfTest &&
-    (area.width < required.width + 16 || area.height < required.height + 40)
-  )
-    throw new Error(
-      `Màn hình cần work area tối thiểu ${required.width + 16} × ${required.height + 40} DIP. Hiện tại ${area.width} × ${area.height}. Không thu nhỏ viewport.`,
-    );
   await mkdir(dataPath, { recursive: true });
   const assetDir = path.join(dataPath, "targets"),
     evidenceDir = path.join(dataPath, "captures"),
@@ -113,9 +106,15 @@ async function boot() {
   );
   const window = new BrowserWindow({
     useContentSize: true,
-    width: required.width,
-    height: required.height,
-    resizable: false,
+    width: selfTest
+      ? required.width
+      : Math.min(required.width, area.width - 16),
+    height: selfTest
+      ? required.height
+      : Math.min(required.height, area.height - 40),
+    resizable: true,
+    minWidth: 640,
+    minHeight: 648,
     maximizable: true,
     fullscreenable: true,
     show: false,
@@ -127,21 +126,6 @@ async function boot() {
       sandbox: true,
     },
   });
-  // On Windows, construction with resizable:false clears the maximize style.
-  // Re-enable the independent window-mode capabilities after initialization.
-  window.setMaximizable(true);
-  window.setFullScreenable(true);
-  // resizable:false also installs a maximum equal to the initial size on
-  // Windows. Clear that size cap so native maximize/fullscreen can fill the
-  // display; the independent resizable flag still blocks dragging the edges.
-  window.setMaximumSize(0, 0);
-  if (
-    window.getContentSize()[0] !== required.width ||
-    window.getContentSize()[1] !== required.height
-  )
-    throw new Error(
-      "Windows đã giới hạn kích thước cửa sổ. Màn hình không đủ cho viewport cố định.",
-    );
   window.webContents.setWindowOpenHandler(() => ({ action: "deny" }));
   window.webContents.on("will-navigate", (event) => event.preventDefault());
   const browser = new BrowserCore(
@@ -224,8 +208,7 @@ async function boot() {
     event.returnValue = draft.get(request.key);
   });
   for (const view of overlays.views) browser.trackEditor(view.webContents);
-  // Fullscreen/restore keep the canonical width for the current Editor state.
-  // Only opening/closing Editor changes the browser width; height and zoom stay fixed.
+  // Window and panel changes reposition the fixed viewport without reflowing it.
   window.on("resize", () => {
     overlays.layout();
     publishLayout();
@@ -314,6 +297,28 @@ async function boot() {
         )
           browser.view.webContents.focus();
         return state();
+      case "workspaceScroll":
+        if (
+          closing ||
+          window.isDestroyed() ||
+          browser.view.webContents.isDestroyed()
+        )
+          return;
+        if (
+          event.sender !== window.webContents ||
+          !Number.isFinite(command.left) ||
+          !Number.isFinite(command.top) ||
+          command.left < 0 ||
+          command.top < 0
+        )
+          throw new Error("Invalid workspace scroll");
+        overlays.scroll = {
+          left: Math.round(command.left),
+          top: Math.round(command.top),
+        };
+        overlays.layout();
+        publishLayout();
+        return;
       case "state":
         return state();
       case "toggleFullscreen":
@@ -422,6 +427,14 @@ async function boot() {
           dataUrl: `data:image/png;base64,${cropped.toString("base64")}`,
         };
       }
+      case "variables":
+        isIdle();
+        store.updateVariables(command.variables, command.values);
+        return state();
+      case "organize":
+        isIdle();
+        store.organize(command.groups, command.stepIds);
+        return state();
       case "saveStep":
         isIdle();
         store.saveStep(command.name, command.payload, command.id);

@@ -1,3 +1,5 @@
+import { StepList } from "./step-list";
+import { Variables, Groups } from "./flow-controls";
 import React, { useEffect, useRef, useState } from "react";
 import { createRoot } from "react-dom/client";
 import type {
@@ -30,14 +32,11 @@ document.body.dataset.panel = panel || "shell";
 
 function Creator() {
   const [state, setState] = useDraft<State>("state");
+  const [variableId, setVariableId] = useDraft("variableId", "");
   const [url, setUrl] = useState("");
   const urlEdit = useRef({ dirty: false, revision: 0 });
   const [action, setAction] = useDraft<Action>("action", "CLICK_TARGET");
   const [name, setName] = useDraft("name", "");
-  const [text, setText] = useDraft(
-    "text",
-    "Nội dung bản nháp kiểm thử — không xuất bản.",
-  );
   const [delta, setDelta] = useDraft("delta", -400);
   const [inputMethod, setInputMethod] = useDraft<"keyboard" | "clipboard">(
     "inputMethod",
@@ -46,7 +45,6 @@ function Creator() {
   const [pairDelay, setPairDelay] = useDraft("pairDelay", 800);
   const [target, setTarget] = useDraft<Payload["target"]>("target");
   const [targetImage, setTargetImage] = useDraft("targetImage", "");
-  const [files, setFiles] = useDraft<string[]>("files", []);
   const [ocrResult, setOcrResult] = useDraft<OcrResult>("ocrResult");
   const [ocrError, setOcrError] = useDraft("ocrError", "");
   const [ocrLoading, setOcrLoading] = useDraft("ocrLoading", false);
@@ -100,6 +98,27 @@ function Creator() {
     }
   }, [results, state]);
 
+  useEffect(() => {
+    if (!shell) return;
+    let frame = 0;
+    const scroll = () => {
+      cancelAnimationFrame(frame);
+      frame = requestAnimationFrame(() => {
+        void invoke({
+          type: "workspaceScroll",
+          left: window.scrollX,
+          top: window.scrollY,
+        }).catch((e) => setMessage(String(e)));
+      });
+    };
+    window.addEventListener("scroll", scroll);
+    window.addEventListener("resize", scroll);
+    return () => {
+      cancelAnimationFrame(frame);
+      window.removeEventListener("scroll", scroll);
+      window.removeEventListener("resize", scroll);
+    };
+  }, []);
   async function setEditorOpen(expanded: boolean) {
     const next = await invoke<State>({
       type: "panel",
@@ -116,8 +135,8 @@ function Creator() {
   function newStep() {
     showEditor();
     setSelected(undefined);
+    setVariableId("");
     setTarget(undefined);
-    setFiles([]);
     setTargetImage("");
     setOcrResult(undefined);
     setOcrError("");
@@ -246,15 +265,14 @@ function Creator() {
     window.addEventListener("keydown", escape);
     return () => window.removeEventListener("keydown", escape);
   }, [shot, busy]);
-  async function loadStep(step: Step) {
-    showEditor();
+  async function loadStep(step: Step, edit = true) {
+    if (edit) showEditor();
     if (selected?.id !== step.id || selected?.version !== step.version)
       setResults([]);
     setSelected(step);
     setName(step.name);
     setAction(step.payload.action);
-    setText(step.payload.text || "");
-    setFiles(step.payload.files ?? []);
+    setVariableId(step.payload.variableId || "");
     setInputMethod(step.payload.inputMethod ?? "keyboard");
     setDelta(step.payload.deltaY ?? -400);
     setTarget(step.payload.target);
@@ -274,10 +292,10 @@ function Creator() {
     return {
       action,
       ...(["TYPE_ONLY", "CLICK_AND_TYPE"].includes(action)
-        ? { text, inputMethod }
+        ? { variableId, inputMethod }
         : {}),
       ...(action === "SCROLL" ? { deltaY: delta } : {}),
-      ...(action === "UPLOAD_FILE" ? { files } : {}),
+      ...(action === "UPLOAD_FILE" ? { variableId } : {}),
       ...([
         "CLICK_TARGET",
         "CLICK_AND_TYPE",
@@ -492,6 +510,14 @@ function Creator() {
       "--browser-width",
       `${state?.browserBounds.width ?? 1024}px`,
     );
+    document.documentElement.style.setProperty(
+      "--editor-left",
+      `${(state?.browserBounds.x ?? 320) + window.scrollX === 672 ? 320 : 0}px`,
+    );
+    document.documentElement.style.setProperty(
+      "--editor-width",
+      `${(state?.browserBounds.x ?? 320) + window.scrollX === 672 ? 352 : 320}px`,
+    );
   }, [state?.browserBounds.x, state?.browserBounds.width]);
   function togglePanel() {
     const next = !expanded;
@@ -528,8 +554,8 @@ function Creator() {
                       }),
                     );
                     setSelected(undefined);
+                    setVariableId("");
                     setTarget(undefined);
-                    setFiles([]);
                     setTargetImage("");
                     setOcrResult(undefined);
                     setOcrError("");
@@ -564,8 +590,8 @@ function Creator() {
                         }),
                       );
                       setSelected(undefined);
+                      setVariableId("");
                       setTarget(undefined);
-                      setFiles([]);
                       setTargetImage("");
                       setOcrResult(undefined);
                       setOcrError("");
@@ -586,7 +612,10 @@ function Creator() {
                 locked ||
                 !state?.flow ||
                 (needsTarget && !target) ||
-                (action === "UPLOAD_FILE" && !files.length)
+                (["UPLOAD_FILE", "TYPE_ONLY", "CLICK_AND_TYPE"].includes(
+                  action,
+                ) &&
+                  !variableId)
               }
               onClick={() => void task(saveBase)}
             >
@@ -607,8 +636,31 @@ function Creator() {
             >
               Toàn màn hình · F11
             </button>
+            {state && (
+              <Variables
+                state={state}
+                locked={locked}
+                update={async (c) => setState(await invoke<State>(c))}
+              />
+            )}
           </header>
           <nav>
+            <div className="workspace-scroll" aria-label="Workspace scrolling">
+              <button
+                title="Scroll workspace left"
+                aria-label="Workspace left"
+                onClick={() => window.scrollBy({ left: -240 })}
+              >
+                ←
+              </button>
+              <button
+                title="Scroll workspace right"
+                aria-label="Workspace right"
+                onClick={() => window.scrollBy({ left: 240 })}
+              >
+                →
+              </button>
+            </div>
             {shot ? (
               <>
                 <span className="capture-instructions" role="note">
@@ -720,24 +772,41 @@ function Creator() {
                 + Step mới
               </button>
             </div>
-            <div className="steps">
-              {state?.flow?.steps.map((ref, i) => {
-                const s = state.steps.find(
-                  (s) => s.id === ref.id && s.version === ref.version,
-                )!;
-                return (
-                  <button
-                    className={selected?.id === s.id ? "step active" : "step"}
-                    key={s.id}
-                    disabled={locked}
-                    onClick={() => void task(() => loadStep(s))}
-                  >
-                    <span>{String(i + 1).padStart(2, "0")}</span>
-                    <b>{s.name}</b>
-                  </button>
-                );
-              })}
-            </div>
+            {state && (
+              <Groups
+                state={state}
+                locked={locked}
+                update={async (c) => setState(await invoke<State>(c))}
+              />
+            )}
+            {state && (
+              <StepList
+                state={state}
+                selected={selected}
+                locked={locked}
+                update={async (c) => {
+                  try {
+                    setState(await invoke<State>(c));
+                  } catch (e) {
+                    setMessage(String(e));
+                  }
+                }}
+                select={(s) =>
+                  void task(async () => {
+                    await loadStep(s, false);
+                    await setEditorOpen(false);
+                    setResults([]);
+                    setDebugExpanded(true);
+                    await invoke({
+                      type: "panel",
+                      panel: "debug",
+                      expanded: true,
+                    });
+                  })
+                }
+                edit={(s) => void task(() => loadStep(s))}
+              />
+            )}
             {!state?.flow?.steps.length && (
               <p className="hint">
                 Chọn Action trong Step Editor, crop target rồi Save step.
@@ -748,7 +817,9 @@ function Creator() {
             <div
               className="snapshot"
               style={{
-                left: shot.bounds?.x ?? 320 + WEB_WIDTH - shot.width,
+                left:
+                  (shot.bounds?.x ?? 320 + WEB_WIDTH - shot.width) +
+                  window.scrollX,
                 top: shot.bounds?.y ?? 88,
                 width: shot.width,
                 height: shot.height,
@@ -814,12 +885,18 @@ function Creator() {
               {overrideId ? " · Override" : ""}
             </span>
             <button
-              aria-label={expanded ? "Thu gọn panel" : "Mở panel"}
+              aria-label={
+                shell
+                  ? "Đóng Step Editor"
+                  : expanded
+                    ? "Thu gọn panel"
+                    : "Mở panel"
+              }
               aria-expanded={expanded}
               onMouseDown={(e) => e.preventDefault()}
               onClick={togglePanel}
             >
-              {expanded ? "−" : "+"}
+              {shell ? "Đóng ×" : expanded ? "−" : "+"}
             </button>
           </div>
           {!shell && expanded && selected && (
@@ -830,18 +907,10 @@ function Creator() {
                   {expected!.zoom * 100}%; hiện tại {state!.browserBounds.width}
                   ×{state!.browserBounds.height}. Test sẽ bị chặn khi khác môi
                   trường.
-                  <button
-                    disabled={locked || expected!.zoom !== state!.zoom}
-                    onClick={() =>
-                      void task(() =>
-                        setEditorOpen(
-                          expected!.width === WEB_WIDTH - EDITOR_WIDTH,
-                        ),
-                      )
-                    }
-                  >
-                    Khôi phục viewport target
-                  </button>
+                  <p>
+                    Crop lại target ở viewport chuẩn và lưu version mới. Target
+                    cũ được giữ nguyên.
+                  </p>
                 </div>
               )}
               <button
@@ -865,7 +934,6 @@ function Creator() {
                       onChange={(e) => {
                         setAction(e.target.value as Action);
                         setTarget(undefined);
-                        setFiles([]);
                         setTargetImage("");
                         setOcrResult(undefined);
                         setOcrError("");
@@ -948,13 +1016,21 @@ function Creator() {
                           </option>
                         </select>
                       </label>
-                      <textarea
-                        aria-label={`Nội dung ${action}`}
+                      <select
+                        aria-label="Text variable"
+                        value={variableId}
                         disabled={locked}
-                        rows={4}
-                        value={text}
-                        onChange={(e) => setText(e.target.value)}
-                      />
+                        onChange={(e) => setVariableId(e.target.value)}
+                      >
+                        <option value="">Select Text variable</option>
+                        {state?.flow?.variables
+                          ?.filter((v) => v.type === "text")
+                          .map((v) => (
+                            <option key={v.id} value={v.id}>
+                              {v.key}
+                            </option>
+                          ))}
+                      </select>
                       <p className="hint">
                         {action === "CLICK_AND_TYPE" ? (
                           "Composer cần đang mở. Crop ô nhập; Test sẽ click một lần rồi nhập. Quan sát bản nháp trước khi xác nhận."
@@ -972,28 +1048,23 @@ function Creator() {
                   )}
                   {action === "UPLOAD_FILE" && (
                     <section aria-label="Ảnh upload">
-                      <button
+                      <select
+                        aria-label="File variable"
+                        value={variableId}
                         disabled={locked}
-                        onClick={() =>
-                          void task(async () => {
-                            const picked = await invoke<string[] | undefined>({
-                              type: "pickUploadFiles",
-                            });
-                            if (picked) setFiles(picked);
-                          })
-                        }
+                        onChange={(e) => setVariableId(e.target.value)}
                       >
-                        Chọn ảnh local
-                      </button>
-                      <p className="hint">
-                        {files.length} ảnh · PNG/JPEG/WebP/GIF, tối đa 20. File
-                        giữ ở đường dẫn local; cần còn tồn tại khi chạy Step.
-                      </p>
-                      <ol>
-                        {files.map((file, i) => (
-                          <li key={i}>{file.split(/[\\/]/).at(-1)}</li>
-                        ))}
-                      </ol>
+                        <option value="">Select File/Files variable</option>
+                        {state?.flow?.variables
+                          ?.filter(
+                            (v) => v.type === "file" || v.type === "files",
+                          )
+                          .map((v) => (
+                            <option key={v.id} value={v.id}>
+                              {v.key}
+                            </option>
+                          ))}
+                      </select>
                       <p className="hint">
                         Crop nút Ảnh/Video đang hiển thị trong composer. Action
                         chỉ chọn file; phải quan sát đủ thumbnail/preview ảnh
@@ -1084,6 +1155,8 @@ function Creator() {
                             trí khớp chính xác.
                           </p>
                           <button
+                            aria-label="Clear confirmed OCR"
+                            className="ocr-clear"
                             disabled={locked}
                             onClick={() => {
                               setTarget((previous) => {
@@ -1093,7 +1166,7 @@ function Creator() {
                               });
                             }}
                           >
-                            Bỏ chữ dự phòng
+                            ×
                           </button>
                         </div>
                       ) : (
@@ -1120,7 +1193,10 @@ function Creator() {
                       locked ||
                       !state?.flow ||
                       (needsTarget && !target) ||
-                      (action === "UPLOAD_FILE" && !files.length)
+                      (["UPLOAD_FILE", "TYPE_ONLY", "CLICK_AND_TYPE"].includes(
+                        action,
+                      ) &&
+                        !variableId)
                     }
                     onClick={() => void task(saveBase)}
                   >
