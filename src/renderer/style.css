@@ -1,0 +1,255 @@
+* {
+  box-sizing: border-box;
+}
+body {
+  margin: 0;
+  background: #101a2b;
+  color: #e3eaf4;
+  font:
+    13px "Segoe UI",
+    sans-serif;
+  width: 1344px;
+  height: calc(var(--web-height) + 88px);
+  overflow: hidden;
+}
+button,
+input,
+select,
+textarea {
+  font: inherit;
+  border-radius: 6px;
+}
+button {
+  background: #23334b;
+  color: #e6efff;
+  border: 1px solid #3a4c68;
+  padding: 8px 10px;
+  cursor: pointer;
+}
+button:hover:not(:disabled) {
+  background: #30486b;
+}
+button:disabled {
+  opacity: 0.42;
+  cursor: default;
+}
+input,
+select,
+textarea {
+  min-width: 0;
+  background: #0c1524;
+  border: 1px solid #33445e;
+  color: #e3eaf4;
+  padding: 8px;
+  width: 100%;
+}
+textarea {
+  resize: vertical;
+  max-height: 160px;
+}
+label {
+  display: block;
+  color: #afc0d5;
+  font-size: 12px;
+  margin: 9px 0;
+}
+label input,
+label select {
+  display: block;
+  margin-top: 5px;
+}
+header {
+  height: 36px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 0 18px;
+  border-bottom: 1px solid #2a3b52;
+  background: #142238;
+}
+.brand {
+  font-size: 15px;
+}
+.brand span {
+  font-size: 10px;
+  color: #80b7e8;
+  margin-left: 12px;
+}
+.environment {
+  font-size: 10px;
+  color: #9eb4cc;
+  letter-spacing: 1px;
+}
+.environment i {
+  display: inline-block;
+  width: 6px;
+  height: 6px;
+  background: #56d1ad;
+  border-radius: 50%;
+  margin: 0 8px;
+}
+nav {
+  height: 52px;
+  padding: 8px 14px;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  background: #17263b;
+}
+nav input {
+  flex: 1;
+}
+nav label {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin: 0;
+}
+nav select {
+  width: 85px;
+  margin: 0;
+}
+aside {
+  position: absolute;
+  top: 88px;
+  left: 0;
+  width: 320px;
+  height: var(--web-height);
+  padding: 16px;
+  overflow-y: auto;
+  border-right: 1px solid #3c4b63;
+}
+aside > button {
+  width: 100%;
+  margin: 5px 0;
+}
+.eyebrow {
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 1.6px;
+  color: #71b6e8;
+  margin: 15px 0 9px;
+}
+.row {
+  display: flex;
+  gap: 7px;
+  align-items: center;
+  margin: 7px 0;
+}
+.row input {
+  flex: 1;
+}
+.row label {
+  flex: 1;
+  margin: 0;
+}
+.row .eyebrow {
+  flex: 1;
+}
+.link {
+  border: 0;
+  background: none;
+  padding: 3px;
+  color: #8ac9ff;
+}
+.primary {
+  background: #146d76;
+  border-color: #328c95;
+  font-weight: 600;
+}
+.hint {
+  font-size: 11px;
+  line-height: 1.55;
+  color: #90a5bf;
+  margin: 7px 0;
+}
+.mono {
+  font-family: monospace;
+  font-size: 9px;
+  overflow-wrap: anywhere;
+}
+.steps {
+  margin-top: 12px;
+}
+.step {
+  width: 100%;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  text-align: left;
+  margin: 5px 0;
+}
+.step span {
+  color: #8ba2bf;
+  font-size: 11px;
+}
+.step b {
+  flex: 1;
+  font-weight: 500;
+}
+.step small {
+  color: #7eb9e7;
+}
+.step.active {
+  border-color: #6bb6e5;
+  background: #1b405c;
+}
+.target {
+  max-width: 100%;
+  max-height: 100px;
+  object-fit: contain;
+  background: #fff;
+  border: 1px solid #4b6a83;
+  margin: 8px 0;
+}
+.status {
+  margin-top: 14px;
+  white-space: pre-wrap;
+  background: #17283d;
+  padding: 10px;
+  border-left: 3px solid #699ac2;
+  line-height: 1.5;
+  font-size: 12px;
+  overflow-wrap: anywhere;
+}
+.result {
+  padding: 10px;
+  margin-top: 10px;
+  border: 1px solid #3c6d66;
+  border-radius: 7px;
+}
+.result.fail {
+  border-color: #ad5e66;
+}
+.result p {
+  font-size: 11px;
+  line-height: 1.5;
+}
+.capture-controls button {
+  width: 100%;
+  margin: 4px 0;
+}
+.snapshot {
+  position: absolute;
+  left: 320px;
+  top: 88px;
+  width: 1024px;
+  height: var(--web-height);
+  overflow: hidden;
+  touch-action: none;
+  cursor: crosshair;
+  background: #fff;
+}
+.snapshot > img {
+  width: 1024px;
+  height: var(--web-height);
+  pointer-events: none;
+  user-select: none;
+}
+.roi {
+  position: absolute;
+  border: 2px solid #04e8d0;
+  background: #00d5c626;
+  pointer-events: none;
+  box-shadow: 0 0 0 9999px #07122255;
+}

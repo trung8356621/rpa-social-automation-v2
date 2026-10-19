@@ -1,0 +1,62 @@
+# Dependencies and tool caches
+node_modules/
+.npm-cache/
+.electron-cache/
+.cache/
+coverage/
+*.tsbuildinfo
+
+# Build and packaging output
+dist/
+build/
+release/
+out/
+
+# Local application data, browser profiles and execution evidence
+.local/
+artifacts/
+userData/
+browser-data/
+profiles/
+sessions/
+Cookies
+Cookies-*
+Local State
+Session Storage/
+Local Storage/
+Network/
+
+# SQLite databases, journals and sidecars
+*.db
+*.db-*
+*.sqlite
+*.sqlite-*
+*.sqlite3
+*.sqlite3-*
+*.db3
+
+# Credentials and local configuration
+.env
+.env.*
+!.env.example
+!.env.sample
+.npmrc
+secrets/
+.secrets/
+credentials/
+credentials*.json
+*service-account*.json
+*.pem
+*.key
+*.p12
+*.pfx
+
+# Logs, temporary files and OS/editor state
+*.log
+*.tmp
+*.bak
+.DS_Store
+Thumbs.db
+desktop.ini
+.idea/
+.vscode/
