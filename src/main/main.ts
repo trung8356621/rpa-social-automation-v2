@@ -1,4 +1,12 @@
-import { app, BrowserWindow, ipcMain, Menu, dialog, screen } from "electron";
+import {
+  app,
+  BrowserWindow,
+  ipcMain,
+  Menu,
+  dialog,
+  screen,
+  clipboard,
+} from "electron";
 import { mkdir, writeFile, readFile } from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
@@ -30,7 +38,7 @@ const dataPath = path.join(
   project,
   ".local",
   selfTest
-    ? ["ux", "ocr", "typing", "upload"].includes(phase)
+    ? ["ux", "ocr", "typing", "upload", "address"].includes(phase)
       ? `test-${phase}-${process.pid}`
       : "test-session"
     : "creator",
@@ -77,15 +85,17 @@ async function boot() {
   const store = new Store(path.join(dataPath, "creator.sqlite"));
   const fixture = await startFixture(
     selfTest
-      ? phase === "upload"
-        ? 47836
-        : phase === "typing"
-          ? 47835
-          : phase === "ocr"
-            ? 47834
-            : phase === "ux"
-              ? 47833
-              : 47832
+      ? phase === "address"
+        ? 47837
+        : phase === "upload"
+          ? 47836
+          : phase === "typing"
+            ? 47835
+            : phase === "ocr"
+              ? 47834
+              : phase === "ux"
+                ? 47833
+                : 47832
       : 47831,
   );
   const window = new BrowserWindow({
@@ -178,6 +188,11 @@ async function boot() {
       case "toggleFullscreen":
         window.setFullScreen(!window.isFullScreen());
         return;
+      case "copyUrl": {
+        const url = browser.view.webContents.getURL();
+        await clipboard.writeText(url);
+        return url;
+      }
       case "navigate":
         isIdle();
         await browser.navigate(command.url);
@@ -383,6 +398,20 @@ async function boot() {
         });
       });
   });
+  const publishUrl = () => {
+    if (!window.webContents.isDestroyed())
+      window.webContents.send(
+        "creator:navigation",
+        browser.view.webContents.getURL(),
+      );
+  };
+  browser.view.webContents.on("did-navigate", publishUrl);
+  browser.view.webContents.on(
+    "did-navigate-in-page",
+    (_event, _url, isMainFrame) => {
+      if (isMainFrame) publishUrl();
+    },
+  );
   await window.loadFile(path.join(root, "renderer/index.html"));
   window.show();
   // Load the web page after its host is shown so Chromium has a live compositor.
@@ -398,15 +427,17 @@ async function boot() {
   if (selfTest) {
     try {
       const { runSelfTest } = await import(
-        phase === "upload"
-          ? "./upload-self-test.js"
-          : phase === "typing"
-            ? "./typing-self-test.js"
-            : phase === "ocr"
-              ? "./ocr-self-test.js"
-              : phase === "ux"
-                ? "./ux-self-test.js"
-                : "./self-test.js"
+        phase === "address"
+          ? "./address-self-test.js"
+          : phase === "upload"
+            ? "./upload-self-test.js"
+            : phase === "typing"
+              ? "./typing-self-test.js"
+              : phase === "ocr"
+                ? "./ocr-self-test.js"
+                : phase === "ux"
+                  ? "./ux-self-test.js"
+                  : "./self-test.js"
       );
       await runSelfTest({
         browser,

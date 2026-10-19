@@ -24,7 +24,8 @@ declare global {
 
 function Creator() {
   const [state, setState] = useState<State>();
-  const [url, setUrl] = useState("https://www.facebook.com/");
+  const [url, setUrl] = useState("");
+  const urlEdit = useRef({ dirty: false, revision: 0 });
   const [action, setAction] = useState<Action>("CLICK_TARGET");
   const [name, setName] = useState("");
   const [text, setText] = useState(
@@ -155,10 +156,21 @@ function Creator() {
     }
   }
   useEffect(() => {
+    let navigationSeen = false;
+    const syncUrl = (actual: string) => {
+      if (!urlEdit.current.dirty) setUrl(actual);
+    };
+    const offNavigation = window.creator.onNavigation((actual) => {
+      navigationSeen = true;
+      syncUrl(actual);
+    });
     void invoke<State>({ type: "state" })
-      .then(setState)
+      .then((snapshot) => {
+        setState(snapshot);
+        if (!navigationSeen) syncUrl(snapshot.url);
+      })
       .catch((e) => setMessage(String(e)));
-    return window.creator.onTest((result) => {
+    const offTest = window.creator.onTest((result) => {
       if (Array.isArray(result)) {
         setResults(result);
         setMessage(result.map((r) => r.message).join("\n"));
@@ -167,6 +179,10 @@ function Creator() {
         setMessage(result.error);
       }
     });
+    return () => {
+      offNavigation();
+      offTest();
+    };
   }, []);
   useEffect(() => {
     if (selected)
@@ -414,17 +430,41 @@ function Creator() {
             <input
               aria-label="URL"
               value={url}
-              onChange={(e) => setUrl(e.target.value)}
+              onChange={(e) => {
+                urlEdit.current.dirty = true;
+                urlEdit.current.revision++;
+                setUrl(e.target.value);
+              }}
             />
             <button
               disabled={locked}
               onClick={() =>
-                void task(async () =>
-                  setState(await invoke<State>({ type: "navigate", url })),
-                )
+                void task(async () => {
+                  const revision = urlEdit.current.revision;
+                  const snapshot = await invoke<State>({
+                    type: "navigate",
+                    url,
+                  });
+                  setState(snapshot);
+                  if (revision === urlEdit.current.revision) {
+                    urlEdit.current.dirty = false;
+                    setUrl(snapshot.url);
+                  }
+                })
               }
             >
               Mở URL
+            </button>
+            <button
+              disabled={locked}
+              onClick={() =>
+                void task(async () => {
+                  await invoke<string>({ type: "copyUrl" });
+                  setMessage("Đã sao chép URL hiện tại của browser.");
+                })
+              }
+            >
+              Copy URL
             </button>
             <button
               disabled={locked}

@@ -144,6 +144,7 @@ export type State = {
 };
 export type Command =
   | { type: "state" }
+  | { type: "copyUrl" }
   | { type: "navigate"; url: string }
   | { type: "fixture" }
   | { type: "toggleFullscreen" }
@@ -176,6 +177,7 @@ export type Command =
   | { type: "disarmTest" }
   | { type: "browserVisible"; visible: boolean };
 export interface CreatorApi {
+  onNavigation(callback: (url: string) => void): () => void;
   invoke(command: Command): Promise<unknown>;
   onTest(callback: (result: Result[] | { error: string }) => void): () => void;
 }

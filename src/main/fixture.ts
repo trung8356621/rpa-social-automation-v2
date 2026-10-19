@@ -4,6 +4,15 @@ import { createHash } from "node:crypto";
 export async function startFixture(port: number) {
   const uploaded: Buffer[] = [];
   const server = createServer((req, res) => {
+    if (req.url?.startsWith("/address")) {
+      res.setHeader("Content-Type", "text/html; charset=utf-8");
+      res.end(`<html><body><h1>Address fixture</h1>
+        <button onclick="history.pushState({},'', '/address?pushed')">Push</button>
+        <button onclick="history.replaceState({},'', '/address?replaced')">Replace</button>
+        <a href="/address?linked">Link</a>
+        <iframe src="/" style="width:200px;height:100px"></iframe></body></html>`);
+      return;
+    }
     if (req.method === "POST" && req.url === "/fixture-upload") {
       const chunks: Buffer[] = [];
       let total = 0;

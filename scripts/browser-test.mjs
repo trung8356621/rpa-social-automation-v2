@@ -8,16 +8,18 @@ const phases = process.argv.slice(2);
 if (
   phases.some(
     (phase) =>
-      !["first", "second", "ux", "ocr", "typing", "upload"].includes(phase),
+      !["first", "second", "ux", "ocr", "typing", "upload", "address"].includes(
+        phase,
+      ),
   )
 ) {
   throw new Error(
-    "Supported browser test phases: first, second, ux, ocr, typing, upload",
+    "Supported browser test phases: first, second, ux, ocr, typing, upload, address",
   );
 }
 for (const phase of phases.length
   ? phases
-  : ["first", "second", "ux", "ocr", "typing", "upload"]) {
+  : ["first", "second", "ux", "ocr", "typing", "upload", "address"]) {
   const started = Date.now();
   const code = await new Promise((resolve, reject) => {
     const env = { ...process.env };

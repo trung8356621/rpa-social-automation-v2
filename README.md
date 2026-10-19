@@ -65,3 +65,5 @@ Bản UPLOAD_FILE: 24 unit tests qua; 75 checks Electron đạt (27 first + 3 re
 6. **Không bấm Publish.** Không có Publish action được tạo sẵn. Nếu gặp CAPTCHA/checkpoint, dừng và xử lý thủ công.
 
 Không có Runner, Profile/Proxy Manager, SEO-OPS, marketplace, crawler hoặc AI API trong POC này. `old/` chỉ được đọc; `git status --porcelain` tại đó trống sau triển khai.
+
+Thanh địa chỉ đồng bộ URL thực tế và bảo vệ URL đang nhập; Copy URL lấy URL browser. Kiểm thử và các bước Facebook: [Address bar](docs/ADDRESS-BAR.md).
