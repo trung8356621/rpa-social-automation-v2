@@ -1,5 +1,7 @@
 # TYPE_ONLY — contenteditable, keyboard và clipboard
 
+Action mới cho composer đang mở: [CLICK_AND_TYPE](CLICK-AND-TYPE.md) tự nhận diện/click vùng nhập một lần rồi nhập trong cùng runtime. TYPE_ONLY và test cặp trong tài liệu này vẫn giữ cho các flow hiện có.
+
 ## Thay đổi
 
 `webContents.isFocused()` chỉ là tín hiệu focus của native browser view; nó không chứng minh editor của website có caret. Chẩn đoán mới ghi riêng `browser`, `editor` (sidebar), route tương tác gần nhất và **caret: unknown**. Khi focus native trả false nhưng cửa sổ đang active, sidebar không focus và input vẫn được route vào browser, runtime không từ chối chỉ vì một cờ native. Nếu sidebar/cửa sổ khác giữ focus hoặc không có bằng chứng route browser, TYPE_ONLY bị BLOCKED với chẩn đoán cụ thể. Không dùng DOM/AX tree/pseudo-DOM để tìm hoặc tạo caret.

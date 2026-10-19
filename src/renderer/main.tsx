@@ -57,12 +57,29 @@ function Creator() {
   const drag = useRef<{ x: number; y: number } | undefined>(undefined);
   const flowInput = useRef<HTMLInputElement>(null);
   const resultPanel = useRef<HTMLDivElement>(null);
+  const autoRedesigned = useRef("");
   const latest = useRef({ selected, overrideId, busy });
   latest.current = { selected, overrideId, busy };
   useEffect(() => {
     if (results.length)
       resultPanel.current?.scrollIntoView({ block: "nearest" });
   }, [results]);
+  useEffect(() => {
+    const blocked = results.find(
+      (r) =>
+        r.action === "CLICK_AND_TYPE" && r.status === "BLOCKED" && !r.clickSent,
+    );
+    if (
+      blocked &&
+      blocked.id !== autoRedesigned.current &&
+      state?.steps.some(
+        (s) => s.id === blocked.stepId && s.version === blocked.version,
+      )
+    ) {
+      autoRedesigned.current = blocked.id;
+      void openRedesign(blocked).catch((e) => setMessage(String(e)));
+    }
+  }, [results, state]);
 
   function newStep() {
     setSelected(undefined);
@@ -99,22 +116,24 @@ function Creator() {
           : r,
       ),
     );
-    if (verdict === "incorrect") {
-      const base = state!.steps.find(
-        (s) => s.id === result.stepId && s.version === result.version,
-      )!;
-      const overlay = state!.overrides.find((o) => o.id === result.overrideId);
-      await loadStep({ ...base, payload: overlay?.segment[0] ?? base.payload });
-      setMessage(
-        `Redesign ${base.name} / v${base.version}. Base giữ nguyên; chỉ tạo version mới khi lưu. Browser vẫn ở trạng thái sau click.`,
-      );
-      document
-        .querySelector('[aria-label="Action"]')
-        ?.scrollIntoView({ block: "center" });
-    } else
+    if (verdict === "incorrect") await openRedesign(result);
+    else
       setMessage(
         "Đã VERIFIED bằng xác nhận của bạn. Có thể tạo Step tiếp theo từ browser hiện tại.",
       );
+  }
+  async function openRedesign(result: Result) {
+    const base = state!.steps.find(
+      (s) => s.id === result.stepId && s.version === result.version,
+    )!;
+    const overlay = state!.overrides.find((o) => o.id === result.overrideId);
+    await loadStep({ ...base, payload: overlay?.segment[0] ?? base.payload });
+    setMessage(
+      `Redesign ${base.name} / v${base.version}. Base giữ nguyên; chỉ tạo version mới khi lưu. Browser giữ trạng thái hiện tại.`,
+    );
+    document
+      .querySelector('[aria-label="Action"]')
+      ?.scrollIntoView({ block: "center" });
   }
 
   async function invoke<T>(command: Command): Promise<T> {
@@ -191,9 +210,11 @@ function Creator() {
   function payload(): Payload {
     return {
       action,
-      ...(action === "TYPE_ONLY" ? { text, inputMethod } : {}),
+      ...(["TYPE_ONLY", "CLICK_AND_TYPE"].includes(action)
+        ? { text, inputMethod }
+        : {}),
       ...(action === "SCROLL" ? { deltaY: delta } : {}),
-      ...(["CLICK_TARGET", "WAIT_VERIFY"].includes(action)
+      ...(["CLICK_TARGET", "CLICK_AND_TYPE", "WAIT_VERIFY"].includes(action)
         ? { target, method, threshold: 0.96, timeoutMs: 3000 }
         : {}),
     };
@@ -311,7 +332,11 @@ function Creator() {
       y: Math.max(0, Math.min(WEB_HEIGHT, e.clientY - r.top)),
     };
   }
-  const needsTarget = ["CLICK_TARGET", "WAIT_VERIFY"].includes(action);
+  const needsTarget = [
+    "CLICK_TARGET",
+    "CLICK_AND_TYPE",
+    "WAIT_VERIFY",
+  ].includes(action);
   const selectedIndex =
     state?.flow?.steps.findIndex((s) => s.id === selected?.id) ?? -1;
   const previousRef =
@@ -536,6 +561,7 @@ function Creator() {
             }}
           >
             <option>CLICK_TARGET</option>
+            <option>CLICK_AND_TYPE</option>
             <option>TYPE_ONLY</option>
             <option value="WAIT_VERIFY">WAIT / VERIFY</option>
             <option>SCROLL</option>
@@ -550,7 +576,7 @@ function Creator() {
             onChange={(e) => setName(e.target.value)}
           />,
         )}
-        {action === "TYPE_ONLY" && (
+        {["TYPE_ONLY", "CLICK_AND_TYPE"].includes(action) && (
           <>
             <label>
               Phương thức nhập
@@ -571,17 +597,23 @@ function Creator() {
               </select>
             </label>
             <textarea
-              aria-label="Nội dung TYPE_ONLY"
+              aria-label={`Nội dung ${action}`}
               disabled={locked}
               rows={4}
               value={text}
               onChange={(e) => setText(e.target.value)}
             />
             <p className="hint">
-              Gửi vào caret hiện tại; không tự click/focus. Native browser focus
-              không chứng minh caret sẵn sàng. Lưu → test cặp CLICK → TYPE bên
-              dưới, hoặc click thủ công ô nhập rồi Ctrl+Shift+T. Clipboard chỉ
-              phục hồi khi chưa bị thay đổi trong lúc paste.
+              {action === "CLICK_AND_TYPE" ? (
+                "Composer phải đang mở. Crop vùng nhập/placeholder bên dưới: nhận diện → click một lần vào target → nhập ngay trong cùng runtime. Không double-click, không quay lại Creator giữa click và nhập. Kết quả cần xác nhận."
+              ) : (
+                <>
+                  Gửi vào caret hiện tại; không tự click/focus. Native browser
+                  focus không chứng minh caret sẵn sàng. Lưu → test cặp CLICK →
+                  TYPE bên dưới, hoặc click thủ công ô nhập rồi Ctrl+Shift+T.
+                  Clipboard chỉ phục hồi khi chưa bị thay đổi trong lúc paste.
+                </>
+              )}
             </p>
           </>
         )}
@@ -849,7 +881,7 @@ function Creator() {
               Test dùng payload đã lưu. TYPE_ONLY/SCROLL: giữ focus trong web và
               dùng phím tắt.
             </p>
-            {["CLICK_TARGET", "WAIT_VERIFY"].includes(
+            {["CLICK_TARGET", "CLICK_AND_TYPE", "WAIT_VERIFY"].includes(
               selected.payload.action,
             ) && (
               <p className="hint saved-method">
@@ -1025,16 +1057,21 @@ function Creator() {
                   sát browser đang hiển thị và chờ giao diện phản hồi.
                 </p>
               )}
-              {["CLICK_TARGET", "TYPE_ONLY"].includes(r.action) && !r.after && (
-                <p>
-                  Browser live được giữ nguyên; không tự chụp ảnh sau input để
-                  tránh mất focus. Ảnh trước chỉ xem khi bạn yêu cầu. Nếu cần gõ
-                  tiếp sau thao tác ở sidebar/chụp ảnh, click thủ công vào ô
-                  nhập.
-                </p>
-              )}
+              {["CLICK_TARGET", "CLICK_AND_TYPE", "TYPE_ONLY"].includes(
+                r.action,
+              ) &&
+                !r.after && (
+                  <p>
+                    Browser live được giữ nguyên; không tự chụp ảnh sau input để
+                    tránh mất focus. Ảnh trước chỉ xem khi bạn yêu cầu. Nếu cần
+                    gõ tiếp sau thao tác ở sidebar/chụp ảnh, click thủ công vào
+                    ô nhập.
+                  </p>
+                )}
               {r.status === "ACTION_SENT" &&
-                ["CLICK_TARGET", "TYPE_ONLY"].includes(r.action) && (
+                ["CLICK_TARGET", "CLICK_AND_TYPE", "TYPE_ONLY"].includes(
+                  r.action,
+                ) && (
                   <div className="review-actions">
                     <button
                       disabled={
@@ -1062,6 +1099,21 @@ function Creator() {
                     </button>
                   </div>
                 )}
+              {r.status === "BLOCKED" && r.action === "CLICK_AND_TYPE" && (
+                <div className="review-actions">
+                  <p>
+                    {r.clickSent
+                      ? "Đã click; cần kiểm tra nội dung trước khi test lại."
+                      : "Bị chặn trước khi click/nhập. Sửa target và lưu version mới trước khi thử lại."}
+                  </p>
+                  <button
+                    disabled={locked}
+                    onClick={() => void task(() => openRedesign(r))}
+                  >
+                    Redesign Step bị chặn
+                  </button>
+                </div>
+              )}
               {r.review?.verdict === "correct" && (
                 <button disabled={locked} onClick={newStep}>
                   + Tạo Step tiếp theo từ browser hiện tại

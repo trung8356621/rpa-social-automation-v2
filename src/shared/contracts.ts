@@ -1,5 +1,6 @@
 export type Rect = { x: number; y: number; width: number; height: number };
-export type Action = "CLICK_TARGET" | "TYPE_ONLY" | "WAIT_VERIFY" | "SCROLL";
+export type Action =
+  "CLICK_TARGET" | "CLICK_AND_TYPE" | "TYPE_ONLY" | "WAIT_VERIFY" | "SCROLL";
 export type OcrSegment = {
   id: string;
   text: string;
@@ -66,6 +67,7 @@ export type Result = {
   flowId?: string;
   overrideId?: string;
   targetAsset?: string;
+  clickSent?: boolean;
   input?: {
     method: "keyboard" | "clipboard";
     focus: {

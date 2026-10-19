@@ -77,6 +77,78 @@ test("action-first payload requires target only for click and verify", () => {
     }),
   );
 });
+test("CLICK_AND_TYPE requires target and text, preserves TYPE_ONLY and append-only versions/Override", () => {
+  const target = {
+    asset: "00000000-0000-0000-0000-000000000001.png",
+    roi: { x: 120, y: 220, width: 650, height: 100 },
+  };
+  for (const inputMethod of ["keyboard", "clipboard"] as const)
+    validatePayload({
+      action: "CLICK_AND_TYPE",
+      text: "Nháp 👋\nDòng 2",
+      inputMethod,
+      target,
+    });
+  assert.throws(
+    () => validatePayload({ action: "CLICK_AND_TYPE", text: "draft" }),
+    /ảnh/,
+  );
+  assert.throws(
+    () => validatePayload({ action: "CLICK_AND_TYPE", target }),
+    /text/,
+  );
+  assert.throws(
+    () =>
+      validatePayload({
+        action: "CLICK_AND_TYPE",
+        target,
+        text: "draft",
+        method: "ocr",
+      }),
+    /xác nhận/,
+  );
+  const payload = {
+    action: "CLICK_AND_TYPE" as const,
+    text: "draft",
+    method: "ocr" as const,
+    target: {
+      ...target,
+      ocr: {
+        confirmed: true as const,
+        language: "vie+eng" as const,
+        kind: "line" as const,
+        text: "Viết bản nháp",
+        confidence: 95,
+        bbox: { x: 10, y: 10, width: 150, height: 30 },
+      },
+    },
+  };
+  validatePayload(payload);
+  const store = new Store(":memory:");
+  try {
+    store.newFlow("Input", 1);
+    const legacy = store.saveStep("Legacy", {
+      action: "TYPE_ONLY",
+      text: "old",
+    });
+    const base = store.saveStep("New input", payload);
+    const redesigned = store.saveStep(
+      "New input",
+      { ...payload, inputMethod: "clipboard" },
+      base.id,
+    );
+    const overlay = store.saveOverride(base.id, 1, "Image", [
+      { ...payload, method: "image" },
+    ]);
+    assert.equal(redesigned.version, 2);
+    assert.equal(redesigned.id, base.id);
+    assert.deepEqual(store.step(base.id, 1), base);
+    assert.equal(overlay.segment[0].action, "CLICK_AND_TYPE");
+    assert.deepEqual(store.step(legacy.id, 1), legacy);
+  } finally {
+    store.close();
+  }
+});
 test("image resolver locates a displaced target and rejects uniform image", async () => {
   const target = await sharp({
     create: { width: 40, height: 24, channels: 3, background: "#df2848" },

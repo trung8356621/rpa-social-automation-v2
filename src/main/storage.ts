@@ -10,23 +10,32 @@ import {
 export function validatePayload(p: Payload) {
   if (
     !p ||
-    !["CLICK_TARGET", "TYPE_ONLY", "WAIT_VERIFY", "SCROLL"].includes(p.action)
+    ![
+      "CLICK_TARGET",
+      "CLICK_AND_TYPE",
+      "TYPE_ONLY",
+      "WAIT_VERIFY",
+      "SCROLL",
+    ].includes(p.action)
   )
     throw new Error("Action không hỗ trợ.");
-  if (p.action === "TYPE_ONLY" && (!p.text || p.text.length > 20000))
-    throw new Error("TYPE_ONLY cần text, tối đa 20.000 ký tự.");
+  if (
+    ["TYPE_ONLY", "CLICK_AND_TYPE"].includes(p.action) &&
+    (!p.text || p.text.length > 20000)
+  )
+    throw new Error("Action nhập liệu cần text, tối đa 20.000 ký tự.");
   if (
     p.inputMethod !== undefined &&
-    (p.action !== "TYPE_ONLY" ||
+    (!["TYPE_ONLY", "CLICK_AND_TYPE"].includes(p.action) ||
       !["keyboard", "clipboard"].includes(p.inputMethod))
   )
-    throw new Error("Phương thức nhập TYPE_ONLY không hợp lệ.");
+    throw new Error("Phương thức nhập không hợp lệ.");
   if (
-    ["CLICK_TARGET", "WAIT_VERIFY"].includes(p.action) &&
+    ["CLICK_TARGET", "CLICK_AND_TYPE", "WAIT_VERIFY"].includes(p.action) &&
     (!p.target || !/^[a-f0-9-]+\.png$/.test(p.target.asset))
   )
     throw new Error("Action cần ảnh target được crop.");
-  if (["CLICK_TARGET", "WAIT_VERIFY"].includes(p.action))
+  if (["CLICK_TARGET", "CLICK_AND_TYPE", "WAIT_VERIFY"].includes(p.action))
     validateRect(p.target!.roi, WEB_WIDTH, WEB_HEIGHT);
   if (p.method !== undefined && !["image", "ocr"].includes(p.method))
     throw new Error("Phương thức target không hợp lệ.");
@@ -55,7 +64,7 @@ export function validatePayload(p: Payload) {
   }
   if (
     p.method === "ocr" &&
-    (!["CLICK_TARGET", "WAIT_VERIFY"].includes(p.action) ||
+    (!["CLICK_TARGET", "CLICK_AND_TYPE", "WAIT_VERIFY"].includes(p.action) ||
       !p.target?.ocr?.confirmed)
   )
     throw new Error("OCR matching cần chữ do người dùng chọn và xác nhận.");

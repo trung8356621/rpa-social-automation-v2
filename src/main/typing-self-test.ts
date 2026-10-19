@@ -7,6 +7,7 @@ import type { BrowserCore } from "./browser-core.js";
 import type { Store } from "./storage.js";
 import type { Runtime } from "./runtime.js";
 import type { State, Result } from "../shared/contracts.js";
+import { localOcr } from "./ocr.js";
 
 // DOM is read only as fixture/test-shell instrumentation, never to set text/caret.
 export async function runSelfTest({
@@ -316,6 +317,253 @@ export async function runSelfTest({
   assert.equal(blocked[0].status, "BLOCKED");
   await assert.rejects(runtime.testPair(second.id, first.id, 400), /liên tiếp/);
   pass("pair-stops-before-TYPE-on-blocked-click-and-rejects-invalid-order");
+  // Composer is opened by its own CLICK; author/test the new action from sidebar.
+  await browser.navigate("http://127.0.0.1:47835/typing?no-caret");
+  browser.click(300, 132);
+  await wait(400);
+  assert.equal((await read()).active, "open");
+  await click("Tạo flow");
+  const select = async (label: string, value: string) => {
+    await evaluate(
+      `(()=>{const s=document.querySelector('[aria-label="${label}"]');s.value=${JSON.stringify(value)};s.dispatchEvent(new Event('change',{bubbles:true}))})()`,
+    );
+    await wait();
+  };
+  await select("Action", "CLICK_AND_TYPE");
+  await select("Phương thức nhập", "keyboard");
+  await click("Chụp & crop ROI");
+  await until(
+    () => evaluate("!!document.querySelector('.snapshot')"),
+    "new action crop",
+  );
+  const r = await evaluate(
+    "(()=>{const r=document.querySelector('.snapshot').getBoundingClientRect();return{x:r.x,y:r.y}})()",
+  );
+  ui.sendInputEvent({
+    type: "mouseDown",
+    x: r.x + 120,
+    y: r.y + 220,
+    button: "left",
+    clickCount: 1,
+  });
+  ui.sendInputEvent({
+    type: "mouseMove",
+    x: r.x + 770,
+    y: r.y + 320,
+    button: "left",
+  });
+  ui.sendInputEvent({
+    type: "mouseUp",
+    x: r.x + 770,
+    y: r.y + 320,
+    button: "left",
+    clickCount: 1,
+  });
+  await until(
+    () => evaluate("!!document.querySelector('.roi')"),
+    "new action ROI",
+  );
+  await click("Dùng ROI");
+  assert.ok(
+    await evaluate(
+      "document.querySelector('.ocr-candidates').textContent.includes('Viết bản nháp ở đây')",
+    ),
+  );
+  await click("Viết bản nháp ở đây");
+  await select("Phương thức nhận diện", "ocr");
+  await click("Lưu Base v1");
+  const combinedRef = store.flow()!.steps[0];
+  const combinedBase = store.step(combinedRef.id, 1);
+  assert.equal(combinedBase.payload.action, "CLICK_AND_TYPE");
+  assert.equal(combinedBase.payload.text, text);
+  captures = 0;
+  browser.capture = async () => {
+    captures++;
+    return originalCapture();
+  };
+  try {
+    await click("Test step đã lưu");
+  } finally {
+    browser.capture = originalCapture;
+  }
+  probe = await read();
+  assert.equal(probe.text, text);
+  assert.equal(probe.editorClicks, 1);
+  assert.deepEqual(probe.clickDetails, [1]);
+  assert.equal(probe.doubleClicks, 0);
+  assert.equal(
+    probe.clicks,
+    1,
+    "opening composer is a separate click, never replayed by CLICK_AND_TYPE",
+  );
+  assert.equal(probe.active, "editor");
+  assert.equal(browser.view.webContents.isFocused(), true);
+  assert.equal(
+    captures,
+    1,
+    "only recognition screenshot, none between focus click and typing",
+  );
+  assert.match(
+    await evaluate("document.querySelector('.result').textContent"),
+    /ACTION_SENT.*OCR text matching/s,
+  );
+  await click("Đúng — Hoàn thành Step");
+  assert.match(
+    await evaluate("document.querySelector('.result').textContent"),
+    /VERIFIED/,
+  );
+  pass(
+    "CLICK_AND_TYPE-authored-Action-first-crop-OCR-single-click-keyboard-from-sidebar-composer-open-no-manual-caret",
+  );
+  // Reset only as fixture setup; runtime never navigates or clears the page.
+  await browser.navigate("http://127.0.0.1:47835/typing?no-caret");
+  browser.click(300, 132);
+  await wait(400);
+  const oldClipboard = await Promise.all(
+    (await clipboard.read()).map(
+      async (item) =>
+        new ClipboardItem(
+          Object.fromEntries(
+            await Promise.all(
+              item.types.map(async (type) => [type, await item.getType(type)]),
+            ),
+          ),
+        ),
+    ),
+  );
+  const combinedMarker = "CLICK_AND_TYPE old clipboard";
+  try {
+    await clipboard.writeText(combinedMarker);
+    await select("Phương thức nhập", "clipboard");
+    await click("Lưu redesign");
+    await click("Test step đã lưu");
+    probe = await read();
+    assert.equal(probe.text, text);
+    assert.equal(probe.editorClicks, 1);
+    assert.equal(probe.doubleClicks, 0);
+    assert.equal(await clipboard.readText(), combinedMarker);
+    assert.match(
+      await evaluate("document.querySelector('.result').textContent"),
+      /Clipboard paste.*restored/s,
+    );
+    assert.deepEqual(store.step(combinedRef.id, 1), combinedBase);
+  } finally {
+    if ((await clipboard.readText()) === combinedMarker) {
+      if (oldClipboard.length) await clipboard.write(oldClipboard);
+      else clipboard.clear();
+    }
+  }
+  pass(
+    "CLICK_AND_TYPE-clipboard-native-paste-restores-clipboard-redesign-v2-keeps-v1",
+  );
+  // Recognition must block both the focus click and typing, not just the latter.
+  const recognize = localOcr.recognize.bind(localOcr);
+  try {
+    for (const mode of ["low", "duplicate", "failure"]) {
+      await browser.navigate("http://127.0.0.1:47835/typing?no-caret");
+      browser.click(300, 132);
+      await wait(400);
+      const clicksBefore = (await read()).editorClicks,
+        textBefore = (await read()).text;
+      localOcr.recognize = async (image) => {
+        if (mode === "failure") throw Error("fixture OCR failure");
+        const result = await recognize(image);
+        assert.ok(
+          result.segments.some((s) => s.text === "Viết bản nháp ở đây"),
+          "fixture has the selected text before confidence/ambiguity injection",
+        );
+        return {
+          ...result,
+          segments:
+            mode === "low"
+              ? result.segments.map((s) => ({ ...s, confidence: 20 }))
+              : [...result.segments, ...result.segments],
+        };
+      };
+      await click("Test step đã lưu");
+      assert.match(
+        await evaluate("document.querySelector('.result').textContent"),
+        /BLOCKED/,
+      );
+      const last = JSON.parse(
+        (
+          store.db
+            .prepare("SELECT payload FROM runs ORDER BY rowid DESC LIMIT 1")
+            .get() as { payload: string }
+        ).payload,
+      ) as Result;
+      assert.equal(last.clickSent, false);
+      assert.equal(last.input, undefined);
+      assert.match(
+        last.message,
+        mode === "low"
+          ? /confidence/
+          : mode === "duplicate"
+            ? /nhiều/
+            : /fixture OCR failure/,
+      );
+      await until(
+        () =>
+          evaluate(
+            "document.querySelector('[role=status]').textContent.includes('Redesign')",
+          ),
+        "auto-open redesign for uncertain OCR",
+      );
+      assert.equal((await read()).editorClicks, clicksBefore);
+      assert.equal((await read()).text, textBefore);
+    }
+  } finally {
+    localOcr.recognize = recognize;
+  }
+  await click("Redesign Step bị chặn");
+  assert.equal(
+    await evaluate("document.querySelector('[aria-label=\"Action\"]').value"),
+    "CLICK_AND_TYPE",
+  );
+  assert.deepEqual(store.step(combinedRef.id, 1), combinedBase);
+  assert.equal(
+    store.steps().filter((s) => s.id === combinedRef.id).length,
+    2,
+    "opening redesign never auto-saves",
+  );
+  pass(
+    "CLICK_AND_TYPE-OCR-low-duplicate-error-block-before-click-and-type-open-Redesign-without-mutating-Base",
+  );
+  const base2 = store.step(combinedRef.id, 2);
+  await select("Phương thức nhận diện", "image");
+  await click("Lưu form thành Override riêng");
+  await click("Test step đã lưu");
+  probe = await read();
+  assert.equal(probe.text, text);
+  assert.equal(probe.editorClicks, 1);
+  assert.equal(probe.doubleClicks, 0);
+  assert.match(
+    await evaluate("document.querySelector('.result').textContent"),
+    /ACTION_SENT.*Override.*Image Matching/s,
+  );
+  assert.deepEqual(store.step(combinedRef.id, 2), base2);
+  await click("Sai — Redesign Step");
+  assert.match(
+    await evaluate("document.querySelector('.result').textContent"),
+    /REJECTED/,
+  );
+  assert.deepEqual(store.step(combinedRef.id, 2), base2);
+  pass(
+    "CLICK_AND_TYPE-image-Override-single-click-paste-and-manual-rejection-preserve-Base",
+  );
+  await evaluate(
+    "document.querySelector('.result').scrollIntoView({block:'start'})",
+  );
+  await sharp((await ui.capturePage()).toPNG())
+    .composite([
+      {
+        input: browser.captureBuffer((await browser.capture()).id),
+        left: browser.bounds.x,
+        top: browser.bounds.y,
+      },
+    ])
+    .png()
+    .toFile(path.join(project, "artifacts", "click-and-type-review.png"));
   await mkdir(path.join(project, "artifacts"), { recursive: true });
   await writeFile(
     path.join(project, "artifacts", "browser-typing.json"),

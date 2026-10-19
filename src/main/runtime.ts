@@ -134,7 +134,9 @@ export class Runtime {
     const result: Result = JSON.parse(row.payload);
     const flow = this.store.flow();
     if (
-      !["CLICK_TARGET", "TYPE_ONLY"].includes(result.action) ||
+      !["CLICK_TARGET", "CLICK_AND_TYPE", "TYPE_ONLY"].includes(
+        result.action,
+      ) ||
       result.status !== "ACTION_SENT" ||
       result.review ||
       !flow ||
@@ -183,6 +185,7 @@ export class Runtime {
       message = "Input đã gửi; cần VERIFY riêng để xác nhận nghiệp vụ.",
       match: Result["match"],
       input: Result["input"];
+    let clickSent = false;
     try {
       if (payload.action === "TYPE_ONLY") {
         input = await this.browser.typeOnly(payload.text!, payload.inputMethod);
@@ -218,14 +221,20 @@ export class Runtime {
           await new Promise((r) => setTimeout(r, 200));
           current = await this.browser.capture();
         } while (true);
-        if (payload.action === "CLICK_TARGET") {
+        if (["CLICK_TARGET", "CLICK_AND_TYPE"].includes(payload.action)) {
           this.browser.click(match.x, match.y);
+          clickSent = true;
+          if (payload.action === "CLICK_AND_TYPE")
+            input = await this.browser.typeOnly(
+              payload.text!,
+              payload.inputMethod,
+            );
           status = "ACTION_SENT";
         } else status = "VERIFIED";
         message =
           payload.action === "WAIT_VERIFY"
             ? `VERIFIED: điều kiện ${match.method === "ocr" ? `chữ “${match.text}”` : "ảnh"} đã khớp. Chỉ xác nhận điều kiện của step.`
-            : `Click đã gửi tại ${match.x}, ${match.y}; chưa xác nhận kết quả nghiệp vụ.`;
+            : `Click một lần đã gửi tại ${match.x}, ${match.y}${input ? ` rồi nhập bằng ${input.method === "clipboard" ? "clipboard paste" : "keyboard"}` : ""}; chưa xác nhận kết quả nghiệp vụ.${input?.warning ? ` ${input.warning}` : ""}`;
       }
     } catch (e) {
       status =
@@ -235,10 +244,14 @@ export class Runtime {
       if (e instanceof InputNotReady)
         input = { method: payload.inputMethod ?? "keyboard", focus: e.focus };
       message = (e as Error).message;
+      if (payload.action === "CLICK_AND_TYPE" && clickSent)
+        message = `Đã click target một lần; nhập liệu chưa hoàn tất và có thể đã nhập một phần. ${message}`;
     }
     await new Promise((r) => setTimeout(r, 120));
     // Keep the live page/focus after input. Evidence capture is an explicit user action.
-    const after = ["CLICK_TARGET", "TYPE_ONLY"].includes(payload.action)
+    const after = ["CLICK_TARGET", "CLICK_AND_TYPE", "TYPE_ONLY"].includes(
+      payload.action,
+    )
       ? undefined
       : await this.browser.capture();
     const result: Result = {
@@ -257,6 +270,7 @@ export class Runtime {
       flowId: this.store.flow()!.id,
       overrideId,
       targetAsset: payload.target?.asset,
+      clickSent,
     };
     // Store paths/metadata in history, not duplicate base64 screenshots in SQLite.
     const metadata = {
