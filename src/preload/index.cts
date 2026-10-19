@@ -1,5 +1,5 @@
 import { contextBridge, ipcRenderer } from "electron";
-import type { Command, Result } from "../shared/contracts.js";
+import type { Command, Result, ExecutionStart } from "../shared/contracts.js";
 contextBridge.exposeInMainWorld("creator", {
   readDraft: (key: string, initial: unknown) =>
     ipcRenderer.sendSync("creator:draft", { key, initial }),
@@ -30,6 +30,11 @@ contextBridge.exposeInMainWorld("creator", {
       callback(url);
     ipcRenderer.on("creator:navigation", handler);
     return () => ipcRenderer.removeListener("creator:navigation", handler);
+  },
+  onExecution: (callback: (execution: ExecutionStart) => void) => {
+    const handler = (_event: Electron.IpcRendererEvent, execution: ExecutionStart) => callback(execution);
+    ipcRenderer.on("creator:execution-start", handler);
+    return () => ipcRenderer.removeListener("creator:execution-start", handler);
   },
   onTest: (callback: (result: Result[] | { error: string }) => void) => {
     const handler = (

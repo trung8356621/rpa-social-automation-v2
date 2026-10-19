@@ -13,6 +13,7 @@ import type {
   Result,
   OcrResult,
   OcrSegment,
+  ExecutionStart,
   State,
   Step,
 } from "../shared/contracts";
@@ -75,10 +76,14 @@ function Creator() {
   const [activeStepId, setActiveStepId] = useState("");
   const playLock = useRef(false);
   const listRunIds = useRef(new Set<string>());
+  const [execution, setExecution] = useState<ExecutionStart>();
+  const executionRef = useRef<ExecutionStart | undefined>(undefined);
   useEffect(() => {
     setStepPlayback({});
     setActiveStepId("");
     listRunIds.current.clear();
+    setExecution(undefined);
+    executionRef.current = undefined;
   }, [state?.flow?.id]);
   useEffect(() => {
     if (shell && !playLock.current && results.length)
@@ -92,7 +97,17 @@ function Creator() {
   const drag = useRef<{ x: number; y: number } | undefined>(undefined);
   const flowInput = useRef<HTMLInputElement>(null);
   const resultPanel = useRef<HTMLDivElement>(null);
-  const autoRedesigned = useRef("");
+  function executionLabel(run: ExecutionStart) {
+    return `${run.stepId.slice(0, 8)} · v${run.version} · ${run.overrideId ? "Override" : "Base"} · Match To ${run.matchTo} · ${run.pipeline}`;
+  }
+  function executionFailed(message: string) {
+    const run = executionRef.current;
+    if (run) setStepPlayback(previous => previous[run.stepId]?.status === "running"
+      ? { ...previous, [run.stepId]: {
+          status: /Viewport|Zoom|không thuộc flow/i.test(message) ? "blocked" : "fail", message,
+        } }
+      : previous);
+  }
   const latest = useRef({ selected, overrideId, busy });
   latest.current = { selected, overrideId, busy };
   useEffect(() => {
@@ -102,26 +117,6 @@ function Creator() {
     if (results.length)
       resultPanel.current?.parentElement?.scrollTo({ top: 0 });
   }, [results]);
-  useEffect(() => {
-    if (!shell) return;
-    const blocked = results.find(
-      (r) =>
-        ["CLICK_AND_TYPE", "UPLOAD_FILE"].includes(r.action) &&
-        r.status === "BLOCKED" &&
-        !listRunIds.current.has(r.id) &&
-        !r.clickSent,
-    );
-    if (
-      blocked &&
-      blocked.id !== autoRedesigned.current &&
-      state?.steps.some(
-        (s) => s.id === blocked.stepId && s.version === blocked.version,
-      )
-    ) {
-      autoRedesigned.current = blocked.id;
-      void openRedesign(blocked).catch((e) => setMessage(String(e)));
-    }
-  }, [results, state]);
 
   useEffect(() => {
     if (!shell) return;
@@ -224,6 +219,7 @@ function Creator() {
     try {
       await work();
     } catch (e) {
+      executionFailed((e as Error).message);
       setMessage((e as Error).message);
     } finally {
       setBusy(false);
@@ -251,12 +247,21 @@ function Creator() {
         if (!navigationSeen) syncUrl(snapshot.url);
       })
       .catch((e) => setMessage(String(e)));
+    const offExecution = window.creator.onExecution((run) => {
+      executionRef.current = run;
+      setExecution(run);
+      setActiveStepId(run.stepId);
+      setResults([]);
+      setStepPlayback(previous => ({ ...previous, [run.stepId]: { status: "running", message: executionLabel(run) } }));
+      setMessage(`Đang chạy bản đã lưu: ${executionLabel(run)}`);
+    });
     const offTest = window.creator.onTest((result) => {
       if (Array.isArray(result)) {
         setResults(result);
         setMessage(result.map((r) => r.message).join("\n"));
       } else {
         setResults([]);
+        executionFailed(result.error);
         setMessage(result.error);
       }
     });
@@ -265,6 +270,7 @@ function Creator() {
       offFocus();
       offNavigation();
       offTest();
+      offExecution();
     };
   }, []);
   useEffect(() => {
@@ -349,6 +355,8 @@ function Creator() {
       setResults(r);
       setMessage(r.map((r) => r.message).join("\n"));
     } catch (e) {
+      setResults([]);
+      executionFailed((e as Error).message);
       setMessage((e as Error).message);
     } finally {
       setBusy(false);
@@ -365,7 +373,8 @@ function Creator() {
       await playSequential(
         steps,
         async (step) => {
-          await loadStep(step, false);
+          // Play saved references without overwriting the Editor draft/selected version.
+          setResults([]);
           const next = await invoke<Result[]>({
             type: "test",
             stepId: step.id,
@@ -527,7 +536,7 @@ function Creator() {
         : "Đã gửi thao tác. Quan sát browser rồi chọn Đúng hoặc Sai.";
     if (result.action === "TYPE_ONLY" || result.action === "SCROLL")
       return "Chưa chạy. Click vào browser rồi dùng Ctrl+Shift+T, hoặc Test cặp CLICK → TYPE.";
-    return "Chưa hoàn thành. Kiểm tra trang và target, hoặc mở Debug để xem lý do.";
+    return result.message;
   }
   async function saveBase() {
     const next = await invoke<State>({
@@ -546,17 +555,24 @@ function Creator() {
     setMessage(`Đã lưu Base v${ref.version}; version cũ vẫn được giữ.`);
   }
   const expanded = shell ? editorExpanded : debugExpanded;
+  const selectedBase = selected && (state?.steps.find(step => step.id === selected.id && step.version === selected.version) ?? selected);
   const activePayload = overrideId
     ? state?.overrides.find((o) => o.id === overrideId)?.segment[0]
-    : selected?.payload;
+    : selectedBase?.payload;
+  function editableConfig(p: Payload) {
+    const target = p.target ? { ...p.target, matchTo: p.target.ocr?.confirmed ? p.target.matchTo ?? "current" : undefined } : null;
+    return JSON.stringify([p.action, p.variableId ?? "", p.inputMethod ?? "keyboard", p.deltaY ?? -400, target]);
+  }
+  const editorDirty = !selected || (ocrEdit !== undefined && ocrEdit.trim() !== target?.ocr?.text) || name !== selectedBase?.name || editableConfig(payload()) !== editableConfig(selectedBase!.payload);
   const expected = activePayload
     ? targetEnvironment(activePayload, state?.flow?.zoom ?? 1)
     : undefined;
+  const viewportOcr = activePayload?.target?.ocr?.confirmed && activePayload.target.matchTo && activePayload.target.matchTo !== "current";
   const environmentMismatch =
     expected &&
     state &&
     (expected.width !== state.browserBounds.width ||
-      expected.height !== state.browserBounds.height ||
+      (!viewportOcr && expected.height !== state.browserBounds.height) ||
       expected.zoom !== state.zoom);
   useEffect(() => {
     document.documentElement.style.setProperty("--web-height",
@@ -817,6 +833,15 @@ function Creator() {
             )}
           </nav>
           <aside aria-label="Steps">
+            <div className="execution-summary" role="status" aria-label="Lượt chạy hiện tại">
+              {execution ? <><b>Bản đã chạy: {executionLabel(execution)}</b>
+                <p>{stepPlayback[execution.stepId]?.status ?? "running"} · {stepPlayback[execution.stepId]?.message}</p>
+              </> : <small>Play dùng version Base đã ghim trong danh sách; không dùng bản nháp Editor.</small>}
+              {results.map(result => <p key={result.id}>
+                v{result.version} · {result.status} · {result.execution?.matchTo ?? "current"}
+                {result.execution && <> · OCR {result.execution.ocrPasses} / scroll {result.execution.scrolls} · {result.execution.stopReason}</>}
+              </p>)}
+            </div>
             {state && (
               <Groups
                 newStep={newStep}
@@ -979,6 +1004,14 @@ function Creator() {
           )}
           {expanded && (
             <div className="panel-body">
+              {shell && <div className="editor-save-state" role="note">
+                {execution && <><b>Lượt chạy: {executionLabel(execution)}</b>
+                  <p>{stepPlayback[execution.stepId]?.status} · {stepPlayback[execution.stepId]?.message}</p></>}
+                Editor: {selected ? `${selected.name} · Base v${selected.version}` : "Step mới"}
+                <br />{editorDirty ? "Có thay đổi chưa lưu — Play không dùng bản nháp này." : "Đã lưu."}
+                <br />Match To Editor: {target?.ocr?.confirmed ? target.matchTo ?? "current" : "không có OCR"}
+                {selected && <><br />Ctrl+Shift+T: v{selected.version} · {overrideId ? "Override" : "Base"} · Match To {activePayload?.target?.ocr?.confirmed ? activePayload.target.matchTo ?? "current" : "current"}</>}
+              </div>}
               {shell ? (
                 <>
                   {field(
@@ -1264,6 +1297,7 @@ function Creator() {
                       )}
                       {target.ocr?.confirmed && field("Match To",
                         <select aria-label="Match To" disabled={locked}
+                          title="Current: AUTO ảnh + OCR quanh ROI. Top/Middle/Bottom: OCR toàn viewport và cuộn từng đoạn."
                           value={target.matchTo ?? "current"}
                           onChange={(e) => setTarget({ ...target, matchTo: e.target.value as NonNullable<NonNullable<Payload["target"]>["matchTo"]> })}>
                           <option value="current">Current</option>

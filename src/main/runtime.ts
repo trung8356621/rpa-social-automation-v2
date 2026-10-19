@@ -1,16 +1,17 @@
-import { logMainError } from "./main-error-log.js";
+import { logMainError, logMainEvent } from "./main-error-log.js";
 import { resolvePayload } from "../shared/flow-model.js";
 import { validatePayload } from "./storage.js";
 import path from "node:path";
 import { readFile, writeFile } from "node:fs/promises";
 import { randomUUID } from "node:crypto";
-import type { Payload, Result } from "../shared/contracts.js";
+import type { Payload, Result, ExecutionStart, ExecutionDetails } from "../shared/contracts.js";
 import { BrowserCore, InputNotReady } from "./browser-core.js";
 import { Store } from "./storage.js";
 import { localOcr, type OcrEngine } from "./ocr.js";
 import { advanceOcrSearch, clearOcrSearch } from "./ocr-match-scroll.js";
-import { resolveVisualTarget, TargetNotConfident } from "./target-resolver.js";
+import { resolveVisualTarget, TargetNotConfident, OcrNotFound, OcrTechnicalError } from "./target-resolver.js";
 import { inspectUploadFiles, UploadError } from "./upload-files.js";
+import { WEB_HEIGHT } from "../shared/geometry.js";
 import { assertVisualEnvironment } from "../shared/visual-environment.js";
 export class Runtime {
   busy = false;
@@ -22,7 +23,13 @@ export class Runtime {
     readonly runDir: string,
     readonly ocr: OcrEngine = localOcr,
     readonly onClick?: (x: number, y: number) => void,
+    readonly onExecution?: (execution: ExecutionStart) => void,
   ) {}
+  private executionStart(payload: Payload, stepId: string, version: number, overrideId?: string): ExecutionStart {
+    const matchTo = payload.target?.ocr?.confirmed ? payload.target.matchTo ?? "current" : "current";
+    return { stepId, version, overrideId, matchTo,
+      pipeline: matchTo === "current" ? "auto-roi" : "ocr-viewport" };
+  }
   async test(
     stepId: string,
     version: number,
@@ -69,6 +76,7 @@ export class Runtime {
     delayMs = 0,
   ): Promise<Result[]> {
     if (this.busy) throw new Error("Đang có một tác vụ chạy.");
+    this.latestRuns.clear();
     const flow = this.store.flow();
     if (
       !flow ||
@@ -105,12 +113,23 @@ export class Runtime {
     });
     // Width changes reflow page content. Refuse the entire plan before any capture,
     // click, file chooser or input; legacy targets retain their original 1024 viewport.
+    const first = plans[0];
+    if (first?.payloads[0]) this.onExecution?.(this.executionStart(first.payloads[0], first.stepId, first.version, first.overrideId));
     for (const plan of plans)
-      for (const payload of plan.payloads)
-        assertVisualEnvironment(payload, flow.zoom, {
-          ...this.browser.bounds,
-          zoom: this.browser.zoom,
-        });
+      for (const payload of plan.payloads) {
+        try {
+          const viewportOcr = payload.target?.ocr?.confirmed && payload.target.matchTo && payload.target.matchTo !== "current";
+          assertVisualEnvironment(payload, flow.zoom, { ...this.browser.bounds,
+            height: viewportOcr ? payload.target?.environment?.height ?? WEB_HEIGHT : this.browser.bounds.height,
+            zoom: this.browser.zoom });
+        } catch (error) {
+          logMainError(this.runDir, "preflight", error, {
+            ...this.executionStart(payload, plan.stepId, plan.version, plan.overrideId),
+            ocrPasses: 0, scrolls: 0, stopReason: "VIEWPORT_MISMATCH", viewport: this.browser.bounds,
+          });
+          throw error;
+        }
+      }
     this.busy = true;
     this.latestRuns.clear();
     try {
@@ -210,9 +229,11 @@ export class Runtime {
   ): Promise<Result> {
     // Screenshot capture can disturb native focus on this Electron/Windows build.
     // Focus-sensitive input runs first without a pre-capture or any refocus.
-    const before = ["TYPE_ONLY", "SCROLL"].includes(payload.action)
-      ? undefined
-      : await this.browser.capture();
+    const execution: ExecutionDetails = { ...this.executionStart(payload, stepId, version, overrideId),
+      runId: randomUUID(), ocrPasses: 0, scrolls: 0, stopReason: "STARTED" };
+    this.onExecution?.(execution);
+    logMainEvent(this.runDir, "execution-start", { ...execution, action: payload.action });
+    let before: Result["before"];
     let status: Result["status"] = "FAILED",
       message = "Input đã gửi; cần VERIFY riêng để xác nhận nghiệp vụ.",
       match: Result["match"],
@@ -230,6 +251,7 @@ export class Runtime {
           }
         : undefined;
     try {
+      before = ["TYPE_ONLY", "SCROLL"].includes(payload.action) ? undefined : await this.browser.capture();
       if (payload.action === "TYPE_ONLY") {
         input = await this.browser.typeOnly(payload.text!, payload.inputMethod);
         message = `Đã gửi ${input.method === "clipboard" ? "clipboard paste" : "native text + phím Shift+Enter"}; caret chưa được tự kiểm chứng. Quan sát chữ và xác nhận thủ công hoặc VERIFY riêng.${input.warning ? ` ${input.warning}` : ""}`;
@@ -247,7 +269,7 @@ export class Runtime {
         );
         const matchTo = payload.target?.ocr?.confirmed && payload.target.matchTo !== "current"
           ? payload.target.matchTo : undefined;
-        const deadline = Date.now() + (matchTo ? 20000
+        const deadline = Date.now() + (matchTo ? 120000
           : payload.action === "WAIT_VERIFY" ? (payload.timeoutMs ?? 3000) : 0);
         let scrolls = 0;
         let reached = false;
@@ -256,6 +278,7 @@ export class Runtime {
         try {
           do {
             try {
+              if (matchTo) execution.ocrPasses++;
               const resolved = await resolveVisualTarget(
                 this.browser.captureBuffer(current.id),
                 template,
@@ -263,27 +286,37 @@ export class Runtime {
                 this.ocr,
               );
               const { resolution: trace, ...position } = resolved;
+              if (!matchTo) execution.ocrPasses += trace.attempts.filter(a => a.method === "ocr" && a.outcome !== "unavailable").length;
               if (matchTo && Date.now() >= deadline)
-                throw new TargetNotConfident("Match To hết thời gian tìm OCR; chưa gửi action.");
+                throw new TargetNotConfident("TIME_LIMIT: Match To hết thời gian tìm OCR; chưa gửi action.");
               match = position;
               resolution = trace;
+              logMainEvent(this.runDir, "ocr-pass", { ...execution, outcome: "MATCHED", captureId: current.id, method: position.method });
               if (trace.attempts.some((attempt) => attempt.outcome === "failed"))
                 logMainError(this.runDir, "visual-fallback", new Error("Visual/OCR attempt failed; fallback selected"),
                   { stepId, version, action: payload.action, resolution: trace });
               break;
             } catch (error) {
-              if (
-                !(error instanceof TargetNotConfident) || (matchTo && error.ambiguous) ||
-                Date.now() >= deadline || (matchTo && (reached || scrolls >= 40))
-              )
-                throw error;
+              if (matchTo) {
+                // Only absence is recoverable by scrolling. Technical/ambiguous/weak OCR is distinct.
+                if (!(error instanceof OcrNotFound)) throw error;
+                logMainEvent(this.runDir, "ocr-pass", { ...execution, outcome: "NOT_FOUND", captureId: current.id });
+                if (Date.now() >= deadline) throw new TargetNotConfident("TIME_LIMIT: hết thời gian quét OCR.");
+                if (reached || scrolls >= 40) throw new TargetNotConfident("SCROLL_LIMIT: hết giới hạn quét OCR.");
+              } else {
+                if (error instanceof TargetNotConfident)
+                  execution.ocrPasses += error.resolution?.attempts.filter(a => a.method === "ocr" && a.outcome !== "unavailable").length ?? 0;
+                if (!(error instanceof TargetNotConfident) || Date.now() >= deadline) throw error;
+              }
             }
             if (matchTo) {
               const progress = await advanceOcrSearch(this.browser.view.webContents, matchTo, this.browser.zoom);
               reached = progress.reached;
-              scrolls++;
+              if (progress.moved) scrolls++;
+              execution.scrolls = scrolls;
+              logMainEvent(this.runDir, "ocr-scroll", { ...execution, ...progress });
               if (!progress.moved)
-                throw new TargetNotConfident("Match To đã đến vùng đích hoặc không thể cuộn; không tìm thấy OCR. Chưa gửi action.");
+                throw new TargetNotConfident(`${progress.reason ?? "SCROLL_STALLED"}: không tìm thấy OCR; chưa gửi action.`);
             }
             await new Promise((r) => setTimeout(r, matchTo ? 250 : 200));
             current = await this.browser.capture();
@@ -318,12 +351,20 @@ export class Runtime {
               ? `VERIFIED: điều kiện ${match.method === "ocr" ? `chữ “${match.text}”` : "ảnh"} đã khớp. Chỉ xác nhận điều kiện của step.`
               : `Đã gửi click một lần${input ? " rồi gửi nội dung nhập" : ""}; chưa xác nhận kết quả nghiệp vụ.${input?.warning ? ` ${input.warning}` : ""}`;
       }
+      execution.stopReason = match ? "MATCHED" : "ACTION_SENT";
     } catch (e) {
+      const ocrFailure = e instanceof TargetNotConfident
+        ? e.resolution?.attempts.find(attempt => attempt.method === "ocr" && attempt.outcome === "failed") : undefined;
+      execution.stopReason = e instanceof OcrTechnicalError || ocrFailure ? "OCR_TECHNICAL"
+        : e instanceof OcrNotFound ? "NOT_FOUND"
+        : e instanceof TargetNotConfident && e.ambiguous ? "OCR_AMBIGUOUS"
+        : e instanceof Error ? e.message.split(":")[0] : "RUNTIME_ERROR";
       logMainError(this.runDir, "runtime", e, {
-        stepId, version, overrideId, action: payload.action, matchTo: payload.target?.matchTo,
+        ...execution,
+        stepId, version, overrideId, action: payload.action,
         clickSent, resolution: e instanceof TargetNotConfident ? e.resolution : resolution,
       });
-      status =
+      status = ocrFailure ? "FAILED" :
         e instanceof TargetNotConfident ||
         e instanceof InputNotReady ||
         (e instanceof UploadError && !clickSent)
@@ -331,7 +372,7 @@ export class Runtime {
           : "FAILED";
       if (e instanceof InputNotReady)
         input = { method: payload.inputMethod ?? "keyboard", focus: e.focus };
-      message =
+      message = ocrFailure ? `OCR_TECHNICAL: ${ocrFailure.reason}` :
         e instanceof TargetNotConfident
           ? `BLOCKED: ${e.message}`
           : (e as Error).message;
@@ -340,6 +381,8 @@ export class Runtime {
       if (payload.action === "CLICK_AND_TYPE" && clickSent)
         message = `Đã click target một lần; nhập liệu chưa hoàn tất và có thể đã nhập một phần. ${message}`;
     }
+    logMainEvent(this.runDir, "execution-stop", { ...execution, status, clickSent, resolution });
+    message = `v${version} · ${overrideId ? "Override" : "Base"} · Match To ${execution.matchTo} · ${execution.pipeline}: ${message}`;
     if (upload?.cleanupWarning) message += ` ${upload.cleanupWarning}`;
     await new Promise((r) => setTimeout(r, 120));
     // Keep the live page/focus after input. Evidence capture is an explicit user action.
@@ -359,7 +402,8 @@ export class Runtime {
         ? undefined
         : await this.browser.capture();
     const result: Result = {
-      id: randomUUID(),
+      id: execution.runId,
+      execution,
       ok: status === "ACTION_SENT" || status === "VERIFIED",
       status,
       action: payload.action,

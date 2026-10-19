@@ -81,6 +81,40 @@ export class LocalOcr implements OcrEngine {
     }
   }
   private async read(image: Buffer): Promise<OcrResult> {
+    const { width, height } = await sharp(image).metadata();
+    if (!width || !height || width > 1024 || height > 16384)
+      throw new Error("OCR_IMAGE_SIZE: ảnh cần rộng ≤1024 và cao ≤16384 pixel.");
+    if (height <= 560) return this.readRegion(image);
+    // Overlapping strips retain lines crossing a boundary. Only strip offsets are
+    // added to boxes: these remain screenshot viewport coordinates, never scrollTop.
+    const segments: OcrSegment[] = [];
+    const texts: string[] = [];
+    const confidences: number[] = [];
+    for (let top = 0; top < height; top += 480) {
+      const regionHeight = Math.min(560, height - top);
+      const region = await sharp(image).extract({ left: 0, top, width, height: regionHeight }).png().toBuffer();
+      const result = await this.readRegion(region);
+      texts.push(result.text);
+      confidences.push(result.confidence);
+      for (const segment of result.segments) {
+        const translated = { ...segment, bbox: { ...segment.bbox, y: top + segment.bbox.y } };
+        const duplicate = segments.findIndex((saved) => {
+          const normalize = (text: string) => text.normalize("NFC").trim().replace(/\s+/gu, " ").toLocaleLowerCase("vi");
+          if (saved.kind !== translated.kind || normalize(saved.text) !== normalize(translated.text)) return false;
+          const a = saved.bbox, b = translated.bbox;
+          const intersection = Math.max(0, Math.min(a.x+a.width,b.x+b.width)-Math.max(a.x,b.x)) *
+            Math.max(0, Math.min(a.y+a.height,b.y+b.height)-Math.max(a.y,b.y));
+          return intersection / Math.min(a.width*a.height,b.width*b.height) > 0.8;
+        });
+        if (duplicate < 0) segments.push(translated);
+        else if (translated.confidence > segments[duplicate].confidence) segments[duplicate] = translated;
+      }
+      if (top + regionHeight >= height) break;
+    }
+    return { text: texts.join("\n"), confidence: confidences.reduce((a,b) => a+b,0)/confidences.length,
+      segments: segments.map((segment, index) => ({ ...segment, id: String(index) })), language: "vie+eng" };
+  }
+  private async readRegion(image: Buffer): Promise<OcrResult> {
     const metadata = await sharp(image).metadata();
     const width = metadata.width!,
       height = metadata.height!;

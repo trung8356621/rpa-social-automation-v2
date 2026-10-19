@@ -151,6 +151,7 @@ export function StepList({
         >
           <span className="step-label">
             <b>{s.name}</b>
+            <small>v{s.version} · Base · {s.payload.target?.ocr?.confirmed ? s.payload.target.matchTo ?? "current" : "image"}</small>
             {playback[s.id] && (
               <small
                 className={`step-status ${playback[s.id].status}`}
@@ -168,7 +169,7 @@ export function StepList({
         <button
           className="icon-button step-play"
           aria-label={`Play ${s.name}`}
-          title="Play step"
+          title={`Play Base v${s.version} · Match To ${s.payload.target?.ocr?.confirmed ? s.payload.target.matchTo ?? "current" : "current"}`}
           disabled={locked}
           onClick={() => play(s)}
         >

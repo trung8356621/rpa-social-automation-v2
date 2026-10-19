@@ -87,7 +87,21 @@ export type Capture = {
   backend: "cdp-surface";
   bounds?: Rect;
 };
+export type ExecutionStart = {
+  stepId: string;
+  version: number;
+  overrideId?: string;
+  matchTo: "current" | "top" | "middle" | "bottom";
+  pipeline: "auto-roi" | "ocr-viewport";
+};
+export type ExecutionDetails = ExecutionStart & {
+  runId: string;
+  ocrPasses: number;
+  scrolls: number;
+  stopReason: string;
+};
 export type Result = {
+  execution?: ExecutionDetails;
   id: string;
   ok: boolean;
   status: "ACTION_SENT" | "VERIFIED" | "BLOCKED" | "FAILED" | "REJECTED";
@@ -248,5 +262,6 @@ export interface CreatorApi {
   onFocusFlow(callback: () => void): () => void;
   onNavigation(callback: (url: string) => void): () => void;
   invoke(command: Command): Promise<unknown>;
+  onExecution(callback: (execution: ExecutionStart) => void): () => void;
   onTest(callback: (result: Result[] | { error: string }) => void): () => void;
 }

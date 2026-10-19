@@ -18,6 +18,15 @@ export class TargetNotConfident extends Error {
     super(message);
   }
 }
+export class OcrNotFound extends TargetNotConfident {
+  constructor() { super("OCR_NOT_FOUND: chưa thấy chính xác chữ đã xác nhận trong viewport."); }
+}
+export class OcrTechnicalError extends Error {
+  constructor(readonly cause: unknown) {
+    super(`OCR_TECHNICAL: ${cause instanceof Error ? cause.message : String(cause)}`);
+    this.name = "OcrTechnicalError";
+  }
+}
 export function normalizeTargetText(text: string) {
   return text
     .normalize("NFC")
@@ -35,6 +44,7 @@ export function resolveOcrText(
       segment.kind === selection.kind &&
       normalizeTargetText(segment.text) === normalizeTargetText(selection.text),
   );
+  if (!matches.length) throw new OcrNotFound();
   if (matches.length !== 1)
     throw new TargetNotConfident(
       matches.length
@@ -53,13 +63,13 @@ export function resolveOcrText(
     found.bbox.x + found.bbox.width > offset.width ||
     found.bbox.y + found.bbox.height > offset.height
   )
-    throw new TargetNotConfident("OCR bounding box không hợp lệ.");
+    throw new TargetNotConfident("OCR_INVALID_BBOX: OCR bounding box không hợp lệ.");
   if (
     !Number.isFinite(found.confidence) ||
     found.confidence < MIN_OCR_CONFIDENCE
   )
     throw new TargetNotConfident(
-      `OCR confidence ${found.confidence.toFixed(1)} < ${MIN_OCR_CONFIDENCE}. Không gửi action.`,
+      `OCR_LOW_CONFIDENCE: OCR confidence ${found.confidence.toFixed(1)} < ${MIN_OCR_CONFIDENCE}. Không gửi action.`,
     );
   return {
     method: "ocr",
@@ -80,7 +90,10 @@ export async function resolveVisualTarget(
   // Match To explicitly searches the visible OCR region after bounded scrolling.
   if (target.ocr?.confirmed && target.matchTo && target.matchTo !== "current") {
     const size = await sharp(frame).metadata();
-    const found = resolveOcrText(await ocr.recognize(frame), target.ocr,
+    let result: OcrResult;
+    try { result = await ocr.recognize(frame); }
+    catch (error) { throw new OcrTechnicalError(error); }
+    const found = resolveOcrText(result, target.ocr,
       { x: 0, y: 0, width: size.width!, height: size.height! });
     return { ...found, resolution: { mode: "auto", selectedMethod: "ocr",
       attempts: [{ method: "ocr", outcome: "matched", confidence: found.confidence }] } };

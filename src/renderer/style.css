@@ -1010,3 +1010,13 @@ body[data-panel="shell"] .step-play {
 .variables-drawer .variable-columns, .variables-drawer .variable-row {
   grid-template-columns: 70px 65px minmax(90px, 1fr) 24px;
 }
+
+.execution-summary, .editor-save-state {
+  padding: 8px; background: #192c41; border-bottom: 1px solid #3c536e;
+  font-size: 11px; overflow-wrap: anywhere;
+}
+.execution-summary { flex-shrink: 0; max-height: 170px; overflow: auto; }
+.execution-summary p { margin: 4px 0; }
+.editor-save-state { color: #ebd19b; margin-bottom: 10px; }
+
+.step-label > small { font-size: 9px; line-height: 10px; }

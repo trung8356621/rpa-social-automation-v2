@@ -1,3 +1,20 @@
+> Audit Match To/OCR (chưa kiểm thử thực tế):
+> - Nguyên nhân tĩnh: Top/Middle/Bottom OCR toàn viewport nhưng OCR cũ từ chối ảnh >1024×560;
+>   Current dùng AUTO Image Matching + OCR quanh ROI, nên hai chế độ có thể cho kết quả khác nhau.
+> - Ảnh cao nay được chia thành dải 560px, overlap 80px. Bbox cộng offset dải trong screenshot,
+>   khử trùng bbox chồng lấn; không cộng scrollTop và không dùng ROI cũ làm tọa độ sau cuộn.
+> - NOT_FOUND tiếp tục tìm; OCR_TECHNICAL báo FAILED riêng. Ambiguous/low-confidence giữ chặn an toàn.
+> - Giới hạn tìm: 40 lượt / 120 giây / 8000 DIP. Sau lazy-load, tính lại đích từ chiều cao hiện tại;
+>   không đánh dấu kết thúc sớm chỉ vì đã chạm chiều cao trang trước khi render.
+> - OCR viewport chỉ kiểm tra width/zoom target; không phụ thuộc chiều cao ROI cũ. Current giữ guard cũ.
+> - Runtime báo cấu hình version/Override/Match To thực tế. Editor báo thay đổi chưa lưu;
+>   Play danh sách dùng Base đã ghim và không ghi đè bản nháp. BLOCKED không tự mở Redesign nữa.
+> - Lượt bắt đầu xóa kết quả cũ, thay trạng thái Step bằng running rồi nhận kết quả mới.
+>   Log `runs/creator-execution.jsonl`: runId, version, matchTo, pipeline, OCR passes, scrolls, stopReason.
+>   Lỗi kỹ thuật/trace nằm trong `runs/creator-errors.jsonl`. Metadata bổ sung chỉ ghi vào lượt chạy mới.
+> - Giữ nguyên Visual Engine, browser.click, imageToInput, Click Marker và dữ liệu/version cũ.
+> - Chưa test theo yêu cầu: không chạy test/build/typecheck hoặc mở Electron. Các ghi chú dưới là lịch sử.
+
 > Bổ sung: double-click chữ OCR đã xác nhận để sửa trong Editor; Enter nhận chữ,
 > Esc/blur hủy, X bỏ OCR. Lưu Step/Redesign theo luồng sẵn có để ghi thay đổi.
 > Giữ ảnh target, ROI và metadata OCR. Không tự tạo version khi Enter.

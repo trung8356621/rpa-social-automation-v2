@@ -10,7 +10,7 @@ export async function clearOcrSearch(contents: WebContents) {
 }
 export async function advanceOcrSearch(
   contents: WebContents, matchTo: "top" | "middle" | "bottom", zoom: number,
-): Promise<{ moved: boolean; reached: boolean }> {
+): Promise<{ moved: boolean; reached: boolean; reason?: string }> {
   const progress = await contents.executeJavaScriptInIsolatedWorld(WORLD, [{ code: `(() => {
     const visible = el => {
       const r = el.getBoundingClientRect(), style = getComputedStyle(el);
@@ -55,15 +55,17 @@ export async function advanceOcrSearch(
     const before = el.scrollTop;
     const goal = Math.max(0, el.scrollHeight-el.clientHeight) * state.fraction;
     const remaining = (goal-before)*state.direction;
-    if (!state.direction || remaining <= 1) return { moved: false, reached: true };
+    if (!state.direction || remaining <= 1) return { moved: false, reached: true, reason: "DESTINATION_REACHED" };
     // 200 DIP per capture, also capped by visible height to retain overlap.
     const distance = Math.min(200 / ${zoom}, el.clientHeight * 0.7, remaining);
     el.scrollTo({ top: before + state.direction*distance, behavior: 'instant' });
     const moved = Math.abs(el.scrollTop-before);
     state.traveled += moved;
-    return { moved: moved > 0.5, reached: remaining-distance <= 1 || state.traveled >= 8000 / ${zoom} };
+    return { moved: moved > 0.5, reached: state.traveled >= 8000 / ${zoom},
+      reason: moved <= 0.5 ? 'SCROLL_STALLED' : 'SCROLLED',
+      scrollTop: el.scrollTop, scrollHeight: el.scrollHeight, goal };
   })()` }]);
   if (progress.blocked)
-    throw new TargetNotConfident("Match To: vùng cuộn/modal đã đổi hoặc không cuộn được; chưa gửi action.");
+    throw new TargetNotConfident("SCROLL_CONTAINER_CHANGED: vùng cuộn/modal đã đổi hoặc không cuộn được; chưa gửi action.");
   return progress;
 }

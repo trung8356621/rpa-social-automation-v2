@@ -15,3 +15,10 @@ export function logMainError(directory: string, scope: string, error: unknown,
     console.error("[Creator diagnostics write failed]", logError);
   }
 }
+
+export function logMainEvent(directory: string, scope: string, context: Record<string, unknown>) {
+  const entry = { at: new Date().toISOString(), scope, ...context };
+  console.info(`[Creator ${scope}]`, entry);
+  try { appendFileSync(path.join(directory, "creator-execution.jsonl"), JSON.stringify(entry) + "\n", "utf8"); }
+  catch (error) { console.error("[Creator execution log write failed]", error); }
+}

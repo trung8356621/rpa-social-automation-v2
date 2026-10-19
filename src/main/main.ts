@@ -258,7 +258,8 @@ async function boot() {
   browser.setZoom(store.flow()?.zoom ?? Number(store.setting("zoom") || 1));
   const marker = new ClickMarker(window, browser);
   const runtime = new Runtime(browser, store, assetDir, runDir, undefined,
-    (x, y) => marker.show(x, y));
+    (x, y) => marker.show(x, y),
+    (execution) => window.webContents.send("creator:execution-start", execution));
   let armedTest:
     { stepId: string; version: number; overrideId?: string } | undefined;
   const state = (): State => ({
