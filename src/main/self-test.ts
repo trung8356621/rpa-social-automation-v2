@@ -388,7 +388,7 @@ export async function runSelfTest(ctx: {
     const preview = await sharp((await window.capturePage()).toPNG())
       .composite([
         {
-          input: Buffer.from(typed[0].after.dataUrl.split(",")[1], "base64"),
+          input: Buffer.from(typed[0].after!.dataUrl.split(",")[1], "base64"),
           left: browser.bounds.x,
           top: browser.bounds.y,
         },

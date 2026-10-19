@@ -60,11 +60,15 @@ export type Capture = {
 export type Result = {
   id: string;
   ok: boolean;
-  status: "ACTION_SENT" | "VERIFIED" | "BLOCKED" | "FAILED";
+  status: "ACTION_SENT" | "VERIFIED" | "BLOCKED" | "FAILED" | "REJECTED";
+  review?: { verdict: "correct" | "incorrect"; at: string; by: "user" };
+  flowId?: string;
+  overrideId?: string;
+  targetAsset?: string;
   action: Action;
   message: string;
   before?: Capture;
-  after: Capture;
+  after?: Capture;
   match?: {
     score: number;
     x: number;
@@ -111,7 +115,9 @@ export type Command =
       segment: Payload[];
     }
   | { type: "test"; stepId: string; version: number; overrideId?: string }
+  | { type: "reviewTest"; runId: string; verdict: "correct" | "incorrect" }
   | { type: "armTest"; stepId: string; version: number; overrideId?: string }
+  | { type: "disarmTest" }
   | { type: "browserVisible"; visible: boolean };
 export interface CreatorApi {
   invoke(command: Command): Promise<unknown>;

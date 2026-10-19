@@ -6,7 +6,7 @@ export async function startFixture(port: number) {
       res.end(`<!doctype html><html><head><meta charset="utf-8"><title>OCR fixture</title><style>
       body{margin:0;background:#f4f6f9;font:18px Arial}button{position:absolute;left:100px;width:360px;height:64px;background:white;color:#111;border:2px solid #333;font:32px Arial}#vi{top:110px}#en{top:260px}#icon{left:550px;top:110px;width:80px;height:80px;background:#173d82;border:0}#icon:before{content:'';position:absolute;left:20px;top:20px;width:36px;height:36px;border:6px solid white;border-radius:50%}#output{position:absolute;top:420px;left:100px}</style></head><body>
       <button id="vi">Tạo bài viết</button><button id="en">Create post</button><button id="icon" aria-label="icon"></button><div id="output"></div>
-      <script>window.ocrProbe={clicks:0,id:'',x:0,y:0};for(const b of document.querySelectorAll('button'))b.onclick=e=>{ocrProbe.clicks++;ocrProbe.id=b.id;ocrProbe.x=e.clientX;ocrProbe.y=e.clientY;document.querySelector('#output').textContent='Draft opened';};</script></body></html>`);
+      <script>window.ocrProbe={clicks:0,id:'',x:0,y:0};for(const b of document.querySelectorAll('button'))b.onclick=e=>{ocrProbe.clicks++;ocrProbe.id=b.id;ocrProbe.x=e.clientX;ocrProbe.y=e.clientY;document.querySelector('#output').innerHTML='Draft opened <textarea id=live-draft></textarea>';document.querySelector('#live-draft').focus();};</script></body></html>`);
       return;
     }
     res.end(`<!doctype html><html><head><title>Browser calibration</title><style>

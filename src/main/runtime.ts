@@ -8,6 +8,7 @@ import { localOcr, type OcrEngine } from "./ocr.js";
 import { resolveVisualTarget, TargetNotConfident } from "./target-resolver.js";
 export class Runtime {
   busy = false;
+  private latestRuns = new Set<string>();
   constructor(
     readonly browser: BrowserCore,
     readonly store: Store,
@@ -40,6 +41,7 @@ export class Runtime {
         "Override khác Base version; cần test lại/tạo override mới.",
       );
     this.busy = true;
+    this.latestRuns.clear();
     try {
       const results: Result[] = [];
       for (const payload of override?.segment || [step.payload]) {
@@ -48,11 +50,63 @@ export class Runtime {
           stepId,
           version,
           override ? "override" : "base",
+          overrideId,
         );
         results.push(result);
+        this.latestRuns.add(result.id);
         if (!result.ok) break;
       }
       return results;
+    } finally {
+      this.busy = false;
+    }
+  }
+  async review(
+    runId: string,
+    verdict: "correct" | "incorrect",
+  ): Promise<Result> {
+    if (this.busy) throw new Error("Đang test; đợi tác vụ kết thúc.");
+    if (
+      !["correct", "incorrect"].includes(verdict) ||
+      !this.latestRuns.has(runId)
+    )
+      throw new Error("Chỉ xác nhận lần test mới nhất trong phiên hiện tại.");
+    const row = this.store.db
+      .prepare("SELECT payload FROM runs WHERE id=?")
+      .get(runId) as { payload: string } | undefined;
+    if (!row) throw new Error("Không tìm thấy lần test.");
+    const result: Result = JSON.parse(row.payload);
+    const flow = this.store.flow();
+    if (
+      result.action !== "CLICK_TARGET" ||
+      result.status !== "ACTION_SENT" ||
+      result.review ||
+      !flow ||
+      result.flowId !== flow.id ||
+      !flow.steps.some(
+        (s) => s.id === result.stepId && s.version === result.version,
+      )
+    )
+      throw new Error(
+        "Lần test không còn chờ xác nhận ở flow/version hiện tại; hãy test lại.",
+      );
+    result.review = { verdict, at: new Date().toISOString(), by: "user" };
+    result.status = verdict === "correct" ? "VERIFIED" : "REJECTED";
+    result.ok = verdict === "correct";
+    result.message =
+      verdict === "correct"
+        ? "Người dùng đã quan sát browser và xác nhận kết quả đúng cho Step này."
+        : "Người dùng xác nhận kết quả sai. Base được giữ nguyên; lưu Redesign để tạo version mới.";
+    this.busy = true;
+    try {
+      await writeFile(
+        path.join(this.runDir, `${result.id}.json`),
+        JSON.stringify(result, null, 2),
+      );
+      this.store.db
+        .prepare("UPDATE runs SET payload=? WHERE id=?")
+        .run(JSON.stringify(result), runId);
+      return result;
     } finally {
       this.busy = false;
     }
@@ -62,6 +116,7 @@ export class Runtime {
     stepId: string,
     version: number,
     source: "base" | "override",
+    overrideId?: string,
   ): Promise<Result> {
     // Screenshot capture can disturb native focus on this Electron/Windows build.
     // Focus-sensitive input runs first without a pre-capture or any refocus.
@@ -119,7 +174,11 @@ export class Runtime {
       message = (e as Error).message;
     }
     await new Promise((r) => setTimeout(r, 120));
-    const after = await this.browser.capture();
+    // Keep the live page/focus after click. Evidence capture is an explicit user action.
+    const after =
+      payload.action === "CLICK_TARGET"
+        ? undefined
+        : await this.browser.capture();
     const result: Result = {
       id: randomUUID(),
       ok: status === "ACTION_SENT" || status === "VERIFIED",
@@ -132,12 +191,15 @@ export class Runtime {
       source,
       stepId,
       version,
+      flowId: this.store.flow()!.id,
+      overrideId,
+      targetAsset: payload.target?.asset,
     };
     // Store paths/metadata in history, not duplicate base64 screenshots in SQLite.
     const metadata = {
       ...result,
       before: before ? { ...before, dataUrl: undefined } : undefined,
-      after: { ...after, dataUrl: undefined },
+      after: after ? { ...after, dataUrl: undefined } : undefined,
     };
     this.store.db
       .prepare("INSERT INTO runs VALUES(?,?)")

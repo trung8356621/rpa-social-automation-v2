@@ -262,12 +262,18 @@ async function boot() {
           command.segment,
         );
         return state();
+      case "reviewTest":
+        isIdle();
+        return runtime.review(command.runId, command.verdict);
       case "test":
         return runtime.test(
           command.stepId,
           command.version,
           command.overrideId,
         );
+      case "disarmTest":
+        armedTest = undefined;
+        return;
       case "armTest":
         store.step(command.stepId, command.version);
         armedTest = {

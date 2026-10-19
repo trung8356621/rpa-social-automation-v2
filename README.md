@@ -22,7 +22,7 @@ Electron 44.9.0, React 19, Vite 8, TypeScript, Sharp, SQLite tích hợp trong N
 1. Tạo flow bằng nút `Tạo flow` hoặc chọn flow đã lưu ở Bước 1. Khi chưa có flow, ngay cạnh nút crop có lý do và nút `Đi tới bước 1`. Chọn zoom trước khi lưu step đầu tiên.
 2. Chọn Action trước. CLICK_TARGET và WAIT/VERIFY cần `Chụp & crop ROI`; TYPE_ONLY và SCROLL không cần target.
 3. Kéo ROI trên ảnh, chọn `Dùng ROI` ở thanh trên cùng, rồi `Lưu Base v1`. `Quay lại browser` hoặc Escape hủy crop mà không lưu step. Nút thoát luôn ở thanh trên cùng, kể cả khi sidebar cuộn xuống hoặc crop báo lỗi. Trong crop mode, Escape thoát crop trước; khi đang ở browser fullscreen, Escape thoát fullscreen. Ảnh crop PNG được lưu thật.
-4. Test step đã lưu. CLICK_TARGET gửi click nếu matching đạt ngưỡng; input gửi thành công không đồng nghĩa tác vụ nghiệp vụ thành công. WAIT/VERIFY xác nhận ảnh hoặc chữ OCR đã chọn hiện diện. CLICK/TYPE/SCROLL trả ACTION_SENT; chỉ WAIT/VERIFY trả VERIFIED cho điều kiện của step. Xem [hướng dẫn OCR](docs/OCR-POC.md).
+4. Test step đã lưu. CLICK_TARGET gửi click thật trên browser đang hiển thị và trả ACTION_SENT; không tự chụp ảnh sau click hay reset trang. Quan sát kết quả rồi chọn **Đúng — Hoàn thành Step** để VERIFIED và tạo Step tiếp theo từ trạng thái hiện tại, hoặc **Sai — Redesign Step** để sửa mà giữ Base. WAIT/VERIFY xác nhận điều kiện ảnh/chữ. Xem [quy trình Test & Debug](docs/TEST-DEBUG-UX.md) và [hướng dẫn OCR](docs/OCR-POC.md).
 5. TYPE_ONLY: lưu nội dung, click thủ công vào ô nhập trong browser, nhấn **Ctrl+Shift+T rồi thả các phím**. Action không tự tìm input, click hoặc focus. Nếu native focus không thuộc browser, runtime từ chối.
 6. Chỉnh form rồi `Lưu redesign` tạo version mới cùng stable ID. Chọn version cũ và `Ghim version` để rollback flow. V1 vẫn tồn tại trong SQLite.
 7. `Lưu form thành Override riêng` giữ Base nguyên vẹn. Chọn Implementation để test Base hoặc Override. Override tham chiếu đúng Base version; đổi Base phải test/lưu Override lại. UI hiện hỗ trợ replacement một action; contract/runtime hỗ trợ segment tối đa 8 action, chưa có segment editor.
@@ -51,7 +51,7 @@ npm run test:browser
 
 Bộ test hiện chạy thêm process UX với session riêng `.local/test-ux-<pid>/`, kiểm tra tạo flow, hủy/lỗi crop, maximize/fullscreen/restore. Có thể chạy riêng sau build bằng `node scripts/browser-test.mjs ux`. Báo cáo sửa UX: [docs/UX-FIXES.md](docs/UX-FIXES.md); kết quả máy: `artifacts/browser-ux.json`.
 
-Bản OCR: 10 unit tests qua; thêm 6 nhóm kiểm tra Electron OCR thật (fixture Việt/Anh), cùng hồi quy first/second/ux; còn 3 mục giới hạn/thủ công đã biết. Báo cáo OCR: [docs/OCR-POC.md](docs/OCR-POC.md). Xem [báo cáo giai đoạn](docs/POC-REPORT.md), [report phiên đầu](artifacts/browser-first.json) và [report sau restart](artifacts/browser-second.json).
+Bản Test & Debug: 10 unit tests qua; 54 checks Electron đạt (27 first + 3 restart + 16 UX + 8 OCR/debug), còn 2 mục giới hạn/thủ công ở lần chạy cuối: screenshot khi ẩn view timeout và phím tắt vật lý chưa xác nhận. Screenshot/focus vẫn có thể không ổn định theo môi trường; CLICK_TARGET không tự chụp sau click. Báo cáo: [Test & Debug](docs/TEST-DEBUG-UX.md), [OCR](docs/OCR-POC.md). Các báo cáo POC/UX cũ giữ làm lịch sử; kết quả mới tại `artifacts/browser-*.json`.
 
 [Ảnh review UI](artifacts/creator-ui-composed.png) được ghép từ capture shell và capture browser thật, vì BrowserWindow.capturePage không chứa native child view. Đây không phải ảnh chụp desktop nguyên khối.
 

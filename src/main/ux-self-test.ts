@@ -302,7 +302,7 @@ export async function runSelfTest({
       assert.ok(Math.abs(probe.x - 270) < 2);
       assert.ok(Math.abs(probe.y - 152) < 2);
       const png = await sharp(
-        browser.captureBuffer(result.after.id),
+        browser.captureBuffer((await browser.capture()).id),
       ).metadata();
       assert.equal(png.width, WEB_WIDTH);
       assert.equal(png.height, WEB_HEIGHT);

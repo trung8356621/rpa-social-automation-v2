@@ -52,8 +52,65 @@ function Creator() {
   const [context, setContext] = useState("Ngữ cảnh sửa lỗi");
   const drag = useRef<{ x: number; y: number } | undefined>(undefined);
   const flowInput = useRef<HTMLInputElement>(null);
+  const resultPanel = useRef<HTMLDivElement>(null);
   const latest = useRef({ selected, overrideId, busy });
   latest.current = { selected, overrideId, busy };
+  useEffect(() => {
+    if (results.length)
+      resultPanel.current?.scrollIntoView({ block: "nearest" });
+  }, [results]);
+
+  function newStep() {
+    setSelected(undefined);
+    setTarget(undefined);
+    setTargetImage("");
+    setMethod("image");
+    setOcrResult(undefined);
+    setOcrError("");
+    setName("");
+    setOverrideId("");
+    setResults([]);
+    setAction("CLICK_TARGET");
+    setMessage(
+      "Chọn Action cho Step tiếp theo từ trạng thái browser hiện tại. Không chạy lại flow.",
+    );
+    requestAnimationFrame(() =>
+      document
+        .querySelector('[aria-label="Action"]')
+        ?.scrollIntoView({ block: "center" }),
+    );
+  }
+  async function reviewClick(result: Result, verdict: "correct" | "incorrect") {
+    if (shot) await closeShot();
+    const reviewed = await invoke<Result>({
+      type: "reviewTest",
+      runId: result.id,
+      verdict,
+    });
+    setResults((previous) =>
+      previous.map((r) =>
+        r.id === reviewed.id
+          ? { ...r, ...reviewed, before: r.before, after: r.after }
+          : r,
+      ),
+    );
+    if (verdict === "incorrect") {
+      const base = state!.steps.find(
+        (s) => s.id === result.stepId && s.version === result.version,
+      )!;
+      const overlay = state!.overrides.find((o) => o.id === result.overrideId);
+      await loadStep({ ...base, payload: overlay?.segment[0] ?? base.payload });
+      setMessage(
+        `Redesign ${base.name} / v${base.version}. Base giữ nguyên; chỉ tạo version mới khi lưu. Browser vẫn ở trạng thái sau click.`,
+      );
+      document
+        .querySelector('[aria-label="Action"]')
+        ?.scrollIntoView({ block: "center" });
+    } else
+      setMessage(
+        "Đã VERIFIED bằng xác nhận của bạn. Có thể tạo Step tiếp theo từ browser hiện tại.",
+      );
+  }
 
   async function invoke<T>(command: Command): Promise<T> {
     return window.creator.invoke(command) as Promise<T>;
@@ -77,7 +134,10 @@ function Creator() {
       if (Array.isArray(result)) {
         setResults(result);
         setMessage(result.map((r) => r.message).join("\n"));
-      } else setMessage(result.error);
+      } else {
+        setResults([]);
+        setMessage(result.error);
+      }
     });
   }, []);
   useEffect(() => {
@@ -88,6 +148,8 @@ function Creator() {
         version: selected.version,
         overrideId: overrideId || undefined,
       }).catch((e) => setMessage(String(e)));
+    else
+      void invoke({ type: "disarmTest" }).catch((e) => setMessage(String(e)));
   }, [selected, overrideId]);
   useEffect(() => {
     if (!shot) return;
@@ -134,7 +196,10 @@ function Creator() {
     // Disabling a previously focused editor button can pull focus away from the
     // native browser view. The browser shortcut must not mutate UI before input.
     latest.current.busy = true;
-    if (!fromBrowser) setBusy(true);
+    if (!fromBrowser) {
+      setBusy(true);
+      setResults([]);
+    }
     try {
       const r = await invoke<Result[]>({
         type: "test",
@@ -433,20 +498,7 @@ function Creator() {
         </div>
         <div className="row">
           <div className="eyebrow">02 / ACTION-FIRST</div>
-          <button
-            className="link"
-            disabled={locked}
-            onClick={() => {
-              setSelected(undefined);
-              setTarget(undefined);
-              setTargetImage("");
-              setMethod("image");
-              setOcrResult(undefined);
-              setOcrError("");
-              setName("");
-              setOverrideId("");
-            }}
-          >
+          <button className="link" disabled={locked} onClick={newStep}>
             + Step mới
           </button>
         </div>
@@ -759,6 +811,20 @@ function Creator() {
               Test dùng payload đã lưu. TYPE_ONLY/SCROLL: giữ focus trong web và
               dùng phím tắt.
             </p>
+            {["CLICK_TARGET", "WAIT_VERIFY"].includes(
+              selected.payload.action,
+            ) && (
+              <p className="hint saved-method">
+                Phương thức đã lưu:{" "}
+                {(
+                  state?.overrides.find((o) => o.id === overrideId)
+                    ?.segment[0] ?? selected.payload
+                ).method === "ocr"
+                  ? "OCR text matching"
+                  : "Image Matching"}
+                . Thay đổi form cần lưu trước khi Test.
+              </p>
+            )}
             <input
               aria-label="Ngữ cảnh Override"
               disabled={locked}
@@ -794,47 +860,124 @@ function Creator() {
         <div role="status" className="status">
           {busy ? "Đang xử lý…" : message}
         </div>
-        {results.map((r) => (
-          <div
-            className={
-              "result " +
-              (r.status === "VERIFIED"
-                ? "pass"
-                : r.status === "ACTION_SENT"
-                  ? "sent"
-                  : "fail")
-            }
-            key={r.id}
-          >
-            <b>
-              {r.status} · {r.action}
-            </b>
-            <p>{r.message}</p>
-            {r.status === "ACTION_SENT" && (
+        <div ref={resultPanel} aria-label="Kết quả Test">
+          {results.map((r) => (
+            <div
+              className={
+                "result " +
+                (r.status === "VERIFIED"
+                  ? "pass"
+                  : r.status === "ACTION_SENT"
+                    ? "sent"
+                    : "fail")
+              }
+              key={r.id}
+            >
+              <b>
+                {r.status} · {r.action}
+              </b>
+              <p>{r.message}</p>
               <p>
-                Chỉ mới gửi thao tác; chưa xác nhận kết quả nghiệp vụ. Dùng
-                WAIT/VERIFY với điều kiện mong đợi.
+                Step {r.stepId.slice(0, 8)} · v{r.version} ·{" "}
+                {r.source === "override" ? "Override" : "Base"}
               </p>
-            )}
-            {!r.before && (
-              <p>Không chụp trước TYPE_ONLY/SCROLL để giữ focus.</p>
-            )}
-            <div className="row">
-              <button
-                disabled={busy || !r.before}
-                onClick={() => void task(() => inspect(r.before!))}
-              >
-                Ảnh trước
-              </button>
-              <button
-                disabled={busy}
-                onClick={() => void task(() => inspect(r.after))}
-              >
-                Ảnh sau
-              </button>
+              {r.match && (
+                <div className="match-detail">
+                  <b>
+                    Đã dùng:{" "}
+                    {r.match.method === "ocr"
+                      ? "OCR text matching"
+                      : "Image Matching"}
+                  </b>
+                  {r.match.method === "ocr" ? (
+                    <p>
+                      Chữ tìm được: “{r.match.text}” · confidence{" "}
+                      {r.match.confidence?.toFixed(1)}%
+                    </p>
+                  ) : (
+                    <>
+                      <p>
+                        Ảnh ROI đã khớp · score {r.match.score.toFixed(4)}.
+                        Không dùng OCR cho lần test này.
+                      </p>
+                      <ResultTarget asset={r.targetAsset} />
+                    </>
+                  )}
+                  <p>
+                    Tọa độ browser: ({r.match.x.toFixed(1)},{" "}
+                    {r.match.y.toFixed(1)}) DIP
+                  </p>
+                </div>
+              )}
+              {r.status === "ACTION_SENT" && (
+                <p>
+                  Chỉ mới gửi thao tác; chưa xác nhận kết quả nghiệp vụ. Quan
+                  sát browser đang hiển thị và chờ giao diện phản hồi.
+                </p>
+              )}
+              {r.action === "CLICK_TARGET" && !r.after && (
+                <p>
+                  Browser live được giữ nguyên; không tự chụp ảnh sau click để
+                  tránh mất focus. Ảnh trước chỉ xem khi bạn yêu cầu. Nếu cần gõ
+                  tiếp sau thao tác ở sidebar/chụp ảnh, click thủ công vào ô
+                  nhập.
+                </p>
+              )}
+              {r.status === "ACTION_SENT" && r.action === "CLICK_TARGET" && (
+                <div className="review-actions">
+                  <button
+                    disabled={
+                      locked ||
+                      selected?.id !== r.stepId ||
+                      selected.version !== r.version
+                    }
+                    onClick={() => void task(() => reviewClick(r, "correct"))}
+                  >
+                    Đúng — Hoàn thành Step
+                  </button>
+                  <button
+                    disabled={
+                      locked ||
+                      selected?.id !== r.stepId ||
+                      selected.version !== r.version
+                    }
+                    onClick={() => void task(() => reviewClick(r, "incorrect"))}
+                  >
+                    Sai — Redesign Step
+                  </button>
+                </div>
+              )}
+              {r.review?.verdict === "correct" && (
+                <button disabled={locked} onClick={newStep}>
+                  + Tạo Step tiếp theo từ browser hiện tại
+                </button>
+              )}
+              {!r.before && (
+                <p>Không chụp trước TYPE_ONLY/SCROLL để giữ focus.</p>
+              )}
+              <div className="row">
+                <button
+                  disabled={busy || !r.before}
+                  onClick={() => void task(() => inspect(r.before!))}
+                >
+                  Ảnh trước
+                </button>
+                <button
+                  disabled={busy || !!shot}
+                  onClick={() =>
+                    void task(async () =>
+                      inspect(
+                        r.after ?? (await invoke<Capture>({ type: "capture" })),
+                      ),
+                    )
+                  }
+                >
+                  {r.after ? "Ảnh sau" : "Chụp trạng thái hiện tại"}
+                </button>
+              </div>
             </div>
-          </div>
-        ))}
+          ))}
+        </div>
         <p className="hint">
           Đăng nhập thủ công; session giữ local. CAPTCHA/checkpoint: dừng và xử
           lý thủ công. POC không có Publish action.
@@ -887,5 +1030,25 @@ function Creator() {
       )}
     </main>
   );
+}
+function ResultTarget({ asset }: { asset?: string }) {
+  const [image, setImage] = useState("");
+  useEffect(() => {
+    let active = true;
+    setImage("");
+    if (asset)
+      void window.creator
+        .invoke({ type: "targetImage", asset })
+        .then((value) => {
+          if (active) setImage(value as string);
+        })
+        .catch(() => {});
+    return () => {
+      active = false;
+    };
+  }, [asset]);
+  return image ? (
+    <img className="target" alt="Ảnh target đã dùng khi test" src={image} />
+  ) : null;
 }
 createRoot(document.getElementById("root")!).render(<Creator />);

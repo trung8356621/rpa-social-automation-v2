@@ -13,7 +13,7 @@ Target lưu PNG, ROI và phần OCR được user xác nhận. Chọn `Phương 
 - Image: score tối thiểu 0.96 (hoặc threshold cao hơn); chặn khi có ứng viên ảnh gần tương đương ở vị trí khác trong vùng tìm kiếm. Score ảnh không phải xác suất đúng.
 - OCR: đọc lại screenshot mới trong ROI mở rộng 64 DIP mỗi phía, giới hạn viewport. Chỉ khớp chính xác sau NFC, chuẩn hóa khoảng trắng và hoa/thường; giữ dấu tiếng Việt, không fuzzy match/substring. Phải có đúng một dòng/từ khớp và confidence ít nhất 80. Confidence là điểm của engine, không bảo đảm đúng về ngữ nghĩa.
 - Click ở tâm bounding box của chữ đã tìm thấy, cùng hệ tọa độ screenshot/input DIP. Không fallback từ OCR sang ảnh khi thiếu chữ, lỗi engine, trùng chữ hoặc confidence thấp. Kết quả `BLOCKED` không gửi action.
-- `ACTION_SENT`: click/keyboard/scroll đã gửi, **chưa xác nhận kết quả nghiệp vụ**. `VERIFIED`: WAIT/VERIFY xác nhận đúng điều kiện ảnh hoặc chữ của step, không chứng minh toàn bộ workflow thành công. `FAILED`: lỗi thực thi khác. Không hiển thị PASS nghiệp vụ sau click.
+- `ACTION_SENT`: click/keyboard/scroll đã gửi, **chưa xác nhận kết quả nghiệp vụ**. `VERIFIED`: WAIT/VERIFY xác nhận điều kiện ảnh/chữ, hoặc người dùng quan sát browser live và chọn Đúng sau click. `REJECTED`: người dùng xác nhận sai để Redesign; Base giữ nguyên. `FAILED`: lỗi thực thi khác. Không tự coi click là thành công nghiệp vụ. Xem [quy trình Test & Debug](TEST-DEBUG-UX.md).
 
 OCR chỉ hỗ trợ mục tiêu nhìn thấy trong vùng tìm kiếm, chưa tìm toàn trang hoặc xử lý thay đổi scale/font/theme lớn. Nhận diện chữ không thay thế bước VERIFY kết quả sau action. Không dùng DOM/pseudo-DOM để tìm target. Instrumentation DOM chỉ có trong test shell và fixture local.
 

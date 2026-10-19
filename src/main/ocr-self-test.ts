@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import { mkdir, writeFile } from "node:fs/promises";
 import path from "node:path";
+import sharp from "sharp";
 import type { BrowserWindow } from "electron";
 import type { BrowserCore } from "./browser-core.js";
 import type { Store } from "./storage.js";
@@ -188,6 +189,140 @@ export async function runSelfTest({
     "en",
   );
   pass("English-ROI-explicit-selection-save-and-real-OCR-runtime-click");
+  // Exercise the real Test button, result review IPC and live browser continuity.
+  const page = browser.view.webContents;
+  const originalCapture = browser.capture.bind(browser);
+  let captures = 0;
+  browser.capture = async () => {
+    captures++;
+    return originalCapture();
+  };
+  try {
+    await click("Test step đã lưu");
+  } finally {
+    browser.capture = originalCapture;
+  }
+  assert.equal(
+    captures,
+    1,
+    "only recognition screenshot, no post-click screenshot",
+  );
+  assert.equal(
+    await page.executeJavaScript("document.activeElement.id"),
+    "live-draft",
+  );
+  assert.equal(
+    page.isFocused(),
+    true,
+    "live browser keeps native focus after click",
+  );
+  assert.equal(browser.visible, true);
+  assert.equal(await evaluate("!!document.querySelector('.snapshot')"), false);
+  assert.match(
+    await evaluate("document.querySelector('.result').textContent"),
+    /ACTION_SENT/,
+  );
+  assert.match(
+    await evaluate("document.querySelector('.match-detail').textContent"),
+    /OCR text matching.*Create post/s,
+  );
+  // Explicit test evidence only: compose shell + native view after focus assertions.
+  await evaluate(
+    "document.querySelector('.result').scrollIntoView({block:'start'})",
+  );
+  await wait();
+  await sharp((await ui.capturePage()).toPNG())
+    .composite([
+      {
+        input: browser.captureBuffer((await browser.capture()).id),
+        left: browser.bounds.x,
+        top: browser.bounds.y,
+      },
+    ])
+    .png()
+    .toFile(path.join(project, "artifacts", "debug-live-review.png"));
+  const url = page.getURL();
+  const clicks = (await page.executeJavaScript("window.ocrProbe")).clicks;
+  await click("Đúng — Hoàn thành Step");
+  assert.match(
+    await evaluate("document.querySelector('.result').textContent"),
+    /VERIFIED/,
+  );
+  const reviewed = JSON.parse(
+    (
+      store.db
+        .prepare("SELECT payload FROM runs ORDER BY rowid DESC LIMIT 1")
+        .get() as { payload: string }
+    ).payload,
+  );
+  assert.equal(reviewed.review.by, "user");
+  await click("Ảnh trước");
+  assert.match(
+    await evaluate("document.querySelector('.snapshot img').src"),
+    /^data:image\/png;base64,/,
+  );
+  await click("Quay lại browser");
+  await assert.rejects(
+    runtime.review(reviewed.id, "incorrect"),
+    /không còn chờ/,
+  );
+  await click("Tạo Step tiếp theo từ browser hiện tại");
+  assert.equal(page.getURL(), url);
+  assert.equal(
+    (await page.executeJavaScript("window.ocrProbe")).clicks,
+    clicks,
+  );
+  assert.ok(
+    await page.executeJavaScript("!!document.querySelector('#live-draft')"),
+  );
+  assert.match(
+    await evaluate("document.querySelector('aside').textContent"),
+    /Lưu Base v1/,
+  );
+  pass(
+    "live-click-focus-preserved-user-confirms-VERIFIED-and-next-step-without-reset-or-replay",
+  );
+  // New Step retains page state; image matching is explicitly identified even with OCR available.
+  await crop(100, 260, 360, 64);
+  await click("Lưu Base v1");
+  const imageRef = store.flow()!.steps.at(-1)!;
+  const base = store.step(imageRef.id, 1);
+  await click("Test step đã lưu");
+  assert.match(
+    await evaluate("document.querySelector('.match-detail').textContent"),
+    /Image Matching.*Không dùng OCR/s,
+  );
+  assert.ok(
+    await evaluate(
+      "!!document.querySelector('img[alt=\"Ảnh target đã dùng khi test\"]')",
+    ),
+  );
+  const stale = JSON.parse(
+    (
+      store.db
+        .prepare("SELECT payload FROM runs ORDER BY rowid DESC LIMIT 1")
+        .get() as { payload: string }
+    ).payload,
+  );
+  await click("Test step đã lưu");
+  await assert.rejects(runtime.review(stale.id, "correct"), /mới nhất/);
+  await click("Sai — Redesign Step");
+  assert.match(
+    await evaluate("document.querySelector('.result').textContent"),
+    /REJECTED/,
+  );
+  assert.deepEqual(store.step(imageRef.id, 1), base);
+  assert.equal(store.steps().filter((s) => s.id === imageRef.id).length, 1);
+  await click("Lưu redesign");
+  assert.equal(store.step(imageRef.id, 2).id, imageRef.id);
+  assert.deepEqual(store.step(imageRef.id, 1), base);
+  assert.equal(page.getURL(), url);
+  assert.ok(
+    await page.executeJavaScript("!!document.querySelector('#live-draft')"),
+  );
+  pass(
+    "image-method-explicit-stale-review-blocked-reject-keeps-Base-redesign-appends-v2-live-page-retained",
+  );
   await click("Tạo flow");
   try {
     localOcr.recognize = async () => {

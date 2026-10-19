@@ -264,6 +264,21 @@ aside > button {
   font-size: 11px;
   line-height: 1.5;
 }
+.review-actions {
+  display: grid;
+  gap: 7px;
+  margin: 10px 0;
+}
+.result > button {
+  width: 100%;
+  margin: 7px 0;
+}
+.match-detail {
+  border-top: 1px solid #3a4c68;
+  margin-top: 8px;
+  padding-top: 8px;
+  overflow-wrap: anywhere;
+}
 .capture-instructions {
   flex: 1;
   color: #b9d8ef;
