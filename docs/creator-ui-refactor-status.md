@@ -1,44 +1,49 @@
-# Creator UX refactor: overlay gate (2026-10-19)
+# Creator UX Refactor — giai đoạn 2
 
-Branch: `feature/creator-ui-refactor`, based on `ae262df` (main was fetched and already current). No merge into main. The pre-existing untracked `rpa-social-automation-v2/` directory is untouched.
+Branch: `feature/creator-ui-refactor`. Không merge main. Thư mục untracked có sẵn `rpa-social-automation-v2/` được giữ nguyên.
 
-## Current status
+## Trạng thái
 
-Step 1 is INCOMPLETE. Step 2 has NOT started. Normal startup still uses the existing Creator UI and POC runtime. Native overlay views are constructed only for the explicit `overlay` fixture phase. No action, target resolver, storage/version/Override, session, upload or clipboard implementation has changed.
+Người dùng đã xác nhận Overlay POC chạy thành công trên Windows tương tác: 5 passed, 0 pending (native stacking, input vùng không bị che, viewport, navigation và focus). Giai đoạn 2 tiếp tục từ kết quả đó; không làm lại POC.
 
-The initial geometry-only proof passed but was insufficient: Electron input injection bypasses native OS hit-testing, and BrowserWindow.capturePage omits sibling WebContentsViews. The strengthened proof now requires OS clicks into each panel and the uncovered browser, stable bounds/zoom/navigation/focus while toggling, and a nonempty desktop compositor screenshot. Never treat the initial geometry-only pass as approval to proceed.
+UI sử dụng hai native WebContentsView đặt trên Embedded Browser: Step Editor ở góc phải phía trên, Test & Debug phía dưới. Nút −/+ thu gọn/mở từng panel bằng cách đổi bounds của panel. Browser luôn giữ bounds x320/y88, viewport 1024 × 560 DIP và zoom của flow. Thu gọn từ panel trả focus về browser; mở panel không tự focus vào ô nhập. F11/fullscreen/restore không scale browser, kéo cạnh vẫn bị khóa.
 
-In this execution session Windows SetCursorPos and GetCursorPos return false, and desktopCapturer returns an empty thumbnail. The strengthened test exits nonzero and writes an incomplete report. This establishes an environment limitation; it does not establish that the overlay works or that it is defective. No valid screenshot of a new UI is available.
+Top bar chứa Flow, tên flow mới, Save step, URL, Copy URL và zoom. Sidebar chỉ chứa danh sách Step và thêm/chọn Step. Editor giữ Action-first, target ROI/OCR, input và Save. Test được giữ ở đầu panel dưới; kết quả và Đúng/Sai hiện trước Debug. Version/Override, log kỹ thuật, ảnh bằng chứng và hướng dẫn Test cặp mặc định thu gọn. Khi crop/xem ảnh, cả hai native panel được ẩn để canvas dùng đúng toàn bộ hệ tọa độ browser; thoát sẽ hiện lại panel theo trạng thái thu gọn trước đó.
 
-## Resume overlay verification
+Bản nháp đồng bộ giữa ba renderer qua IPC có kiểm tra sender và danh sách key cho phép. Saved Step, Base/Override và test vẫn dùng Store/Runtime hiện có. Chỉ mở rộng nhận diện focus editor cho hai native panel. Không thay đổi action execution, AUTO resolver, clipboard/upload/session hoặc thêm Publish/Runner/SEO-OPS.
 
-Use an unlocked interactive Windows desktop with this repository checked out on the feature branch. Close any other test instance. The test moves the OS pointer briefly; leave input idle while it runs.
+## Kiểm thử
+
+- Typecheck và build pass; 24/24 unit tests pass.
+- Electron: creator-ui 10, first 27, restart 3, UX 16, OCR 8, typing 13, upload 8, address 14: tổng 99 checks pass.
+- Phase first vẫn partial: screenshot khi ẩn cửa sổ có thể timeout; phím Ctrl+Shift+T vật lý cần xác nhận trong desktop tương tác.
+- Regression `creator-native` dùng OS mouse cho nút thu gọn của UI thật và vùng browser không bị che. Phiên automation hiện tại không điều khiển được input desktop: SetCursorPos trả false. Đây là kiểm tra native của UI mới chưa đạt trong phiên này, không phủ nhận kết quả POC bạn đã xác nhận. Regression renderer input/focus và collapse thật trong `creator-ui` đã pass.
+- Chưa kiểm thử lại UI refactor trên Facebook thật. Các xác nhận trong fixture không phải Facebook acceptance.
 
 ```powershell
 Set-Location D:\workspace-2026\rpa\new
-npm run build
-node scripts/browser-test.mjs overlay
+npm run typecheck
+npm test
+npm run test:browser
 ```
 
-Review `artifacts/browser-overlay.json`, `artifacts/failure-overlay.txt` on failure, and `artifacts/overlay-proof.png` only after a fresh successful run. The latter is a desktop screenshot and may include other visible windows; inspect before sharing. These artifacts remain local and ignored by Git.
+`test:browser` mặc định chạy UI thật cùng các fixture nghiệp vụ; không chạy lại Overlay POC. Trên Windows tương tác, chạy bổ sung:
 
-Before moving to Step 2, finish the native panel proof with real collapse controls, confirm collapse does not unnecessarily steal browser focus, verify pointer routing throughout uncovered browser regions, and repeat at flow zooms 100/90/80%, normal/fullscreen/restore. The current prototype has placeholder panel content, not the refactored Step Editor or Test & Debug controls.
+```powershell
+npm run test:browser -- creator-native
+```
 
-## Facebook Group manual acceptance after the UI refactor
+Giữ desktop mở và không thao tác chuột trong lúc test native. Báo cáo cục bộ: `artifacts/browser-*.json`; lỗi: `artifacts/failure-*.txt`. `artifacts/creator-ui.png` là ảnh ghép từ capture thật của shell, browser và từng native panel theo đúng bounds, không phải ảnh desktop nguyên khối. Báo cáo và ảnh runtime vẫn bị gitignore. Ảnh review fixture được lưu riêng tại [images/creator-ui.png](images/creator-ui.png) để review cùng branch.
 
-This checklist is for the later completed UI, not a claim of Facebook verification now.
+![Creator UI từ capture các native view](images/creator-ui.png)
 
-1. Start with `npm start`, sign in manually, open the test Group URL. Verify the live URL/copy URL, flow zoom and local session after restart.
-2. Create a flow. Crop the visible create-post target, confirm OCR explicitly where applicable, save CLICK_TARGET, test, observe the actual click, then mark correct/incorrect.
-3. With the composer open, crop the input target and test CLICK_AND_TYPE with Vietnamese accents, emoji and line breaks; test keyboard and clipboard methods. Confirm draft text and caret behavior. Do not click Publish.
-4. Crop the Photo/Video target, choose local image(s), save UPLOAD_FILE and test. Confirm every real thumbnail has loaded before marking correct. Confirm no automatic Publish occurs.
-5. Switch steps, test saved payloads, reject a result and Redesign. Confirm a new Base version retains the old one, version pinning works and an Override remains separate from Base.
-6. Exercise TYPE_ONLY from browser focus via Ctrl+Shift+T, SCROLL, WAIT_VERIFY, cancel/escape ROI capture and reopen it. Confirm no editor focus causes unintended typing.
-7. Open/collapse both panels before and after capture/test, and fullscreen/restore. Compare browser viewport 1024 x 560 DIP, zoom, page state, target coordinates and uncovered pointer interaction throughout.
-8. Record the commit hash, flow zoom, actions tested and observed results. Facebook acceptance requires the user's actual confirmation.
+## Kiểm chứng Facebook Group
 
-## Validation in this session
-
-- Typecheck and build passed; 24/24 unit tests passed.
-- Existing Electron phases: first 27 passed / 2 pending, second 3, ux 16, ocr 8, typing 13, upload 8, address 14 passed (89 passing checks total). The first phase is partial, including hidden-view screenshot timeout; Facebook remains untested.
-- Strengthened overlay phase: incomplete/nonzero because SetCursorPos failed on the input desktop. No UI refactor acceptance is implied.
+1. Chạy `npm start`, mở URL Group test và đăng nhập thủ công. Chọn flow đã có hoặc Tạo flow; xác nhận zoom đúng flow. Không xóa `.local/creator` vì chứa session.
+2. Trong Step Editor, chọn CLICK_TARGET, crop nút mở composer, xác nhận OCR nếu dùng chữ và bấm Save step. Trong panel dưới bấm Test, quan sát composer thực sự mở rồi bấm Đúng. Nút “Tạo Step tiếp theo” tiếp tục từ trang hiện tại.
+3. Với composer đang mở, chọn CLICK_AND_TYPE, crop vùng nhập, nhập nội dung tiếng Việt/emoji/nhiều dòng, Save rồi Test. Quan sát click và nội dung thực tế trước khi xác nhận. Lặp lại với keyboard/clipboard nếu dùng cả hai.
+4. Chọn UPLOAD_FILE, chọn ảnh local, crop nút Ảnh/Video, Save rồi Test. Chờ đủ thumbnail/preview thật và không có lỗi mới xác nhận hoàn thành. Không bấm Publish.
+5. Bấm Sai để Redesign, sửa target/nội dung rồi Save tạo Base version mới. Mở Version & Override để xem lại version cũ, Ghim version và tạo Override riêng. Chuyển Implementation giữa Base/Override; kiểm tra Base không đổi.
+6. Chuyển Step từ sidebar, kiểm tra form/input/target tương ứng và Test dùng payload đã lưu. Thử hủy crop bằng Esc, mở lại crop rồi dùng ROI. Kiểm tra URL/Copy URL sau điều hướng Facebook và sau khi tự nhập URL mới.
+7. Click/gõ ở vùng browser không bị che, thu gọn/mở cả hai panel, F11 rồi restore. Trang không reload, target không lệch, browser vẫn 1024 × 560 DIP. TYPE_ONLY/SCROLL: click browser rồi Ctrl+Shift+T và thả phím; hoặc mở hướng dẫn Test cặp cho CLICK → TYPE.
+8. Đóng/mở app kiểm tra session, ghi commit hash, zoom, action đã thử và kết quả Đúng/Sai. Facebook acceptance của UI mới cần xác nhận thực tế của bạn.

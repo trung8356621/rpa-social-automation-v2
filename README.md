@@ -2,7 +2,7 @@
 
 Creator đầu tiên, theo [baseline V2 trên Drive](https://docs.google.com/document/d/141N81qBlAg9VlX1WF-iaX9CfAieTcmBokjbWp5rpqUY/edit), đọc ngày 19/10/2026; mục 24 Action-first ưu tiên hơn các ý tưởng cũ.
 
-**Trạng thái: POC một phần, chưa đạt acceptance Facebook.** Đã chạy Electron thật và kiểm chứng editor/runtime trên trang kiểm chuẩn local. Facebook chưa được kiểm thử.
+**Creator UX Refactor:** người dùng đã xác nhận POC Facebook và native Overlay POC. UI mới cần kiểm chứng lại trên Facebook; các báo cáo tự động chỉ dùng fixture. Xem [bố cục, kiểm thử và hướng dẫn Facebook](docs/creator-ui-refactor-status.md).
 
 ## Chạy ứng dụng
 
@@ -19,12 +19,12 @@ Electron 44.9.0, React 19, Vite 8, TypeScript, Sharp, SQLite tích hợp trong N
 
 ## Cách dùng
 
-1. Tạo flow bằng nút `Tạo flow` hoặc chọn flow đã lưu ở Bước 1. Khi chưa có flow, ngay cạnh nút crop có lý do và nút `Đi tới bước 1`. Chọn zoom trước khi lưu step đầu tiên.
+1. Tạo flow bằng nút `Tạo flow` hoặc chọn flow ở top bar. Sidebar chỉ chứa danh sách Step và nút thêm Step. Step Editor nằm trên browser; Test & Debug nằm phía dưới, mỗi panel có nút −/+ để thu gọn/mở. Khi chưa có flow, ngay cạnh nút crop có lý do và nút `Đi tới bước 1`. Chọn zoom trước khi lưu step đầu tiên.
 2. Chọn Action trước. CLICK_TARGET, CLICK_AND_TYPE, UPLOAD_FILE và WAIT/VERIFY cần `Chụp & crop ROI`; TYPE_ONLY và SCROLL không cần target. [Resolver AUTO](docs/AUTO-RESOLVER.md) ưu tiên ảnh rồi fallback sang chữ OCR đã xác nhận khi cần. Với composer đã mở, dùng CLICK_AND_TYPE để nhập hoặc [UPLOAD_FILE](docs/UPLOAD-FILE-POC.md) để chọn ảnh local và click nút Ảnh/Video. Chọn file chưa phải upload thành công: phải quan sát đủ preview rồi xác nhận.
 3. Kéo ROI trên ảnh, chọn `Dùng ROI` ở thanh trên cùng, rồi `Lưu Base v1`. `Quay lại browser` hoặc Escape hủy crop mà không lưu step. Nút thoát luôn ở thanh trên cùng, kể cả khi sidebar cuộn xuống hoặc crop báo lỗi. Trong crop mode, Escape thoát crop trước; khi đang ở browser fullscreen, Escape thoát fullscreen. Ảnh crop PNG được lưu thật.
 4. Test step đã lưu. CLICK_TARGET gửi click thật trên browser đang hiển thị và trả ACTION_SENT; không tự chụp ảnh sau click hay reset trang. Quan sát kết quả rồi chọn **Đúng — Hoàn thành Step** để VERIFIED và tạo Step tiếp theo từ trạng thái hiện tại, hoặc **Sai — Redesign Step** để sửa mà giữ Base. WAIT/VERIFY xác nhận điều kiện ảnh/chữ. Xem [quy trình Test & Debug](docs/TEST-DEBUG-UX.md) và [hướng dẫn OCR](docs/OCR-POC.md).
 5. TYPE_ONLY: chọn Keyboard hoặc Clipboard paste và lưu. Test hai Step Base liên tiếp bằng nút `Test 2 Step · CLICK → TYPE (Base)` ở Step TYPE để không chuyển focus sang sidebar. CLICK phải đặt caret; TYPE không tự click/focus. Test đơn: click thủ công ô nhập rồi **Ctrl+Shift+T và thả các phím**. Native browser focus không chứng minh có caret. Xem [TYPE_ONLY](docs/TYPE-ONLY-POC.md).
-6. Chỉnh form rồi `Lưu redesign` tạo version mới cùng stable ID. Chọn version cũ và `Ghim version` để rollback flow. V1 vẫn tồn tại trong SQLite.
+6. Chỉnh form rồi `Save step` ở top bar hoặc `Lưu redesign` trong Editor để tạo version mới cùng stable ID. Mở `Version & Override` khi cần quản lý version/implementation. Chọn version cũ và `Ghim version` để rollback flow. V1 vẫn tồn tại trong SQLite.
 7. `Lưu form thành Override riêng` giữ Base nguyên vẹn. Chọn Implementation để test Base hoặc Override. Override tham chiếu đúng Base version; đổi Base phải test/lưu Override lại. UI hiện hỗ trợ replacement một action; contract/runtime hỗ trợ segment tối đa 8 action, chưa có segment editor.
 
 Khi sửa form, Test vẫn dùng **payload đã lưu**. Chưa có full-flow runner, breakpoint debugger, recorder hoặc auto modal/security detector; scope hiện tại là author/test từng step. CAPTCHA/checkpoint cần người dùng dừng và xử lý thủ công, không tự tiếp tục.
@@ -48,6 +48,8 @@ npm run test:browser
 ```
 
 `test:browser` mở Electron thật, dùng session kiểm thử riêng `.local/test-session/`, chạy hai process liên tiếp. Không mở hay thao tác Facebook. Exit 0 nghĩa assertions tự động hoàn tất; các mục `limitation`/`manualRequired` vẫn khiến trạng thái POC là **PARTIAL**.
+
+Bộ test mặc định chạy cả `creator-ui` cho bố cục native panel thật (Save, Test, review, ROI, focus, version). Regression chuột Windows cho UI thật: `npm run test:browser -- creator-native`. Không chạy lại Overlay POC trong suite mặc định.
 
 Bộ test hiện chạy thêm process UX với session riêng `.local/test-ux-<pid>/`, kiểm tra tạo flow, hủy/lỗi crop, maximize/fullscreen/restore. Có thể chạy riêng sau build bằng `node scripts/browser-test.mjs ux`. Báo cáo sửa UX: [docs/UX-FIXES.md](docs/UX-FIXES.md); kết quả máy: `artifacts/browser-ux.json`.
 

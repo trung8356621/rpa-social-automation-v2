@@ -63,6 +63,7 @@ function Creator() {
   const [results, setResults] = useDraft<Result[]>("results", []);
   const [flowName, setFlowName] = useDraft("flowName", "Facebook draft POC");
   const [context, setContext] = useDraft("context", "Ngữ cảnh sửa lỗi");
+  const [editorRevision, setEditorRevision] = useDraft("editorRevision", 0);
   const [editorExpanded, setEditorExpanded] = useDraft("editorExpanded", true);
   const [debugExpanded, setDebugExpanded] = useDraft("debugExpanded", true);
   const drag = useRef<{ x: number; y: number } | undefined>(undefined);
@@ -71,6 +72,10 @@ function Creator() {
   const autoRedesigned = useRef("");
   const latest = useRef({ selected, overrideId, busy });
   latest.current = { selected, overrideId, busy };
+  useEffect(() => {
+    if (panel === "editor")
+      document.querySelector(".panel-body")?.scrollTo({ top: 0 });
+  }, [editorRevision, editorExpanded]);
   useEffect(() => {
     if (results.length)
       resultPanel.current?.parentElement?.scrollTo({ top: 0 });
@@ -96,6 +101,7 @@ function Creator() {
   }, [results, state]);
 
   function showEditor() {
+    setEditorRevision((value) => value + 1);
     setEditorExpanded(true);
     void invoke({ type: "panel", panel: "editor", expanded: true });
   }

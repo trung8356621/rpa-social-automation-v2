@@ -203,6 +203,7 @@ export const DRAFT_KEYS = [
   "results",
   "flowName",
   "context",
+  "editorRevision",
   "editorExpanded",
   "debugExpanded",
 ] as const;

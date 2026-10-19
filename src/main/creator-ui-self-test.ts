@@ -273,6 +273,34 @@ export async function runSelfTest({
       ),
     "selected step synced",
   );
+  await editor.executeJavaScript(
+    'document.querySelector(".panel-body").scrollTop=10000',
+  );
+  await click(shell, ".step:first-child");
+  await until(
+    () =>
+      editor.executeJavaScript(
+        'document.querySelector("[aria-label=Action]").value === "TYPE_ONLY"',
+      ),
+    "first step form",
+  );
+  await click(shell, ".step:last-child");
+  await until(
+    () =>
+      editor.executeJavaScript(
+        'document.querySelector("[aria-label=Action]").value === "CLICK_TARGET"',
+      ),
+    "second step form",
+  );
+  assert.equal(
+    await editor.executeJavaScript(
+      'document.querySelector(".panel-body").scrollTop',
+    ),
+    0,
+  );
+  pass(
+    "switching-steps-restores-form-and-editor-scroll-without-moving-browser",
+  );
   await click(debug, ".panel-body > button");
   await until(
     () =>
