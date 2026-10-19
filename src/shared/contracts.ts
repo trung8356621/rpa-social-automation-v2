@@ -150,6 +150,7 @@ export type UploadInfo = {
   cleanupWarning?: string;
 };
 export type ResolutionTrace = {
+  context?: { x: number; y: number; confirmed: boolean; reason: string; imageScore?: number; anchor?: string }[];
   mode: "auto";
   legacyMethod?: "image" | "ocr";
   selectedMethod?: "image" | "ocr";

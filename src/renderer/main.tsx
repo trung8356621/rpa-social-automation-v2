@@ -1297,7 +1297,7 @@ function Creator() {
                       )}
                       {target.ocr?.confirmed && field("Match To",
                         <select aria-label="Match To" disabled={locked}
-                          title="Current: AUTO ảnh + OCR quanh ROI. Top/Middle/Bottom: OCR toàn viewport và cuộn từng đoạn."
+                          title="Current: chỉ viewport hiện tại. Top/Middle/Bottom: về đầu rồi quét xuống 1/3, 2/3 hoặc toàn vùng. OCR cần khớp ngữ cảnh ROI."
                           value={target.matchTo ?? "current"}
                           onChange={(e) => setTarget({ ...target, matchTo: e.target.value as NonNullable<NonNullable<Payload["target"]>["matchTo"]> })}>
                           <option value="current">Current</option>

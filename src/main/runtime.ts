@@ -4,7 +4,7 @@ import { validatePayload } from "./storage.js";
 import path from "node:path";
 import { readFile, writeFile } from "node:fs/promises";
 import { randomUUID } from "node:crypto";
-import type { Payload, Result, ExecutionStart, ExecutionDetails } from "../shared/contracts.js";
+import type { Payload, Result, ExecutionStart, ExecutionDetails, Rect } from "../shared/contracts.js";
 import { BrowserCore, InputNotReady } from "./browser-core.js";
 import { Store } from "./storage.js";
 import { localOcr, type OcrEngine } from "./ocr.js";
@@ -273,25 +273,43 @@ export class Runtime {
           : payload.action === "WAIT_VERIFY" ? (payload.timeoutMs ?? 3000) : 0);
         let scrolls = 0;
         let reached = false;
+        let resetScrolls = 0;
+        let searchRegion: Rect | undefined;
+        let lastSearchTrace: Result["resolution"];
         let current = before!;
         if (matchTo) await clearOcrSearch(this.browser.view.webContents);
         try {
+          if (matchTo) {
+            const reset = await advanceOcrSearch(this.browser.view.webContents, matchTo, this.browser.zoom, true);
+            if (reset.moved) resetScrolls = 1;
+            execution.scrolls = resetScrolls;
+            logMainEvent(this.runDir, "ocr-scan-start", { ...execution, ...reset });
+            await new Promise(resolve => setTimeout(resolve, 250));
+            current = await this.browser.capture();
+          }
           do {
             try {
-              if (matchTo) execution.ocrPasses++;
+              if (matchTo) {
+                const scope = await advanceOcrSearch(this.browser.view.webContents, matchTo, this.browser.zoom, false, true);
+                searchRegion = scope.searchRegion;
+                if (!searchRegion?.width || !searchRegion.height)
+                  throw new TargetNotConfident("SCAN_RANGE_EMPTY: phạm vi quét không còn hiển thị.");
+                execution.ocrPasses++;
+              }
               const resolved = await resolveVisualTarget(
                 this.browser.captureBuffer(current.id),
                 template,
                 payload,
                 this.ocr,
+                searchRegion,
               );
               const { resolution: trace, ...position } = resolved;
               if (!matchTo) execution.ocrPasses += trace.attempts.filter(a => a.method === "ocr" && a.outcome !== "unavailable").length;
               if (matchTo && Date.now() >= deadline)
-                throw new TargetNotConfident("TIME_LIMIT: Match To hết thời gian tìm OCR; chưa gửi action.");
+                throw new TargetNotConfident("TIME_LIMIT: Match To hết thời gian tìm OCR; chưa gửi action.", trace);
               match = position;
               resolution = trace;
-              logMainEvent(this.runDir, "ocr-pass", { ...execution, outcome: "MATCHED", captureId: current.id, method: position.method });
+              logMainEvent(this.runDir, "ocr-pass", { ...execution, outcome: "MATCHED", captureId: current.id, method: position.method, position, context: trace.context, searchRegion });
               if (trace.attempts.some((attempt) => attempt.outcome === "failed"))
                 logMainError(this.runDir, "visual-fallback", new Error("Visual/OCR attempt failed; fallback selected"),
                   { stepId, version, action: payload.action, resolution: trace });
@@ -300,9 +318,10 @@ export class Runtime {
               if (matchTo) {
                 // Only absence is recoverable by scrolling. Technical/ambiguous/weak OCR is distinct.
                 if (!(error instanceof OcrNotFound)) throw error;
-                logMainEvent(this.runDir, "ocr-pass", { ...execution, outcome: "NOT_FOUND", captureId: current.id });
-                if (Date.now() >= deadline) throw new TargetNotConfident("TIME_LIMIT: hết thời gian quét OCR.");
-                if (reached || scrolls >= 40) throw new TargetNotConfident("SCROLL_LIMIT: hết giới hạn quét OCR.");
+                lastSearchTrace = error.resolution;
+                logMainEvent(this.runDir, "ocr-pass", { ...execution, outcome: error.resolution?.context?.length ? "CONTEXT_REJECTED" : "NOT_FOUND", captureId: current.id, context: error.resolution?.context, attempts: error.resolution?.attempts, searchRegion });
+                if (Date.now() >= deadline) throw new TargetNotConfident("TIME_LIMIT: hết thời gian quét OCR.", lastSearchTrace);
+                if (reached || scrolls >= 40) throw new TargetNotConfident("SCROLL_LIMIT: hết giới hạn quét OCR.", lastSearchTrace);
               } else {
                 if (error instanceof TargetNotConfident)
                   execution.ocrPasses += error.resolution?.attempts.filter(a => a.method === "ocr" && a.outcome !== "unavailable").length ?? 0;
@@ -313,10 +332,10 @@ export class Runtime {
               const progress = await advanceOcrSearch(this.browser.view.webContents, matchTo, this.browser.zoom);
               reached = progress.reached;
               if (progress.moved) scrolls++;
-              execution.scrolls = scrolls;
+              execution.scrolls = scrolls + resetScrolls;
               logMainEvent(this.runDir, "ocr-scroll", { ...execution, ...progress });
               if (!progress.moved)
-                throw new TargetNotConfident(`${progress.reason ?? "SCROLL_STALLED"}: không tìm thấy OCR; chưa gửi action.`);
+                throw new TargetNotConfident(`${progress.reason ?? "SCROLL_STALLED"}: chưa tìm được mục tiêu có ngữ cảnh tin cậy; chưa gửi action.`, lastSearchTrace);
             }
             await new Promise((r) => setTimeout(r, matchTo ? 250 : 200));
             current = await this.browser.capture();
@@ -351,7 +370,7 @@ export class Runtime {
               ? `VERIFIED: điều kiện ${match.method === "ocr" ? `chữ “${match.text}”` : "ảnh"} đã khớp. Chỉ xác nhận điều kiện của step.`
               : `Đã gửi click một lần${input ? " rồi gửi nội dung nhập" : ""}; chưa xác nhận kết quả nghiệp vụ.${input?.warning ? ` ${input.warning}` : ""}`;
       }
-      execution.stopReason = match ? "MATCHED" : "ACTION_SENT";
+      execution.stopReason = match ? (resolution?.context?.some(context => context.confirmed) ? "MATCHED_CONTEXT_CONFIRMED" : "MATCHED") : "ACTION_SENT";
     } catch (e) {
       const ocrFailure = e instanceof TargetNotConfident
         ? e.resolution?.attempts.find(attempt => attempt.method === "ocr" && attempt.outcome === "failed") : undefined;

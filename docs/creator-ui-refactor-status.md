@@ -1,3 +1,19 @@
+> Match To cập nhật 2026-10-20 (chưa test):
+> - Top = 1/3 đầu, Middle = 2/3 đầu, Bottom = toàn vùng cuộn. Cả ba về đầu container,
+>   đợi render, chụp mới rồi mới OCR; tiếp tục xuống từng đoạn 200 DIP. Không OCR vị trí cũ trước reset.
+> - Chỉ xét bbox OCR nằm trong container/phần phạm vi đang quét; Current không cuộn.
+> - Giữ giới hạn 40 lượt xuống / 120 giây / 8000 DIP; tính lại phạm vi theo chiều cao lazy-load.
+> - OCR đơn thuần không đủ: phải có dòng ngữ cảnh độc lập (≥10 ký tự, confidence ≥80%) trong ảnh target đã lưu,
+>   và mọi dòng ngữ cảnh đủ điều kiện phải khớp (không nhận riêng một từ tên tác giả). Ví dụ tác giả/tiêu đề,
+>   khớp vị trí tương đối và score ảnh ngoài bbox chữ ≥0.96. Crop chỉ chứa nhãn/nút chung bị BLOCKED.
+> - Top/Middle/Bottom xét từng ứng viên chữ, chỉ nhận đúng một ứng viên có context được xác nhận.
+>   Context không khớp thì tiếp tục quét; thiếu context trong ảnh lưu hoặc nhiều context trùng thì BLOCKED.
+> - Current giữ AUTO trong viewport; nhánh OCR fallback cũng bắt buộc xác nhận context, không click theo chữ đơn lẻ.
+> - Log mỗi lượt có OCR candidates, context/anchor/imageScore, vị trí, phạm vi; kết quả ghi
+>   MATCHED_CONTEXT_CONFIRMED hoặc nguyên nhân BLOCKED, kèm trace của lượt cuối.
+> - Không đổi browser.click, imageToInput, Click Marker, dữ liệu Step/Version/Override hay thuật toán visual.ts.
+> - Không chạy test/build/typecheck hoặc Electron. Ghi chú bên dưới mô tả các phiên bản cũ.
+
 > Audit Match To/OCR (chưa kiểm thử thực tế):
 > - Nguyên nhân tĩnh: Top/Middle/Bottom OCR toàn viewport nhưng OCR cũ từ chối ảnh >1024×560;
 >   Current dùng AUTO Image Matching + OCR quanh ROI, nên hai chế độ có thể cho kết quả khác nhau.

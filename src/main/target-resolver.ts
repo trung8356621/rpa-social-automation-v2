@@ -7,6 +7,7 @@ import type {
   ResolutionTrace,
 } from "../shared/contracts.js";
 import type { OcrEngine } from "./ocr.js";
+import { confirmOcrContext } from "./ocr-context.js";
 import { matchTemplate } from "./visual.js";
 export const MIN_OCR_CONFIDENCE = 80;
 export class TargetNotConfident extends Error {
@@ -19,7 +20,7 @@ export class TargetNotConfident extends Error {
   }
 }
 export class OcrNotFound extends TargetNotConfident {
-  constructor() { super("OCR_NOT_FOUND: chưa thấy chính xác chữ đã xác nhận trong viewport."); }
+  constructor(resolution?: ResolutionTrace) { super("OCR_NOT_FOUND: chưa thấy mục tiêu có ngữ cảnh được xác nhận trong viewport.", resolution); }
 }
 export class OcrTechnicalError extends Error {
   constructor(readonly cause: unknown) {
@@ -85,6 +86,7 @@ export async function resolveVisualTarget(
   template: Buffer,
   payload: Payload,
   ocr: OcrEngine,
+  searchRegion?: Rect,
 ): Promise<NonNullable<Result["match"]> & { resolution: ResolutionTrace }> {
   const target = payload.target!;
   // Match To explicitly searches the visible OCR region after bounded scrolling.
@@ -93,10 +95,39 @@ export async function resolveVisualTarget(
     let result: OcrResult;
     try { result = await ocr.recognize(frame); }
     catch (error) { throw new OcrTechnicalError(error); }
-    const found = resolveOcrText(result, target.ocr,
-      { x: 0, y: 0, width: size.width!, height: size.height! });
-    return { ...found, resolution: { mode: "auto", selectedMethod: "ocr",
-      attempts: [{ method: "ocr", outcome: "matched", confidence: found.confidence }] } };
+    if (searchRegion) result = { ...result, segments: result.segments.filter(segment => {
+      const b = segment.bbox, r = searchRegion;
+      return b.x >= r.x && b.y >= r.y && b.x+b.width <= r.x+r.width && b.y+b.height <= r.y+r.height;
+    }) };
+    const trace: ResolutionTrace = { mode: "auto", attempts: [], context: [] };
+    const candidates = result.segments.filter(segment => segment.kind === target.ocr!.kind &&
+      normalizeTargetText(segment.text) === normalizeTargetText(target.ocr!.text));
+    if (!candidates.length) throw new OcrNotFound(trace);
+    if (candidates.length > 32) throw new TargetNotConfident("CONTEXT_AMBIGUOUS: quá nhiều dòng chữ trùng trong viewport; không click.", trace, true);
+    const confirmed: NonNullable<Result["match"]>[] = [];
+    for (const candidate of candidates) {
+      let found: NonNullable<Result["match"]>;
+      try {
+        found = resolveOcrText({ ...result, segments: [candidate] }, target.ocr,
+          { x: 0, y: 0, width: size.width!, height: size.height! });
+      } catch (error) {
+        trace.attempts.push({ method: "ocr", outcome: "not_confident", reason: (error as Error).message,
+          x: candidate.bbox.x+candidate.bbox.width/2, y: candidate.bbox.y+candidate.bbox.height/2, confidence: candidate.confidence });
+        continue;
+      }
+      trace.attempts.push({ method: "ocr", outcome: "matched", x: found.x, y: found.y, confidence: found.confidence });
+      let context: NonNullable<ResolutionTrace["context"]>[number];
+      try { context = await confirmOcrContext(frame, template, payload, ocr, found, result); }
+      catch (error) { throw new OcrTechnicalError(error); }
+      trace.context!.push(context);
+      if (context.reason.startsWith("CONTEXT_INSUFFICIENT"))
+        throw new TargetNotConfident(context.reason, trace);
+      if (context.confirmed) confirmed.push(found);
+    }
+    if (confirmed.length > 1) throw new TargetNotConfident("CONTEXT_AMBIGUOUS: nhiều mục tiêu cùng chữ/ngữ cảnh; không click.", trace, true);
+    if (!confirmed.length) throw new OcrNotFound(trace);
+    trace.selectedMethod = "ocr";
+    return { ...confirmed[0], resolution: trace };
   }
   const trace: ResolutionTrace = {
     mode: "auto",
@@ -145,6 +176,7 @@ export async function resolveVisualTarget(
   const imageGood = image !== undefined && image.score >= threshold;
   if (!imageGood) trace.fallbackReason = imageReason;
   let textMatch: NonNullable<Result["match"]> | undefined;
+  let viewportOcr: OcrResult | undefined;
   if (target.ocr?.confirmed) {
     const size = await sharp(frame).metadata();
     const left = Math.max(0, target.roi.x - 64),
@@ -157,7 +189,10 @@ export async function resolveVisualTarget(
         .extract({ left, top, width: roi.width, height: roi.height })
         .png()
         .toBuffer();
-      textMatch = resolveOcrText(await ocr.recognize(image), target.ocr, roi);
+      const recognized = await ocr.recognize(image);
+      viewportOcr = { ...recognized, segments: recognized.segments.map(segment => ({ ...segment,
+        bbox: { ...segment.bbox, x: segment.bbox.x+roi.x, y: segment.bbox.y+roi.y } })) };
+      textMatch = resolveOcrText(recognized, target.ocr, roi);
       trace.attempts.push({
         method: "ocr",
         outcome: "matched",
@@ -211,6 +246,11 @@ export async function resolveVisualTarget(
     return { ...image!, method: "image", resolution: trace };
   }
   if (textMatch) {
+    let context: NonNullable<ResolutionTrace["context"]>[number];
+    try { context = await confirmOcrContext(frame, template, payload, ocr, textMatch, viewportOcr!); }
+    catch (error) { throw new OcrTechnicalError(error); }
+    trace.context = [context];
+    if (!context.confirmed) throw new TargetNotConfident(context.reason, trace);
     trace.selectedMethod = "ocr";
     return { ...textMatch, resolution: trace };
   }

@@ -1,3 +1,4 @@
+import type { Rect } from "../shared/contracts.js";
 import type { WebContents } from "electron";
 import { TargetNotConfident } from "./target-resolver.js";
 
@@ -9,8 +10,8 @@ export async function clearOcrSearch(contents: WebContents) {
   }]);
 }
 export async function advanceOcrSearch(
-  contents: WebContents, matchTo: "top" | "middle" | "bottom", zoom: number,
-): Promise<{ moved: boolean; reached: boolean; reason?: string }> {
+  contents: WebContents, matchTo: "top" | "middle" | "bottom", zoom: number, start = false, inspect = false,
+): Promise<{ moved: boolean; reached: boolean; reason?: string; searchRegion?: Rect }> {
   const progress = await contents.executeJavaScriptInIsolatedWorld(WORLD, [{ code: `(() => {
     const visible = el => {
       const r = el.getBoundingClientRect(), style = getComputedStyle(el);
@@ -45,26 +46,45 @@ export async function advanceOcrSearch(
       // A modal with no scrollable content must never fall back to the page behind it.
       const el = pool[0] || (!modal ? root : null);
       if (!el) return { blocked: true };
-      const fraction = ${JSON.stringify(matchTo)} === 'top' ? 0 : ${JSON.stringify(matchTo)} === 'middle' ? 0.5 : 1;
-      const goal = Math.max(0, el.scrollHeight-el.clientHeight) * fraction;
+      const fraction = ${JSON.stringify(matchTo)} === 'top' ? 1/3 : ${JSON.stringify(matchTo)} === 'middle' ? 2/3 : 1;
       state = globalThis.__creatorOcrScroll = { el, modal, fraction,
-        direction: Math.sign(goal-el.scrollTop), traveled: 0 };
+        traveled: 0 };
     }
     const el = state.el;
     if (state.modal !== modal || !el.isConnected || !visible(el)) return { blocked: true };
     const before = el.scrollTop;
-    const goal = Math.max(0, el.scrollHeight-el.clientHeight) * state.fraction;
-    const remaining = (goal-before)*state.direction;
-    if (!state.direction || remaining <= 1) return { moved: false, reached: true, reason: "DESTINATION_REACHED" };
+    const goal = Math.max(0, el.scrollHeight * state.fraction - el.clientHeight);
+    const region = () => {
+      const r = el === document.scrollingElement
+        ? { left: 0, top: 0, right: innerWidth, bottom: innerHeight }
+        : el.getBoundingClientRect();
+      const left = Math.max(0,r.left), top = Math.max(0,r.top);
+      const right = Math.min(innerWidth,r.right);
+      const bottom = Math.min(innerHeight,r.bottom,r.top+el.scrollHeight*state.fraction-el.scrollTop);
+      return { x: Math.ceil(left*${zoom}), y: Math.ceil(top*${zoom}),
+        width: Math.max(0,Math.floor(right*${zoom})-Math.ceil(left*${zoom})),
+        height: Math.max(0,Math.floor(bottom*${zoom})-Math.ceil(top*${zoom})) };
+    };
+    if (${inspect}) return { moved: false, reached: false, reason: 'SCAN_REGION', searchRegion: region(),
+      scrollTop: el.scrollTop, scrollHeight: el.scrollHeight, goal };
+    if (${start}) {
+      el.scrollTo({ top: 0, behavior: 'instant' });
+      return { moved: Math.abs(before-el.scrollTop)>0.5, reached: false,
+        reason: el.scrollTop <= 1 ? 'SCAN_START' : 'RESET_FAILED', scrollTop: el.scrollTop, goal };
+    }
+    const remaining = goal-before;
+    if (remaining <= 1) return { moved: false, reached: true, reason: "DESTINATION_REACHED" };
     // 200 DIP per capture, also capped by visible height to retain overlap.
     const distance = Math.min(200 / ${zoom}, el.clientHeight * 0.7, remaining);
-    el.scrollTo({ top: before + state.direction*distance, behavior: 'instant' });
+    el.scrollTo({ top: before + distance, behavior: 'instant' });
     const moved = Math.abs(el.scrollTop-before);
     state.traveled += moved;
     return { moved: moved > 0.5, reached: state.traveled >= 8000 / ${zoom},
       reason: moved <= 0.5 ? 'SCROLL_STALLED' : 'SCROLLED',
       scrollTop: el.scrollTop, scrollHeight: el.scrollHeight, goal };
   })()` }]);
+  if (progress.reason === "RESET_FAILED")
+    throw new TargetNotConfident("SCAN_RESET_FAILED: không thể về đầu vùng cuộn; chưa gửi action.");
   if (progress.blocked)
     throw new TargetNotConfident("SCROLL_CONTAINER_CHANGED: vùng cuộn/modal đã đổi hoặc không cuộn được; chưa gửi action.");
   return progress;
