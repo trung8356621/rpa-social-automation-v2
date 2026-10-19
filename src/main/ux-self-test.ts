@@ -1,3 +1,4 @@
+import { fixtureUi } from "./fixture-ui.js";
 import assert from "node:assert/strict";
 import { mkdir, writeFile } from "node:fs/promises";
 import path from "node:path";
@@ -27,7 +28,7 @@ export async function runSelfTest({
     entries.push({ name, passed: true, detail });
     console.log("PASS", name);
   };
-  const ui = window.webContents;
+  const ui = fixtureUi(window);
   // All DOM reads/selectors here are test instrumentation for the shell/fixture.
   const evaluate = (code: string) => ui.executeJavaScript(code);
   const until = async (

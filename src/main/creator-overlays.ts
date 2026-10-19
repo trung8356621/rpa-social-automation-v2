@@ -41,14 +41,19 @@ export class CreatorOverlays {
       x: SIDE_WIDTH + WEB_WIDTH - 360,
       y: TOP_HEIGHT + 8,
       width: 352,
-      height: this.expanded.editor ? 374 : 36,
+      height: this.expanded.editor ? 344 : 36,
     });
     this.debug.setBounds({
       x: SIDE_WIDTH + 8,
-      y: TOP_HEIGHT + WEB_HEIGHT - (this.expanded.debug ? 170 : 36) - 8,
+      y: TOP_HEIGHT + WEB_HEIGHT - (this.expanded.debug ? 200 : 36) - 8,
       width: WEB_WIDTH - 16,
-      height: this.expanded.debug ? 170 : 36,
+      height: this.expanded.debug ? 200 : 36,
     });
+  }
+  setExpanded(panel: "editor" | "debug", expanded: boolean) {
+    this.expanded[panel] = expanded;
+    this.layout();
+    return expanded;
   }
   toggle(panel: "editor" | "debug") {
     this.expanded[panel] = !this.expanded[panel];

@@ -14,6 +14,7 @@ import type {
   Step,
 } from "../shared/contracts";
 import "./style.css";
+import { useDraft } from "./draft";
 import { WEB_HEIGHT } from "../shared/geometry";
 document.documentElement.style.setProperty("--web-height", `${WEB_HEIGHT}px`);
 declare global {
@@ -22,39 +23,48 @@ declare global {
   }
 }
 
+const panel = new URLSearchParams(location.search).get("panel");
+const shell = !panel;
+document.body.dataset.panel = panel || "shell";
+
 function Creator() {
-  const [state, setState] = useState<State>();
+  const [state, setState] = useDraft<State>("state");
   const [url, setUrl] = useState("");
   const urlEdit = useRef({ dirty: false, revision: 0 });
-  const [action, setAction] = useState<Action>("CLICK_TARGET");
-  const [name, setName] = useState("");
-  const [text, setText] = useState(
+  const [action, setAction] = useDraft<Action>("action", "CLICK_TARGET");
+  const [name, setName] = useDraft("name", "");
+  const [text, setText] = useDraft(
+    "text",
     "Nội dung bản nháp kiểm thử — không xuất bản.",
   );
-  const [delta, setDelta] = useState(-400);
-  const [inputMethod, setInputMethod] = useState<"keyboard" | "clipboard">(
+  const [delta, setDelta] = useDraft("delta", -400);
+  const [inputMethod, setInputMethod] = useDraft<"keyboard" | "clipboard">(
+    "inputMethod",
     "keyboard",
   );
-  const [pairDelay, setPairDelay] = useState(800);
-  const [target, setTarget] = useState<Payload["target"]>();
-  const [targetImage, setTargetImage] = useState("");
-  const [files, setFiles] = useState<string[]>([]);
-  const [ocrResult, setOcrResult] = useState<OcrResult>();
-  const [ocrError, setOcrError] = useState("");
-  const [ocrLoading, setOcrLoading] = useState(false);
-  const [ocrKind, setOcrKind] = useState<"line" | "word">("line");
-  const [selected, setSelected] = useState<Step>();
-  const [overrideId, setOverrideId] = useState("");
-  const [shot, setShot] = useState<Capture>();
-  const [cropMode, setCropMode] = useState(false);
-  const [roi, setRoi] = useState<Rect>();
-  const [message, setMessage] = useState(
+  const [pairDelay, setPairDelay] = useDraft("pairDelay", 800);
+  const [target, setTarget] = useDraft<Payload["target"]>("target");
+  const [targetImage, setTargetImage] = useDraft("targetImage", "");
+  const [files, setFiles] = useDraft<string[]>("files", []);
+  const [ocrResult, setOcrResult] = useDraft<OcrResult>("ocrResult");
+  const [ocrError, setOcrError] = useDraft("ocrError", "");
+  const [ocrLoading, setOcrLoading] = useDraft("ocrLoading", false);
+  const [ocrKind, setOcrKind] = useDraft<"line" | "word">("ocrKind", "line");
+  const [selected, setSelected] = useDraft<Step>("selected");
+  const [overrideId, setOverrideId] = useDraft("overrideId", "");
+  const [shot, setShot] = useDraft<Capture>("shot");
+  const [cropMode, setCropMode] = useDraft("cropMode", false);
+  const [roi, setRoi] = useDraft<Rect>("roi");
+  const [message, setMessage] = useDraft(
+    "message",
     "Tạo flow, chọn Action rồi crop target nếu cần.",
   );
-  const [busy, setBusy] = useState(false);
-  const [results, setResults] = useState<Result[]>([]);
-  const [flowName, setFlowName] = useState("Facebook draft POC");
-  const [context, setContext] = useState("Ngữ cảnh sửa lỗi");
+  const [busy, setBusy] = useDraft("busy", false);
+  const [results, setResults] = useDraft<Result[]>("results", []);
+  const [flowName, setFlowName] = useDraft("flowName", "Facebook draft POC");
+  const [context, setContext] = useDraft("context", "Ngữ cảnh sửa lỗi");
+  const [editorExpanded, setEditorExpanded] = useDraft("editorExpanded", true);
+  const [debugExpanded, setDebugExpanded] = useDraft("debugExpanded", true);
   const drag = useRef<{ x: number; y: number } | undefined>(undefined);
   const flowInput = useRef<HTMLInputElement>(null);
   const resultPanel = useRef<HTMLDivElement>(null);
@@ -63,9 +73,10 @@ function Creator() {
   latest.current = { selected, overrideId, busy };
   useEffect(() => {
     if (results.length)
-      resultPanel.current?.scrollIntoView({ block: "nearest" });
+      resultPanel.current?.parentElement?.scrollTo({ top: 0 });
   }, [results]);
   useEffect(() => {
+    if (!shell) return;
     const blocked = results.find(
       (r) =>
         ["CLICK_AND_TYPE", "UPLOAD_FILE"].includes(r.action) &&
@@ -84,7 +95,12 @@ function Creator() {
     }
   }, [results, state]);
 
+  function showEditor() {
+    setEditorExpanded(true);
+    void invoke({ type: "panel", panel: "editor", expanded: true });
+  }
   function newStep() {
+    showEditor();
     setSelected(undefined);
     setTarget(undefined);
     setFiles([]);
@@ -156,6 +172,8 @@ function Creator() {
     }
   }
   useEffect(() => {
+    if (!shell) return;
+    const offFocus = window.creator.onFocusFlow(goToFlow);
     let navigationSeen = false;
     const syncUrl = (actual: string) => {
       if (!urlEdit.current.dirty) setUrl(actual);
@@ -180,11 +198,13 @@ function Creator() {
       }
     });
     return () => {
+      offFocus();
       offNavigation();
       offTest();
     };
   }, []);
   useEffect(() => {
+    if (!shell) return;
     if (selected)
       void invoke({
         type: "armTest",
@@ -207,6 +227,9 @@ function Creator() {
     return () => window.removeEventListener("keydown", escape);
   }, [shot, busy]);
   async function loadStep(step: Step) {
+    showEditor();
+    if (selected?.id !== step.id || selected?.version !== step.version)
+      setResults([]);
     setSelected(step);
     setName(step.name);
     setAction(step.payload.action);
@@ -246,6 +269,8 @@ function Creator() {
     };
   }
   async function run(step: Step, overlay: string, fromBrowser = false) {
+    setDebugExpanded(true);
+    await invoke({ type: "panel", panel: "debug", expanded: true });
     // Disabling a previously focused editor button can pull focus away from the
     // native browser view. The browser shortcut must not mutate UI before input.
     latest.current.busy = true;
@@ -346,6 +371,10 @@ function Creator() {
     );
   }
   function goToFlow() {
+    if (!shell) {
+      void invoke({ type: "focusFlow" });
+      return;
+    }
     flowInput.current?.scrollIntoView({ block: "center" });
     flowInput.current?.focus();
     setMessage("Bước 1: nhập tên và bấm Tạo flow, hoặc chọn một flow đã lưu.");
@@ -382,956 +411,1104 @@ function Creator() {
       {child}
     </label>
   );
+  function resultSummary(result: Result) {
+    if (result.status === "VERIFIED") return "Bạn đã xác nhận Step hoàn thành.";
+    if (result.status === "REJECTED")
+      return "Kết quả chưa đúng. Redesign rồi lưu version mới.";
+    if (result.status === "ACTION_SENT")
+      return result.action === "UPLOAD_FILE"
+        ? "Đã chọn ảnh. Kiểm tra đủ thumbnail rồi xác nhận."
+        : "Đã gửi thao tác. Quan sát browser rồi chọn Đúng hoặc Sai.";
+    if (result.action === "TYPE_ONLY" || result.action === "SCROLL")
+      return "Chưa chạy. Click vào browser rồi dùng Ctrl+Shift+T, hoặc Test cặp CLICK → TYPE.";
+    return "Chưa hoàn thành. Kiểm tra trang và target, hoặc mở Debug để xem lý do.";
+  }
+  async function saveBase() {
+    const next = await invoke<State>({
+      type: "saveStep",
+      id: selected?.id,
+      name,
+      payload: payload(),
+    });
+    setState(next);
+    const ref = selected
+      ? next.flow!.steps.find((s) => s.id === selected.id)!
+      : next.flow!.steps.at(-1)!;
+    await loadStep(
+      next.steps.find((s) => s.id === ref.id && s.version === ref.version)!,
+    );
+    setMessage(`Đã lưu Base v${ref.version}; version cũ vẫn được giữ.`);
+  }
+  const expanded = panel === "editor" ? editorExpanded : debugExpanded;
+  function togglePanel() {
+    const next = !expanded;
+    if (panel === "editor") setEditorExpanded(next);
+    else setDebugExpanded(next);
+    void invoke({
+      type: "panel",
+      panel: panel as "editor" | "debug",
+      expanded: next,
+    });
+  }
   return (
     <main>
-      <header>
-        <div className="brand">
-          ◈ <b>RPA Creator</b>
-          <span>V2 / POC</span>
-        </div>
-        <div className="environment">
-          ONE SESSION <i />
-          1024 × {WEB_HEIGHT} DIP · {Math.round((state?.zoom || 1) * 100)}% zoom
-        </div>
-        <button
-          className="window-mode"
-          onClick={() =>
-            void invoke({ type: "toggleFullscreen" }).catch((e) =>
-              setMessage(String(e)),
-            )
-          }
-        >
-          Toàn màn hình · F11
-        </button>
-      </header>
-      <nav>
-        {shot ? (
-          <>
-            <span className="capture-instructions" role="note">
-              {cropMode
-                ? "Kéo để chọn ROI trên ảnh. Esc để hủy."
-                : "Đang xem ảnh kiểm thử. Esc để quay lại."}
-            </span>
-            {cropMode && (
-              <button
-                className="primary"
-                disabled={!roi || roi.width < 4 || roi.height < 4 || busy}
-                onClick={() => void task(saveCrop)}
-              >
-                Dùng ROI {roi ? `${roi.width}×${roi.height}` : ""}
-              </button>
-            )}
-            <button disabled={busy} onClick={() => void task(closeShot)}>
-              Quay lại browser · Esc
-            </button>
-          </>
-        ) : (
-          <>
-            <input
-              aria-label="URL"
-              value={url}
-              onChange={(e) => {
-                urlEdit.current.dirty = true;
-                urlEdit.current.revision++;
-                setUrl(e.target.value);
-              }}
-            />
-            <button
-              disabled={locked}
-              onClick={() =>
-                void task(async () => {
-                  const revision = urlEdit.current.revision;
-                  const snapshot = await invoke<State>({
-                    type: "navigate",
-                    url,
-                  });
-                  setState(snapshot);
-                  if (revision === urlEdit.current.revision) {
-                    urlEdit.current.dirty = false;
-                    setUrl(snapshot.url);
-                  }
-                })
-              }
-            >
-              Mở URL
-            </button>
-            <button
-              disabled={locked}
-              onClick={() =>
-                void task(async () => {
-                  await invoke<string>({ type: "copyUrl" });
-                  setMessage("Đã sao chép URL hiện tại của browser.");
-                })
-              }
-            >
-              Copy URL
-            </button>
-            <button
-              disabled={locked}
-              onClick={() =>
-                void task(async () =>
-                  setState(await invoke<State>({ type: "fixture" })),
-                )
-              }
-            >
-              Trang kiểm chuẩn
-            </button>
-            <label>
-              Zoom
+      {shell && (
+        <>
+          <header>
+            <div className="brand">
+              ◈ <b>RPA Creator</b>
+              <span>V2 / POC</span>
+            </div>
+            <div className="flow-controls">
+              {" "}
               <select
-                aria-label="Zoom"
-                disabled={locked || !!state?.flow?.steps.length}
-                value={state?.zoom || 1}
+                aria-label="Flow đã lưu"
+                disabled={locked}
+                value={state?.flow?.id || ""}
                 onChange={(e) =>
-                  void task(async () =>
-                    setState(
-                      await invoke<State>({
-                        type: "environment",
-                        zoom: Number(e.target.value),
-                      }),
-                    ),
-                  )
-                }
-              >
-                <option value="1">100%</option>
-                <option value="0.9">90%</option>
-                <option value="0.8">80%</option>
-              </select>
-            </label>
-          </>
-        )}
-      </nav>
-      <aside>
-        <div className="eyebrow">01 / FLOW</div>
-        <p className="flow-guide">
-          Bước 1: tạo hoặc chọn flow. Sau đó chọn Action, crop target và lưu
-          step.
-        </p>
-        <select
-          aria-label="Flow đã lưu"
-          disabled={locked}
-          value={state?.flow?.id || ""}
-          onChange={(e) =>
-            void task(async () => {
-              setState(
-                await invoke<State>({ type: "openFlow", id: e.target.value }),
-              );
-              setSelected(undefined);
-              setTarget(undefined);
-              setFiles([]);
-              setTargetImage("");
-              setOcrResult(undefined);
-              setOcrError("");
-              setResults([]);
-            })
-          }
-        >
-          <option value="" disabled>
-            Chọn flow đã lưu
-          </option>
-          {state?.flows.map((f) => (
-            <option value={f.id} key={f.id}>
-              {f.name} · {Math.round(f.zoom * 100)}%
-            </option>
-          ))}
-        </select>
-        <div className="row">
-          <input
-            ref={flowInput}
-            aria-label="Tên flow mới"
-            value={flowName}
-            onChange={(e) => setFlowName(e.target.value)}
-          />
-          <button
-            disabled={locked}
-            onClick={() =>
-              void task(async () => {
-                setState(
-                  await invoke<State>({ type: "newFlow", name: flowName }),
-                );
-                setSelected(undefined);
-                setTarget(undefined);
-                setFiles([]);
-                setTargetImage("");
-                setOcrResult(undefined);
-                setOcrError("");
-                setResults([]);
-                setMessage(
-                  `Đã tạo flow “${flowName}”. Có thể chụp & crop ROI; chọn zoom trước khi lưu step đầu tiên.`,
-                );
-              })
-            }
-          >
-            Tạo flow
-          </button>
-        </div>
-        {state?.flow && (
-          <p className="flow-active" aria-live="polite">
-            Flow đang chọn: <b>{state.flow.name}</b>
-          </p>
-        )}
-        <div className="steps">
-          {state?.flow?.steps.map((ref, i) => {
-            const s = state.steps.find(
-              (s) => s.id === ref.id && s.version === ref.version,
-            )!;
-            return (
-              <button
-                className={selected?.id === s.id ? "step active" : "step"}
-                key={s.id}
-                disabled={locked}
-                onClick={() => void task(() => loadStep(s))}
-              >
-                <span>{String(i + 1).padStart(2, "0")}</span>
-                <b>{s.name}</b>
-                <small>v{s.version}</small>
-              </button>
-            );
-          })}
-        </div>
-        <div className="row">
-          <div className="eyebrow">02 / ACTION-FIRST</div>
-          <button className="link" disabled={locked} onClick={newStep}>
-            + Step mới
-          </button>
-        </div>
-        {field(
-          "Action",
-          <select
-            aria-label="Action"
-            disabled={locked}
-            value={action}
-            onChange={(e) => {
-              setAction(e.target.value as Action);
-              setTarget(undefined);
-              setFiles([]);
-              setTargetImage("");
-              setOcrResult(undefined);
-              setOcrError("");
-            }}
-          >
-            <option>CLICK_TARGET</option>
-            <option>CLICK_AND_TYPE</option>
-            <option>UPLOAD_FILE</option>
-            <option>TYPE_ONLY</option>
-            <option value="WAIT_VERIFY">WAIT / VERIFY</option>
-            <option>SCROLL</option>
-          </select>,
-        )}
-        {field(
-          "Tên step",
-          <input
-            aria-label="Tên step"
-            disabled={locked}
-            value={name}
-            onChange={(e) => setName(e.target.value)}
-          />,
-        )}
-        {["TYPE_ONLY", "CLICK_AND_TYPE"].includes(action) && (
-          <>
-            <label>
-              Phương thức nhập
-              <select
-                aria-label="Phương thức nhập"
-                disabled={locked}
-                value={inputMethod}
-                onChange={(e) =>
-                  setInputMethod(e.target.value as "keyboard" | "clipboard")
-                }
-              >
-                <option value="keyboard">
-                  Keyboard · native text + Shift+Enter
-                </option>
-                <option value="clipboard">
-                  Clipboard paste · phục hồi clipboard
-                </option>
-              </select>
-            </label>
-            <textarea
-              aria-label={`Nội dung ${action}`}
-              disabled={locked}
-              rows={4}
-              value={text}
-              onChange={(e) => setText(e.target.value)}
-            />
-            <p className="hint">
-              {action === "CLICK_AND_TYPE" ? (
-                "Composer phải đang mở. Crop vùng nhập/placeholder bên dưới: nhận diện → click một lần vào target → nhập ngay trong cùng runtime. Không double-click, không quay lại Creator giữa click và nhập. Kết quả cần xác nhận."
-              ) : (
-                <>
-                  Gửi vào caret hiện tại; không tự click/focus. Native browser
-                  focus không chứng minh caret sẵn sàng. Lưu → test cặp CLICK →
-                  TYPE bên dưới, hoặc click thủ công ô nhập rồi Ctrl+Shift+T.
-                  Clipboard chỉ phục hồi khi chưa bị thay đổi trong lúc paste.
-                </>
-              )}
-            </p>
-          </>
-        )}
-        {action === "UPLOAD_FILE" && (
-          <section aria-label="Ảnh upload">
-            <button
-              disabled={locked}
-              onClick={() =>
-                void task(async () => {
-                  const picked = await invoke<string[] | undefined>({
-                    type: "pickUploadFiles",
-                  });
-                  if (picked) setFiles(picked);
-                })
-              }
-            >
-              Chọn ảnh local
-            </button>
-            <p className="hint">
-              {files.length} ảnh · PNG/JPEG/WebP/GIF, tối đa 20. File giữ ở
-              đường dẫn local; cần còn tồn tại khi chạy Step.
-            </p>
-            <ol>
-              {files.map((file, i) => (
-                <li key={i}>{file.split(/[\\/]/).at(-1)}</li>
-              ))}
-            </ol>
-            <p className="hint">
-              Crop nút Ảnh/Video đang hiển thị trong composer. Action chỉ chọn
-              file; phải quan sát đủ thumbnail/preview ảnh thật rồi xác nhận.
-              Không Publish.
-            </p>
-          </section>
-        )}
-        {action === "SCROLL" &&
-          field(
-            "Delta Y (âm = xuống)",
-            <input
-              aria-label="Scroll delta"
-              disabled={locked}
-              type="number"
-              value={delta}
-              onChange={(e) => setDelta(Number(e.target.value))}
-            />,
-          )}
-        {needsTarget && (
-          <>
-            <button
-              disabled={locked || !state?.flow}
-              aria-describedby="roi-flow-help"
-              onClick={() => void task(capture)}
-            >
-              Chụp & crop ROI
-            </button>
-            <p id="roi-flow-help" className="hint">
-              {!state?.flow
-                ? "Chưa có flow: nhập tên và bấm Tạo flow ở Bước 1, hoặc chọn flow đã lưu để bật chụp ROI."
-                : "Chụp trang web hiện tại và kéo ROI; Dùng ROI để xác nhận hoặc Esc để hủy."}
-            </p>
-            {!state?.flow && (
-              <button className="link" disabled={locked} onClick={goToFlow}>
-                Đi tới bước 1
-              </button>
-            )}
-            {targetImage && (
-              <img alt="Target ROI" className="target" src={targetImage} />
-            )}
-            <p className="hint">
-              {target
-                ? `${target.roi.width}×${target.roi.height} · x${target.roi.x}, y${target.roi.y}`
-                : "Chưa có target. Crop nhãn/icon cùng biên."}{" "}
-              Tìm trong vùng ROI ±64 DIP bằng ảnh hoặc chữ đã xác nhận.
-            </p>
-          </>
-        )}
-        {needsTarget && target && (
-          <section className="ocr-panel" aria-label="OCR ROI">
-            <div className="eyebrow">OCR LOCAL · VIỆT + ANH</div>
-            {ocrLoading && <p role="note">Đang đọc OCR trên máy…</p>}
-            {ocrError && (
-              <p role="note" className="hint">
-                {ocrError}
-              </p>
-            )}
-            {ocrResult && !ocrResult.segments.length && (
-              <p className="hint">
-                ROI không có chữ đọc được. Có thể lưu image-only cho nút icon.
-              </p>
-            )}
-            {ocrResult && ocrResult.segments.length > 0 && (
-              <>
-                <p className="hint">
-                  {target.ocr
-                    ? "Bấm dòng/từ khác để đổi chữ đã xác nhận."
-                    : "Không tự chọn chữ. Bấm một dòng/từ bên dưới để xác nhận target."}
-                </p>
-                <label>
-                  Đơn vị chọn
-                  <select
-                    aria-label="Đơn vị OCR"
-                    value={ocrKind}
-                    disabled={locked}
-                    onChange={(e) =>
-                      setOcrKind(e.target.value as "line" | "word")
-                    }
-                  >
-                    <option value="line">Dòng chữ</option>
-                    <option value="word">Từ riêng lẻ</option>
-                  </select>
-                </label>
-                <div className="ocr-candidates">
-                  {ocrResult.segments
-                    .filter((s) => s.kind === ocrKind)
-                    .map((s) => (
-                      <button
-                        key={s.id}
-                        className="ocr-candidate"
-                        disabled={locked}
-                        aria-pressed={
-                          target.ocr?.text === s.text &&
-                          target.ocr.kind === s.kind &&
-                          target.ocr.bbox.x === s.bbox.x &&
-                          target.ocr.bbox.y === s.bbox.y
-                        }
-                        onClick={() => confirmOcr(s)}
-                      >
-                        <b>{s.text}</b>
-                        <small>
-                          {s.confidence.toFixed(1)}% · bbox {s.bbox.x},
-                          {s.bbox.y} · {s.bbox.width}×{s.bbox.height}
-                        </small>
-                      </button>
-                    ))}
-                </div>
-              </>
-            )}
-            {target.ocr ? (
-              <div className="ocr-confirmed">
-                <b>Chữ đã xác nhận: {target.ocr.text}</b>
-                <p className="hint">
-                  {target.ocr.kind} · {target.ocr.confidence.toFixed(1)}% khi
-                  thiết kế. Runtime đọc lại và cần confidence ≥80%, chỉ một vị
-                  trí khớp chính xác.
-                </p>
-                <button
-                  disabled={locked}
-                  onClick={() => {
-                    setTarget((previous) => {
-                      if (!previous) return previous;
-                      const { ocr, ...rest } = previous;
-                      return rest;
-                    });
-                  }}
-                >
-                  Bỏ chữ dự phòng
-                </button>
-              </div>
-            ) : (
-              <p className="hint">
-                Chưa có chữ dự phòng được xác nhận; AUTO vẫn dùng ảnh.
-              </p>
-            )}
-            <button
-              disabled={locked}
-              onClick={() => void task(() => readOcr(target.asset))}
-            >
-              Đọc lại OCR
-            </button>
-            <p className="hint">
-              AUTO ưu tiên ảnh; dùng chữ bạn xác nhận khi ảnh chưa đủ rõ. Không
-              cần chọn engine hay lưu version mới khi engine đổi phương pháp.
-            </p>
-          </section>
-        )}
-        <button
-          className="primary"
-          disabled={
-            locked ||
-            !state?.flow ||
-            (needsTarget && !target) ||
-            (action === "UPLOAD_FILE" && !files.length)
-          }
-          onClick={() =>
-            void task(async () => {
-              const next = await invoke<State>({
-                type: "saveStep",
-                id: selected?.id,
-                name,
-                payload: payload(),
-              });
-              setState(next);
-              const ref = selected
-                ? next.flow!.steps.find((s) => s.id === selected.id)!
-                : next.flow!.steps.at(-1)!;
-              await loadStep(
-                next.steps.find(
-                  (s) => s.id === ref.id && s.version === ref.version,
-                )!,
-              );
-              setMessage(
-                `Đã lưu Base v${ref.version}; version cũ vẫn được giữ.`,
-              );
-            })
-          }
-        >
-          {selected
-            ? `Lưu redesign → v${Math.max(...(state?.steps.filter((s) => s.id === selected.id).map((s) => s.version) || [1])) + 1}`
-            : "Lưu Base v1"}
-        </button>
-        {selected && (
-          <>
-            <div className="row">
-              {field(
-                "Base version",
-                <select
-                  aria-label="Base version"
-                  disabled={locked}
-                  value={selected.version}
-                  onChange={(e) =>
-                    void task(() =>
-                      loadStep(
-                        state!.steps.find(
-                          (s) =>
-                            s.id === selected.id &&
-                            s.version === Number(e.target.value),
-                        )!,
-                      ),
-                    )
-                  }
-                >
-                  {state?.steps
-                    .filter((s) => s.id === selected.id)
-                    .map((s) => (
-                      <option key={s.version} value={s.version}>
-                        v{s.version}
-                      </option>
-                    ))}
-                </select>,
-              )}
-              <button
-                disabled={locked}
-                onClick={() =>
                   void task(async () => {
                     setState(
                       await invoke<State>({
-                        type: "selectVersion",
-                        id: selected.id,
-                        version: selected.version,
+                        type: "openFlow",
+                        id: e.target.value,
                       }),
                     );
-                    setMessage(`Flow ghim Base v${selected.version}.`);
+                    setSelected(undefined);
+                    setTarget(undefined);
+                    setFiles([]);
+                    setTargetImage("");
+                    setOcrResult(undefined);
+                    setOcrError("");
+                    setResults([]);
                   })
                 }
               >
-                Ghim version
-              </button>
-            </div>
-            <div className="eyebrow">03 / TEST & DEBUG</div>
-            {field(
-              "Implementation",
-              <select
-                aria-label="Implementation"
-                disabled={locked}
-                value={overrideId}
-                onChange={(e) => setOverrideId(e.target.value)}
-              >
-                <option value="">Base v{selected.version}</option>
-                {state?.overrides
-                  .filter(
-                    (o) =>
-                      o.stepId === selected.id &&
-                      o.baseVersion === selected.version,
-                  )
-                  .map((o) => (
-                    <option key={o.id} value={o.id}>
-                      Override · {o.name}
-                    </option>
-                  ))}
-              </select>,
-            )}
-            <button
-              disabled={locked}
-              onClick={() => void run(selected, overrideId)}
-            >
-              Test step đã lưu · Ctrl+Shift+T
-            </button>
-            <p className="hint">
-              Test dùng payload đã lưu. TYPE_ONLY/SCROLL: giữ focus trong web và
-              dùng phím tắt.
-            </p>
-            {[
-              "CLICK_TARGET",
-              "CLICK_AND_TYPE",
-              "UPLOAD_FILE",
-              "WAIT_VERIFY",
-            ].includes(selected.payload.action) && (
-              <p className="hint saved-method">
-                Nhận diện AUTO, áp dụng cả Step cũ. Chỉ cần lưu khi sửa target,
-                nội dung hoặc Action; không cần lưu để đổi engine.
-              </p>
-            )}
-            {selected.payload.action === "TYPE_ONLY" && (
-              <section aria-label="Test hai Step" className="flow-guide">
-                <b>Test CLICK → TYPE liền nhau</b>
-                <p>
-                  Chạy Base đã lưu của Step CLICK ngay trước và Step TYPE này;
-                  không về sidebar hoặc chụp ảnh giữa hai Step. CLICK phải mở
-                  composer và đặt caret; nếu chỉ mở hộp thoại, hãy tạo CLICK
-                  riêng vào ô nhập trước TYPE. Kết quả vẫn cần xác nhận.
-                </p>
-                <label>
-                  Đợi sau click (ms)
-                  <input
-                    aria-label="Đợi sau click"
-                    disabled={locked}
-                    type="number"
-                    min={0}
-                    max={10000}
-                    value={pairDelay}
-                    onChange={(e) => setPairDelay(Number(e.target.value))}
-                  />
-                </label>
+                <option value="" disabled>
+                  Chọn flow đã lưu
+                </option>
+                {state?.flows.map((f) => (
+                  <option value={f.id} key={f.id}>
+                    {f.name} · {Math.round(f.zoom * 100)}%
+                  </option>
+                ))}
+              </select>
+              <div className="row">
+                <input
+                  ref={flowInput}
+                  aria-label="Tên flow mới"
+                  value={flowName}
+                  onChange={(e) => setFlowName(e.target.value)}
+                />
                 <button
-                  disabled={
-                    locked ||
-                    !previousClick ||
-                    state?.flow?.steps[selectedIndex]?.version !==
-                      selected.version
-                  }
+                  disabled={locked}
                   onClick={() =>
                     void task(async () => {
+                      setState(
+                        await invoke<State>({
+                          type: "newFlow",
+                          name: flowName,
+                        }),
+                      );
+                      setSelected(undefined);
+                      setTarget(undefined);
+                      setFiles([]);
+                      setTargetImage("");
+                      setOcrResult(undefined);
+                      setOcrError("");
                       setResults([]);
-                      const r = await invoke<Result[]>({
-                        type: "testPair",
-                        firstId: previousClick!.id,
-                        secondId: selected.id,
-                        delayMs: pairDelay,
-                      });
-                      setResults(r);
-                      setMessage(r.map((r) => r.message).join("\n"));
+                      setMessage(
+                        `Đã tạo flow “${flowName}”. Có thể chụp & crop ROI; chọn zoom trước khi lưu step đầu tiên.`,
+                      );
                     })
                   }
                 >
-                  Test 2 Step · CLICK → TYPE (Base)
-                </button>
-                <p>
-                  {previousClick
-                    ? `${previousClick.name} v${previousClick.version} → ${selected.name} v${selected.version}. TYPE đã lưu: ${selected.payload.inputMethod ?? "keyboard"}. Override không áp dụng cho cặp này.`
-                    : "Cần Step Base CLICK_TARGET ngay trước TYPE_ONLY trong flow. Lưu/pin đúng version trước khi test cặp."}
-                </p>
-              </section>
-            )}
-
-            <input
-              aria-label="Ngữ cảnh Override"
-              disabled={locked}
-              value={context}
-              onChange={(e) => setContext(e.target.value)}
-            />
-            <button
-              disabled={locked || (needsTarget && !target)}
-              onClick={() =>
-                void task(async () => {
-                  const next = await invoke<State>({
-                    type: "saveOverride",
-                    stepId: selected.id,
-                    version: selected.version,
-                    name: context,
-                    segment: [payload()],
-                  });
-                  setState(next);
-                  setOverrideId(next.overrides.at(-1)!.id);
-                  setMessage(
-                    "Đã lưu Override riêng; Base không thay đổi. Chọn Base để bỏ áp dụng Override.",
-                  );
-                })
-              }
-            >
-              Lưu form thành Override riêng
-            </button>
-            <p className="hint mono">
-              {selected.id} / v{selected.version}
-            </p>
-          </>
-        )}
-        <div role="status" className="status">
-          {busy ? "Đang xử lý…" : message}
-        </div>
-        <div ref={resultPanel} aria-label="Kết quả Test">
-          {results.map((r) => (
-            <div
-              className={
-                "result " +
-                (r.status === "VERIFIED"
-                  ? "pass"
-                  : r.status === "ACTION_SENT"
-                    ? "sent"
-                    : "fail")
-              }
-              key={r.id}
-            >
-              <b>
-                {r.status} · {r.action}
-              </b>
-              <p>{r.message}</p>
-              {r.upload && (
-                <p>
-                  {r.upload.preview === "confirmed_by_user"
-                    ? "Đã xác nhận preview bằng quan sát của người dùng."
-                    : `Chưa xác nhận preview. Cần thấy đủ ${r.upload.fileCount} thumbnail ảnh thật, đợi xử lý xong và kiểm tra không có lỗi trước khi hoàn thành Step.`}
-                </p>
-              )}
-              {r.evidenceWarning && <p>{r.evidenceWarning}</p>}
-              <p>
-                Step {r.stepId.slice(0, 8)} · v{r.version} ·{" "}
-                {r.source === "override" ? "Override" : "Base"}
-              </p>
-              {(r.match || r.input || r.resolution || r.upload) && (
-                <details className="debug-details">
-                  <summary>Debug</summary>
-                  {r.upload && (
-                    <p>
-                      Upload: {r.upload.transport} · {r.upload.phase} · chooser{" "}
-                      {r.upload.chooserMode ?? "chưa nhận"} · giao{" "}
-                      {r.upload.assignedCount}/{r.upload.fileCount} file ·
-                      preview {r.upload.preview}. {r.upload.cleanupWarning}
-                    </p>
-                  )}
-                  {r.resolution && (
-                    <div className="resolver-trace">
-                      <b>
-                        Resolver AUTO · thực dùng:{" "}
-                        {r.resolution.selectedMethod ?? "không chọn"}
-                      </b>
-                      {r.resolution.legacyMethod && (
-                        <p>
-                          Hint cũ: {r.resolution.legacyMethod} (giữ trong Base;
-                          runtime dùng AUTO).
-                        </p>
-                      )}
-                      {r.resolution.fallbackReason && (
-                        <p>Lý do fallback: {r.resolution.fallbackReason}</p>
-                      )}
-                      {r.resolution.blockedReason && (
-                        <p>Lý do chặn: {r.resolution.blockedReason}</p>
-                      )}
-                      {r.resolution.attempts.map((a, i) => (
-                        <p key={i}>
-                          {a.method}: {a.outcome}
-                          {a.score !== undefined
-                            ? ` · score ${a.score.toFixed(4)}`
-                            : ""}
-                          {a.confidence !== undefined
-                            ? ` · confidence ${a.confidence.toFixed(1)}%`
-                            : ""}
-                          {a.x !== undefined
-                            ? ` · (${a.x.toFixed(1)}, ${a.y?.toFixed(1)}) DIP`
-                            : ""}
-                          . {a.reason}
-                        </p>
-                      ))}
-                    </div>
-                  )}
-                  {r.match && (
-                    <div className="match-detail">
-                      <b>
-                        Đã dùng:{" "}
-                        {r.match.method === "ocr"
-                          ? "OCR text matching"
-                          : "Image Matching"}
-                      </b>
-                      {r.match.method === "ocr" ? (
-                        <p>
-                          Chữ tìm được: “{r.match.text}” · confidence{" "}
-                          {r.match.confidence?.toFixed(1)}%
-                        </p>
-                      ) : (
-                        <>
-                          <p>
-                            Ảnh ROI đã khớp · score {r.match.score.toFixed(4)}.
-                            Vị trí cuối cùng chọn bằng ảnh; OCR có thể được dùng
-                            để đối chiếu an toàn.
-                          </p>
-                          <ResultTarget asset={r.targetAsset} />
-                        </>
-                      )}
-                      <p>
-                        Tọa độ browser: ({r.match.x.toFixed(1)},{" "}
-                        {r.match.y.toFixed(1)}) DIP
-                      </p>
-                    </div>
-                  )}
-                  {r.input && (
-                    <div className="match-detail">
-                      <b>
-                        Phương thức nhập:{" "}
-                        {r.input.method === "clipboard"
-                          ? "Clipboard paste"
-                          : "Keyboard · native text + Shift+Enter"}
-                      </b>
-                      <p>
-                        Browser focus: {String(r.input.focus.browser)} · editor
-                        focus: {String(r.input.focus.editor)} · route:{" "}
-                        {r.input.focus.route}. Caret: chưa kiểm chứng.
-                      </p>
-                      {r.input.clipboard && (
-                        <p>
-                          Clipboard: {r.input.clipboard}. {r.input.warning}
-                        </p>
-                      )}
-                    </div>
-                  )}
-                </details>
-              )}
-              {r.status === "ACTION_SENT" && (
-                <p>
-                  Chỉ mới gửi thao tác; chưa xác nhận kết quả nghiệp vụ. Quan
-                  sát browser đang hiển thị và chờ giao diện phản hồi.
-                </p>
-              )}
-              {["CLICK_TARGET", "CLICK_AND_TYPE", "TYPE_ONLY"].includes(
-                r.action,
-              ) &&
-                !r.after && (
-                  <p>
-                    Browser live được giữ nguyên; không tự chụp ảnh sau input để
-                    tránh mất focus. Ảnh trước chỉ xem khi bạn yêu cầu. Nếu cần
-                    gõ tiếp sau thao tác ở sidebar/chụp ảnh, click thủ công vào
-                    ô nhập.
-                  </p>
-                )}
-              {r.status === "ACTION_SENT" &&
-                [
-                  "CLICK_TARGET",
-                  "CLICK_AND_TYPE",
-                  "UPLOAD_FILE",
-                  "TYPE_ONLY",
-                ].includes(r.action) && (
-                  <div className="review-actions">
-                    <button
-                      disabled={
-                        locked ||
-                        !state?.flow?.steps.some(
-                          (s) => s.id === r.stepId && s.version === r.version,
-                        )
-                      }
-                      onClick={() => void task(() => reviewClick(r, "correct"))}
-                    >
-                      {r.action === "UPLOAD_FILE"
-                        ? "Đã thấy đủ preview — Hoàn thành Step"
-                        : "Đúng — Hoàn thành Step"}
-                    </button>
-                    <button
-                      disabled={
-                        locked ||
-                        !state?.flow?.steps.some(
-                          (s) => s.id === r.stepId && s.version === r.version,
-                        )
-                      }
-                      onClick={() =>
-                        void task(() => reviewClick(r, "incorrect"))
-                      }
-                    >
-                      Sai — Redesign Step
-                    </button>
-                  </div>
-                )}
-              {r.status === "BLOCKED" &&
-                ["CLICK_AND_TYPE", "UPLOAD_FILE"].includes(r.action) && (
-                  <div className="review-actions">
-                    <p>
-                      {r.clickSent
-                        ? "Đã click; cần kiểm tra nội dung trước khi test lại."
-                        : "Bị chặn trước khi click/nhập. Sửa target và lưu version mới trước khi thử lại."}
-                    </p>
-                    <button
-                      disabled={locked}
-                      onClick={() => void task(() => openRedesign(r))}
-                    >
-                      Redesign Step bị chặn
-                    </button>
-                  </div>
-                )}
-              {r.review?.verdict === "correct" && (
-                <button disabled={locked} onClick={newStep}>
-                  + Tạo Step tiếp theo từ browser hiện tại
-                </button>
-              )}
-              {!r.before && (
-                <p>Không chụp trước TYPE_ONLY/SCROLL để giữ focus.</p>
-              )}
-              <div className="row">
-                <button
-                  disabled={busy || !r.before}
-                  onClick={() => void task(() => inspect(r.before!))}
-                >
-                  Ảnh trước
-                </button>
-                <button
-                  disabled={busy || !!shot}
-                  onClick={() =>
-                    void task(async () =>
-                      inspect(
-                        r.after ?? (await invoke<Capture>({ type: "capture" })),
-                      ),
-                    )
-                  }
-                >
-                  {r.after ? "Ảnh sau" : "Chụp trạng thái hiện tại"}
+                  Tạo flow
                 </button>
               </div>
             </div>
-          ))}
-        </div>
-        <p className="hint">
-          Đăng nhập thủ công; session giữ local. CAPTCHA/checkpoint: dừng và xử
-          lý thủ công. POC không có Publish action.
-        </p>
-      </aside>
-      {shot && (
-        <div
-          className="snapshot"
-          onPointerDown={(e) => {
-            if (!cropMode) return;
-            drag.current = point(e);
-            e.currentTarget.setPointerCapture(e.pointerId);
-            setRoi(undefined);
-          }}
-          onPointerMove={(e) => {
-            if (!drag.current || !cropMode) return;
-            const p = point(e),
-              s = drag.current;
-            setRoi({
-              x: Math.round(Math.min(p.x, s.x)),
-              y: Math.round(Math.min(p.y, s.y)),
-              width: Math.round(Math.abs(p.x - s.x)),
-              height: Math.round(Math.abs(p.y - s.y)),
-            });
-          }}
-          onPointerUp={() => {
-            drag.current = undefined;
-          }}
-          onPointerCancel={() => {
-            drag.current = undefined;
-            setRoi(undefined);
-          }}
-          onLostPointerCapture={() => {
-            drag.current = undefined;
-          }}
-        >
-          <img alt="Browser screenshot" draggable={false} src={shot.dataUrl} />
-          {roi && (
+            <button
+              className="primary"
+              disabled={
+                locked ||
+                !state?.flow ||
+                (needsTarget && !target) ||
+                (action === "UPLOAD_FILE" && !files.length)
+              }
+              onClick={() => void task(saveBase)}
+            >
+              Save step
+            </button>
+            <div className="environment">
+              ONE SESSION <i />
+              1024 × {WEB_HEIGHT} DIP · {Math.round((state?.zoom || 1) * 100)}%
+              zoom
+            </div>
+            <button
+              className="window-mode"
+              onClick={() =>
+                void invoke({ type: "toggleFullscreen" }).catch((e) =>
+                  setMessage(String(e)),
+                )
+              }
+            >
+              Toàn màn hình · F11
+            </button>
+          </header>
+          <nav>
+            {shot ? (
+              <>
+                <span className="capture-instructions" role="note">
+                  {cropMode
+                    ? "Kéo để chọn ROI trên ảnh. Esc để hủy."
+                    : "Đang xem ảnh kiểm thử. Esc để quay lại."}
+                </span>
+                {cropMode && (
+                  <button
+                    className="primary"
+                    disabled={!roi || roi.width < 4 || roi.height < 4 || busy}
+                    onClick={() => void task(saveCrop)}
+                  >
+                    Dùng ROI {roi ? `${roi.width}×${roi.height}` : ""}
+                  </button>
+                )}
+                <button disabled={busy} onClick={() => void task(closeShot)}>
+                  Quay lại browser · Esc
+                </button>
+              </>
+            ) : (
+              <>
+                <input
+                  aria-label="URL"
+                  value={url}
+                  onChange={(e) => {
+                    urlEdit.current.dirty = true;
+                    urlEdit.current.revision++;
+                    setUrl(e.target.value);
+                  }}
+                />
+                <button
+                  disabled={locked}
+                  onClick={() =>
+                    void task(async () => {
+                      const revision = urlEdit.current.revision;
+                      const snapshot = await invoke<State>({
+                        type: "navigate",
+                        url,
+                      });
+                      setState(snapshot);
+                      if (revision === urlEdit.current.revision) {
+                        urlEdit.current.dirty = false;
+                        setUrl(snapshot.url);
+                      }
+                    })
+                  }
+                >
+                  Mở URL
+                </button>
+                <button
+                  disabled={locked}
+                  onClick={() =>
+                    void task(async () => {
+                      await invoke<string>({ type: "copyUrl" });
+                      setMessage("Đã sao chép URL hiện tại của browser.");
+                    })
+                  }
+                >
+                  Copy URL
+                </button>
+                <button
+                  disabled={locked}
+                  onClick={() =>
+                    void task(async () =>
+                      setState(await invoke<State>({ type: "fixture" })),
+                    )
+                  }
+                >
+                  Trang kiểm chuẩn
+                </button>
+                <label>
+                  Zoom
+                  <select
+                    aria-label="Zoom"
+                    disabled={locked || !!state?.flow?.steps.length}
+                    value={state?.zoom || 1}
+                    onChange={(e) =>
+                      void task(async () =>
+                        setState(
+                          await invoke<State>({
+                            type: "environment",
+                            zoom: Number(e.target.value),
+                          }),
+                        ),
+                      )
+                    }
+                  >
+                    <option value="1">100%</option>
+                    <option value="0.9">90%</option>
+                    <option value="0.8">80%</option>
+                  </select>
+                </label>
+              </>
+            )}
+          </nav>
+          <aside aria-label="Steps">
+            <div className="step-heading">
+              <b>Steps</b>
+              <button disabled={locked} onClick={newStep}>
+                + Step mới
+              </button>
+            </div>
+            <div className="steps">
+              {state?.flow?.steps.map((ref, i) => {
+                const s = state.steps.find(
+                  (s) => s.id === ref.id && s.version === ref.version,
+                )!;
+                return (
+                  <button
+                    className={selected?.id === s.id ? "step active" : "step"}
+                    key={s.id}
+                    disabled={locked}
+                    onClick={() => void task(() => loadStep(s))}
+                  >
+                    <span>{String(i + 1).padStart(2, "0")}</span>
+                    <b>{s.name}</b>
+                  </button>
+                );
+              })}
+            </div>
+            {!state?.flow?.steps.length && (
+              <p className="hint">
+                Chọn Action trong Step Editor, crop target rồi Save step.
+              </p>
+            )}
+          </aside>
+          {shot && (
             <div
-              className="roi"
-              style={{
-                left: roi.x,
-                top: roi.y,
-                width: roi.width,
-                height: roi.height,
+              className="snapshot"
+              onPointerDown={(e) => {
+                if (!cropMode) return;
+                drag.current = point(e);
+                e.currentTarget.setPointerCapture(e.pointerId);
+                setRoi(undefined);
               }}
-            />
+              onPointerMove={(e) => {
+                if (!drag.current || !cropMode) return;
+                const p = point(e),
+                  s = drag.current;
+                setRoi({
+                  x: Math.round(Math.min(p.x, s.x)),
+                  y: Math.round(Math.min(p.y, s.y)),
+                  width: Math.round(Math.abs(p.x - s.x)),
+                  height: Math.round(Math.abs(p.y - s.y)),
+                });
+              }}
+              onPointerUp={() => {
+                drag.current = undefined;
+              }}
+              onPointerCancel={() => {
+                drag.current = undefined;
+                setRoi(undefined);
+              }}
+              onLostPointerCapture={() => {
+                drag.current = undefined;
+              }}
+            >
+              <img
+                alt="Browser screenshot"
+                draggable={false}
+                src={shot.dataUrl}
+              />
+              {roi && (
+                <div
+                  className="roi"
+                  style={{
+                    left: roi.x,
+                    top: roi.y,
+                    width: roi.width,
+                    height: roi.height,
+                  }}
+                />
+              )}
+            </div>
+          )}{" "}
+        </>
+      )}
+      {!shell && (
+        <section
+          className="panel"
+          aria-label={panel === "editor" ? "Step Editor" : "Test & Debug"}
+        >
+          <div className="panel-heading">
+            <b>{panel === "editor" ? "Step Editor" : "Test & Debug"}</b>
+            <span>
+              {selected?.name || "Step mới"}
+              {overrideId ? " · Override" : ""}
+            </span>
+            <button
+              aria-label={expanded ? "Thu gọn panel" : "Mở panel"}
+              aria-expanded={expanded}
+              onMouseDown={(e) => e.preventDefault()}
+              onClick={togglePanel}
+            >
+              {expanded ? "−" : "+"}
+            </button>
+          </div>
+          {expanded && (
+            <div className="panel-body">
+              {panel === "editor" ? (
+                <>
+                  {field(
+                    "Action",
+                    <select
+                      aria-label="Action"
+                      disabled={locked}
+                      value={action}
+                      onChange={(e) => {
+                        setAction(e.target.value as Action);
+                        setTarget(undefined);
+                        setFiles([]);
+                        setTargetImage("");
+                        setOcrResult(undefined);
+                        setOcrError("");
+                      }}
+                    >
+                      <option>CLICK_TARGET</option>
+                      <option>CLICK_AND_TYPE</option>
+                      <option>UPLOAD_FILE</option>
+                      <option>TYPE_ONLY</option>
+                      <option value="WAIT_VERIFY">WAIT / VERIFY</option>
+                      <option>SCROLL</option>
+                    </select>,
+                  )}
+                  {field(
+                    "Tên step",
+                    <input
+                      aria-label="Tên step"
+                      disabled={locked}
+                      value={name}
+                      onChange={(e) => setName(e.target.value)}
+                    />,
+                  )}
+                  {needsTarget && (
+                    <>
+                      <button
+                        disabled={locked || !state?.flow}
+                        aria-describedby="roi-flow-help"
+                        onClick={() => void task(capture)}
+                      >
+                        Chụp & crop ROI
+                      </button>
+                      <p id="roi-flow-help" className="hint">
+                        {!state?.flow
+                          ? "Chưa có flow: nhập tên và bấm Tạo flow ở Bước 1, hoặc chọn flow đã lưu để bật chụp ROI."
+                          : "Chụp trang web hiện tại và kéo ROI; Dùng ROI để xác nhận hoặc Esc để hủy."}
+                      </p>
+                      {!state?.flow && (
+                        <button
+                          className="link"
+                          disabled={locked}
+                          onClick={goToFlow}
+                        >
+                          Đi tới bước 1
+                        </button>
+                      )}
+                      {targetImage && (
+                        <img
+                          alt="Target ROI"
+                          className="target"
+                          src={targetImage}
+                        />
+                      )}
+                      <p className="hint">
+                        {target
+                          ? `${target.roi.width}×${target.roi.height} · x${target.roi.x}, y${target.roi.y}`
+                          : "Chưa có target. Crop nhãn/icon cùng biên."}{" "}
+                        AUTO tìm bằng ảnh hoặc chữ đã xác nhận.
+                      </p>
+                    </>
+                  )}
+                  {["TYPE_ONLY", "CLICK_AND_TYPE"].includes(action) && (
+                    <>
+                      <label>
+                        Phương thức nhập
+                        <select
+                          aria-label="Phương thức nhập"
+                          disabled={locked}
+                          value={inputMethod}
+                          onChange={(e) =>
+                            setInputMethod(
+                              e.target.value as "keyboard" | "clipboard",
+                            )
+                          }
+                        >
+                          <option value="keyboard">
+                            Keyboard · native text + Shift+Enter
+                          </option>
+                          <option value="clipboard">
+                            Clipboard paste · phục hồi clipboard
+                          </option>
+                        </select>
+                      </label>
+                      <textarea
+                        aria-label={`Nội dung ${action}`}
+                        disabled={locked}
+                        rows={4}
+                        value={text}
+                        onChange={(e) => setText(e.target.value)}
+                      />
+                      <p className="hint">
+                        {action === "CLICK_AND_TYPE" ? (
+                          "Composer cần đang mở. Crop ô nhập; Test sẽ click một lần rồi nhập. Quan sát bản nháp trước khi xác nhận."
+                        ) : (
+                          <>
+                            Gửi vào caret hiện tại; không tự click/focus. Native
+                            browser focus không chứng minh caret sẵn sàng. Lưu →
+                            test cặp CLICK → TYPE bên dưới, hoặc click thủ công
+                            ô nhập rồi Ctrl+Shift+T. Clipboard chỉ phục hồi khi
+                            chưa bị thay đổi trong lúc paste.
+                          </>
+                        )}
+                      </p>
+                    </>
+                  )}
+                  {action === "UPLOAD_FILE" && (
+                    <section aria-label="Ảnh upload">
+                      <button
+                        disabled={locked}
+                        onClick={() =>
+                          void task(async () => {
+                            const picked = await invoke<string[] | undefined>({
+                              type: "pickUploadFiles",
+                            });
+                            if (picked) setFiles(picked);
+                          })
+                        }
+                      >
+                        Chọn ảnh local
+                      </button>
+                      <p className="hint">
+                        {files.length} ảnh · PNG/JPEG/WebP/GIF, tối đa 20. File
+                        giữ ở đường dẫn local; cần còn tồn tại khi chạy Step.
+                      </p>
+                      <ol>
+                        {files.map((file, i) => (
+                          <li key={i}>{file.split(/[\\/]/).at(-1)}</li>
+                        ))}
+                      </ol>
+                      <p className="hint">
+                        Crop nút Ảnh/Video đang hiển thị trong composer. Action
+                        chỉ chọn file; phải quan sát đủ thumbnail/preview ảnh
+                        thật rồi xác nhận. Không Publish.
+                      </p>
+                    </section>
+                  )}
+                  {action === "SCROLL" &&
+                    field(
+                      "Delta Y (âm = xuống)",
+                      <input
+                        aria-label="Scroll delta"
+                        disabled={locked}
+                        type="number"
+                        value={delta}
+                        onChange={(e) => setDelta(Number(e.target.value))}
+                      />,
+                    )}
+                  {needsTarget && target && (
+                    <section className="ocr-panel" aria-label="OCR ROI">
+                      <div className="eyebrow">OCR LOCAL · VIỆT + ANH</div>
+                      {ocrLoading && <p role="note">Đang đọc OCR trên máy…</p>}
+                      {ocrError && (
+                        <p role="note" className="hint">
+                          {ocrError}
+                        </p>
+                      )}
+                      {ocrResult && !ocrResult.segments.length && (
+                        <p className="hint">
+                          ROI không có chữ đọc được. Có thể lưu image-only cho
+                          nút icon.
+                        </p>
+                      )}
+                      {ocrResult && ocrResult.segments.length > 0 && (
+                        <>
+                          <p className="hint">
+                            {target.ocr
+                              ? "Bấm dòng/từ khác để đổi chữ đã xác nhận."
+                              : "Không tự chọn chữ. Bấm một dòng/từ bên dưới để xác nhận target."}
+                          </p>
+                          <label>
+                            Đơn vị chọn
+                            <select
+                              aria-label="Đơn vị OCR"
+                              value={ocrKind}
+                              disabled={locked}
+                              onChange={(e) =>
+                                setOcrKind(e.target.value as "line" | "word")
+                              }
+                            >
+                              <option value="line">Dòng chữ</option>
+                              <option value="word">Từ riêng lẻ</option>
+                            </select>
+                          </label>
+                          <div className="ocr-candidates">
+                            {ocrResult.segments
+                              .filter((s) => s.kind === ocrKind)
+                              .map((s) => (
+                                <button
+                                  key={s.id}
+                                  className="ocr-candidate"
+                                  disabled={locked}
+                                  aria-pressed={
+                                    target.ocr?.text === s.text &&
+                                    target.ocr.kind === s.kind &&
+                                    target.ocr.bbox.x === s.bbox.x &&
+                                    target.ocr.bbox.y === s.bbox.y
+                                  }
+                                  onClick={() => confirmOcr(s)}
+                                >
+                                  <b>{s.text}</b>
+                                  <small>
+                                    {s.confidence.toFixed(1)}% · bbox {s.bbox.x}
+                                    ,{s.bbox.y} · {s.bbox.width}×{s.bbox.height}
+                                  </small>
+                                </button>
+                              ))}
+                          </div>
+                        </>
+                      )}
+                      {target.ocr ? (
+                        <div className="ocr-confirmed">
+                          <b>Chữ đã xác nhận: {target.ocr.text}</b>
+                          <p className="hint">
+                            {target.ocr.kind} ·{" "}
+                            {target.ocr.confidence.toFixed(1)}% khi thiết kế.
+                            Runtime đọc lại và cần confidence ≥80%, chỉ một vị
+                            trí khớp chính xác.
+                          </p>
+                          <button
+                            disabled={locked}
+                            onClick={() => {
+                              setTarget((previous) => {
+                                if (!previous) return previous;
+                                const { ocr, ...rest } = previous;
+                                return rest;
+                              });
+                            }}
+                          >
+                            Bỏ chữ dự phòng
+                          </button>
+                        </div>
+                      ) : (
+                        <p className="hint">
+                          Chưa có chữ dự phòng được xác nhận; AUTO vẫn dùng ảnh.
+                        </p>
+                      )}
+                      <button
+                        disabled={locked}
+                        onClick={() => void task(() => readOcr(target.asset))}
+                      >
+                        Đọc lại OCR
+                      </button>
+                      <p className="hint">
+                        AUTO ưu tiên ảnh; dùng chữ bạn xác nhận khi ảnh chưa đủ
+                        rõ. Không cần chọn engine hay lưu version mới khi engine
+                        đổi phương pháp.
+                      </p>
+                    </section>
+                  )}
+                  <button
+                    className="primary"
+                    disabled={
+                      locked ||
+                      !state?.flow ||
+                      (needsTarget && !target) ||
+                      (action === "UPLOAD_FILE" && !files.length)
+                    }
+                    onClick={() => void task(saveBase)}
+                  >
+                    {selected
+                      ? `Lưu redesign → v${Math.max(...(state?.steps.filter((s) => s.id === selected.id).map((s) => s.version) || [1])) + 1}`
+                      : "Lưu Base v1"}
+                  </button>
+                  {selected && (
+                    <details className="advanced">
+                      <summary>Version & Override</summary>
+                      <div className="row">
+                        {field(
+                          "Base version",
+                          <select
+                            aria-label="Base version"
+                            disabled={locked}
+                            value={selected.version}
+                            onChange={(e) =>
+                              void task(() =>
+                                loadStep(
+                                  state!.steps.find(
+                                    (s) =>
+                                      s.id === selected.id &&
+                                      s.version === Number(e.target.value),
+                                  )!,
+                                ),
+                              )
+                            }
+                          >
+                            {state?.steps
+                              .filter((s) => s.id === selected.id)
+                              .map((s) => (
+                                <option key={s.version} value={s.version}>
+                                  v{s.version}
+                                </option>
+                              ))}
+                          </select>,
+                        )}
+                        <button
+                          disabled={locked}
+                          onClick={() =>
+                            void task(async () => {
+                              setState(
+                                await invoke<State>({
+                                  type: "selectVersion",
+                                  id: selected.id,
+                                  version: selected.version,
+                                }),
+                              );
+                              setMessage(
+                                `Flow ghim Base v${selected.version}.`,
+                              );
+                            })
+                          }
+                        >
+                          Ghim version
+                        </button>
+                      </div>
+                      {field(
+                        "Implementation",
+                        <select
+                          aria-label="Implementation"
+                          disabled={locked}
+                          value={overrideId}
+                          onChange={(e) => setOverrideId(e.target.value)}
+                        >
+                          <option value="">Base v{selected.version}</option>
+                          {state?.overrides
+                            .filter(
+                              (o) =>
+                                o.stepId === selected.id &&
+                                o.baseVersion === selected.version,
+                            )
+                            .map((o) => (
+                              <option key={o.id} value={o.id}>
+                                Override · {o.name}
+                              </option>
+                            ))}
+                        </select>,
+                      )}
+                      <input
+                        aria-label="Ngữ cảnh Override"
+                        disabled={locked}
+                        value={context}
+                        onChange={(e) => setContext(e.target.value)}
+                      />
+                      <button
+                        disabled={locked || (needsTarget && !target)}
+                        onClick={() =>
+                          void task(async () => {
+                            const next = await invoke<State>({
+                              type: "saveOverride",
+                              stepId: selected.id,
+                              version: selected.version,
+                              name: context,
+                              segment: [payload()],
+                            });
+                            setState(next);
+                            setOverrideId(next.overrides.at(-1)!.id);
+                            setMessage(
+                              "Đã lưu Override riêng; Base không thay đổi. Chọn Base để bỏ áp dụng Override.",
+                            );
+                          })
+                        }
+                      >
+                        Lưu form thành Override riêng
+                      </button>
+                      <p className="hint mono">
+                        {selected.id} / v{selected.version}
+                      </p>
+                    </details>
+                  )}
+                </>
+              ) : (
+                <>
+                  {selected ? (
+                    <>
+                      <button
+                        disabled={locked}
+                        onClick={() => void run(selected, overrideId)}
+                      >
+                        Test step đã lưu · Ctrl+Shift+T
+                      </button>
+                    </>
+                  ) : (
+                    <p className="hint">
+                      Lưu hoặc chọn Step để Test. Kết quả cần bạn xác nhận.
+                    </p>
+                  )}
+                  <div
+                    role="status"
+                    className="status"
+                    hidden={
+                      !busy &&
+                      results.length > 0 &&
+                      message === results.map((r) => r.message).join("\n")
+                    }
+                  >
+                    {busy ? "Đang xử lý…" : message}
+                  </div>
+                  <div ref={resultPanel} aria-label="Kết quả Test">
+                    {results.map((r) => (
+                      <div
+                        className={
+                          "result " +
+                          (r.status === "VERIFIED"
+                            ? "pass"
+                            : r.status === "ACTION_SENT"
+                              ? "sent"
+                              : "fail")
+                        }
+                        key={r.id}
+                      >
+                        <b>
+                          {r.status} · {r.action}
+                        </b>
+                        <p>{resultSummary(r)}</p>
+                        {r.status === "ACTION_SENT" &&
+                          [
+                            "CLICK_TARGET",
+                            "CLICK_AND_TYPE",
+                            "UPLOAD_FILE",
+                            "TYPE_ONLY",
+                          ].includes(r.action) && (
+                            <div className="review-actions">
+                              <button
+                                disabled={
+                                  locked ||
+                                  !state?.flow?.steps.some(
+                                    (s) =>
+                                      s.id === r.stepId &&
+                                      s.version === r.version,
+                                  )
+                                }
+                                onClick={() =>
+                                  void task(() => reviewClick(r, "correct"))
+                                }
+                              >
+                                {r.action === "UPLOAD_FILE"
+                                  ? "Đã thấy đủ preview — Hoàn thành Step"
+                                  : "Đúng — Hoàn thành Step"}
+                              </button>
+                              <button
+                                disabled={
+                                  locked ||
+                                  !state?.flow?.steps.some(
+                                    (s) =>
+                                      s.id === r.stepId &&
+                                      s.version === r.version,
+                                  )
+                                }
+                                onClick={() =>
+                                  void task(() => reviewClick(r, "incorrect"))
+                                }
+                              >
+                                Sai — Redesign Step
+                              </button>
+                            </div>
+                          )}
+                        {r.status === "BLOCKED" &&
+                          ["CLICK_AND_TYPE", "UPLOAD_FILE"].includes(
+                            r.action,
+                          ) && (
+                            <div className="review-actions">
+                              <p>
+                                {r.clickSent
+                                  ? "Đã click; cần kiểm tra nội dung trước khi test lại."
+                                  : "Bị chặn trước khi click/nhập. Sửa target và lưu version mới trước khi thử lại."}
+                              </p>
+                              <button
+                                disabled={locked}
+                                onClick={() => void task(() => openRedesign(r))}
+                              >
+                                Redesign Step bị chặn
+                              </button>
+                            </div>
+                          )}
+
+                        {r.upload && (
+                          <p>
+                            {r.upload.preview === "confirmed_by_user"
+                              ? "Đã xác nhận preview bằng quan sát của người dùng."
+                              : `Chưa xác nhận preview. Cần thấy đủ ${r.upload.fileCount} thumbnail ảnh thật, đợi xử lý xong và kiểm tra không có lỗi trước khi hoàn thành Step.`}
+                          </p>
+                        )}
+                        {r.evidenceWarning && <p>{r.evidenceWarning}</p>}
+                        {
+                          <details className="debug-details">
+                            <summary>Debug</summary>
+                            <p>{r.message}</p>
+                            <p>
+                              Step {r.stepId.slice(0, 8)} · v{r.version} ·{" "}
+                              {r.source === "override" ? "Override" : "Base"}
+                            </p>
+                            {r.upload && (
+                              <p>
+                                Upload: {r.upload.transport} · {r.upload.phase}{" "}
+                                · chooser {r.upload.chooserMode ?? "chưa nhận"}{" "}
+                                · giao {r.upload.assignedCount}/
+                                {r.upload.fileCount} file · preview{" "}
+                                {r.upload.preview}. {r.upload.cleanupWarning}
+                              </p>
+                            )}
+                            {r.resolution && (
+                              <div className="resolver-trace">
+                                <b>
+                                  Resolver AUTO · thực dùng:{" "}
+                                  {r.resolution.selectedMethod ?? "không chọn"}
+                                </b>
+                                {r.resolution.legacyMethod && (
+                                  <p>
+                                    Hint cũ: {r.resolution.legacyMethod} (giữ
+                                    trong Base; runtime dùng AUTO).
+                                  </p>
+                                )}
+                                {r.resolution.fallbackReason && (
+                                  <p>
+                                    Lý do fallback:{" "}
+                                    {r.resolution.fallbackReason}
+                                  </p>
+                                )}
+                                {r.resolution.blockedReason && (
+                                  <p>
+                                    Lý do chặn: {r.resolution.blockedReason}
+                                  </p>
+                                )}
+                                {r.resolution.attempts.map((a, i) => (
+                                  <p key={i}>
+                                    {a.method}: {a.outcome}
+                                    {a.score !== undefined
+                                      ? ` · score ${a.score.toFixed(4)}`
+                                      : ""}
+                                    {a.confidence !== undefined
+                                      ? ` · confidence ${a.confidence.toFixed(1)}%`
+                                      : ""}
+                                    {a.x !== undefined
+                                      ? ` · (${a.x.toFixed(1)}, ${a.y?.toFixed(1)}) DIP`
+                                      : ""}
+                                    . {a.reason}
+                                  </p>
+                                ))}
+                              </div>
+                            )}
+                            {r.match && (
+                              <div className="match-detail">
+                                <b>
+                                  Đã dùng:{" "}
+                                  {r.match.method === "ocr"
+                                    ? "OCR text matching"
+                                    : "Image Matching"}
+                                </b>
+                                {r.match.method === "ocr" ? (
+                                  <p>
+                                    Chữ tìm được: “{r.match.text}” · confidence{" "}
+                                    {r.match.confidence?.toFixed(1)}%
+                                  </p>
+                                ) : (
+                                  <>
+                                    <p>
+                                      Ảnh ROI đã khớp · score{" "}
+                                      {r.match.score.toFixed(4)}. Vị trí cuối
+                                      cùng chọn bằng ảnh; OCR có thể được dùng
+                                      để đối chiếu an toàn.
+                                    </p>
+                                    <ResultTarget asset={r.targetAsset} />
+                                  </>
+                                )}
+                                <p>
+                                  Tọa độ browser: ({r.match.x.toFixed(1)},{" "}
+                                  {r.match.y.toFixed(1)}) DIP
+                                </p>
+                              </div>
+                            )}
+                            {r.input && (
+                              <div className="match-detail">
+                                <b>
+                                  Phương thức nhập:{" "}
+                                  {r.input.method === "clipboard"
+                                    ? "Clipboard paste"
+                                    : "Keyboard · native text + Shift+Enter"}
+                                </b>
+                                <p>
+                                  Browser focus: {String(r.input.focus.browser)}{" "}
+                                  · editor focus: {String(r.input.focus.editor)}{" "}
+                                  · route: {r.input.focus.route}. Caret: chưa
+                                  kiểm chứng.
+                                </p>
+                                {r.input.clipboard && (
+                                  <p>
+                                    Clipboard: {r.input.clipboard}.{" "}
+                                    {r.input.warning}
+                                  </p>
+                                )}
+                              </div>
+                            )}
+                          </details>
+                        }
+                        {r.review?.verdict === "correct" && (
+                          <button disabled={locked} onClick={newStep}>
+                            + Tạo Step tiếp theo từ browser hiện tại
+                          </button>
+                        )}
+                        <details className="evidence">
+                          <summary>Ảnh & ghi chú</summary>
+                          {r.status === "ACTION_SENT" && (
+                            <p>
+                              Chỉ mới gửi thao tác; chưa xác nhận kết quả nghiệp
+                              vụ. Quan sát browser đang hiển thị và chờ giao
+                              diện phản hồi.
+                            </p>
+                          )}
+                          {[
+                            "CLICK_TARGET",
+                            "CLICK_AND_TYPE",
+                            "TYPE_ONLY",
+                          ].includes(r.action) &&
+                            !r.after && (
+                              <p>
+                                Browser live được giữ nguyên; không tự chụp ảnh
+                                sau input để tránh mất focus. Ảnh trước chỉ xem
+                                khi bạn yêu cầu. Nếu cần gõ tiếp sau thao tác ở
+                                sidebar/chụp ảnh, click thủ công vào ô nhập.
+                              </p>
+                            )}
+                          {!r.before && (
+                            <p>
+                              Không chụp trước TYPE_ONLY/SCROLL để giữ focus.
+                            </p>
+                          )}
+                          <div className="row">
+                            <button
+                              disabled={busy || !r.before}
+                              onClick={() =>
+                                void task(() => inspect(r.before!))
+                              }
+                            >
+                              Ảnh trước
+                            </button>
+                            <button
+                              disabled={busy || !!shot}
+                              onClick={() =>
+                                void task(async () =>
+                                  inspect(
+                                    r.after ??
+                                      (await invoke<Capture>({
+                                        type: "capture",
+                                      })),
+                                  ),
+                                )
+                              }
+                            >
+                              {r.after ? "Ảnh sau" : "Chụp trạng thái hiện tại"}
+                            </button>
+                          </div>
+                        </details>
+                      </div>
+                    ))}
+                  </div>
+                  {selected && (
+                    <details className="test-help">
+                      <summary>Hướng dẫn Test & Test cặp</summary>
+
+                      <p className="hint">
+                        Test dùng payload đã lưu. TYPE_ONLY/SCROLL: giữ focus
+                        trong web và dùng phím tắt.
+                      </p>
+                      {[
+                        "CLICK_TARGET",
+                        "CLICK_AND_TYPE",
+                        "UPLOAD_FILE",
+                        "WAIT_VERIFY",
+                      ].includes(selected.payload.action) && (
+                        <p className="hint saved-method">
+                          Nhận diện AUTO, áp dụng cả Step cũ. Chỉ cần lưu khi
+                          sửa target, nội dung hoặc Action; không cần lưu để đổi
+                          engine.
+                        </p>
+                      )}
+                      {selected.payload.action === "TYPE_ONLY" && (
+                        <section
+                          aria-label="Test hai Step"
+                          className="flow-guide"
+                        >
+                          <b>Test CLICK → TYPE liền nhau</b>
+                          <p>
+                            Chạy Base đã lưu của Step CLICK ngay trước và Step
+                            TYPE này; không về sidebar hoặc chụp ảnh giữa hai
+                            Step. CLICK phải mở composer và đặt caret; nếu chỉ
+                            mở hộp thoại, hãy tạo CLICK riêng vào ô nhập trước
+                            TYPE. Kết quả vẫn cần xác nhận.
+                          </p>
+                          <label>
+                            Đợi sau click (ms)
+                            <input
+                              aria-label="Đợi sau click"
+                              disabled={locked}
+                              type="number"
+                              min={0}
+                              max={10000}
+                              value={pairDelay}
+                              onChange={(e) =>
+                                setPairDelay(Number(e.target.value))
+                              }
+                            />
+                          </label>
+                          <button
+                            disabled={
+                              locked ||
+                              !previousClick ||
+                              state?.flow?.steps[selectedIndex]?.version !==
+                                selected.version
+                            }
+                            onClick={() =>
+                              void task(async () => {
+                                setResults([]);
+                                const r = await invoke<Result[]>({
+                                  type: "testPair",
+                                  firstId: previousClick!.id,
+                                  secondId: selected.id,
+                                  delayMs: pairDelay,
+                                });
+                                setResults(r);
+                                setMessage(r.map((r) => r.message).join("\n"));
+                              })
+                            }
+                          >
+                            Test 2 Step · CLICK → TYPE (Base)
+                          </button>
+                          <p>
+                            {previousClick
+                              ? `${previousClick.name} v${previousClick.version} → ${selected.name} v${selected.version}. TYPE đã lưu: ${selected.payload.inputMethod ?? "keyboard"}. Override không áp dụng cho cặp này.`
+                              : "Cần Step Base CLICK_TARGET ngay trước TYPE_ONLY trong flow. Lưu/pin đúng version trước khi test cặp."}
+                          </p>
+                        </section>
+                      )}
+                    </details>
+                  )}{" "}
+                </>
+              )}
+            </div>
           )}
-        </div>
+        </section>
       )}
     </main>
   );
 }
+
 function ResultTarget({ asset }: { asset?: string }) {
   const [image, setImage] = useState("");
   useEffect(() => {

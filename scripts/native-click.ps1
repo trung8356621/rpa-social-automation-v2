@@ -8,6 +8,6 @@ public class CreatorMouse {
 }
 "@
 [CreatorMouse]::SetProcessDPIAware() | Out-Null
-if (-not [CreatorMouse]::SetCursorPos($X,$Y)) { throw "Native input desktop unavailable: SetCursorPos failed. Unlock/reconnect the Windows desktop and rerun overlay proof." }
+if (-not [CreatorMouse]::SetCursorPos($X,$Y)) { throw "Native input desktop unavailable: SetCursorPos failed. Unlock/reconnect the Windows desktop and rerun the native input test." }
 [CreatorMouse]::mouse_event(2,0,0,0,[System.UIntPtr]::Zero)
 [CreatorMouse]::mouse_event(4,0,0,0,[System.UIntPtr]::Zero)

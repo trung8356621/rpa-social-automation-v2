@@ -144,6 +144,8 @@ export type State = {
 };
 export type Command =
   | { type: "state" }
+  | { type: "panel"; panel: "editor" | "debug"; expanded: boolean }
+  | { type: "focusFlow" }
   | { type: "copyUrl" }
   | { type: "navigate"; url: string }
   | { type: "fixture" }
@@ -176,7 +178,41 @@ export type Command =
   | { type: "armTest"; stepId: string; version: number; overrideId?: string }
   | { type: "disarmTest" }
   | { type: "browserVisible"; visible: boolean };
+export const DRAFT_KEYS = [
+  "state",
+  "action",
+  "name",
+  "text",
+  "delta",
+  "inputMethod",
+  "pairDelay",
+  "target",
+  "targetImage",
+  "files",
+  "ocrResult",
+  "ocrError",
+  "ocrLoading",
+  "ocrKind",
+  "selected",
+  "overrideId",
+  "shot",
+  "cropMode",
+  "roi",
+  "message",
+  "busy",
+  "results",
+  "flowName",
+  "context",
+  "editorExpanded",
+  "debugExpanded",
+] as const;
+export type DraftKey = (typeof DRAFT_KEYS)[number];
+export type DraftEntry = { revision: number; value: unknown };
 export interface CreatorApi {
+  readDraft(key: DraftKey, initial: unknown): DraftEntry;
+  writeDraft(key: DraftKey, value: unknown): DraftEntry;
+  onDraft(callback: (key: string, entry: DraftEntry) => void): () => void;
+  onFocusFlow(callback: () => void): () => void;
   onNavigation(callback: (url: string) => void): () => void;
   invoke(command: Command): Promise<unknown>;
   onTest(callback: (result: Result[] | { error: string }) => void): () => void;

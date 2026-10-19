@@ -10,6 +10,8 @@ if (
     (phase) =>
       ![
         "overlay",
+        "creator-ui",
+        "creator-native",
         "first",
         "second",
         "ux",
@@ -21,13 +23,13 @@ if (
   )
 ) {
   throw new Error(
-    "Supported browser test phases: overlay, first, second, ux, ocr, typing, upload, address",
+    "Supported browser test phases: overlay, creator-ui, creator-native, first, second, ux, ocr, typing, upload, address",
   );
 }
 for (const phase of phases.length
   ? phases
   : [
-      "overlay",
+      "creator-ui",
       "first",
       "second",
       "ux",

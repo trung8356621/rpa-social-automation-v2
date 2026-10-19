@@ -12,6 +12,7 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import sharp from "sharp";
 import { randomUUID } from "node:crypto";
+import { registerFixtureWorkspace } from "./fixture-ui.js";
 import { CreatorOverlays } from "./creator-overlays.js";
 import { BrowserCore } from "./browser-core.js";
 import { Store } from "./storage.js";
@@ -27,6 +28,7 @@ import {
   validateRect,
   validateZoom,
 } from "../shared/geometry.js";
+import { DRAFT_KEYS } from "../shared/contracts.js";
 import type { Command, State } from "../shared/contracts.js";
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
@@ -39,7 +41,16 @@ const dataPath = path.join(
   project,
   ".local",
   selfTest
-    ? ["overlay", "ux", "ocr", "typing", "upload", "address"].includes(phase)
+    ? [
+        "creator-ui",
+        "creator-native",
+        "overlay",
+        "ux",
+        "ocr",
+        "typing",
+        "upload",
+        "address",
+      ].includes(phase)
       ? `test-${phase}-${process.pid}`
       : "test-session"
     : "creator",
@@ -137,10 +148,50 @@ async function boot() {
     evidenceDir,
     "persist:creator-default",
   );
-  const overlays =
-    selfTest && phase === "overlay"
-      ? new CreatorOverlays(window, path.join(root, "preload/index.cjs"))
-      : undefined;
+  const overlays = new CreatorOverlays(
+    window,
+    path.join(root, "preload/index.cjs"),
+  );
+  if (selfTest) {
+    registerFixtureWorkspace(window, overlays);
+    for (const wc of [
+      window.webContents,
+      ...overlays.views.map((v) => v.webContents),
+    ])
+      wc.on("console-message", (event) => {
+        if (event.level === "error") console.error("RENDERER", event.message);
+      });
+  }
+  const editors = [
+    window.webContents,
+    ...overlays.views.map((v) => v.webContents),
+  ];
+  const trusted = (
+    event: Electron.IpcMainEvent | Electron.IpcMainInvokeEvent,
+  ) =>
+    editors.includes(event.sender) &&
+    event.senderFrame === event.sender.mainFrame;
+  const draft = new Map<string, { revision: number; value: unknown }>();
+  const keys = new Set<string>(DRAFT_KEYS);
+  let revision = 0;
+  ipcMain.on("creator:draft", (event, request) => {
+    if (!trusted(event) || !request || !keys.has(request.key)) {
+      event.returnValue = null;
+      return;
+    }
+    if (!draft.has(request.key) || request.write) {
+      const entry = {
+        revision: ++revision,
+        value: request.write ? request.value : request.initial,
+      };
+      draft.set(request.key, entry);
+      for (const editor of editors)
+        if (editor !== event.sender && !editor.isDestroyed())
+          editor.send("creator:draft-update", request.key, entry);
+    }
+    event.returnValue = draft.get(request.key);
+  });
+  for (const view of overlays.views) browser.trackEditor(view.webContents);
   // Only the outer window changes size. Keep the web viewport and screenshot
   // origin identical in normal, maximized and fullscreen modes.
   window.on("resize", () => browser.view.setBounds(browser.bounds));
@@ -158,7 +209,7 @@ async function boot() {
       window.setFullScreen(false);
     }
   };
-  window.webContents.on("before-input-event", windowKeys);
+  for (const editor of editors) editor.on("before-input-event", windowKeys);
   browser.view.webContents.on("before-input-event", windowKeys);
   browser.setZoom(store.flow()?.zoom ?? Number(store.setting("zoom") || 1));
   const runtime = new Runtime(browser, store, assetDir, runDir);
@@ -180,14 +231,28 @@ async function boot() {
     if (runtime.busy) throw new Error("Đang test; đợi tác vụ kết thúc.");
   };
   ipcMain.handle("creator:command", async (event, command: Command) => {
-    if (
-      event.sender !== window.webContents ||
-      event.senderFrame !== window.webContents.mainFrame
-    )
-      throw new Error("IPC sender không hợp lệ.");
+    if (!trusted(event)) throw new Error("IPC sender không hợp lệ.");
     if (!command || typeof command !== "object")
       throw new Error("Command không hợp lệ.");
     switch (command.type) {
+      case "focusFlow":
+        window.webContents.focus();
+        window.webContents.send("creator:focus-flow");
+        return;
+      case "panel":
+        if (
+          !["editor", "debug"].includes(command.panel) ||
+          typeof command.expanded !== "boolean"
+        )
+          throw new Error("Invalid panel");
+        overlays.setExpanded(command.panel, command.expanded);
+        if (
+          !command.expanded &&
+          event.sender.isFocused() &&
+          event.sender !== window.webContents
+        )
+          browser.view.webContents.focus();
+        return;
       case "state":
         return state();
       case "toggleFullscreen":
@@ -331,6 +396,7 @@ async function boot() {
       case "browserVisible":
         isIdle();
         browser.setVisible(command.visible);
+        overlays.setVisible(command.visible);
         return state();
       default:
         throw new Error("Command không hỗ trợ.");
@@ -419,6 +485,7 @@ async function boot() {
     },
   );
   await window.loadFile(path.join(root, "renderer/index.html"));
+  await overlays.load(path.join(root, "renderer/index.html"));
   window.show();
   // Load the web page after its host is shown so Chromium has a live compositor.
   await new Promise((resolve) => setTimeout(resolve, 100));
@@ -433,19 +500,21 @@ async function boot() {
   if (selfTest) {
     try {
       const { runSelfTest } = await import(
-        phase === "overlay"
-          ? "./overlay-self-test.js"
-          : phase === "address"
-            ? "./address-self-test.js"
-            : phase === "upload"
-              ? "./upload-self-test.js"
-              : phase === "typing"
-                ? "./typing-self-test.js"
-                : phase === "ocr"
-                  ? "./ocr-self-test.js"
-                  : phase === "ux"
-                    ? "./ux-self-test.js"
-                    : "./self-test.js"
+        ["creator-ui", "creator-native"].includes(phase)
+          ? "./creator-ui-self-test.js"
+          : phase === "overlay"
+            ? "./overlay-self-test.js"
+            : phase === "address"
+              ? "./address-self-test.js"
+              : phase === "upload"
+                ? "./upload-self-test.js"
+                : phase === "typing"
+                  ? "./typing-self-test.js"
+                  : phase === "ocr"
+                    ? "./ocr-self-test.js"
+                    : phase === "ux"
+                      ? "./ux-self-test.js"
+                      : "./self-test.js"
       );
       await runSelfTest({
         overlays,

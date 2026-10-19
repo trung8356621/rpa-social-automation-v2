@@ -1,3 +1,4 @@
+import { fixtureUi } from "./fixture-ui.js";
 import assert from "node:assert/strict";
 import { mkdir, writeFile } from "node:fs/promises";
 import path from "node:path";
@@ -29,7 +30,7 @@ export async function runSelfTest({
     console.log("PASS", name);
   };
   const wait = (ms = 100) => new Promise((r) => setTimeout(r, ms));
-  const ui = window.webContents;
+  const ui = fixtureUi(window);
   const evaluate = (code: string) => ui.executeJavaScript(code);
   const read = () =>
     browser.view.webContents.executeJavaScript("window.typingRead()");

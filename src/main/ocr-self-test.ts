@@ -1,3 +1,4 @@
+import { fixtureUi } from "./fixture-ui.js";
 import assert from "node:assert/strict";
 import { mkdir, writeFile } from "node:fs/promises";
 import path from "node:path";
@@ -27,7 +28,7 @@ export async function runSelfTest({
     entries.push(name);
     console.log("PASS", name);
   };
-  const ui = window.webContents;
+  const ui = fixtureUi(window);
   const evaluate = (code: string) => ui.executeJavaScript(code);
   const wait = (ms = 100) => new Promise((r) => setTimeout(r, ms));
   const until = async (check: () => Promise<unknown>, label: string) => {
@@ -271,7 +272,7 @@ export async function runSelfTest({
     await page.executeJavaScript("!!document.querySelector('#live-draft')"),
   );
   assert.match(
-    await evaluate("document.querySelector('aside').textContent"),
+    await evaluate(`document.querySelector('[aria-label="Step Editor"]').textContent`),
     /Lưu Base v1/,
   );
   pass(

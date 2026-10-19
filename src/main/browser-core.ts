@@ -1,5 +1,6 @@
 import {
   WebContentsView,
+  type WebContents,
   clipboard,
   ClipboardItem,
   type BrowserWindow,
@@ -36,6 +37,19 @@ export class BrowserCore {
     width: WEB_WIDTH,
     height: WEB_HEIGHT,
   };
+  private editors: WebContents[] = [];
+  trackEditor(contents: WebContents) {
+    this.editors.push(contents);
+    contents.on("before-mouse-event", () => {
+      this.inputRoute = "editor";
+    });
+    contents.on("before-input-event", () => {
+      this.inputRoute = "editor";
+    });
+    contents.on("focus", () => {
+      this.inputRoute = "editor";
+    });
+  }
   private captures = new Map<string, Buffer>();
   zoom = 1;
   visible = true;
@@ -202,7 +216,9 @@ export class BrowserCore {
   inputFocus() {
     return {
       browser: this.view.webContents.isFocused(),
-      editor: this.window.webContents.isFocused(),
+      editor:
+        this.window.webContents.isFocused() ||
+        this.editors.some((wc) => wc.isFocused()),
       route: this.inputRoute,
       caret: "unknown" as const,
     };

@@ -332,3 +332,173 @@ aside > button {
   pointer-events: none;
   box-shadow: 0 0 0 9999px #07122255;
 }
+/* Creator workspace: native panel bounds are controlled in the main process. */
+header {
+  padding: 0 12px;
+  gap: 10px;
+}
+.brand {
+  white-space: nowrap;
+  font-size: 13px;
+}
+.brand span {
+  display: none;
+}
+.environment {
+  display: none;
+}
+.flow-controls {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex: 1;
+  min-width: 0;
+}
+.flow-controls > select {
+  width: 240px;
+}
+.flow-controls .row {
+  margin: 0;
+  flex: 1;
+}
+.flow-controls input {
+  width: 150px;
+}
+header input,
+header select,
+header button {
+  padding: 4px 8px;
+  height: 28px;
+}
+header button {
+  white-space: nowrap;
+}
+.step-heading {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  position: sticky;
+  top: 0;
+  background: #101a2b;
+  padding-bottom: 12px;
+}
+aside {
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+.steps {
+  flex: 1;
+  overflow-y: auto;
+  margin: 0;
+}
+body[data-panel="editor"],
+body[data-panel="debug"] {
+  width: 100vw;
+  height: 100vh;
+  background: #142238;
+}
+.panel {
+  height: 100vh;
+  border: 1px solid #49617d;
+  border-radius: 8px;
+  overflow: hidden;
+  display: flex;
+  flex-direction: column;
+}
+.panel-heading {
+  flex: 0 0 35px;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 0 10px;
+  background: #20344f;
+}
+.panel-heading b {
+  white-space: nowrap;
+  color: #a4dfef;
+}
+.panel-heading span {
+  flex: 1;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: #afc0d5;
+  font-size: 11px;
+}
+.panel-heading button {
+  padding: 0;
+  width: 26px;
+  height: 25px;
+  font-size: 18px;
+}
+.panel-body {
+  flex: 1;
+  overflow-y: auto;
+  padding: 10px 12px;
+  min-height: 0;
+}
+.panel-body > :first-child {
+  margin-top: 0;
+}
+.panel-body > button {
+  width: 100%;
+  margin: 6px 0;
+}
+.advanced {
+  margin: 14px 0 4px;
+  border-top: 1px solid #3a4c68;
+  padding-top: 10px;
+}
+.advanced summary {
+  color: #8ac9ff;
+  cursor: pointer;
+}
+.advanced button {
+  margin: 5px 0;
+}
+body[data-panel="debug"] .panel-body {
+  display: flex;
+  flex-direction: column;
+}
+body[data-panel="debug"] .panel-body > button:first-child {
+  position: sticky;
+  top: -10px;
+  background: #146d76;
+  z-index: 1;
+}
+body[data-panel="debug"] .review-actions {
+  display: flex;
+  flex-wrap: wrap;
+}
+body[data-panel="debug"] .status {
+  margin-top: 5px;
+  padding: 6px 10px;
+}
+body[data-panel="debug"] .result {
+  margin-top: 8px;
+}
+body[data-panel="debug"] .result > button {
+  width: auto;
+}
+body[data-panel] {
+  scrollbar-color: #4a637e #142238;
+  scrollbar-width: thin;
+}
+body[data-panel="debug"] .result p {
+  margin: 5px 0;
+}
+body[data-panel="debug"] .review-actions {
+  margin: 7px 0;
+}
+.evidence {
+  margin-top: 8px;
+}
+.evidence summary,
+.test-help summary {
+  color: #8ac9ff;
+  cursor: pointer;
+}
+.test-help {
+  margin-top: 8px;
+}

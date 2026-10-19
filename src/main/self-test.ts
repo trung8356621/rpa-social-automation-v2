@@ -1,3 +1,4 @@
+import { fixtureUi } from "./fixture-ui.js";
 import assert from "node:assert/strict";
 import { mkdir, writeFile, readFile } from "node:fs/promises";
 import path from "node:path";
@@ -247,7 +248,7 @@ export async function runSelfTest(ctx: {
     passed("target-asset-persisted");
     await browser.view.webContents.executeJavaScript("window.scrollTo(0,0)");
     await wait();
-    const ui = window.webContents;
+    const ui = fixtureUi(window);
     const uiEval = (code: string) => ui.executeJavaScript(code);
     const uiWait = async (code: string) => {
       const deadline = Date.now() + 6000;
