@@ -73,7 +73,9 @@ export async function runSelfTest({
   const command = async <T>(value: unknown): Promise<T> =>
     evaluate(`window.creator.invoke(${JSON.stringify(value)})`);
   await command({ type: "newFlow", name: "Contenteditable input" });
-  const capture = await browser.capture();
+  const capture = await command<import("../shared/contracts.js").Capture>({
+    type: "capture",
+  });
   const target = await command<{
     asset: string;
     roi: { x: number; y: number; width: number; height: number };
@@ -106,6 +108,8 @@ export async function runSelfTest({
     "flow loaded",
   );
   await click("Type draft");
+  // Seeded legacy CLICK was captured at 1024 DIP; explicitly restore that viewport.
+  await command({ type: "panel", panel: "editor", expanded: false });
   const originalCapture = browser.capture.bind(browser);
   let captures = 0;
   browser.capture = async () => {
@@ -328,6 +332,7 @@ export async function runSelfTest({
   await wait(400);
   assert.equal((await read()).active, "open");
   await click("Tạo flow");
+  await click("+ Step mới");
   const select = async (label: string, value: string) => {
     await evaluate(
       `(()=>{const s=document.querySelector('[aria-label="${label}"]');s.value=${JSON.stringify(value)};s.dispatchEvent(new Event('change',{bubbles:true}))})()`,
@@ -353,13 +358,13 @@ export async function runSelfTest({
   });
   ui.sendInputEvent({
     type: "mouseMove",
-    x: r.x + 770,
+    x: r.x + Math.min(770, browser.bounds.width - 10),
     y: r.y + 320,
     button: "left",
   });
   ui.sendInputEvent({
     type: "mouseUp",
-    x: r.x + 770,
+    x: r.x + Math.min(770, browser.bounds.width - 10),
     y: r.y + 320,
     button: "left",
     clickCount: 1,

@@ -15,7 +15,8 @@ import type {
 } from "../shared/contracts";
 import "./style.css";
 import { useDraft } from "./draft";
-import { WEB_HEIGHT } from "../shared/geometry";
+import { targetEnvironment } from "../shared/visual-environment";
+import { WEB_WIDTH, EDITOR_WIDTH, WEB_HEIGHT } from "../shared/geometry";
 document.documentElement.style.setProperty("--web-height", `${WEB_HEIGHT}px`);
 declare global {
   interface Window {
@@ -64,7 +65,7 @@ function Creator() {
   const [flowName, setFlowName] = useDraft("flowName", "Facebook draft POC");
   const [context, setContext] = useDraft("context", "Ngữ cảnh sửa lỗi");
   const [editorRevision, setEditorRevision] = useDraft("editorRevision", 0);
-  const [editorExpanded, setEditorExpanded] = useDraft("editorExpanded", true);
+  const [editorExpanded, setEditorExpanded] = useDraft("editorExpanded", false);
   const [debugExpanded, setDebugExpanded] = useDraft("debugExpanded", true);
   const drag = useRef<{ x: number; y: number } | undefined>(undefined);
   const flowInput = useRef<HTMLInputElement>(null);
@@ -73,8 +74,7 @@ function Creator() {
   const latest = useRef({ selected, overrideId, busy });
   latest.current = { selected, overrideId, busy };
   useEffect(() => {
-    if (panel === "editor")
-      document.querySelector(".panel-body")?.scrollTo({ top: 0 });
+    if (shell) document.querySelector(".panel-body")?.scrollTo({ top: 0 });
   }, [editorRevision, editorExpanded]);
   useEffect(() => {
     if (results.length)
@@ -100,10 +100,18 @@ function Creator() {
     }
   }, [results, state]);
 
+  async function setEditorOpen(expanded: boolean) {
+    const next = await invoke<State>({
+      type: "panel",
+      panel: "editor",
+      expanded,
+    });
+    setState(next);
+    setEditorExpanded(expanded);
+  }
   function showEditor() {
     setEditorRevision((value) => value + 1);
-    setEditorExpanded(true);
-    void invoke({ type: "panel", panel: "editor", expanded: true });
+    void setEditorOpen(true).catch((e) => setMessage(String(e)));
   }
   function newStep() {
     showEditor();
@@ -180,6 +188,11 @@ function Creator() {
   useEffect(() => {
     if (!shell) return;
     const offFocus = window.creator.onFocusFlow(goToFlow);
+    const offLayout = window.creator.onLayout((bounds) => {
+      setState((previous) =>
+        previous ? { ...previous, browserBounds: bounds } : previous,
+      );
+    });
     let navigationSeen = false;
     const syncUrl = (actual: string) => {
       if (!urlEdit.current.dirty) setUrl(actual);
@@ -204,6 +217,7 @@ function Creator() {
       }
     });
     return () => {
+      offLayout();
       offFocus();
       offNavigation();
       offTest();
@@ -317,7 +331,7 @@ function Creator() {
     setRoi(undefined);
     setCropMode(true);
     setMessage(
-      `Kéo ROI trên ảnh 1024×${WEB_HEIGHT} DIP. Browser vẫn giữ nguyên kích thước.`,
+      `Kéo ROI trên ảnh ${image.width}×${image.height} DIP. Giữ nguyên viewport trong lúc crop.`,
     );
   }
   async function inspect(image: Capture) {
@@ -327,12 +341,17 @@ function Creator() {
   }
   async function saveCrop() {
     if (!shot || !roi) return;
-    const t = await invoke<{ asset: string; roi: Rect; dataUrl: string }>({
+    const t = await invoke<{
+      asset: string;
+      roi: Rect;
+      dataUrl: string;
+      environment: { width: number; height: number; zoom: number };
+    }>({
       type: "crop",
       captureId: shot.id,
       roi,
     });
-    setTarget({ asset: t.asset, roi: t.roi });
+    setTarget({ asset: t.asset, roi: t.roi, environment: t.environment });
     setOcrResult(undefined);
     setOcrError("");
     setTargetImage(t.dataUrl);
@@ -388,7 +407,13 @@ function Creator() {
   function point(e: React.PointerEvent) {
     const r = e.currentTarget.getBoundingClientRect();
     return {
-      x: Math.max(0, Math.min(1024, e.clientX - r.left)),
+      x: Math.max(
+        0,
+        Math.min(
+          shot?.width ?? state?.browserBounds.width ?? WEB_WIDTH,
+          e.clientX - r.left,
+        ),
+      ),
       y: Math.max(0, Math.min(WEB_HEIGHT, e.clientY - r.top)),
     };
   }
@@ -445,15 +470,38 @@ function Creator() {
     );
     setMessage(`Đã lưu Base v${ref.version}; version cũ vẫn được giữ.`);
   }
-  const expanded = panel === "editor" ? editorExpanded : debugExpanded;
+  const expanded = shell ? editorExpanded : debugExpanded;
+  const activePayload = overrideId
+    ? state?.overrides.find((o) => o.id === overrideId)?.segment[0]
+    : selected?.payload;
+  const expected = activePayload
+    ? targetEnvironment(activePayload, state?.flow?.zoom ?? 1)
+    : undefined;
+  const environmentMismatch =
+    expected &&
+    state &&
+    (expected.width !== state.browserBounds.width ||
+      expected.height !== state.browserBounds.height ||
+      expected.zoom !== state.zoom);
+  useEffect(() => {
+    document.documentElement.style.setProperty(
+      "--browser-left",
+      `${state?.browserBounds.x ?? 320}px`,
+    );
+    document.documentElement.style.setProperty(
+      "--browser-width",
+      `${state?.browserBounds.width ?? 1024}px`,
+    );
+  }, [state?.browserBounds.x, state?.browserBounds.width]);
   function togglePanel() {
     const next = !expanded;
-    if (panel === "editor") setEditorExpanded(next);
-    else setDebugExpanded(next);
-    void invoke({
-      type: "panel",
-      panel: panel as "editor" | "debug",
-      expanded: next,
+    if (shell) {
+      void task(() => setEditorOpen(next));
+      return;
+    }
+    void task(async () => {
+      await invoke({ type: "panel", panel: "debug", expanded: next });
+      setDebugExpanded(next);
     });
   }
   return (
@@ -546,8 +594,8 @@ function Creator() {
             </button>
             <div className="environment">
               ONE SESSION <i />
-              1024 × {WEB_HEIGHT} DIP · {Math.round((state?.zoom || 1) * 100)}%
-              zoom
+              {state?.browserBounds.width ?? WEB_WIDTH} × {WEB_HEIGHT} DIP ·{" "}
+              {Math.round((state?.zoom || 1) * 100)}% zoom
             </div>
             <button
               className="window-mode"
@@ -660,6 +708,14 @@ function Creator() {
           <aside aria-label="Steps">
             <div className="step-heading">
               <b>Steps</b>
+              <button
+                aria-label="Mở/ẩn Step Editor"
+                disabled={locked}
+                aria-expanded={editorExpanded}
+                onClick={() => void task(() => setEditorOpen(!editorExpanded))}
+              >
+                {editorExpanded ? "Ẩn Editor" : "Editor"}
+              </button>
               <button disabled={locked} onClick={newStep}>
                 + Step mới
               </button>
@@ -691,6 +747,12 @@ function Creator() {
           {shot && (
             <div
               className="snapshot"
+              style={{
+                left: shot.bounds?.x ?? 320 + WEB_WIDTH - shot.width,
+                top: shot.bounds?.y ?? 88,
+                width: shot.width,
+                height: shot.height,
+              }}
               onPointerDown={(e) => {
                 if (!cropMode) return;
                 drag.current = point(e);
@@ -723,6 +785,7 @@ function Creator() {
                 alt="Browser screenshot"
                 draggable={false}
                 src={shot.dataUrl}
+                style={{ width: shot.width, height: shot.height }}
               />
               {roi && (
                 <div
@@ -739,13 +802,13 @@ function Creator() {
           )}{" "}
         </>
       )}
-      {!shell && (
+      {(panel === "debug" || (shell && editorExpanded && !shot)) && (
         <section
-          className="panel"
-          aria-label={panel === "editor" ? "Step Editor" : "Test & Debug"}
+          className={shell ? "panel editor-column" : "panel"}
+          aria-label={shell ? "Step Editor" : "Test & Debug"}
         >
           <div className="panel-heading">
-            <b>{panel === "editor" ? "Step Editor" : "Test & Debug"}</b>
+            <b>{shell ? "Step Editor" : "Test & Debug"}</b>
             <span>
               {selected?.name || "Step mới"}
               {overrideId ? " · Override" : ""}
@@ -761,7 +824,7 @@ function Creator() {
           </div>
           {expanded && (
             <div className="panel-body">
-              {panel === "editor" ? (
+              {shell ? (
                 <>
                   {field(
                     "Action",
@@ -1145,6 +1208,27 @@ function Creator() {
                 <>
                   {selected ? (
                     <>
+                      {environmentMismatch && (
+                        <div className="environment-warning" role="note">
+                          Target cần {expected!.width}×{expected!.height} @{" "}
+                          {expected!.zoom * 100}%; hiện tại{" "}
+                          {state!.browserBounds.width}×
+                          {state!.browserBounds.height}. Test sẽ bị chặn khi
+                          khác môi trường.
+                          <button
+                            disabled={locked || expected!.zoom !== state!.zoom}
+                            onClick={() =>
+                              void task(() =>
+                                setEditorOpen(
+                                  expected!.width === WEB_WIDTH - EDITOR_WIDTH,
+                                ),
+                              )
+                            }
+                          >
+                            Khôi phục viewport target
+                          </button>
+                        </div>
+                      )}
                       <button
                         disabled={locked}
                         onClick={() => void run(selected, overrideId)}

@@ -8,6 +8,7 @@ import {
   WEB_WIDTH,
   WEB_HEIGHT,
 } from "../shared/geometry.js";
+import { validateVisualEnvironment } from "../shared/visual-environment.js";
 export function validatePayload(p: Payload) {
   if (
     !p ||
@@ -44,8 +45,14 @@ export function validatePayload(p: Payload) {
     ["CLICK_TARGET", "CLICK_AND_TYPE", "UPLOAD_FILE", "WAIT_VERIFY"].includes(
       p.action,
     )
-  )
-    validateRect(p.target!.roi, WEB_WIDTH, WEB_HEIGHT);
+  ) {
+    if (p.target!.environment) validateVisualEnvironment(p.target!.environment);
+    validateRect(
+      p.target!.roi,
+      p.target!.environment?.width ?? WEB_WIDTH,
+      p.target!.environment?.height ?? WEB_HEIGHT,
+    );
+  }
   if (p.method !== undefined && !["auto", "image", "ocr"].includes(p.method))
     throw new Error("Phương thức target không hợp lệ.");
   if (p.target?.ocr) {

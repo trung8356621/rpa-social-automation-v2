@@ -101,6 +101,7 @@ export async function runSelfTest({
   window.setAlwaysOnTop(true);
   await browser.navigate("http://127.0.0.1:47834/ocr");
   await wait(300);
+  await window.webContents.executeJavaScript('window.creator.invoke({type:"panel",panel:"editor",expanded:true})');
   await until(
     () => evaluate(`!!document.querySelector('#roi-flow-help')`),
     "mounted",

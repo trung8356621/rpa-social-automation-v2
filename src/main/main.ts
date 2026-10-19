@@ -13,6 +13,7 @@ import { fileURLToPath } from "node:url";
 import sharp from "sharp";
 import { randomUUID } from "node:crypto";
 import { registerFixtureWorkspace } from "./fixture-ui.js";
+import { PointerTrace } from "./pointer-trace.js";
 import { CreatorOverlays } from "./creator-overlays.js";
 import { BrowserCore } from "./browser-core.js";
 import { Store } from "./storage.js";
@@ -151,6 +152,14 @@ async function boot() {
   const overlays = new CreatorOverlays(
     window,
     path.join(root, "preload/index.cjs"),
+    browser,
+  );
+  const pointerTrace = new PointerTrace(
+    window,
+    browser,
+    overlays,
+    process.argv.includes("--pointer-trace"),
+    dataPath,
   );
   if (selfTest) {
     registerFixtureWorkspace(window, overlays);
@@ -174,6 +183,29 @@ async function boot() {
   const draft = new Map<string, { revision: number; value: unknown }>();
   const keys = new Set<string>(DRAFT_KEYS);
   let revision = 0;
+  const publishDraft = (key: string, value: unknown) => {
+    const entry = { revision: ++revision, value };
+    draft.set(key, entry);
+    for (const editor of editors)
+      if (!editor.isDestroyed())
+        editor.send("creator:draft-update", key, entry);
+  };
+  ipcMain.on("creator:pointer-enabled", (event) => {
+    event.returnValue = trusted(event) && pointerTrace.enabled;
+  });
+  ipcMain.on("creator:pointer-dom", (event, data) => {
+    if (trusted(event) && data && typeof data.type === "string")
+      pointerTrace.record({
+        kind: "dom",
+        view: event.sender === window.webContents ? "shell" : "debug",
+        id: event.sender.id,
+        type: data.type,
+        control: String(data.control).slice(0, 80),
+        x: data.x,
+        y: data.y,
+        trusted: data.trusted,
+      });
+  });
   ipcMain.on("creator:draft", (event, request) => {
     if (!trusted(event) || !request || !keys.has(request.key)) {
       event.returnValue = null;
@@ -192,9 +224,12 @@ async function boot() {
     event.returnValue = draft.get(request.key);
   });
   for (const view of overlays.views) browser.trackEditor(view.webContents);
-  // Only the outer window changes size. Keep the web viewport and screenshot
-  // origin identical in normal, maximized and fullscreen modes.
-  window.on("resize", () => browser.view.setBounds(browser.bounds));
+  // Fullscreen/restore keep the canonical width for the current Editor state.
+  // Only opening/closing Editor changes the browser width; height and zoom stay fixed.
+  window.on("resize", () => {
+    overlays.layout();
+    publishLayout();
+  });
   const windowKeys = (event: Electron.Event, input: Electron.Input) => {
     if (input.type !== "keyDown") return;
     if (input.key === "F11") {
@@ -227,6 +262,15 @@ async function boot() {
     visible: browser.visible,
     dataPath,
   });
+  const publishLayout = () => {
+    for (const editor of editors)
+      if (!editor.isDestroyed())
+        editor.send("creator:layout", { ...browser.bounds });
+  };
+  const captures = new Map<
+    string,
+    { width: number; height: number; zoom: number }
+  >();
   const isIdle = () => {
     if (runtime.busy) throw new Error("Đang test; đợi tác vụ kết thúc.");
   };
@@ -234,7 +278,14 @@ async function boot() {
     if (!trusted(event)) throw new Error("IPC sender không hợp lệ.");
     if (!command || typeof command !== "object")
       throw new Error("Command không hợp lệ.");
+    pointerTrace.record({
+      kind: "command",
+      type: command.type,
+      sender: event.sender.id,
+    });
     switch (command.type) {
+      case "pointerReport":
+        return pointerTrace.report();
       case "focusFlow":
         window.webContents.focus();
         window.webContents.send("creator:focus-flow");
@@ -245,14 +296,24 @@ async function boot() {
           typeof command.expanded !== "boolean"
         )
           throw new Error("Invalid panel");
+        isIdle();
+        if (!browser.visible && command.panel === "editor")
+          throw new Error("Thoát crop/ảnh trước khi đổi viewport.");
         overlays.setExpanded(command.panel, command.expanded);
+        publishDraft(
+          command.panel === "editor" ? "editorExpanded" : "debugExpanded",
+          command.expanded,
+        );
+        if (pointerTrace.enabled)
+          pointerTrace.record({ kind: "layout", ...pointerTrace.snapshot() });
+        publishLayout();
         if (
           !command.expanded &&
           event.sender.isFocused() &&
-          event.sender !== window.webContents
+          (command.panel === "editor" || event.sender !== window.webContents)
         )
           browser.view.webContents.focus();
-        return;
+        return state();
       case "state":
         return state();
       case "toggleFullscreen":
@@ -311,9 +372,17 @@ async function boot() {
           await readFile(path.join(assetDir, command.asset)),
         );
       }
-      case "capture":
+      case "capture": {
         isIdle();
-        return browser.capture();
+        const image = await browser.capture();
+        captures.set(image.id, {
+          width: image.width,
+          height: image.height,
+          zoom: image.zoom,
+        });
+        if (captures.size > 12) captures.delete(captures.keys().next().value!);
+        return { ...image, bounds: { ...browser.bounds } };
+      }
       case "pickUploadFiles": {
         isIdle();
         const picked = await dialog.showOpenDialog(window, {
@@ -327,7 +396,13 @@ async function boot() {
       }
       case "crop": {
         isIdle();
-        const roi = validateRect(command.roi, WEB_WIDTH, WEB_HEIGHT);
+        const environment = captures.get(command.captureId);
+        if (!environment) throw new Error("Ảnh đã hết hạn; chụp lại.");
+        const roi = validateRect(
+          command.roi,
+          environment.width,
+          environment.height,
+        );
         const source = browser.captureBuffer(command.captureId);
         const asset = `${randomUUID()}.png`;
         const cropped = await sharp(source)
@@ -343,6 +418,7 @@ async function boot() {
         return {
           asset,
           roi,
+          environment,
           dataUrl: `data:image/png;base64,${cropped.toString("base64")}`,
         };
       }
@@ -395,8 +471,14 @@ async function boot() {
         return;
       case "browserVisible":
         isIdle();
+        if (command.visible) overlays.layout();
         browser.setVisible(command.visible);
         overlays.setVisible(command.visible);
+        if (pointerTrace.enabled)
+          pointerTrace.record({
+            kind: "visibility",
+            ...pointerTrace.snapshot(),
+          });
         return state();
       default:
         throw new Error("Command không hỗ trợ.");
@@ -502,19 +584,17 @@ async function boot() {
       const { runSelfTest } = await import(
         ["creator-ui", "creator-native"].includes(phase)
           ? "./creator-ui-self-test.js"
-          : phase === "overlay"
-            ? "./overlay-self-test.js"
-            : phase === "address"
-              ? "./address-self-test.js"
-              : phase === "upload"
-                ? "./upload-self-test.js"
-                : phase === "typing"
-                  ? "./typing-self-test.js"
-                  : phase === "ocr"
-                    ? "./ocr-self-test.js"
-                    : phase === "ux"
-                      ? "./ux-self-test.js"
-                      : "./self-test.js"
+          : phase === "address"
+            ? "./address-self-test.js"
+            : phase === "upload"
+              ? "./upload-self-test.js"
+              : phase === "typing"
+                ? "./typing-self-test.js"
+                : phase === "ocr"
+                  ? "./ocr-self-test.js"
+                  : phase === "ux"
+                    ? "./ux-self-test.js"
+                    : "./self-test.js"
       );
       await runSelfTest({
         overlays,

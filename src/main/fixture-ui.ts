@@ -12,11 +12,7 @@ export function registerFixtureWorkspace(
  * Input coordinates remain local to that renderer; no hidden duplicate UI exists. */
 export function fixtureUi(window: BrowserWindow) {
   const overlays = workspaces.get(window)!;
-  const contents = [
-    window.webContents,
-    overlays.editor.webContents,
-    overlays.debug.webContents,
-  ];
+  const contents = [window.webContents, overlays.debug.webContents];
   let active = window.webContents;
   let reload: Promise<unknown> = Promise.resolve();
   return {

@@ -7,6 +7,7 @@ import { Store } from "./storage.js";
 import { localOcr, type OcrEngine } from "./ocr.js";
 import { resolveVisualTarget, TargetNotConfident } from "./target-resolver.js";
 import { inspectUploadFiles, UploadError } from "./upload-files.js";
+import { assertVisualEnvironment } from "../shared/visual-environment.js";
 export class Runtime {
   busy = false;
   private latestRuns = new Set<string>();
@@ -93,6 +94,14 @@ export class Runtime {
         source: override ? ("override" as const) : ("base" as const),
       };
     });
+    // Width changes reflow page content. Refuse the entire plan before any capture,
+    // click, file chooser or input; legacy targets retain their original 1024 viewport.
+    for (const plan of plans)
+      for (const payload of plan.payloads)
+        assertVisualEnvironment(payload, flow.zoom, {
+          ...this.browser.bounds,
+          zoom: this.browser.zoom,
+        });
     this.busy = true;
     this.latestRuns.clear();
     try {

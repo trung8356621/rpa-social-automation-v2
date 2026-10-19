@@ -14,6 +14,12 @@ contextBridge.exposeInMainWorld("creator", {
     ipcRenderer.on("creator:draft-update", handler);
     return () => ipcRenderer.removeListener("creator:draft-update", handler);
   },
+  onLayout: (callback: (bounds: unknown) => void) => {
+    const handler = (_event: Electron.IpcRendererEvent, bounds: unknown) =>
+      callback(bounds);
+    ipcRenderer.on("creator:layout", handler);
+    return () => ipcRenderer.removeListener("creator:layout", handler);
+  },
   onFocusFlow: (callback: () => void) => {
     ipcRenderer.on("creator:focus-flow", callback);
     return () => ipcRenderer.removeListener("creator:focus-flow", callback);
@@ -33,4 +39,29 @@ contextBridge.exposeInMainWorld("creator", {
     ipcRenderer.on("creator:shortcut-result", handler);
     return () => ipcRenderer.removeListener("creator:shortcut-result", handler);
   },
+});
+
+// Observe UI only. No script is injected into Facebook, no event is cancelled.
+window.addEventListener("DOMContentLoaded", () => {
+  if (!ipcRenderer.sendSync("creator:pointer-enabled")) return;
+  for (const type of ["pointerdown", "pointerup", "click"])
+    document.addEventListener(
+      type,
+      (event) => {
+        const mouse = event as MouseEvent,
+          element = event.target as Element;
+        const control = element.closest("button,input,select,summary");
+        ipcRenderer.send("creator:pointer-dom", {
+          type,
+          x: mouse.clientX,
+          y: mouse.clientY,
+          trusted: event.isTrusted,
+          control:
+            control?.getAttribute("aria-label") ||
+            control?.textContent?.trim().slice(0, 80) ||
+            element.tagName,
+        });
+      },
+      true,
+    );
 });

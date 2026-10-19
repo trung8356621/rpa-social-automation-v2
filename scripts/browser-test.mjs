@@ -9,7 +9,6 @@ if (
   phases.some(
     (phase) =>
       ![
-        "overlay",
         "creator-ui",
         "creator-native",
         "first",
@@ -23,7 +22,7 @@ if (
   )
 ) {
   throw new Error(
-    "Supported browser test phases: overlay, creator-ui, creator-native, first, second, ux, ocr, typing, upload, address",
+    "Supported browser test phases: creator-ui, creator-native, first, second, ux, ocr, typing, upload, address",
   );
 }
 for (const phase of phases.length
@@ -42,12 +41,21 @@ for (const phase of phases.length
   const code = await new Promise((resolve, reject) => {
     const env = { ...process.env };
     delete env.ELECTRON_RUN_AS_NODE;
-    const child = spawn(electron, [".", "--self-test", `--phase=${phase}`], {
-      cwd: process.cwd(),
-      env,
-      stdio: "inherit",
-      windowsHide: true,
-    });
+    const child = spawn(
+      electron,
+      [
+        ".",
+        "--self-test",
+        `--phase=${phase}`,
+        ...(phase === "creator-native" ? ["--pointer-trace"] : []),
+      ],
+      {
+        cwd: process.cwd(),
+        env,
+        stdio: "inherit",
+        windowsHide: true,
+      },
+    );
     const timer = setTimeout(() => {
       child.kill();
       reject(new Error("Browser test timed out after 90s"));

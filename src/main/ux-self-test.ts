@@ -44,6 +44,9 @@ export async function runSelfTest({
   window.show();
   window.focus();
   window.setAlwaysOnTop(true);
+  await window.webContents.executeJavaScript(
+    'window.creator.invoke({type:"panel",panel:"editor",expanded:true})',
+  );
   await until(
     () => evaluate('!!document.querySelector("#roi-flow-help")'),
     "editor mounted",
@@ -168,16 +171,21 @@ export async function runSelfTest({
   ui.focus();
   ui.sendInputEvent({
     type: "mouseDown",
-    x: 440,
+    x: browser.bounds.x + 120,
     y: 208,
     button: "left",
     clickCount: 1,
   });
-  ui.sendInputEvent({ type: "mouseMove", x: 500, y: 240, button: "left" });
+  ui.sendInputEvent({
+    type: "mouseMove",
+    x: browser.bounds.x + 180,
+    y: 240,
+    button: "left",
+  });
   await escape();
   ui.sendInputEvent({
     type: "mouseUp",
-    x: 500,
+    x: browser.bounds.x + 180,
     y: 240,
     button: "left",
     clickCount: 1,
@@ -277,8 +285,8 @@ export async function runSelfTest({
       const metrics = await browser.view.webContents.executeJavaScript(
         "window.fixtureRead()",
       );
-      assert.ok(metrics.width >= 1024);
-      assert.ok(Math.abs(metrics.width - 1024 / zoom) < 2);
+      assert.ok(metrics.width >= browser.bounds.width);
+      assert.ok(Math.abs(metrics.width - browser.bounds.width / zoom) < 2);
       await capture();
       const roi = await draw(zoom);
       await click("Dùng ROI");
@@ -305,7 +313,7 @@ export async function runSelfTest({
       const png = await sharp(
         browser.captureBuffer((await browser.capture()).id),
       ).metadata();
-      assert.equal(png.width, WEB_WIDTH);
+      assert.equal(png.width, browser.bounds.width);
       assert.equal(png.height, WEB_HEIGHT);
       passed(`roi-crop-and-saved-target-click-${mode}-zoom-${zoom}`, {
         bounds: browser.view.getBounds(),

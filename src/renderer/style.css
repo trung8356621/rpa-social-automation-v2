@@ -502,3 +502,41 @@ body[data-panel="debug"] .review-actions {
 .test-help {
   margin-top: 8px;
 }
+/* Editor is DOM owned by the shell: no native surface above the web area. */
+.editor-column {
+  position: absolute;
+  left: 320px;
+  top: 88px;
+  width: 352px;
+  height: var(--web-height);
+  border-radius: 0;
+  background: #142238;
+}
+body[data-panel="shell"] .editor-column .panel-body {
+  overflow-y: auto;
+}
+body[data-panel="shell"] .panel-heading {
+  flex-shrink: 0;
+}
+.step-heading {
+  gap: 6px;
+}
+.step-heading b {
+  margin-right: auto;
+}
+.step-heading button {
+  padding: 6px;
+  font-size: 11px;
+}
+body[data-panel="debug"] .panel {
+  border-radius: 6px 6px 0 0;
+}
+.environment-warning {
+  padding: 8px;
+  border-left: 3px solid #eab765;
+  color: #f0d5a5;
+}
+.environment-warning button {
+  display: block;
+  margin-top: 7px;
+}

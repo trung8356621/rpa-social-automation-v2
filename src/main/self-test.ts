@@ -28,7 +28,7 @@ export async function runSelfTest(ctx: {
     window.show();
     await wait(300);
   }
-  window.contentView.addChildView(browser.view);
+  // Preserve the production native stack; never raise the browser above Debug.
   browser.setVisible(true);
   browser.view.webContents.focus();
   await wait(500);
@@ -296,20 +296,26 @@ export async function runSelfTest(ctx: {
     assert.equal(await uiEval("typeof window.creator.invoke"), "function");
     passed("sandbox-preload-and-ipc-ready");
     await uiClick("Tạo");
+    await uiClick("+ Step mới");
     await uiSelect("Action", "CLICK_TARGET");
     await uiClick("Chụp & crop ROI");
     assert.equal(await uiEval('!!document.querySelector(".snapshot")'), true);
     ui.sendInputEvent({
       type: "mouseDown",
-      x: 440,
+      x: browser.bounds.x + 120,
       y: 208,
       button: "left",
       clickCount: 1,
     });
-    ui.sendInputEvent({ type: "mouseMove", x: 740, y: 272, button: "left" });
+    ui.sendInputEvent({
+      type: "mouseMove",
+      x: browser.bounds.x + 420,
+      y: 272,
+      button: "left",
+    });
     ui.sendInputEvent({
       type: "mouseUp",
-      x: 740,
+      x: browser.bounds.x + 420,
       y: 272,
       button: "left",
       clickCount: 1,

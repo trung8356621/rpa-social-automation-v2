@@ -1,21 +1,21 @@
-import type { BrowserWindow, WebContents } from "electron";
-import type { BrowserCore } from "./browser-core.js";
-import type { CreatorOverlays } from "./creator-overlays.js";
-import type { Store } from "./storage.js";
 import assert from "node:assert/strict";
 import { mkdir, writeFile } from "node:fs/promises";
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
 import path from "node:path";
 import sharp from "sharp";
-import { screen } from "electron";
-import { fixtureUi } from "./fixture-ui.js";
+import { screen, type BrowserWindow, type WebContents } from "electron";
+import type { BrowserCore } from "./browser-core.js";
+import type { CreatorOverlays } from "./creator-overlays.js";
+import type { Store } from "./storage.js";
+import type { Runtime } from "./runtime.js";
 const wait = (ms = 100) => new Promise((r) => setTimeout(r, ms));
 export async function runSelfTest({
   window,
   browser,
   overlays,
   store,
+  runtime,
   project,
   phase,
 }: {
@@ -23,339 +23,306 @@ export async function runSelfTest({
   browser: BrowserCore;
   overlays: CreatorOverlays;
   store: Store;
+  runtime: Runtime;
   project: string;
   phase: string;
 }) {
-  const ui = fixtureUi(window);
-  const editor = overlays.editor.webContents,
-    debug = overlays.debug.webContents;
   const shell = window.webContents,
-    page = browser.view.webContents;
-  const entries: string[] = [];
+    page = browser.view.webContents,
+    debug = overlays.debug.webContents;
+  const native = phase === "creator-native",
+    entries: string[] = [];
   const pass = (name: string) => {
     entries.push(name);
     console.log("PASS", name);
   };
-  const until = async (check: () => Promise<unknown>, label: string) => {
+  const until = async (check: () => Promise<unknown>, name: string) => {
     const end = Date.now() + 7000;
     while (!(await check())) {
-      if (Date.now() > end) throw Error(`Creator UI timeout: ${label}`);
+      if (Date.now() > end) throw Error("Layout timeout: " + name);
       await wait();
     }
   };
   const click = async (wc: WebContents, selector: string) => {
     const p = await wc.executeJavaScript(
-      `(()=>{const e=document.querySelector(${JSON.stringify(selector)});if(!e||e.disabled)throw Error('Control unavailable');e.scrollIntoView({block:'nearest'});const r=e.getBoundingClientRect();return{x:Math.round(r.x+r.width/2),y:Math.round(r.y+r.height/2)}})()`,
+      `(()=>{const e=document.querySelector(${JSON.stringify(selector)});if(!e||e.disabled)throw Error('Missing/disabled '+${JSON.stringify(selector)});e.scrollIntoView({block:'nearest'});const r=e.getBoundingClientRect();return{x:Math.round(r.x+r.width/2),y:Math.round(r.y+r.height/2)}})()`,
     );
-    if (phase === "creator-native") {
-      const view = overlays.views.find((v) => v.webContents === wc);
-      const offset = view?.getBounds() ?? { x: 0, y: 0 };
-      const origin = window.getContentBounds(),
-        scale = screen.getDisplayMatching(origin).scaleFactor;
+    if (native) {
+      const offset =
+        wc === page
+          ? browser.bounds
+          : wc === debug
+            ? overlays.debug.getBounds()
+            : { x: 0, y: 0 };
+      const origin = window.getContentBounds();
+      const point = screen.dipToScreenPoint({
+        x: origin.x + offset.x + p.x,
+        y: origin.y + offset.y + p.y,
+      });
       await promisify(execFile)("powershell.exe", [
         "-NoProfile",
         "-File",
         path.join(project, "scripts/native-click.ps1"),
         "-X",
-        String(Math.round((origin.x + offset.x + p.x) * scale)),
+        String(point.x),
         "-Y",
-        String(Math.round((origin.y + offset.y + p.y) * scale)),
+        String(point.y),
       ]);
     } else {
       wc.focus();
-      wc.sendInputEvent({
-        type: "mouseDown",
-        ...p,
-        button: "left",
-        clickCount: 1,
-      });
-      wc.sendInputEvent({
-        type: "mouseUp",
-        ...p,
-        button: "left",
-        clickCount: 1,
-      });
+      for (const type of ["mouseDown", "mouseUp"] as const)
+        wc.sendInputEvent({ type, ...p, button: "left", clickCount: 1 });
     }
-    await wait(150);
+    await wait(180);
+  };
+  const byText = async (wc: WebContents, text: string) => {
+    console.log("UI_CLICK", text);
+    await until(
+      () =>
+        wc.executeJavaScript(
+          `[...document.querySelectorAll("button")].some(b=>b.textContent.includes(${JSON.stringify(text)}))`,
+        ),
+      `button ${text}`,
+    );
+    const selector = await wc.executeJavaScript(
+      `(()=>{const e=[...document.querySelectorAll('button')].find(b=>b.textContent.includes(${JSON.stringify(text)}));if(!e)throw Error('Button missing '+${JSON.stringify(text)});e.dataset.fixtureClick='yes';return '[data-fixture-click=yes]'})()`,
+    );
+    await click(wc, selector);
+    await wc.executeJavaScript(
+      "document.querySelector('[data-fixture-click=yes]')?.removeAttribute('data-fixture-click')",
+    );
   };
   window.show();
   window.focus();
   window.setAlwaysOnTop(true);
   await until(
-    () =>
-      editor.executeJavaScript('!!document.querySelector("#roi-flow-help")'),
-    "mounted",
+    () => shell.executeJavaScript('!!document.querySelector("aside")'),
+    "shell",
   );
+  assert.equal(overlays.editorOpen, false);
   assert.equal(
-    await shell.executeJavaScript(
-      '!!document.querySelector("aside [aria-label=Action]")',
-    ),
+    await shell.executeJavaScript('!!document.querySelector(".editor-column")'),
     false,
   );
-  assert.equal(
-    await shell.executeJavaScript('!!document.querySelector("aside .result")'),
-    false,
-  );
-  assert.equal(
-    await editor.executeJavaScript(
-      '!!document.querySelector("[aria-label=Action]")',
-    ),
-    true,
-  );
-  assert.equal(
-    await debug.executeJavaScript(
-      'document.querySelector(".panel-heading b").textContent',
-    ),
-    "Test & Debug",
-  );
-  pass("sidebar-only-steps-and-controls-owned-by-native-panels");
-  const bounds = browser.view.getBounds(),
-    zoom = page.getZoomFactor(),
-    url = page.getURL();
+  assert.deepEqual(browser.view.getBounds(), {
+    x: 320,
+    y: 88,
+    width: 1024,
+    height: 560,
+  });
+  assert.equal(window.contentView.children.at(-1), overlays.debug);
+  assert.equal(overlays.views.length, 1);
+  pass("editor-hidden-by-default-no-native-editor-and-production-z-order");
+  const url = page.getURL(),
+    zoom = page.getZoomFactor();
   let navigations = 0;
   page.on("did-start-navigation", () => navigations++);
-  for (const wc of [editor, debug]) {
-    await click(wc, ".panel-heading button");
-    assert.equal(
-      overlays.views.find((v) => v.webContents === wc)!.getBounds().height,
-      36,
-    );
-    await until(async () => page.isFocused(), "collapse returns browser focus");
-    assert.deepEqual(browser.view.getBounds(), bounds);
-    assert.equal(page.getZoomFactor(), zoom);
-    await click(wc, ".panel-heading button");
-    assert.deepEqual(browser.view.getBounds(), bounds);
-  }
-  assert.equal(navigations, 0);
-  assert.equal(page.getURL(), url);
-  pass(
-    "real-collapse-controls-keep-viewport-zoom-navigation-and-return-browser-focus",
+  await click(shell, '[aria-label="Mở/ẩn Step Editor"]');
+  await until(
+    () =>
+      shell.executeJavaScript(
+        '!!document.querySelector(".editor-column [aria-label=Action]")',
+      ),
+    "editor opened",
   );
-  // Native mode uses OS routing into an uncovered fixture target; regular mode
-  // verifies the same browser input/focus contract without claiming OS hit-testing.
-  if (phase === "creator-native") {
-    const origin = window.getContentBounds(),
-      scale = screen.getDisplayMatching(origin).scaleFactor;
-    await promisify(execFile)("powershell.exe", [
-      "-NoProfile",
-      "-File",
-      path.join(project, "scripts/native-click.ps1"),
-      "-X",
-      String(Math.round((origin.x + bounds.x + 270) * scale)),
-      "-Y",
-      String(Math.round((origin.y + bounds.y + 152) * scale)),
-    ]);
-  } else browser.click(270, 152);
-  await wait();
+  assert.deepEqual(browser.view.getBounds(), {
+    x: 672,
+    y: 88,
+    width: 672,
+    height: 560,
+  });
+  const editorRect = await shell.executeJavaScript(
+    '(()=>{const r=document.querySelector(".editor-column").getBoundingClientRect();return{x:r.x,y:r.y,width:r.width,height:r.height}})()',
+  );
+  assert.deepEqual(editorRect, { x: 320, y: 88, width: 352, height: 560 });
+  pass("editor-column-beside-list-browser-reflows-width-only");
+  const openBounds = { ...browser.bounds };
+  await click(debug, ".panel-heading button");
+  assert.equal(overlays.debug.getBounds().height, 36);
+  assert.equal(overlays.debug.getBounds().y + 36, window.getContentSize()[1]);
+  assert.deepEqual(browser.view.getBounds(), openBounds);
+  assert.equal(page.getZoomFactor(), zoom);
+  // Button lies in the former expanded Debug region, below the surviving 36px bar.
+  await click(page, "#routing-target");
+  assert.equal(await page.executeJavaScript("window.routingClicks"), 1);
+  assert.equal(page.isFocused(), true);
+  await click(debug, ".panel-heading button");
+  assert.equal(overlays.debug.getBounds().height, 200);
+  assert.equal(overlays.debug.getBounds().y + 200, window.getContentSize()[1]);
+  assert.deepEqual(browser.view.getBounds(), openBounds);
+  if (native) {
+    await click(page, "#routing-target");
+    assert.equal(
+      await page.executeJavaScript("window.routingClicks"),
+      1,
+      "expanded native panel intercepts its own visible region",
+    );
+  }
+  await click(page, "#composer");
   assert.equal(
     (await page.executeJavaScript("window.fixtureRead()")).clicks,
     1,
   );
-  assert.equal(page.isFocused(), true);
   pass(
-    phase === "creator-native"
-      ? "OS-uncovered-browser-click-and-focus"
-      : "uncovered-browser-renderer-input-and-focus",
+    native
+      ? "physical-mouse-debug-bounds-release-underlying-browser-and-uncovered-input"
+      : "renderer-debug-collapse-bounds-and-browser-focus-contract",
   );
-  await click(shell, ".flow-controls button");
-  await until(async () => !!store.flow(), "flow created");
-  // Change Action using native React events, then save through the actual topbar.
-  await editor.executeJavaScript(
-    `(()=>{const e=document.querySelector('[aria-label=Action]');e.value='TYPE_ONLY';e.dispatchEvent(new Event('change',{bubbles:true}));})()`,
-  );
+  assert.equal(navigations, 0);
+  assert.equal(page.getURL(), url);
+  await byText(shell, "Tạo flow");
+  await until(async () => !!store.flow(), "flow");
+  await byText(shell, "+ Step mới");
   await until(
-    () =>
-      shell.executeJavaScript(
-        '!document.querySelector("header > .primary").disabled',
-      ),
-    "shared draft enables Save",
+    () => shell.executeJavaScript('!!document.querySelector("#roi-flow-help")'),
+    "new step editor",
   );
-  await click(shell, "header > .primary");
-  await until(async () => store.flow()!.steps.length === 1, "topbar saved");
+  await byText(shell, "Chụp & crop ROI");
   await until(
-    () =>
-      debug.executeJavaScript(
-        '!!document.querySelector(".panel-body > button")',
-      ),
-    "test ready",
+    () => shell.executeJavaScript('!!document.querySelector(".snapshot")'),
+    "capture",
   );
-  assert.equal(
-    await editor.executeJavaScript('document.querySelector(".advanced").open'),
-    false,
+  assert.equal(overlays.debug.getVisible(), false);
+  const snapshot = await shell.executeJavaScript(
+    '(()=>{const e=document.querySelector(".snapshot");const r=e.getBoundingClientRect();return{x:r.x,y:r.y,width:r.width,height:r.height}})()',
   );
-  pass("topbar-save-shares-editor-draft-and-advanced-defaults-collapsed");
-  // Test is directly visible even if the list would have been long.
-  const testRect = await debug.executeJavaScript(
-    '(()=>{const r=document.querySelector(".panel-body > button").getBoundingClientRect();return{top:r.top,bottom:r.bottom,height:innerHeight}})()',
-  );
-  assert.ok(testRect.top >= 35 && testRect.bottom <= testRect.height);
-  await click(debug, ".panel-body > button");
-  await until(
-    () =>
-      debug.executeJavaScript(
-        'document.querySelector(".result")?.textContent.includes("BLOCKED")',
-      ),
-    "editor focus blocks TYPE_ONLY",
-  );
-  assert.equal((await page.executeJavaScript("window.fixtureRead()")).text, "");
-  pass(
-    "test-visible-without-sidebar-scroll-and-overlay-focus-blocks-type-only",
-  );
-  // Append redesign through the same shared form; old Base remains immutable.
-  await click(shell, "header > .primary");
-  await until(
-    async () => store.flow()!.steps[0].version === 2,
-    "redesign saved",
-  );
-  const id = store.flow()!.steps[0].id;
-  assert.equal(store.step(id, 1).payload.action, "TYPE_ONLY");
-  assert.equal(store.step(id, 2).payload.action, "TYPE_ONLY");
-  pass("topbar-redesign-appends-version-without-overwriting-base");
-  const clickText = async (text: string) => {
-    const p = await ui.executeJavaScript(
-      `(()=>{const b=[...document.querySelectorAll('button')].find(b=>b.textContent.includes(${JSON.stringify(text)}));if(!b)throw Error('Missing control');b.scrollIntoView({block:'nearest'});const r=b.getBoundingClientRect();return{x:Math.round(r.x+r.width/2),y:Math.round(r.y+r.height/2)}})()`,
-    );
-    ui.focus();
-    ui.sendInputEvent({
-      type: "mouseDown",
-      ...p,
+  assert.deepEqual(snapshot, openBounds);
+  for (const [type, x, y] of [
+    ["mouseDown", 120, 120],
+    ["mouseMove", 420, 184],
+    ["mouseUp", 420, 184],
+  ] as const)
+    shell.sendInputEvent({
+      type,
+      x: openBounds.x + x,
+      y: openBounds.y + y,
       button: "left",
       clickCount: 1,
     });
-    ui.sendInputEvent({ type: "mouseUp", ...p, button: "left", clickCount: 1 });
-    await wait(150);
-  };
-  await clickText("+ Step mới");
-  await clickText("Chụp & crop ROI");
-  await until(
-    () => shell.executeJavaScript('!!document.querySelector(".snapshot")'),
-    "crop canvas",
-  );
-  assert.equal(browser.visible, false);
-  assert.equal(overlays.editor.getVisible(), false);
-  assert.equal(overlays.debug.getVisible(), false);
-  shell.sendInputEvent({
-    type: "mouseDown",
-    x: bounds.x + 120,
-    y: bounds.y + 120,
-    button: "left",
-    clickCount: 1,
-  });
-  shell.sendInputEvent({
-    type: "mouseMove",
-    x: bounds.x + 420,
-    y: bounds.y + 184,
-    button: "left",
-  });
-  shell.sendInputEvent({
-    type: "mouseUp",
-    x: bounds.x + 420,
-    y: bounds.y + 184,
-    button: "left",
-    clickCount: 1,
-  });
-  await clickText("Dùng ROI");
+  await byText(shell, "Dùng ROI");
   await until(
     () =>
       shell.executeJavaScript(
         '!document.querySelector("header > .primary").disabled',
       ),
-    "OCR finished and Save ready",
+    "OCR",
   );
-  assert.equal(browser.visible, true);
-  assert.equal(overlays.editor.getVisible(), true);
   await click(shell, "header > .primary");
-  await until(async () => store.flow()!.steps.length === 2, "click step saved");
-  await until(
-    () =>
-      debug.executeJavaScript(
-        'document.querySelector(".panel-heading span").textContent.includes("CLICK_TARGET")',
-      ),
-    "selected step synced",
-  );
-  await editor.executeJavaScript(
-    'document.querySelector(".panel-body").scrollTop=10000',
-  );
-  await click(shell, ".step:first-child");
-  await until(
-    () =>
-      editor.executeJavaScript(
-        'document.querySelector("[aria-label=Action]").value === "TYPE_ONLY"',
-      ),
-    "first step form",
-  );
-  await click(shell, ".step:last-child");
-  await until(
-    () =>
-      editor.executeJavaScript(
-        'document.querySelector("[aria-label=Action]").value === "CLICK_TARGET"',
-      ),
-    "second step form",
-  );
-  assert.equal(
-    await editor.executeJavaScript(
-      'document.querySelector(".panel-body").scrollTop',
-    ),
-    0,
-  );
-  pass(
-    "switching-steps-restores-form-and-editor-scroll-without-moving-browser",
-  );
-  await click(debug, ".panel-body > button");
+  await until(async () => store.flow()!.steps.length === 1, "saved");
+  const step = store.step(store.flow()!.steps[0].id, 1);
+  assert.deepEqual(step.payload.target!.environment, {
+    width: 672,
+    height: 560,
+    zoom,
+  });
+  assert.deepEqual(step.payload.target!.roi, {
+    x: 120,
+    y: 120,
+    width: 300,
+    height: 64,
+  });
+  await byText(debug, "Test step đã lưu");
   await until(
     () =>
       debug.executeJavaScript(
         'document.querySelector(".result")?.textContent.includes("ACTION_SENT")',
       ),
-    "live click result",
+    "test",
   );
-  assert.equal(
-    await debug.executeJavaScript(
-      'document.querySelector(".debug-details").open',
-    ),
-    false,
-  );
-  assert.deepEqual(browser.view.getBounds(), bounds);
+  pass("narrow-viewport-ROI-is-not-rescaled-and-saved-with-environment");
+  await click(shell, '[aria-label="Mở/ẩn Step Editor"]');
+  assert.equal(browser.bounds.width, 1024);
   assert.equal(page.getZoomFactor(), zoom);
-  pass("ROI-hides-panels-and-restores-live-browser-before-saved-target-test");
-  const reviewRect = await debug.executeJavaScript(
-    '(()=>{const e=document.querySelector(".review-actions button");const r=e.getBoundingClientRect();return{top:r.top,bottom:r.bottom,height:innerHeight}})()',
-  );
-  assert.ok(
-    reviewRect.top >= 35 && reviewRect.bottom <= reviewRect.height,
-    "review controls visible without technical logs",
-  );
-  pass("review-controls-visible-and-technical-debug-collapsed");
-  await wait(250);
-  const layers = [
-    {
-      input: (await page.capturePage()).toPNG(),
-      left: bounds.x,
-      top: bounds.y,
-    },
-  ];
-  for (const view of overlays.views) {
-    const b = view.getBounds();
-    layers.push({
-      input: (await view.webContents.capturePage()).toPNG(),
-      left: b.x,
-      top: b.y,
-    });
+  let captures = 0;
+  const original = browser.capture.bind(browser);
+  browser.capture = async () => {
+    captures++;
+    return original();
+  };
+  try {
+    await assert.rejects(runtime.test(step.id, 1), /Viewport không khớp/);
+  } finally {
+    browser.capture = original;
   }
-  await mkdir(path.join(project, "artifacts"), { recursive: true });
-  await sharp((await window.capturePage()).toPNG())
-    .composite(layers)
-    .png()
-    .toFile(path.join(project, "artifacts/creator-ui.png"));
+  assert.equal(captures, 0);
+  assert.equal(
+    (await page.executeJavaScript("window.fixtureRead()")).clicks,
+    2,
+  );
+  pass("viewport-mismatch-blocks-before-capture-click-type-or-upload");
+  await until(
+    () =>
+      debug.executeJavaScript(
+        '!!document.querySelector(".environment-warning")',
+      ),
+    "mismatch guidance",
+  );
+  await byText(debug, "Khôi phục viewport target");
+  assert.deepEqual(browser.view.getBounds(), openBounds);
+  await byText(debug, "Test step đã lưu");
+  await until(
+    () =>
+      debug.executeJavaScript(
+        'document.querySelector(".result")?.textContent.includes("ACTION_SENT")',
+      ),
+    "retest after restore",
+  );
   await click(debug, ".review-actions button");
   await until(
     () =>
       debug.executeJavaScript(
         'document.querySelector(".result")?.textContent.includes("VERIFIED")',
       ),
-    "explicit review",
+    "review",
   );
-  pass("only-explicit-review-marks-step-verified");
+  await click(shell, "header > .primary");
+  await until(async () => store.flow()!.steps[0].version === 2, "version");
+  assert.equal(store.step(step.id, 1).payload.target!.environment!.width, 672);
+  const override = store.saveOverride(step.id, 2, "legacy target", [
+    {
+      ...step.payload,
+      target: {
+        ...step.payload.target!,
+        environment: { width: 1024, height: 560, zoom },
+      },
+    },
+  ]);
+  await assert.rejects(
+    runtime.test(step.id, 2, override.id),
+    /Viewport không khớp/,
+  );
+  pass("restore-retest-review-version-and-override-retain-environment-guard");
+  await click(shell, ".step");
+  assert.equal(overlays.editorOpen, true);
+  window.setFullScreen(true);
+  await wait(300);
+  assert.deepEqual(browser.view.getBounds(), openBounds);
+  assert.equal(
+    overlays.debug.getBounds().y + overlays.debug.getBounds().height,
+    window.getContentSize()[1],
+  );
+  window.setFullScreen(false);
+  await wait(300);
+  assert.equal(browser.bounds.height, 560);
+  assert.equal(page.getZoomFactor(), zoom);
+  pass("fullscreen-bottom-anchor-and-step-selection-preserve-height-zoom");
+  const layers = [
+    {
+      input: (await page.capturePage()).toPNG(),
+      left: browser.bounds.x,
+      top: browser.bounds.y,
+    },
+    {
+      input: (await debug.capturePage()).toPNG(),
+      left: overlays.debug.getBounds().x,
+      top: overlays.debug.getBounds().y,
+    },
+  ];
+  await mkdir(path.join(project, "artifacts"), { recursive: true });
+  await sharp((await window.capturePage()).toPNG())
+    .composite(layers)
+    .png()
+    .toFile(path.join(project, "artifacts/creator-ui.png"));
   await writeFile(
     path.join(project, `artifacts/browser-${phase}.json`),
     JSON.stringify(
@@ -367,8 +334,7 @@ export async function runSelfTest({
         entries,
         fixtureOnly: true,
         facebookTested: false,
-        nativeInput: phase === "creator-native",
-        screenshot: "creator-ui.png (composed from real native view captures)",
+        nativeInput: native,
       },
       null,
       2,

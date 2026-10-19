@@ -19,7 +19,9 @@ export type OcrResult = {
   segments: OcrSegment[];
   language: "vie+eng";
 };
+export type VisualEnvironment = { width: number; height: number; zoom: number };
 export type VisualTarget = {
+  environment?: VisualEnvironment;
   asset: string;
   roi: Rect;
   ocr?: Omit<OcrSegment, "id"> & { confirmed: true; language: "vie+eng" };
@@ -64,6 +66,7 @@ export type Capture = {
   url: string;
   timestamp: string;
   backend: "cdp-surface";
+  bounds?: Rect;
 };
 export type Result = {
   id: string;
@@ -144,6 +147,7 @@ export type State = {
 };
 export type Command =
   | { type: "state" }
+  | { type: "pointerReport" }
   | { type: "panel"; panel: "editor" | "debug"; expanded: boolean }
   | { type: "focusFlow" }
   | { type: "copyUrl" }
@@ -213,6 +217,7 @@ export interface CreatorApi {
   readDraft(key: DraftKey, initial: unknown): DraftEntry;
   writeDraft(key: DraftKey, value: unknown): DraftEntry;
   onDraft(callback: (key: string, entry: DraftEntry) => void): () => void;
+  onLayout(callback: (bounds: Rect) => void): () => void;
   onFocusFlow(callback: () => void): () => void;
   onNavigation(callback: (url: string) => void): () => void;
   invoke(command: Command): Promise<unknown>;

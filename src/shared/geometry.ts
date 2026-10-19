@@ -51,3 +51,28 @@ export function imageToInput(
     y: Math.floor((y * bounds.height) / imageHeight),
   };
 }
+
+export const EDITOR_WIDTH = 352;
+/** Two canonical viewport widths, independent of fullscreen/restore. */
+export function workspaceLayout(
+  editorOpen: boolean,
+  debugOpen: boolean,
+  contentWidth: number,
+  contentHeight: number,
+) {
+  const x = SIDE_WIDTH + (editorOpen ? EDITOR_WIDTH : 0);
+  return {
+    browser: {
+      x,
+      y: TOP_HEIGHT,
+      width: WEB_WIDTH - (editorOpen ? EDITOR_WIDTH : 0),
+      height: WEB_HEIGHT,
+    },
+    debug: {
+      x,
+      y: contentHeight - (debugOpen ? 200 : 36),
+      width: Math.max(1, contentWidth - x),
+      height: debugOpen ? 200 : 36,
+    },
+  };
+}
