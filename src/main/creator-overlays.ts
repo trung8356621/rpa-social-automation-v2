@@ -2,7 +2,7 @@ import { WebContentsView, type BrowserWindow } from "electron";
 import type { BrowserCore } from "./browser-core.js";
 import { workspaceLayout } from "../shared/geometry.js";
 
-/** The Editor lives in the shell DOM. Only Debug remains a native overlay. */
+/** Shell Editor and browser layout. Debug is detached for legacy diagnostics. */
 export class CreatorOverlays {
   readonly debug: WebContentsView;
   private expanded = { editor: false, debug: true };
@@ -24,7 +24,7 @@ export class CreatorOverlays {
     this.debug.setBackgroundColor("#142238");
     this.debug.webContents.setWindowOpenHandler(() => ({ action: "deny" }));
     this.debug.webContents.on("will-navigate", (e) => e.preventDefault());
-    window.contentView.addChildView(this.debug);
+    // Debug is retained only as a detached compatibility surface.
     this.layout();
   }
   get views() {
@@ -48,9 +48,9 @@ export class CreatorOverlays {
     bounds.browser.y -= this.scroll.top;
     Object.assign(this.browser.bounds, bounds.browser);
     this.browser.view.setBounds(bounds.browser);
-    // This native surface exactly matches the visible Debug panel, including collapse.
+    // Legacy diagnostics can inspect bounds, but no Debug surface is attached.
     this.debug.setBounds(bounds.debug);
-    this.debug.setVisible(this.visible);
+    this.debug.setVisible(false);
   }
   setExpanded(panel: "editor" | "debug", expanded: boolean) {
     this.expanded[panel] = expanded;
@@ -62,10 +62,10 @@ export class CreatorOverlays {
   }
   setVisible(visible: boolean) {
     this.visible = visible;
-    this.debug.setVisible(visible);
+    this.debug.setVisible(false);
   }
   async load(file: string) {
-    await this.debug.webContents.loadFile(file, { query: { panel: "debug" } });
+    // No bottom Test & Debug renderer.
   }
   close() {
     if (!this.debug.webContents.isDestroyed()) this.debug.webContents.close();

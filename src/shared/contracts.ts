@@ -21,6 +21,7 @@ export type OcrResult = {
 };
 export type VisualEnvironment = { width: number; height: number; zoom: number };
 export type VisualTarget = {
+  matchTo?: "current" | "top" | "middle" | "bottom";
   environment?: VisualEnvironment;
   asset: string;
   roi: Rect;

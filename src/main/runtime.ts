@@ -19,6 +19,7 @@ export class Runtime {
     readonly assetDir: string,
     readonly runDir: string,
     readonly ocr: OcrEngine = localOcr,
+    readonly onClick?: (x: number, y: number) => void,
   ) {}
   async test(
     stepId: string,
@@ -207,6 +208,27 @@ export class Runtime {
   ): Promise<Result> {
     // Screenshot capture can disturb native focus on this Electron/Windows build.
     // Focus-sensitive input runs first without a pre-capture or any refocus.
+    if (payload.target?.ocr?.confirmed && payload.target.matchTo && payload.target.matchTo !== "current") {
+      const fraction = { top: 0, middle: 0.5, bottom: 1 }[payload.target.matchTo];
+      // Two passes allow one lazy-load expansion; no unbounded scrolling loop.
+      for (let pass = 0; pass < 2; pass++) {
+        await this.browser.view.webContents.executeJavaScript(`(async () => {
+          const root = document.scrollingElement;
+          const candidates = [...document.querySelectorAll('[role="dialog"], [role="dialog"] *')]
+            .filter(el => el.clientHeight > 100 && el.scrollHeight > el.clientHeight &&
+              el.getBoundingClientRect().bottom > 0 && el.getBoundingClientRect().top < innerHeight &&
+              /auto|scroll/.test(getComputedStyle(el).overflowY));
+          const el = candidates.sort((a,b) => b.clientHeight - a.clientHeight)[0] || root;
+          if (el) {
+            const end = Math.max(0, el.scrollHeight - el.clientHeight);
+            el.scrollTo({ top: Math.max(0, end * ${fraction} + (${fraction} === 0 ? 80 : -80)), behavior: 'instant' });
+            await new Promise(resolve => setTimeout(resolve, 80));
+            el.scrollTo({ top: end * ${fraction}, behavior: 'instant' });
+          }
+        })()`);
+        await new Promise(r => setTimeout(r, 350));
+      }
+    }
     const before = ["TYPE_ONLY", "SCROLL"].includes(payload.action)
       ? undefined
       : await this.browser.capture();
@@ -271,6 +293,7 @@ export class Runtime {
         if (payload.action === "UPLOAD_FILE") {
           upload = await this.browser.uploadFiles(files!, () => {
             this.browser.click(match!.x, match!.y);
+            this.onClick?.(match!.x, match!.y);
             clickSent = true;
           });
           status = "ACTION_SENT";
@@ -278,6 +301,7 @@ export class Runtime {
           ["CLICK_TARGET", "CLICK_AND_TYPE"].includes(payload.action)
         ) {
           this.browser.click(match.x, match.y);
+          this.onClick?.(match.x, match.y);
           clickSent = true;
           if (payload.action === "CLICK_AND_TYPE")
             input = await this.browser.typeOnly(

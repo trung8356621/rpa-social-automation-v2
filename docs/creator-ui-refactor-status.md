@@ -1,3 +1,13 @@
+> Cập nhật 2026-10-19: bỏ Bottom Test & Debug khỏi workspace; dùng Play cạnh Edit.
+> Browser rộng 1024 DIP, cao theo workspace; Editor cuộn nội bộ. Variables ở cột trái,
+> không ẩn/reload browser. Match To chỉ có với OCR xác nhận: Current giữ pipeline cũ;
+> Top/Middle/Bottom cuộn bằng JS tối đa hai lượt, đợi ngắn rồi OCR viewport, không thấy thì không click.
+> Marker Creator là cửa sổ trong suốt 12px, bỏ qua chuột/focus, tự ẩn sau 3 giây.
+> Giữ kiểm tra môi trường target: target cũ khác chiều cao viewport vẫn bị chặn an toàn;
+> cần crop lại ở viewport hiện tại nếu gặp thông báo không khớp. Không tự sửa version/override.
+> Chưa test theo yêu cầu: không chạy unit test, fixture, GUI test, build hoặc typecheck.
+> Nội dung bên dưới là lịch sử của phiên bản trước, không phải kết quả kiểm thử thay đổi này.
+
 # Creator: Editor dạng cột và chẩn đoán pointer
 
 Branch `feature/creator-ui-refactor`; không merge main. Giữ nguyên thư mục untracked `rpa-social-automation-v2/`.

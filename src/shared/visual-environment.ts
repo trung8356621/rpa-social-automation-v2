@@ -27,7 +27,7 @@ export function validateVisualEnvironment(environment: VisualEnvironment) {
   if (
     !environment ||
     ![WEB_WIDTH, WEB_WIDTH - EDITOR_WIDTH].includes(environment.width) ||
-    environment.height !== WEB_HEIGHT
+    (!Number.isInteger(environment.height) || environment.height < 1)
   )
     throw new Error("Viewport target không hợp lệ.");
   validateZoom(environment.zoom);

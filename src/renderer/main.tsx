@@ -329,8 +329,6 @@ function Creator() {
     };
   }
   async function run(step: Step, overlay: string, fromBrowser = false) {
-    setDebugExpanded(true);
-    await invoke({ type: "panel", panel: "debug", expanded: true });
     // Disabling a previously focused editor button can pull focus away from the
     // native browser view. The browser shortcut must not mutate UI before input.
     latest.current.busy = true;
@@ -361,8 +359,6 @@ function Creator() {
     if (all) setStepPlayback({});
     try {
       await setEditorOpen(false);
-      setDebugExpanded(true);
-      await invoke({ type: "panel", panel: "debug", expanded: true });
       await playSequential(
         steps,
         async (step) => {
@@ -490,7 +486,7 @@ function Creator() {
           e.clientX - r.left,
         ),
       ),
-      y: Math.max(0, Math.min(WEB_HEIGHT, e.clientY - r.top)),
+      y: Math.max(0, Math.min(shot?.height ?? WEB_HEIGHT, e.clientY - r.top)),
     };
   }
   const needsTarget = [
@@ -560,6 +556,8 @@ function Creator() {
       expected.height !== state.browserBounds.height ||
       expected.zoom !== state.zoom);
   useEffect(() => {
+    document.documentElement.style.setProperty("--web-height",
+      `${shot?.height ?? state?.browserBounds.height ?? WEB_HEIGHT}px`);
     document.documentElement.style.setProperty(
       "--browser-left",
       `${state?.browserBounds.x ?? 320}px`,
@@ -576,7 +574,7 @@ function Creator() {
       "--editor-width",
       `${window.innerWidth >= 1696 ? 352 : 320}px`,
     );
-  }, [state?.browserBounds.x, state?.browserBounds.width]);
+  }, [state?.browserBounds.x, state?.browserBounds.width, state?.browserBounds.height, shot?.height]);
   function togglePanel() {
     const next = !expanded;
     if (shell) {
@@ -681,7 +679,7 @@ function Creator() {
             </button>
             <div className="environment">
               ONE SESSION <i />
-              {state?.browserBounds.width ?? WEB_WIDTH} × {WEB_HEIGHT} DIP ·{" "}
+              {state?.browserBounds.width ?? WEB_WIDTH} × {state?.browserBounds.height ?? WEB_HEIGHT} DIP ·{" "}
               {Math.round((state?.zoom || 1) * 100)}% zoom
             </div>
             <button
@@ -857,12 +855,6 @@ function Creator() {
                     await loadStep(s, false);
                     await setEditorOpen(false);
                     setResults([]);
-                    setDebugExpanded(true);
-                    await invoke({
-                      type: "panel",
-                      panel: "debug",
-                      expanded: true,
-                    });
                   })
                 }
                 edit={(s) => void task(() => loadStep(s))}
@@ -934,7 +926,7 @@ function Creator() {
           )}{" "}
         </>
       )}
-      {(panel === "debug" || (shell && editorExpanded && !shot)) && (
+      {(shell && editorExpanded && !shot) && (
         <section
           className={shell ? "panel editor-column" : "panel"}
           aria-label={shell ? "Step Editor" : "Test & Debug"}
@@ -1159,7 +1151,7 @@ function Creator() {
                           nút icon.
                         </p>
                       )}
-                      {ocrResult && ocrResult.segments.length > 0 && (
+                      {!target.ocr && ocrResult && ocrResult.segments.length > 0 && (
                         <>
                           <p className="hint">
                             {target.ocr
@@ -1208,12 +1200,10 @@ function Creator() {
                       )}
                       {target.ocr ? (
                         <div className="ocr-confirmed">
-                          <b>Chữ đã xác nhận: {target.ocr.text}</b>
+                          <small>OCR đã xác nhận</small>
+                          <b>{target.ocr.text}</b>
                           <p className="hint">
-                            {target.ocr.kind} ·{" "}
-                            {target.ocr.confidence.toFixed(1)}% khi thiết kế.
-                            Runtime đọc lại và cần confidence ≥80%, chỉ một vị
-                            trí khớp chính xác.
+                            {Math.round(target.ocr.confidence)}% confidence
                           </p>
                           <button
                             aria-label="Clear confirmed OCR"
@@ -1222,7 +1212,7 @@ function Creator() {
                             onClick={() => {
                               setTarget((previous) => {
                                 if (!previous) return previous;
-                                const { ocr, ...rest } = previous;
+                                const { ocr, matchTo, ...rest } = previous;
                                 return rest;
                               });
                             }}
@@ -1235,17 +1225,22 @@ function Creator() {
                           Chưa có chữ dự phòng được xác nhận; AUTO vẫn dùng ảnh.
                         </p>
                       )}
+                      {target.ocr?.confirmed && field("Match To",
+                        <select aria-label="Match To" disabled={locked}
+                          value={target.matchTo ?? "current"}
+                          onChange={(e) => setTarget({ ...target, matchTo: e.target.value as NonNullable<NonNullable<Payload["target"]>["matchTo"]> })}>
+                          <option value="current">Current</option>
+                          <option value="top">Top</option>
+                          <option value="middle">Middle</option>
+                          <option value="bottom">Bottom</option>
+                        </select>)}
                       <button
                         disabled={locked}
                         onClick={() => void task(() => readOcr(target.asset))}
                       >
                         Đọc lại OCR
                       </button>
-                      <p className="hint">
-                        AUTO ưu tiên ảnh; dùng chữ bạn xác nhận khi ảnh chưa đủ
-                        rõ. Không cần chọn engine hay lưu version mới khi engine
-                        đổi phương pháp.
-                      </p>
+
                     </section>
                   )}
                   <button

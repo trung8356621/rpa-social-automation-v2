@@ -12,10 +12,7 @@ export function Variables({ state, update, locked }: Props) {
     [error, setError] = useState("");
   const f = state.flow;
   useEffect(() => {
-    if (open)
-      void update({ type: "browserVisible", visible: true })
-        .then(() => setOpen(false))
-        .catch((e) => setError(String(e)));
+    setOpen(false);
   }, [f?.id]);
   const [vars, setVars] = useState<Variable[]>([]),
     [values, setValues] = useState<Record<string, string | string[]>>({});
@@ -28,9 +25,7 @@ export function Variables({ state, update, locked }: Props) {
             setVars(structuredClone(f?.variables ?? []));
             setValues(structuredClone(f?.defaultPattern?.values ?? {}));
           }
-          void update({ type: "browserVisible", visible: open })
-            .then(() => setOpen(!open))
-            .catch((e) => setError(String(e)));
+          setOpen(!open);
         }}
       >
         Variables ▾
@@ -42,11 +37,7 @@ export function Variables({ state, update, locked }: Props) {
             .getBoundingClientRect()}
           variant="drawer"
           label="Variables"
-          close={() =>
-            void update({ type: "browserVisible", visible: true }).then(() =>
-              setOpen(false),
-            )
-          }
+          close={() => setOpen(false)}
           className="variables-drawer"
         >
           <div className="popover-heading">
@@ -55,11 +46,7 @@ export function Variables({ state, update, locked }: Props) {
             <button
               className="icon-button"
               aria-label="Close Variables"
-              onClick={() =>
-                void update({ type: "browserVisible", visible: true }).then(
-                  () => setOpen(false),
-                )
-              }
+              onClick={() => setOpen(false)}
             >
               ×
             </button>
@@ -166,9 +153,7 @@ export function Variables({ state, update, locked }: Props) {
                 void update({ type: "variables", variables: vars, values })
                   .then(() => {
                     setError("");
-                    void update({ type: "browserVisible", visible: true }).then(
-                      () => setOpen(false),
-                    );
+                    setOpen(false);
                   })
                   .catch((e) => setError(String(e)))
               }
@@ -176,11 +161,7 @@ export function Variables({ state, update, locked }: Props) {
               Save
             </button>
             <button
-              onClick={() =>
-                void update({ type: "browserVisible", visible: true }).then(
-                  () => setOpen(false),
-                )
-              }
+              onClick={() => setOpen(false)}
             >
               Close
             </button>

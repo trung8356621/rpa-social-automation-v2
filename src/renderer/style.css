@@ -1000,3 +1000,13 @@ body[data-panel="shell"] .step-play {
   margin-left: 5px;
   padding-left: 4px;
 }
+
+/* Keep Variables beside the native browser. */
+.ui-backdrop:has(.variables-drawer) { right: auto; width: 320px; }
+.variables-drawer { left: 0; right: auto; width: 320px; padding: 10px; }
+.variables-drawer .variable-table { overflow: auto; }
+.ocr-confirmed > b, .ocr-confirmed > small { display: block; padding-right: 20px; }
+
+.variables-drawer .variable-columns, .variables-drawer .variable-row {
+  grid-template-columns: 70px 65px minmax(90px, 1fr) 24px;
+}

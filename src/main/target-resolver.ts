@@ -77,6 +77,14 @@ export async function resolveVisualTarget(
   ocr: OcrEngine,
 ): Promise<NonNullable<Result["match"]> & { resolution: ResolutionTrace }> {
   const target = payload.target!;
+  // Match To explicitly searches the visible OCR region after bounded scrolling.
+  if (target.ocr?.confirmed && target.matchTo && target.matchTo !== "current") {
+    const size = await sharp(frame).metadata();
+    const found = resolveOcrText(await ocr.recognize(frame), target.ocr,
+      { x: 0, y: 0, width: size.width!, height: size.height! });
+    return { ...found, resolution: { mode: "auto", selectedMethod: "ocr",
+      attempts: [{ method: "ocr", outcome: "matched", confidence: found.confidence }] } };
+  }
   const trace: ResolutionTrace = {
     mode: "auto",
     legacyMethod:

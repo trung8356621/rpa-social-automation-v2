@@ -14,6 +14,7 @@ import sharp from "sharp";
 import { randomUUID } from "node:crypto";
 import { registerFixtureWorkspace } from "./fixture-ui.js";
 import { PointerTrace } from "./pointer-trace.js";
+import { ClickMarker } from "./click-marker.js";
 import { CreatorOverlays } from "./creator-overlays.js";
 import { BrowserCore } from "./browser-core.js";
 import { Store } from "./storage.js";
@@ -231,7 +232,9 @@ async function boot() {
   for (const editor of editors) editor.on("before-input-event", windowKeys);
   browser.view.webContents.on("before-input-event", windowKeys);
   browser.setZoom(store.flow()?.zoom ?? Number(store.setting("zoom") || 1));
-  const runtime = new Runtime(browser, store, assetDir, runDir);
+  const marker = new ClickMarker(window, browser);
+  const runtime = new Runtime(browser, store, assetDir, runDir, undefined,
+    (x, y) => marker.show(x, y));
   let armedTest:
     { stepId: string; version: number; overrideId?: string } | undefined;
   const state = (): State => ({
