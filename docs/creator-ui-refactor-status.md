@@ -28,9 +28,15 @@ Runtime kiểm tra toàn bộ kế hoạch Visual Step trước capture/input (C
 
 ## Kiểm thử hiện tại
 
-Typecheck/build và 28 unit tests đã pass, gồm geometry, legacy target, mismatch guard và metadata qua Version/Override. Electron UI fixture mới đã chạy tới ba kiểm tra đầu, sau đó lỗi tìm control; cần chạy lại đầy đủ. Lần chạy tiếp theo gặp lỗi navigation/lock. Báo cáo cũ không được dùng làm kết quả pass của bản này.
+Typecheck/build và 28/28 unit tests pass. Electron fixture hiện tại: creator-ui 7, first 27, restart 3, UX 16, OCR 8, typing 13, upload 8, address 14 — tổng 96 checks pass. Phase `first` vẫn partial với hai mục hạn chế/thủ công: capture khi ẩn view có thể timeout và Ctrl+Shift+T vật lý chưa xác nhận.
 
-Automatic approval review chặn chạy lại fixture khi process Creator PID 30400 còn cửa sổ hoạt động, vì có thể chạm phiên Facebook đang mở. Chờ người dùng đóng hẳn process hoặc cho phép dừng trước khi chạy lại. Mouse vật lý và mục tiêu click Facebook ngoài Debug vẫn **chưa xác nhận**.
+Đã tái hiện trong fixture một lỗi UI: nút Test dùng `position: sticky` che control khi cuộn Debug; click “Tạo Step tiếp theo” có thể chạy Test thêm (click-count 4 thay vì 3). Đã tách Test thành thanh cố định ngoài vùng cuộn, và kiểm tra `elementFromPoint` trong fixture để từ chối điểm click đang bị control khác che. Regression OCR/review/next-step đã pass, không còn click thừa. Fixture URL cũng được sửa để đợi URL đích trước khi kiểm tra navigation.
+
+Sau khi được phép dừng phiên cũ, kiểm tra cho thấy PID 30400 và các Electron đã thoát; không cần dừng app live. Các fixture đã chạy trong phiên riêng. Native OS mouse fixture được thử nhưng không qua vì `SetCursorPos` thất bại trong automation desktop. Báo cáo `browser-creator-native.json` vẫn `incomplete`; đây không phải native hit-testing pass. **Lỗi click vật lý trên Facebook vẫn chưa xác nhận đã sửa**, cần bài thử Windows bên dưới.
+
+[Ảnh UI hiện tại](images/creator-ui.png) ghép từ capture thật của shell, browser và Debug theo bounds, không phải screenshot desktop nguyên khối.
+
+![Editor dạng cột và Debug sát đáy](images/creator-ui.png)
 
 ```powershell
 Set-Location D:\workspace-2026\rpa\new

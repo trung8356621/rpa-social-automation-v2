@@ -822,6 +822,36 @@ function Creator() {
               {expanded ? "−" : "+"}
             </button>
           </div>
+          {!shell && expanded && selected && (
+            <div className="test-controls">
+              {environmentMismatch && (
+                <div className="environment-warning" role="note">
+                  Target cần {expected!.width}×{expected!.height} @{" "}
+                  {expected!.zoom * 100}%; hiện tại {state!.browserBounds.width}
+                  ×{state!.browserBounds.height}. Test sẽ bị chặn khi khác môi
+                  trường.
+                  <button
+                    disabled={locked || expected!.zoom !== state!.zoom}
+                    onClick={() =>
+                      void task(() =>
+                        setEditorOpen(
+                          expected!.width === WEB_WIDTH - EDITOR_WIDTH,
+                        ),
+                      )
+                    }
+                  >
+                    Khôi phục viewport target
+                  </button>
+                </div>
+              )}
+              <button
+                disabled={locked}
+                onClick={() => void run(selected, overrideId)}
+              >
+                Test step đã lưu · Ctrl+Shift+T
+              </button>
+            </div>
+          )}
           {expanded && (
             <div className="panel-body">
               {shell ? (
@@ -1206,37 +1236,7 @@ function Creator() {
                 </>
               ) : (
                 <>
-                  {selected ? (
-                    <>
-                      {environmentMismatch && (
-                        <div className="environment-warning" role="note">
-                          Target cần {expected!.width}×{expected!.height} @{" "}
-                          {expected!.zoom * 100}%; hiện tại{" "}
-                          {state!.browserBounds.width}×
-                          {state!.browserBounds.height}. Test sẽ bị chặn khi
-                          khác môi trường.
-                          <button
-                            disabled={locked || expected!.zoom !== state!.zoom}
-                            onClick={() =>
-                              void task(() =>
-                                setEditorOpen(
-                                  expected!.width === WEB_WIDTH - EDITOR_WIDTH,
-                                ),
-                              )
-                            }
-                          >
-                            Khôi phục viewport target
-                          </button>
-                        </div>
-                      )}
-                      <button
-                        disabled={locked}
-                        onClick={() => void run(selected, overrideId)}
-                      >
-                        Test step đã lưu · Ctrl+Shift+T
-                      </button>
-                    </>
-                  ) : (
+                  {!selected && (
                     <p className="hint">
                       Lưu hoặc chọn Step để Test. Kết quả cần bạn xác nhận.
                     </p>

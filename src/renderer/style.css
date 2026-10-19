@@ -461,12 +461,16 @@ body[data-panel="debug"] .panel-body {
   display: flex;
   flex-direction: column;
 }
-body[data-panel="debug"] .panel-body > button:first-child {
-  position: sticky;
-  top: -10px;
-  background: #146d76;
-  z-index: 1;
+body[data-panel="debug"] .test-controls {
+  flex: 0 0 auto;
+  padding: 8px 12px 0;
+  background: #142238;
 }
+body[data-panel="debug"] .test-controls > button {
+  width: 100%;
+  background: #146d76;
+}
+
 body[data-panel="debug"] .review-actions {
   display: flex;
   flex-wrap: wrap;

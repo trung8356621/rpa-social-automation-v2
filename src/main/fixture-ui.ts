@@ -64,6 +64,20 @@ export function fixtureUi(window: BrowserWindow) {
             );
           }
           const result = await wc.executeJavaScript(code);
+          if (
+            buttonText &&
+            result &&
+            Number.isFinite(result.x) &&
+            Number.isFinite(result.y)
+          ) {
+            const uncovered = await wc.executeJavaScript(
+              `(()=>{const e=[...document.querySelectorAll('button')].find(b=>b.textContent.includes(${buttonText}));return e?.contains(document.elementFromPoint(${result.x},${result.y}))})()`,
+            );
+            if (!uncovered)
+              throw new Error(
+                `Fixture button is covered at its click point: ${buttonText}`,
+              );
+          }
           active = wc;
           return result;
         } catch (e) {

@@ -73,6 +73,7 @@ export async function runSelfTest({
   await until(async () => page.getURL().endsWith("?replaced"));
   await synced("forward");
   await click("a", page);
+  await until(async () => page.getURL() === base + "/address?linked");
   await synced("native link navigation");
   assert.ok(page.getURL().endsWith("?linked"));
   await page.executeJavaScript(`location.hash='section'`);
