@@ -147,6 +147,7 @@ export async function runSelfTest(ctx: {
     const step = store.saveStep("Composer", { action: "CLICK_TARGET", target });
     const result = await runtime.test(step.id, 1);
     assert.equal(result[0].ok, true);
+    assert.equal(result[0].status, "ACTION_SENT");
     assert.equal(result[0].before!.width, 1024);
     passed(
       "same-runtime-crop-match-click",
@@ -281,6 +282,9 @@ export async function runSelfTest(ctx: {
         clickCount: 1,
       });
       await wait(300);
+      await uiWait(
+        'document.querySelector("[role=status]")?.textContent !== "Đang xử lý…"',
+      );
     };
     const uiSelect = async (label: string, value: string) => {
       await uiEval(
@@ -322,7 +326,7 @@ export async function runSelfTest(ctx: {
     await uiWait('!!document.querySelector(".result")');
     assert.match(
       await uiEval('document.querySelector(".result")?.textContent || ""'),
-      /PASS/,
+      /ACTION_SENT/,
     );
     passed("ui-test-uses-shared-runtime");
     await uiClick("Lưu form thành Override");
@@ -346,7 +350,7 @@ export async function runSelfTest(ctx: {
     );
     assert.match(
       await uiEval('document.querySelector(".result")?.textContent || ""'),
-      /FAIL/,
+      /FAILED/,
     );
     passed("ui-type-only-refuses-stolen-focus");
     window.focus();
@@ -367,7 +371,7 @@ export async function runSelfTest(ctx: {
     await wait();
     assert.match(
       await uiEval('document.querySelector(".result")?.textContent || ""'),
-      /PASS/,
+      /ACTION_SENT/,
     );
     passed("ui-receives-browser-test-result");
     entries.push({

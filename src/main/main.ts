@@ -8,6 +8,7 @@ import { BrowserCore } from "./browser-core.js";
 import { Store } from "./storage.js";
 import { Runtime } from "./runtime.js";
 import { startFixture } from "./fixture.js";
+import { localOcr } from "./ocr.js";
 import {
   WEB_WIDTH,
   WEB_HEIGHT,
@@ -28,8 +29,8 @@ const dataPath = path.join(
   project,
   ".local",
   selfTest
-    ? phase === "ux"
-      ? `test-ux-${process.pid}`
+    ? ["ux", "ocr"].includes(phase)
+      ? `test-${phase}-${process.pid}`
       : "test-session"
     : "creator",
 );
@@ -74,7 +75,13 @@ async function boot() {
     await mkdir(dir, { recursive: true });
   const store = new Store(path.join(dataPath, "creator.sqlite"));
   const fixture = await startFixture(
-    selfTest ? (phase === "ux" ? 47833 : 47832) : 47831,
+    selfTest
+      ? phase === "ocr"
+        ? 47834
+        : phase === "ux"
+          ? 47833
+          : 47832
+      : 47831,
   );
   const window = new BrowserWindow({
     useContentSize: true,
@@ -206,6 +213,14 @@ async function boot() {
           throw new Error("Asset không hợp lệ.");
         return `data:image/png;base64,${(await readFile(path.join(assetDir, command.asset))).toString("base64")}`;
       }
+      case "ocrTarget": {
+        isIdle();
+        if (!/^[a-f0-9-]+\.png$/.test(command.asset))
+          throw new Error("Asset không hợp lệ.");
+        return localOcr.recognize(
+          await readFile(path.join(assetDir, command.asset)),
+        );
+      }
       case "capture":
         isIdle();
         return browser.capture();
@@ -330,8 +345,10 @@ async function boot() {
         browser.close();
         fixture.close();
         store.close();
-        window.destroy();
-        app.quit();
+        void localOcr.close().finally(() => {
+          window.destroy();
+          app.quit();
+        });
       });
   });
   await window.loadFile(path.join(root, "renderer/index.html"));
@@ -349,7 +366,11 @@ async function boot() {
   if (selfTest) {
     try {
       const { runSelfTest } = await import(
-        phase === "ux" ? "./ux-self-test.js" : "./self-test.js"
+        phase === "ocr"
+          ? "./ocr-self-test.js"
+          : phase === "ux"
+            ? "./ux-self-test.js"
+            : "./self-test.js"
       );
       await runSelfTest({
         browser,

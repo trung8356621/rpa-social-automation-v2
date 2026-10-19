@@ -1,0 +1,7 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="600" height="150">
+  <rect width="600" height="150" fill="white"/>
+  <g fill="#111" font-family="Arial, sans-serif" font-size="32">
+    <text x="24" y="52">Tạo bài viết</text>
+    <text x="24" y="114">Create post</text>
+  </g>
+</svg>

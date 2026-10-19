@@ -4,7 +4,8 @@ import { randomUUID } from "node:crypto";
 import type { Payload, Result } from "../shared/contracts.js";
 import { BrowserCore } from "./browser-core.js";
 import { Store } from "./storage.js";
-import { matchTemplate } from "./visual.js";
+import { localOcr, type OcrEngine } from "./ocr.js";
+import { resolveVisualTarget, TargetNotConfident } from "./target-resolver.js";
 export class Runtime {
   busy = false;
   constructor(
@@ -12,6 +13,7 @@ export class Runtime {
     readonly store: Store,
     readonly assetDir: string,
     readonly runDir: string,
+    readonly ocr: OcrEngine = localOcr,
   ) {}
   async test(
     stepId: string,
@@ -66,15 +68,17 @@ export class Runtime {
     const before = ["TYPE_ONLY", "SCROLL"].includes(payload.action)
       ? undefined
       : await this.browser.capture();
-    let ok = true,
+    let status: Result["status"] = "FAILED",
       message = "Input đã gửi; cần VERIFY riêng để xác nhận nghiệp vụ.",
       match: Result["match"];
     try {
-      if (payload.action === "TYPE_ONLY")
+      if (payload.action === "TYPE_ONLY") {
         await this.browser.typeOnly(payload.text!);
-      else if (payload.action === "SCROLL")
+        status = "ACTION_SENT";
+      } else if (payload.action === "SCROLL") {
         this.browser.scroll(payload.deltaY!);
-      else {
+        status = "ACTION_SENT";
+      } else {
         const template = await readFile(
           path.join(this.assetDir, payload.target!.asset),
         );
@@ -83,35 +87,43 @@ export class Runtime {
           (payload.action === "WAIT_VERIFY" ? (payload.timeoutMs ?? 3000) : 0);
         let current = before!;
         do {
-          match = await matchTemplate(
-            this.browser.captureBuffer(current.id),
-            template,
-            payload.target!.roi,
-          );
-          if (match.score >= (payload.threshold ?? 0.96)) break;
-          if (Date.now() >= deadline)
-            throw new Error(
-              `Không khớp target: score ${match.score.toFixed(4)}.`,
+          try {
+            match = await resolveVisualTarget(
+              this.browser.captureBuffer(current.id),
+              template,
+              payload,
+              this.ocr,
             );
+            break;
+          } catch (error) {
+            if (
+              !(error instanceof TargetNotConfident) ||
+              Date.now() >= deadline
+            )
+              throw error;
+          }
           await new Promise((r) => setTimeout(r, 200));
           current = await this.browser.capture();
         } while (true);
-        if (payload.action === "CLICK_TARGET")
+        if (payload.action === "CLICK_TARGET") {
           this.browser.click(match.x, match.y);
+          status = "ACTION_SENT";
+        } else status = "VERIFIED";
         message =
           payload.action === "WAIT_VERIFY"
-            ? `VERIFY khớp ảnh: ${match.score.toFixed(4)}.`
+            ? `VERIFIED: điều kiện ${match.method === "ocr" ? `chữ “${match.text}”` : "ảnh"} đã khớp. Chỉ xác nhận điều kiện của step.`
             : `Click đã gửi tại ${match.x}, ${match.y}; chưa xác nhận kết quả nghiệp vụ.`;
       }
     } catch (e) {
-      ok = false;
+      status = e instanceof TargetNotConfident ? "BLOCKED" : "FAILED";
       message = (e as Error).message;
     }
     await new Promise((r) => setTimeout(r, 120));
     const after = await this.browser.capture();
     const result: Result = {
       id: randomUUID(),
-      ok,
+      ok: status === "ACTION_SENT" || status === "VERIFIED",
+      status,
       action: payload.action,
       message,
       before,

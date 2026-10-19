@@ -221,6 +221,45 @@ aside > button {
 .result.fail {
   border-color: #ad5e66;
 }
+.result.sent {
+  border-color: #5b99cf;
+}
+.ocr-panel {
+  margin: 10px 0;
+  padding: 8px;
+  border: 1px solid #33445e;
+  border-radius: 6px;
+}
+.ocr-panel > button {
+  width: 100%;
+  margin: 5px 0;
+}
+.ocr-candidates {
+  max-height: 200px;
+  overflow-y: auto;
+}
+.ocr-candidate {
+  display: block;
+  text-align: left;
+  width: 100%;
+  margin: 5px 0;
+}
+.ocr-candidate small {
+  display: block;
+  color: #a6c2dd;
+  margin-top: 4px;
+}
+.ocr-candidate[aria-pressed="true"] {
+  border-color: #64d9c0;
+  background: #184b48;
+}
+.ocr-confirmed {
+  margin: 8px 0;
+  padding: 8px;
+  background: #173d39;
+  border-left: 3px solid #64d9c0;
+  overflow-wrap: anywhere;
+}
 .result p {
   font-size: 11px;
   line-height: 1.5;

@@ -294,6 +294,7 @@ export async function runSelfTest({
       ).clicks;
       const [result] = await runtime.test(stepId, 1);
       assert.equal(result.ok, true, result.message);
+      assert.equal(result.status, "ACTION_SENT");
       const probe = await browser.view.webContents.executeJavaScript(
         "window.fixtureRead()",
       );

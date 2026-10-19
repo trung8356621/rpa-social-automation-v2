@@ -1,6 +1,6 @@
 import sharp from "sharp";
 import type { Rect } from "../shared/contracts.js";
-// POC: bounded local RGB template search, no OCR/DOM or AI. Fails closed outside ROI ±64 DIP.
+// Bounded local RGB template search. OCR is a separate resolver; no DOM or AI.
 export async function matchTemplate(
   screenshot: Buffer,
   template: Buffer,
@@ -48,13 +48,18 @@ export async function matchTemplate(
     top = Math.max(0, roi.y - 64),
     bottom = Math.min(h - th, roi.y + 64);
   let best = { score: -1, x: roi.x, y: roi.y };
+  const candidates: (typeof best)[] = [];
   const consider = (x: number, y: number) => {
     const value = score(x, y);
     if (value > best.score) best = { score: value, x, y };
   };
   consider(roi.x, roi.y);
   for (let y = top; y <= bottom; y += 4)
-    for (let x = left; x <= right; x += 4) consider(x, y);
+    for (let x = left; x <= right; x += 4) {
+      const value = score(x, y);
+      candidates.push({ score: value, x, y });
+      if (value > best.score) best = { score: value, x, y };
+    }
   const coarse = { ...best };
   for (
     let y = Math.max(top, coarse.y - 4);
@@ -67,5 +72,28 @@ export async function matchTemplate(
       x++
     )
       consider(x, y);
-  return { ...best, x: best.x + tw / 2, y: best.y + th / 2 };
+  const alternative = candidates
+    .sort((a, b) => b.score - a.score)
+    .find(
+      (item) =>
+        Math.abs(item.x - best.x) > Math.max(8, tw * 0.65) ||
+        Math.abs(item.y - best.y) > Math.max(8, th * 0.65),
+    );
+  let secondScore = -1;
+  if (alternative)
+    for (
+      let y = Math.max(top, alternative.y - 4);
+      y <= Math.min(bottom, alternative.y + 4);
+      y++
+    )
+      for (
+        let x = Math.max(left, alternative.x - 4);
+        x <= Math.min(right, alternative.x + 4);
+        x++
+      )
+        secondScore = Math.max(secondScore, score(x, y));
+  const ambiguous =
+    secondScore >= 0.96 ||
+    (secondScore >= 0.94 && best.score - secondScore < 0.015);
+  return { ...best, ambiguous, x: best.x + tw / 2, y: best.y + th / 2 };
 }

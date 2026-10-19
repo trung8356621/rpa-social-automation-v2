@@ -1,9 +1,28 @@
 export type Rect = { x: number; y: number; width: number; height: number };
 export type Action = "CLICK_TARGET" | "TYPE_ONLY" | "WAIT_VERIFY" | "SCROLL";
+export type OcrSegment = {
+  id: string;
+  text: string;
+  bbox: Rect;
+  confidence: number;
+  kind: "line" | "word";
+};
+export type OcrResult = {
+  text: string;
+  confidence: number;
+  segments: OcrSegment[];
+  language: "vie+eng";
+};
+export type VisualTarget = {
+  asset: string;
+  roi: Rect;
+  ocr?: Omit<OcrSegment, "id"> & { confirmed: true; language: "vie+eng" };
+};
 export type Payload = {
   action: Action;
   text?: string;
-  target?: { asset: string; roi: Rect };
+  target?: VisualTarget;
+  method?: "image" | "ocr";
   deltaY?: number;
   timeoutMs?: number;
   threshold?: number;
@@ -41,11 +60,19 @@ export type Capture = {
 export type Result = {
   id: string;
   ok: boolean;
+  status: "ACTION_SENT" | "VERIFIED" | "BLOCKED" | "FAILED";
   action: Action;
   message: string;
   before?: Capture;
   after: Capture;
-  match?: { score: number; x: number; y: number };
+  match?: {
+    score: number;
+    x: number;
+    y: number;
+    method?: "image" | "ocr";
+    text?: string;
+    confidence?: number;
+  };
   source: "base" | "override";
   stepId: string;
   version: number;
@@ -71,6 +98,7 @@ export type Command =
   | { type: "newFlow"; name: string }
   | { type: "openFlow"; id: string }
   | { type: "targetImage"; asset: string }
+  | { type: "ocrTarget"; asset: string }
   | { type: "capture" }
   | { type: "crop"; captureId: string; roi: Rect }
   | { type: "saveStep"; id?: string; name: string; payload: Payload }

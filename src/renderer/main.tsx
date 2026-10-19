@@ -8,6 +8,8 @@ import type {
   Payload,
   Rect,
   Result,
+  OcrResult,
+  OcrSegment,
   State,
   Step,
 } from "../shared/contracts";
@@ -31,6 +33,11 @@ function Creator() {
   const [delta, setDelta] = useState(-400);
   const [target, setTarget] = useState<Payload["target"]>();
   const [targetImage, setTargetImage] = useState("");
+  const [method, setMethod] = useState<"image" | "ocr">("image");
+  const [ocrResult, setOcrResult] = useState<OcrResult>();
+  const [ocrError, setOcrError] = useState("");
+  const [ocrLoading, setOcrLoading] = useState(false);
+  const [ocrKind, setOcrKind] = useState<"line" | "word">("line");
   const [selected, setSelected] = useState<Step>();
   const [overrideId, setOverrideId] = useState("");
   const [shot, setShot] = useState<Capture>();
@@ -100,6 +107,9 @@ function Creator() {
     setText(step.payload.text || "");
     setDelta(step.payload.deltaY ?? -400);
     setTarget(step.payload.target);
+    setMethod(step.payload.method ?? "image");
+    setOcrResult(undefined);
+    setOcrError("");
     setOverrideId("");
     setTargetImage(
       step.payload.target
@@ -116,7 +126,7 @@ function Creator() {
       ...(action === "TYPE_ONLY" ? { text } : {}),
       ...(action === "SCROLL" ? { deltaY: delta } : {}),
       ...(["CLICK_TARGET", "WAIT_VERIFY"].includes(action)
-        ? { target, threshold: 0.96, timeoutMs: 3000 }
+        ? { target, method, threshold: 0.96, timeoutMs: 3000 }
         : {}),
     };
   }
@@ -174,9 +184,49 @@ function Creator() {
       roi,
     });
     setTarget({ asset: t.asset, roi: t.roi });
+    setMethod("image");
+    setOcrResult(undefined);
+    setOcrError("");
     setTargetImage(t.dataUrl);
     await closeShot();
-    setMessage("Ảnh target đã lưu. Lưu Base hoặc Override để gắn vào step.");
+    await readOcr(t.asset);
+    setMessage(
+      "ROI đã lưu. Chọn và xác nhận một dòng/từ OCR, hoặc giữ image-only; sau đó lưu Base/Override.",
+    );
+  }
+  async function readOcr(asset: string) {
+    setOcrLoading(true);
+    setOcrError("");
+    setOcrResult(undefined);
+    try {
+      setOcrResult(await invoke<OcrResult>({ type: "ocrTarget", asset }));
+    } catch (error) {
+      setOcrError(
+        `OCR thất bại: ${(error as Error).message}. Vẫn có thể lưu target chỉ dùng ảnh.`,
+      );
+    } finally {
+      setOcrLoading(false);
+    }
+  }
+  function confirmOcr(segment: OcrSegment) {
+    setTarget((previous) =>
+      previous
+        ? {
+            ...previous,
+            ocr: {
+              text: segment.text,
+              bbox: segment.bbox,
+              confidence: segment.confidence,
+              kind: segment.kind,
+              language: "vie+eng",
+              confirmed: true,
+            },
+          }
+        : previous,
+    );
+    setMessage(
+      `Đã xác nhận chữ “${segment.text}”. Chọn phương thức OCR nếu muốn test bằng chữ; lưu để áp dụng.`,
+    );
   }
   function goToFlow() {
     flowInput.current?.scrollIntoView({ block: "center" });
@@ -309,6 +359,11 @@ function Creator() {
                 await invoke<State>({ type: "openFlow", id: e.target.value }),
               );
               setSelected(undefined);
+              setTarget(undefined);
+              setTargetImage("");
+              setMethod("image");
+              setOcrResult(undefined);
+              setOcrError("");
               setResults([]);
             })
           }
@@ -339,6 +394,9 @@ function Creator() {
                 setSelected(undefined);
                 setTarget(undefined);
                 setTargetImage("");
+                setMethod("image");
+                setOcrResult(undefined);
+                setOcrError("");
                 setResults([]);
                 setMessage(
                   `Đã tạo flow “${flowName}”. Có thể chụp & crop ROI; chọn zoom trước khi lưu step đầu tiên.`,
@@ -382,6 +440,9 @@ function Creator() {
               setSelected(undefined);
               setTarget(undefined);
               setTargetImage("");
+              setMethod("image");
+              setOcrResult(undefined);
+              setOcrError("");
               setName("");
               setOverrideId("");
             }}
@@ -399,6 +460,9 @@ function Creator() {
               setAction(e.target.value as Action);
               setTarget(undefined);
               setTargetImage("");
+              setMethod("image");
+              setOcrResult(undefined);
+              setOcrError("");
             }}
           >
             <option>CLICK_TARGET</option>
@@ -468,9 +532,121 @@ function Creator() {
               {target
                 ? `${target.roi.width}×${target.roi.height} · x${target.roi.x}, y${target.roi.y}`
                 : "Chưa có target. Crop nhãn/icon cùng biên."}{" "}
-              Matching local ±64 DIP; chưa có OCR.
+              Tìm trong vùng ROI ±64 DIP bằng ảnh hoặc chữ đã xác nhận.
             </p>
           </>
+        )}
+        {needsTarget && target && (
+          <section className="ocr-panel" aria-label="OCR ROI">
+            <div className="eyebrow">OCR LOCAL · VIỆT + ANH</div>
+            {ocrLoading && <p role="note">Đang đọc OCR trên máy…</p>}
+            {ocrError && (
+              <p role="note" className="hint">
+                {ocrError}
+              </p>
+            )}
+            {ocrResult && !ocrResult.segments.length && (
+              <p className="hint">
+                ROI không có chữ đọc được. Có thể lưu image-only cho nút icon.
+              </p>
+            )}
+            {ocrResult && ocrResult.segments.length > 0 && (
+              <>
+                <p className="hint">
+                  {target.ocr
+                    ? "Bấm dòng/từ khác để đổi chữ đã xác nhận."
+                    : "Không tự chọn chữ. Bấm một dòng/từ bên dưới để xác nhận target."}
+                </p>
+                <label>
+                  Đơn vị chọn
+                  <select
+                    aria-label="Đơn vị OCR"
+                    value={ocrKind}
+                    disabled={locked}
+                    onChange={(e) =>
+                      setOcrKind(e.target.value as "line" | "word")
+                    }
+                  >
+                    <option value="line">Dòng chữ</option>
+                    <option value="word">Từ riêng lẻ</option>
+                  </select>
+                </label>
+                <div className="ocr-candidates">
+                  {ocrResult.segments
+                    .filter((s) => s.kind === ocrKind)
+                    .map((s) => (
+                      <button
+                        key={s.id}
+                        className="ocr-candidate"
+                        disabled={locked}
+                        aria-pressed={
+                          target.ocr?.text === s.text &&
+                          target.ocr.kind === s.kind &&
+                          target.ocr.bbox.x === s.bbox.x &&
+                          target.ocr.bbox.y === s.bbox.y
+                        }
+                        onClick={() => confirmOcr(s)}
+                      >
+                        <b>{s.text}</b>
+                        <small>
+                          {s.confidence.toFixed(1)}% · bbox {s.bbox.x},
+                          {s.bbox.y} · {s.bbox.width}×{s.bbox.height}
+                        </small>
+                      </button>
+                    ))}
+                </div>
+              </>
+            )}
+            {target.ocr ? (
+              <div className="ocr-confirmed">
+                <b>Chữ đã xác nhận: {target.ocr.text}</b>
+                <p className="hint">
+                  {target.ocr.kind} · {target.ocr.confidence.toFixed(1)}% khi
+                  thiết kế. Runtime đọc lại và cần confidence ≥80%, chỉ một vị
+                  trí khớp chính xác.
+                </p>
+                <button
+                  disabled={locked}
+                  onClick={() => {
+                    setTarget((previous) => {
+                      if (!previous) return previous;
+                      const { ocr, ...rest } = previous;
+                      return rest;
+                    });
+                    setMethod("image");
+                  }}
+                >
+                  Bỏ chữ, dùng image-only
+                </button>
+              </div>
+            ) : (
+              <p className="hint">Image-only: chưa có chữ được bạn xác nhận.</p>
+            )}
+            <button
+              disabled={locked}
+              onClick={() => void task(() => readOcr(target.asset))}
+            >
+              Đọc lại OCR
+            </button>
+            <label>
+              Phương thức nhận diện
+              <select
+                aria-label="Phương thức nhận diện"
+                disabled={locked}
+                value={method}
+                onChange={(e) => setMethod(e.target.value as "image" | "ocr")}
+              >
+                <option value="image">Image matching</option>
+                <option value="ocr" disabled={!target.ocr}>
+                  OCR text matching
+                </option>
+              </select>
+            </label>
+            <p className="hint">
+              OCR chỉ dùng chữ bạn chọn; không fallback sang ảnh khi không chắc
+              chắn.
+            </p>
+          </section>
         )}
         <button
           className="primary"
@@ -619,11 +795,27 @@ function Creator() {
           {busy ? "Đang xử lý…" : message}
         </div>
         {results.map((r) => (
-          <div className={"result " + (r.ok ? "pass" : "fail")} key={r.id}>
+          <div
+            className={
+              "result " +
+              (r.status === "VERIFIED"
+                ? "pass"
+                : r.status === "ACTION_SENT"
+                  ? "sent"
+                  : "fail")
+            }
+            key={r.id}
+          >
             <b>
-              {r.ok ? "PASS" : "FAIL"} · {r.action}
+              {r.status} · {r.action}
             </b>
             <p>{r.message}</p>
+            {r.status === "ACTION_SENT" && (
+              <p>
+                Chỉ mới gửi thao tác; chưa xác nhận kết quả nghiệp vụ. Dùng
+                WAIT/VERIFY với điều kiện mong đợi.
+              </p>
+            )}
             {!r.before && (
               <p>Không chụp trước TYPE_ONLY/SCROLL để giữ focus.</p>
             )}

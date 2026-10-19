@@ -5,10 +5,10 @@ import { readFile } from "node:fs/promises";
 const require = createRequire(import.meta.url);
 const electron = require("electron");
 const phases = process.argv.slice(2);
-if (phases.some((phase) => !["first", "second", "ux"].includes(phase))) {
-  throw new Error("Supported browser test phases: first, second, ux");
+if (phases.some((phase) => !["first", "second", "ux", "ocr"].includes(phase))) {
+  throw new Error("Supported browser test phases: first, second, ux, ocr");
 }
-for (const phase of phases.length ? phases : ["first", "second", "ux"]) {
+for (const phase of phases.length ? phases : ["first", "second", "ux", "ocr"]) {
   const started = Date.now();
   const code = await new Promise((resolve, reject) => {
     const env = { ...process.env };

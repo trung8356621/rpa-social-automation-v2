@@ -22,6 +22,37 @@ export function validatePayload(p: Payload) {
     throw new Error("Action cần ảnh target được crop.");
   if (["CLICK_TARGET", "WAIT_VERIFY"].includes(p.action))
     validateRect(p.target!.roi, WEB_WIDTH, WEB_HEIGHT);
+  if (p.method !== undefined && !["image", "ocr"].includes(p.method))
+    throw new Error("Phương thức target không hợp lệ.");
+  if (p.target?.ocr) {
+    const o = p.target.ocr,
+      b = o.bbox;
+    if (
+      o.confirmed !== true ||
+      o.language !== "vie+eng" ||
+      !["line", "word"].includes(o.kind) ||
+      !o.text?.trim() ||
+      o.text.length > 2000 ||
+      !Number.isFinite(o.confidence) ||
+      o.confidence < 0 ||
+      o.confidence > 100 ||
+      !b ||
+      !Object.values(b).every(Number.isFinite) ||
+      b.x < 0 ||
+      b.y < 0 ||
+      b.width <= 0 ||
+      b.height <= 0 ||
+      b.x + b.width > p.target.roi.width ||
+      b.y + b.height > p.target.roi.height
+    )
+      throw new Error("Chữ OCR xác nhận/bounding box không hợp lệ.");
+  }
+  if (
+    p.method === "ocr" &&
+    (!["CLICK_TARGET", "WAIT_VERIFY"].includes(p.action) ||
+      !p.target?.ocr?.confirmed)
+  )
+    throw new Error("OCR matching cần chữ do người dùng chọn và xác nhận.");
   if (
     p.action === "SCROLL" &&
     (!Number.isFinite(p.deltaY) || Math.abs(p.deltaY!) > 3000)
