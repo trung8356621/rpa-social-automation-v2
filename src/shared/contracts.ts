@@ -1,6 +1,11 @@
 export type Rect = { x: number; y: number; width: number; height: number };
 export type Action =
-  "CLICK_TARGET" | "CLICK_AND_TYPE" | "TYPE_ONLY" | "WAIT_VERIFY" | "SCROLL";
+  | "CLICK_TARGET"
+  | "CLICK_AND_TYPE"
+  | "UPLOAD_FILE"
+  | "TYPE_ONLY"
+  | "WAIT_VERIFY"
+  | "SCROLL";
 export type OcrSegment = {
   id: string;
   text: string;
@@ -23,6 +28,7 @@ export type Payload = {
   action: Action;
   text?: string;
   inputMethod?: "keyboard" | "clipboard";
+  files?: string[];
   target?: VisualTarget;
   method?: "auto" | "image" | "ocr";
   deltaY?: number;
@@ -69,6 +75,8 @@ export type Result = {
   targetAsset?: string;
   clickSent?: boolean;
   resolution?: ResolutionTrace;
+  upload?: UploadInfo;
+  evidenceWarning?: string;
   input?: {
     method: "keyboard" | "clipboard";
     focus: {
@@ -95,6 +103,15 @@ export type Result = {
   source: "base" | "override";
   stepId: string;
   version: number;
+};
+export type UploadInfo = {
+  transport: "cdp-file-chooser";
+  fileCount: number;
+  assignedCount: number;
+  phase: "waiting_chooser" | "assigning_files" | "files_selected";
+  chooserMode?: "selectSingle" | "selectMultiple";
+  preview: "unverified" | "confirmed_by_user";
+  cleanupWarning?: string;
 };
 export type ResolutionTrace = {
   mode: "auto";
@@ -136,6 +153,7 @@ export type Command =
   | { type: "targetImage"; asset: string }
   | { type: "ocrTarget"; asset: string }
   | { type: "capture" }
+  | { type: "pickUploadFiles" }
   | { type: "crop"; captureId: string; roi: Rect }
   | { type: "saveStep"; id?: string; name: string; payload: Payload }
   | { type: "selectVersion"; id: string; version: number }
@@ -148,7 +166,12 @@ export type Command =
     }
   | { type: "test"; stepId: string; version: number; overrideId?: string }
   | { type: "testPair"; firstId: string; secondId: string; delayMs: number }
-  | { type: "reviewTest"; runId: string; verdict: "correct" | "incorrect" }
+  | {
+      type: "reviewTest";
+      runId: string;
+      verdict: "correct" | "incorrect";
+      previewConfirmed?: boolean;
+    }
   | { type: "armTest"; stepId: string; version: number; overrideId?: string }
   | { type: "disarmTest" }
   | { type: "browserVisible"; visible: boolean };

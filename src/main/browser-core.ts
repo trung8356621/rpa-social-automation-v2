@@ -6,6 +6,7 @@ import {
 } from "electron";
 import { createHash } from "node:crypto";
 import { pasteWithClipboard } from "./clipboard-guard.js";
+import { chooseUploadFiles } from "./file-chooser.js";
 import sharp from "sharp";
 import { randomUUID } from "node:crypto";
 import { mkdir, writeFile } from "node:fs/promises";
@@ -205,6 +206,14 @@ export class BrowserCore {
       route: this.inputRoute,
       caret: "unknown" as const,
     };
+  }
+  async uploadFiles(files: string[], click: () => void, timeoutMs = 8000) {
+    return chooseUploadFiles(
+      this.view.webContents.debugger,
+      files,
+      click,
+      timeoutMs,
+    );
   }
   private requireInputRoute() {
     const focus = this.inputFocus();

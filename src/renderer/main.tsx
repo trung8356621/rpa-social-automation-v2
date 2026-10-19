@@ -37,6 +37,7 @@ function Creator() {
   const [pairDelay, setPairDelay] = useState(800);
   const [target, setTarget] = useState<Payload["target"]>();
   const [targetImage, setTargetImage] = useState("");
+  const [files, setFiles] = useState<string[]>([]);
   const [ocrResult, setOcrResult] = useState<OcrResult>();
   const [ocrError, setOcrError] = useState("");
   const [ocrLoading, setOcrLoading] = useState(false);
@@ -66,7 +67,9 @@ function Creator() {
   useEffect(() => {
     const blocked = results.find(
       (r) =>
-        r.action === "CLICK_AND_TYPE" && r.status === "BLOCKED" && !r.clickSent,
+        ["CLICK_AND_TYPE", "UPLOAD_FILE"].includes(r.action) &&
+        r.status === "BLOCKED" &&
+        !r.clickSent,
     );
     if (
       blocked &&
@@ -83,6 +86,7 @@ function Creator() {
   function newStep() {
     setSelected(undefined);
     setTarget(undefined);
+    setFiles([]);
     setTargetImage("");
     setOcrResult(undefined);
     setOcrError("");
@@ -106,6 +110,8 @@ function Creator() {
       type: "reviewTest",
       runId: result.id,
       verdict,
+      previewConfirmed:
+        result.action === "UPLOAD_FILE" && verdict === "correct",
     });
     setResults((previous) =>
       previous.map((r) =>
@@ -189,6 +195,7 @@ function Creator() {
     setName(step.name);
     setAction(step.payload.action);
     setText(step.payload.text || "");
+    setFiles(step.payload.files ?? []);
     setInputMethod(step.payload.inputMethod ?? "keyboard");
     setDelta(step.payload.deltaY ?? -400);
     setTarget(step.payload.target);
@@ -211,7 +218,13 @@ function Creator() {
         ? { text, inputMethod }
         : {}),
       ...(action === "SCROLL" ? { deltaY: delta } : {}),
-      ...(["CLICK_TARGET", "CLICK_AND_TYPE", "WAIT_VERIFY"].includes(action)
+      ...(action === "UPLOAD_FILE" ? { files } : {}),
+      ...([
+        "CLICK_TARGET",
+        "CLICK_AND_TYPE",
+        "UPLOAD_FILE",
+        "WAIT_VERIFY",
+      ].includes(action)
         ? { target, method: "auto", threshold: 0.96, timeoutMs: 3000 }
         : {}),
     };
@@ -331,6 +344,7 @@ function Creator() {
   const needsTarget = [
     "CLICK_TARGET",
     "CLICK_AND_TYPE",
+    "UPLOAD_FILE",
     "WAIT_VERIFY",
   ].includes(action);
   const selectedIndex =
@@ -464,6 +478,7 @@ function Creator() {
               );
               setSelected(undefined);
               setTarget(undefined);
+              setFiles([]);
               setTargetImage("");
               setOcrResult(undefined);
               setOcrError("");
@@ -496,6 +511,7 @@ function Creator() {
                 );
                 setSelected(undefined);
                 setTarget(undefined);
+                setFiles([]);
                 setTargetImage("");
                 setOcrResult(undefined);
                 setOcrError("");
@@ -548,6 +564,7 @@ function Creator() {
             onChange={(e) => {
               setAction(e.target.value as Action);
               setTarget(undefined);
+              setFiles([]);
               setTargetImage("");
               setOcrResult(undefined);
               setOcrError("");
@@ -555,6 +572,7 @@ function Creator() {
           >
             <option>CLICK_TARGET</option>
             <option>CLICK_AND_TYPE</option>
+            <option>UPLOAD_FILE</option>
             <option>TYPE_ONLY</option>
             <option value="WAIT_VERIFY">WAIT / VERIFY</option>
             <option>SCROLL</option>
@@ -609,6 +627,37 @@ function Creator() {
               )}
             </p>
           </>
+        )}
+        {action === "UPLOAD_FILE" && (
+          <section aria-label="Ảnh upload">
+            <button
+              disabled={locked}
+              onClick={() =>
+                void task(async () => {
+                  const picked = await invoke<string[] | undefined>({
+                    type: "pickUploadFiles",
+                  });
+                  if (picked) setFiles(picked);
+                })
+              }
+            >
+              Chọn ảnh local
+            </button>
+            <p className="hint">
+              {files.length} ảnh · PNG/JPEG/WebP/GIF, tối đa 20. File giữ ở
+              đường dẫn local; cần còn tồn tại khi chạy Step.
+            </p>
+            <ol>
+              {files.map((file, i) => (
+                <li key={i}>{file.split(/[\\/]/).at(-1)}</li>
+              ))}
+            </ol>
+            <p className="hint">
+              Crop nút Ảnh/Video đang hiển thị trong composer. Action chỉ chọn
+              file; phải quan sát đủ thumbnail/preview ảnh thật rồi xác nhận.
+              Không Publish.
+            </p>
+          </section>
         )}
         {action === "SCROLL" &&
           field(
@@ -752,7 +801,12 @@ function Creator() {
         )}
         <button
           className="primary"
-          disabled={locked || !state?.flow || (needsTarget && !target)}
+          disabled={
+            locked ||
+            !state?.flow ||
+            (needsTarget && !target) ||
+            (action === "UPLOAD_FILE" && !files.length)
+          }
           onClick={() =>
             void task(async () => {
               const next = await invoke<State>({
@@ -861,9 +915,12 @@ function Creator() {
               Test dùng payload đã lưu. TYPE_ONLY/SCROLL: giữ focus trong web và
               dùng phím tắt.
             </p>
-            {["CLICK_TARGET", "CLICK_AND_TYPE", "WAIT_VERIFY"].includes(
-              selected.payload.action,
-            ) && (
+            {[
+              "CLICK_TARGET",
+              "CLICK_AND_TYPE",
+              "UPLOAD_FILE",
+              "WAIT_VERIFY",
+            ].includes(selected.payload.action) && (
               <p className="hint saved-method">
                 Nhận diện AUTO, áp dụng cả Step cũ. Chỉ cần lưu khi sửa target,
                 nội dung hoặc Action; không cần lưu để đổi engine.
@@ -973,13 +1030,29 @@ function Creator() {
                 {r.status} · {r.action}
               </b>
               <p>{r.message}</p>
+              {r.upload && (
+                <p>
+                  {r.upload.preview === "confirmed_by_user"
+                    ? "Đã xác nhận preview bằng quan sát của người dùng."
+                    : `Chưa xác nhận preview. Cần thấy đủ ${r.upload.fileCount} thumbnail ảnh thật, đợi xử lý xong và kiểm tra không có lỗi trước khi hoàn thành Step.`}
+                </p>
+              )}
+              {r.evidenceWarning && <p>{r.evidenceWarning}</p>}
               <p>
                 Step {r.stepId.slice(0, 8)} · v{r.version} ·{" "}
                 {r.source === "override" ? "Override" : "Base"}
               </p>
-              {(r.match || r.input || r.resolution) && (
+              {(r.match || r.input || r.resolution || r.upload) && (
                 <details className="debug-details">
                   <summary>Debug</summary>
+                  {r.upload && (
+                    <p>
+                      Upload: {r.upload.transport} · {r.upload.phase} · chooser{" "}
+                      {r.upload.chooserMode ?? "chưa nhận"} · giao{" "}
+                      {r.upload.assignedCount}/{r.upload.fileCount} file ·
+                      preview {r.upload.preview}. {r.upload.cleanupWarning}
+                    </p>
+                  )}
                   {r.resolution && (
                     <div className="resolver-trace">
                       <b>
@@ -1084,9 +1157,12 @@ function Creator() {
                   </p>
                 )}
               {r.status === "ACTION_SENT" &&
-                ["CLICK_TARGET", "CLICK_AND_TYPE", "TYPE_ONLY"].includes(
-                  r.action,
-                ) && (
+                [
+                  "CLICK_TARGET",
+                  "CLICK_AND_TYPE",
+                  "UPLOAD_FILE",
+                  "TYPE_ONLY",
+                ].includes(r.action) && (
                   <div className="review-actions">
                     <button
                       disabled={
@@ -1097,7 +1173,9 @@ function Creator() {
                       }
                       onClick={() => void task(() => reviewClick(r, "correct"))}
                     >
-                      Đúng — Hoàn thành Step
+                      {r.action === "UPLOAD_FILE"
+                        ? "Đã thấy đủ preview — Hoàn thành Step"
+                        : "Đúng — Hoàn thành Step"}
                     </button>
                     <button
                       disabled={
@@ -1114,21 +1192,22 @@ function Creator() {
                     </button>
                   </div>
                 )}
-              {r.status === "BLOCKED" && r.action === "CLICK_AND_TYPE" && (
-                <div className="review-actions">
-                  <p>
-                    {r.clickSent
-                      ? "Đã click; cần kiểm tra nội dung trước khi test lại."
-                      : "Bị chặn trước khi click/nhập. Sửa target và lưu version mới trước khi thử lại."}
-                  </p>
-                  <button
-                    disabled={locked}
-                    onClick={() => void task(() => openRedesign(r))}
-                  >
-                    Redesign Step bị chặn
-                  </button>
-                </div>
-              )}
+              {r.status === "BLOCKED" &&
+                ["CLICK_AND_TYPE", "UPLOAD_FILE"].includes(r.action) && (
+                  <div className="review-actions">
+                    <p>
+                      {r.clickSent
+                        ? "Đã click; cần kiểm tra nội dung trước khi test lại."
+                        : "Bị chặn trước khi click/nhập. Sửa target và lưu version mới trước khi thử lại."}
+                    </p>
+                    <button
+                      disabled={locked}
+                      onClick={() => void task(() => openRedesign(r))}
+                    >
+                      Redesign Step bị chặn
+                    </button>
+                  </div>
+                )}
               {r.review?.verdict === "correct" && (
                 <button disabled={locked} onClick={newStep}>
                   + Tạo Step tiếp theo từ browser hiện tại

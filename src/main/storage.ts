@@ -1,5 +1,6 @@
 import { DatabaseSync } from "node:sqlite";
 import { randomUUID } from "node:crypto";
+import { validateUploadFileList } from "./upload-files.js";
 import type { Flow, Step, Override, Payload } from "../shared/contracts.js";
 import {
   validateZoom,
@@ -13,12 +14,14 @@ export function validatePayload(p: Payload) {
     ![
       "CLICK_TARGET",
       "CLICK_AND_TYPE",
+      "UPLOAD_FILE",
       "TYPE_ONLY",
       "WAIT_VERIFY",
       "SCROLL",
     ].includes(p.action)
   )
     throw new Error("Action không hỗ trợ.");
+  if (p.action === "UPLOAD_FILE") validateUploadFileList(p.files);
   if (
     ["TYPE_ONLY", "CLICK_AND_TYPE"].includes(p.action) &&
     (!p.text || p.text.length > 20000)
@@ -31,11 +34,17 @@ export function validatePayload(p: Payload) {
   )
     throw new Error("Phương thức nhập không hợp lệ.");
   if (
-    ["CLICK_TARGET", "CLICK_AND_TYPE", "WAIT_VERIFY"].includes(p.action) &&
+    ["CLICK_TARGET", "CLICK_AND_TYPE", "UPLOAD_FILE", "WAIT_VERIFY"].includes(
+      p.action,
+    ) &&
     (!p.target || !/^[a-f0-9-]+\.png$/.test(p.target.asset))
   )
     throw new Error("Action cần ảnh target được crop.");
-  if (["CLICK_TARGET", "CLICK_AND_TYPE", "WAIT_VERIFY"].includes(p.action))
+  if (
+    ["CLICK_TARGET", "CLICK_AND_TYPE", "UPLOAD_FILE", "WAIT_VERIFY"].includes(
+      p.action,
+    )
+  )
     validateRect(p.target!.roi, WEB_WIDTH, WEB_HEIGHT);
   if (p.method !== undefined && !["auto", "image", "ocr"].includes(p.method))
     throw new Error("Phương thức target không hợp lệ.");
@@ -64,7 +73,9 @@ export function validatePayload(p: Payload) {
   }
   if (
     p.method === "ocr" &&
-    (!["CLICK_TARGET", "CLICK_AND_TYPE", "WAIT_VERIFY"].includes(p.action) ||
+    (!["CLICK_TARGET", "CLICK_AND_TYPE", "UPLOAD_FILE", "WAIT_VERIFY"].includes(
+      p.action,
+    ) ||
       !p.target?.ocr?.confirmed)
   )
     throw new Error("OCR matching cần chữ do người dùng chọn và xác nhận.");

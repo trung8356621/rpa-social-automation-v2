@@ -7,16 +7,17 @@ const electron = require("electron");
 const phases = process.argv.slice(2);
 if (
   phases.some(
-    (phase) => !["first", "second", "ux", "ocr", "typing"].includes(phase),
+    (phase) =>
+      !["first", "second", "ux", "ocr", "typing", "upload"].includes(phase),
   )
 ) {
   throw new Error(
-    "Supported browser test phases: first, second, ux, ocr, typing",
+    "Supported browser test phases: first, second, ux, ocr, typing, upload",
   );
 }
 for (const phase of phases.length
   ? phases
-  : ["first", "second", "ux", "ocr", "typing"]) {
+  : ["first", "second", "ux", "ocr", "typing", "upload"]) {
   const started = Date.now();
   const code = await new Promise((resolve, reject) => {
     const env = { ...process.env };

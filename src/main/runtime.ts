@@ -6,6 +6,7 @@ import { BrowserCore, InputNotReady } from "./browser-core.js";
 import { Store } from "./storage.js";
 import { localOcr, type OcrEngine } from "./ocr.js";
 import { resolveVisualTarget, TargetNotConfident } from "./target-resolver.js";
+import { inspectUploadFiles, UploadError } from "./upload-files.js";
 export class Runtime {
   busy = false;
   private latestRuns = new Set<string>();
@@ -120,6 +121,7 @@ export class Runtime {
   async review(
     runId: string,
     verdict: "correct" | "incorrect",
+    previewConfirmed = false,
   ): Promise<Result> {
     if (this.busy) throw new Error("Đang test; đợi tác vụ kết thúc.");
     if (
@@ -134,7 +136,7 @@ export class Runtime {
     const result: Result = JSON.parse(row.payload);
     const flow = this.store.flow();
     if (
-      !["CLICK_TARGET", "CLICK_AND_TYPE", "TYPE_ONLY"].includes(
+      !["CLICK_TARGET", "CLICK_AND_TYPE", "UPLOAD_FILE", "TYPE_ONLY"].includes(
         result.action,
       ) ||
       result.status !== "ACTION_SENT" ||
@@ -148,12 +150,24 @@ export class Runtime {
       throw new Error(
         "Lần test không còn chờ xác nhận ở flow/version hiện tại; hãy test lại.",
       );
+    if (
+      result.action === "UPLOAD_FILE" &&
+      verdict === "correct" &&
+      (previewConfirmed !== true || result.upload?.phase !== "files_selected")
+    )
+      throw new Error(
+        "Cần quan sát đủ thumbnail/preview ảnh thật trước khi xác nhận UPLOAD_FILE; chọn file chưa phải upload thành công.",
+      );
     result.review = { verdict, at: new Date().toISOString(), by: "user" };
     result.status = verdict === "correct" ? "VERIFIED" : "REJECTED";
     result.ok = verdict === "correct";
+    if (result.upload && verdict === "correct")
+      result.upload.preview = "confirmed_by_user";
     result.message =
       verdict === "correct"
-        ? "Người dùng đã quan sát browser và xác nhận kết quả đúng cho Step này."
+        ? result.action === "UPLOAD_FILE"
+          ? "Người dùng xác nhận đủ thumbnail/preview ảnh thật trong composer. Chưa Publish."
+          : "Người dùng đã quan sát browser và xác nhận kết quả đúng cho Step này."
         : "Người dùng xác nhận kết quả sai. Base được giữ nguyên; lưu Redesign để tạo version mới.";
     this.busy = true;
     try {
@@ -187,6 +201,16 @@ export class Runtime {
       input: Result["input"];
     let resolution: Result["resolution"];
     let clickSent = false;
+    let upload: Result["upload"] =
+      payload.action === "UPLOAD_FILE"
+        ? {
+            transport: "cdp-file-chooser",
+            fileCount: payload.files?.length ?? 0,
+            assignedCount: 0,
+            phase: "waiting_chooser",
+            preview: "unverified",
+          }
+        : undefined;
     try {
       if (payload.action === "TYPE_ONLY") {
         input = await this.browser.typeOnly(payload.text!, payload.inputMethod);
@@ -196,6 +220,10 @@ export class Runtime {
         this.browser.scroll(payload.deltaY!);
         status = "ACTION_SENT";
       } else {
+        const files =
+          payload.action === "UPLOAD_FILE"
+            ? await inspectUploadFiles(payload.files)
+            : undefined;
         const template = await readFile(
           path.join(this.assetDir, payload.target!.asset),
         );
@@ -225,7 +253,15 @@ export class Runtime {
           await new Promise((r) => setTimeout(r, 200));
           current = await this.browser.capture();
         } while (true);
-        if (["CLICK_TARGET", "CLICK_AND_TYPE"].includes(payload.action)) {
+        if (payload.action === "UPLOAD_FILE") {
+          upload = await this.browser.uploadFiles(files!, () => {
+            this.browser.click(match!.x, match!.y);
+            clickSent = true;
+          });
+          status = "ACTION_SENT";
+        } else if (
+          ["CLICK_TARGET", "CLICK_AND_TYPE"].includes(payload.action)
+        ) {
           this.browser.click(match.x, match.y);
           clickSent = true;
           if (payload.action === "CLICK_AND_TYPE")
@@ -236,13 +272,17 @@ export class Runtime {
           status = "ACTION_SENT";
         } else status = "VERIFIED";
         message =
-          payload.action === "WAIT_VERIFY"
-            ? `VERIFIED: điều kiện ${match.method === "ocr" ? `chữ “${match.text}”` : "ảnh"} đã khớp. Chỉ xác nhận điều kiện của step.`
-            : `Đã gửi click một lần${input ? " rồi gửi nội dung nhập" : ""}; chưa xác nhận kết quả nghiệp vụ.${input?.warning ? ` ${input.warning}` : ""}`;
+          payload.action === "UPLOAD_FILE"
+            ? `Đã giao ${upload!.assignedCount} ảnh cho file chooser. Chưa xác nhận upload/preview thành công; đợi và quan sát đủ thumbnail ảnh thật, không Publish.`
+            : payload.action === "WAIT_VERIFY"
+              ? `VERIFIED: điều kiện ${match.method === "ocr" ? `chữ “${match.text}”` : "ảnh"} đã khớp. Chỉ xác nhận điều kiện của step.`
+              : `Đã gửi click một lần${input ? " rồi gửi nội dung nhập" : ""}; chưa xác nhận kết quả nghiệp vụ.${input?.warning ? ` ${input.warning}` : ""}`;
       }
     } catch (e) {
       status =
-        e instanceof TargetNotConfident || e instanceof InputNotReady
+        e instanceof TargetNotConfident ||
+        e instanceof InputNotReady ||
+        (e instanceof UploadError && !clickSent)
           ? "BLOCKED"
           : "FAILED";
       if (e instanceof InputNotReady)
@@ -252,16 +292,27 @@ export class Runtime {
           ? "Target chưa đủ rõ hoặc vị trí nhận diện không thống nhất. Chưa gửi thao tác; hãy Redesign target. Chi tiết trong Debug."
           : (e as Error).message;
       if (e instanceof TargetNotConfident) resolution = e.resolution;
+      if (e instanceof UploadError && e.upload) upload = e.upload;
       if (payload.action === "CLICK_AND_TYPE" && clickSent)
         message = `Đã click target một lần; nhập liệu chưa hoàn tất và có thể đã nhập một phần. ${message}`;
     }
+    if (upload?.cleanupWarning) message += ` ${upload.cleanupWarning}`;
     await new Promise((r) => setTimeout(r, 120));
     // Keep the live page/focus after input. Evidence capture is an explicit user action.
-    const after = ["CLICK_TARGET", "CLICK_AND_TYPE", "TYPE_ONLY"].includes(
-      payload.action,
-    )
-      ? undefined
-      : await this.browser.capture();
+    let after: Result["after"], evidenceWarning: string | undefined;
+    if (payload.action === "UPLOAD_FILE") {
+      await new Promise((r) => setTimeout(r, 750));
+      try {
+        after = await this.browser.capture();
+      } catch (error) {
+        evidenceWarning = `Không chụp được ảnh sau upload: ${(error as Error).message}`;
+      }
+    } else
+      after = ["CLICK_TARGET", "CLICK_AND_TYPE", "TYPE_ONLY"].includes(
+        payload.action,
+      )
+        ? undefined
+        : await this.browser.capture();
     const result: Result = {
       id: randomUUID(),
       ok: status === "ACTION_SENT" || status === "VERIFIED",
@@ -280,6 +331,8 @@ export class Runtime {
       targetAsset: payload.target?.asset,
       clickSent,
       resolution,
+      upload,
+      evidenceWarning,
     };
     // Store paths/metadata in history, not duplicate base64 screenshots in SQLite.
     const metadata = {

@@ -9,6 +9,7 @@ import { Store } from "./storage.js";
 import { Runtime } from "./runtime.js";
 import { startFixture } from "./fixture.js";
 import { localOcr } from "./ocr.js";
+import { inspectUploadFiles, IMAGE_EXTENSIONS } from "./upload-files.js";
 import {
   WEB_WIDTH,
   WEB_HEIGHT,
@@ -29,7 +30,7 @@ const dataPath = path.join(
   project,
   ".local",
   selfTest
-    ? ["ux", "ocr", "typing"].includes(phase)
+    ? ["ux", "ocr", "typing", "upload"].includes(phase)
       ? `test-${phase}-${process.pid}`
       : "test-session"
     : "creator",
@@ -76,13 +77,15 @@ async function boot() {
   const store = new Store(path.join(dataPath, "creator.sqlite"));
   const fixture = await startFixture(
     selfTest
-      ? phase === "typing"
-        ? 47835
-        : phase === "ocr"
-          ? 47834
-          : phase === "ux"
-            ? 47833
-            : 47832
+      ? phase === "upload"
+        ? 47836
+        : phase === "typing"
+          ? 47835
+          : phase === "ocr"
+            ? 47834
+            : phase === "ux"
+              ? 47833
+              : 47832
       : 47831,
   );
   const window = new BrowserWindow({
@@ -226,6 +229,17 @@ async function boot() {
       case "capture":
         isIdle();
         return browser.capture();
+      case "pickUploadFiles": {
+        isIdle();
+        const picked = await dialog.showOpenDialog(window, {
+          title: "Chọn ảnh cho UPLOAD_FILE",
+          properties: ["openFile", "multiSelections"],
+          filters: [{ name: "Ảnh", extensions: IMAGE_EXTENSIONS }],
+        });
+        return picked.canceled
+          ? undefined
+          : inspectUploadFiles(picked.filePaths);
+      }
       case "crop": {
         isIdle();
         const roi = validateRect(command.roi, WEB_WIDTH, WEB_HEIGHT);
@@ -266,7 +280,11 @@ async function boot() {
         return state();
       case "reviewTest":
         isIdle();
-        return runtime.review(command.runId, command.verdict);
+        return runtime.review(
+          command.runId,
+          command.verdict,
+          command.previewConfirmed,
+        );
       case "test":
         return runtime.test(
           command.stepId,
@@ -380,13 +398,15 @@ async function boot() {
   if (selfTest) {
     try {
       const { runSelfTest } = await import(
-        phase === "typing"
-          ? "./typing-self-test.js"
-          : phase === "ocr"
-            ? "./ocr-self-test.js"
-            : phase === "ux"
-              ? "./ux-self-test.js"
-              : "./self-test.js"
+        phase === "upload"
+          ? "./upload-self-test.js"
+          : phase === "typing"
+            ? "./typing-self-test.js"
+            : phase === "ocr"
+              ? "./ocr-self-test.js"
+              : phase === "ux"
+                ? "./ux-self-test.js"
+                : "./self-test.js"
       );
       await runSelfTest({
         browser,
