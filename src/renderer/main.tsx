@@ -512,11 +512,11 @@ function Creator() {
     );
     document.documentElement.style.setProperty(
       "--editor-left",
-      `${(state?.browserBounds.x ?? 320) + window.scrollX === 672 ? 320 : 0}px`,
+      `${window.innerWidth >= 1696 ? 320 : 0}px`,
     );
     document.documentElement.style.setProperty(
       "--editor-width",
-      `${(state?.browserBounds.x ?? 320) + window.scrollX === 672 ? 352 : 320}px`,
+      `${window.innerWidth >= 1696 ? 352 : 320}px`,
     );
   }, [state?.browserBounds.x, state?.browserBounds.width]);
   function togglePanel() {
@@ -758,22 +758,9 @@ function Creator() {
             )}
           </nav>
           <aside aria-label="Steps">
-            <div className="step-heading">
-              <b>Steps</b>
-              <button
-                aria-label="Mở/ẩn Step Editor"
-                disabled={locked}
-                aria-expanded={editorExpanded}
-                onClick={() => void task(() => setEditorOpen(!editorExpanded))}
-              >
-                {editorExpanded ? "Ẩn Editor" : "Editor"}
-              </button>
-              <button disabled={locked} onClick={newStep}>
-                + Step mới
-              </button>
-            </div>
             {state && (
               <Groups
+                newStep={newStep}
                 state={state}
                 locked={locked}
                 update={async (c) => setState(await invoke<State>(c))}

@@ -67,7 +67,7 @@ export function workspaceLayout(
       : 0);
   return {
     browser: {
-      x,
+      x: x + Math.max(0, Math.floor((contentWidth - x - WEB_WIDTH) / 2)),
       y: TOP_HEIGHT,
       width: WEB_WIDTH,
       height: WEB_HEIGHT,

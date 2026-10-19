@@ -333,7 +333,7 @@ export async function runSelfTest({
   await wait(400);
   assert.equal((await read()).active, "open");
   await click("Tạo flow");
-  await click("+ Step mới");
+  await click("+ Step");
   const select = async (label: string, value: string) => {
     await evaluate(
       `(()=>{const s=document.querySelector('[aria-label="${label}"]');s.value=${JSON.stringify(value)};s.dispatchEvent(new Event('change',{bubbles:true}))})()`,

@@ -553,30 +553,6 @@ body[data-panel="shell"] {
 .variables {
   position: relative;
 }
-.variables-popover {
-  position: absolute;
-  right: 0;
-  top: 36px;
-  width: 620px;
-  max-height: 70vh;
-  overflow: auto;
-  z-index: 100;
-  padding: 16px;
-  background: #142238;
-  border: 1px solid #567;
-}
-.variable-row {
-  display: grid;
-  grid-template-columns: 1fr 90px 2fr 32px;
-  gap: 5px;
-  margin: 8px 0;
-}
-.groups {
-  margin-top: 12px;
-}
-.groups input {
-  margin-top: 4px;
-}
 .ocr-confirmed {
   position: relative;
   padding-right: 28px;
@@ -595,17 +571,6 @@ body[data-panel="shell"] .editor-column {
   background: #142238;
 }
 
-.step-group {
-  border: 1px solid #456;
-  margin: 12px 0;
-  padding: 5px;
-  min-width: 0;
-}
-.step-row {
-  padding-bottom: 8px;
-  border-bottom: 1px solid #283d56;
-}
-
 body[data-panel="shell"] main {
   min-width: 1344px;
   min-height: 648px;
@@ -618,4 +583,283 @@ body[data-panel="shell"] main {
   left: 4px;
   z-index: 20;
   background: #17263b;
+}
+
+/* Creator-only controls; native Test & Debug keeps its existing styles/bounds. */
+body[data-panel="shell"] aside {
+  display: flex;
+  flex-direction: column;
+  padding: 12px;
+  overflow: hidden;
+  height: calc(100vh - 88px);
+  min-height: 300px;
+}
+.step-heading {
+  display: flex;
+  flex-shrink: 0;
+  align-items: center;
+  margin-bottom: 12px;
+}
+.steps {
+  flex: 1;
+  min-height: 0;
+  margin: 0;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  scrollbar-gutter: stable;
+  padding-right: 3px;
+}
+.step-row {
+  display: flex;
+  align-items: center;
+  height: 38px;
+  gap: 2px;
+  margin: 3px 0;
+  padding: 0 3px 0 0;
+  border: 1px solid transparent;
+  border-radius: 6px;
+}
+.step-row:hover {
+  background: #1c2e45;
+}
+.step-row.selected {
+  background: #1b405c;
+  border-color: #6bb6e5;
+}
+.step-row .step {
+  flex: 1;
+  min-width: 0;
+  height: 36px;
+  margin: 0;
+  padding: 0 7px;
+  border: 0;
+  background: transparent;
+  gap: 9px;
+}
+.step-row .step b {
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+  font-weight: 500;
+}
+.step-number {
+  font-size: 11px;
+  color: #91a8c2;
+  font-variant-numeric: tabular-nums;
+  flex-shrink: 0;
+}
+body[data-panel="shell"] .icon-button {
+  flex-shrink: 0;
+  width: 28px;
+  height: 28px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0;
+  border: 0;
+  border-radius: 5px;
+  background: transparent;
+  font-size: 17px;
+  color: #a9bed8;
+}
+body[data-panel="shell"] .icon-button:hover {
+  background: #324962;
+  color: #fff;
+}
+.step-group {
+  border: 0;
+  padding: 0;
+  margin: 5px 0;
+}
+.folder-row {
+  display: flex;
+  align-items: center;
+  min-height: 36px;
+  gap: 2px;
+}
+.folder-toggle {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  flex: 1;
+  min-width: 0;
+  padding: 6px;
+  text-align: left;
+  background: transparent;
+  border: 0;
+}
+.folder-toggle b {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+  font-size: 12px;
+}
+.folder-toggle small {
+  color: #8299b5;
+}
+.group-steps {
+  margin-left: 11px;
+  padding-left: 5px;
+  border-left: 1px solid #2c425c;
+}
+.empty-group {
+  padding: 4px 7px;
+}
+.ui-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 1000;
+  background: rgb(6 13 23 / 28%);
+}
+.ui-popover {
+  position: fixed;
+  z-index: 1001;
+  max-width: calc(100vw - 16px);
+  max-height: calc(100vh - 16px);
+  overflow: auto;
+  padding: 12px;
+  border: 1px solid #3c536e;
+  border-radius: 10px;
+  background: #142238;
+  box-shadow: 0 14px 40px #0008;
+}
+.popover-heading {
+  display: flex;
+  gap: 12px;
+  align-items: center;
+  margin-bottom: 10px;
+  min-width: 0;
+}
+.popover-heading b {
+  flex: 1;
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+.popover-heading span {
+  color: #8da5c2;
+  font-size: 11px;
+}
+.popover-footer {
+  display: flex;
+  gap: 8px;
+  justify-content: flex-end;
+  margin-top: 12px;
+}
+.actions-popover,
+.group-popover {
+  width: 276px;
+}
+.menu-label {
+  font-size: 10px;
+  text-transform: uppercase;
+  color: #91a8c2;
+  margin: 6px;
+  letter-spacing: 0.8px;
+}
+.menu-item {
+  display: block;
+  width: 100%;
+  text-align: left;
+  padding: 8px;
+  margin: 2px 0;
+  border: 0;
+  background: transparent;
+}
+.group-form label {
+  margin: 8px 0;
+}
+.variables-popover {
+  width: 680px;
+  max-height: min(560px, calc(100vh - 16px));
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+.variable-table {
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  border: 1px solid #304660;
+  border-radius: 6px;
+  overflow: hidden;
+}
+.variable-columns,
+.variable-row {
+  display: grid;
+  grid-template-columns: minmax(120px, 1fr) 82px minmax(170px, 2fr) 28px;
+  gap: 8px;
+  align-items: start;
+  padding: 8px;
+  margin: 0;
+}
+.variable-columns {
+  flex-shrink: 0;
+  background: #1c3048;
+  color: #9eb3ce;
+  font-size: 11px;
+}
+.variable-table-body {
+  min-height: 32px;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+}
+.variable-row + .variable-row {
+  border-top: 1px solid #293d56;
+}
+.variable-row input,
+.variable-row select,
+.variable-row textarea {
+  padding: 6px;
+  font-size: 12px;
+  border-radius: 5px;
+  min-width: 0;
+}
+.variable-row textarea {
+  min-height: 32px;
+  max-height: 110px;
+  resize: vertical;
+  overflow: auto;
+  overflow-wrap: anywhere;
+}
+.variable-row input {
+  font-weight: 600;
+}
+.variables-popover > .hint,
+.variables-popover > .popover-footer,
+.variables-popover > .popover-heading {
+  flex-shrink: 0;
+}
+@media (max-width: 600px) {
+  .variable-columns,
+  .variable-row {
+    grid-template-columns: minmax(75px, 1fr) 65px minmax(100px, 1.5fr) 24px;
+    gap: 4px;
+    padding: 6px;
+  }
+}
+
+body[data-panel="shell"] .editor-column .panel-heading button {
+  width: auto;
+  min-width: 62px;
+  flex: 0 0 auto;
+  height: 27px;
+  padding: 3px 7px;
+  font-size: 12px;
+  white-space: nowrap;
+}
+body[data-panel="shell"] .editor-column .panel-heading span {
+  min-width: 0;
+}
+.icon-button svg {
+  pointer-events: none;
+}
+.folder-toggle svg {
+  flex-shrink: 0;
+  color: #98b7d9;
+}
+.ui-popover {
+  overscroll-behavior: contain;
 }

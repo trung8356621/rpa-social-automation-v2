@@ -44,10 +44,16 @@ export async function runSelfTest({
       await wait();
     }
   };
-  const click = async (wc: WebContents, selector: string) => {
-    const p = await wc.executeJavaScript(
-      `(()=>{const e=document.querySelector(${JSON.stringify(selector)});if(!e||e.disabled)throw Error('Missing/disabled '+${JSON.stringify(selector)});e.scrollIntoView({block:'nearest'});const r=e.getBoundingClientRect();return{x:Math.round(r.x+r.width/2),y:Math.round(r.y+r.height/2)}})()`,
-    );
+  const click = async (
+    wc: WebContents,
+    selector: string,
+    point?: { x: number; y: number },
+  ) => {
+    const p =
+      point ??
+      (await wc.executeJavaScript(
+        `(()=>{const e=document.querySelector(${JSON.stringify(selector)});if(!e||e.disabled)throw Error('Missing/disabled '+${JSON.stringify(selector)});e.scrollIntoView({block:'nearest'});const r=e.getBoundingClientRect();return{x:Math.round(r.x+r.width/2),y:Math.round(r.y+r.height/2)}})()`,
+      ));
     if (native || wc === page) {
       const offset =
         wc === page
@@ -124,7 +130,7 @@ export async function runSelfTest({
     zoom = page.getZoomFactor();
   let navigations = 0;
   page.on("did-start-navigation", () => navigations++);
-  await click(shell, '[aria-label="Mở/ẩn Step Editor"]');
+  await byText(shell, "+ Step");
   await until(
     () =>
       shell.executeJavaScript(
@@ -180,7 +186,7 @@ export async function runSelfTest({
   await click(shell, ".editor-column .panel-heading button");
   await byText(shell, "Tạo flow");
   await until(async () => !!store.flow(), "flow");
-  await byText(shell, "+ Step mới");
+  await byText(shell, "+ Step");
   await until(
     () => shell.executeJavaScript('!!document.querySelector("#roi-flow-help")'),
     "new step editor",
@@ -238,7 +244,7 @@ export async function runSelfTest({
     "test",
   );
   pass("narrow-viewport-ROI-is-not-rescaled-and-saved-with-environment");
-  await click(shell, '[aria-label="Mở/ẩn Step Editor"]');
+  await click(shell, ".editor-column .panel-heading button");
   assert.equal(browser.bounds.width, 1024);
   assert.equal(page.getZoomFactor(), zoom);
   await runtime.test(step.id, 1);
@@ -315,7 +321,7 @@ export async function runSelfTest({
     `(()=>{const input=document.querySelector('[aria-label="Variable key"]');Object.getOwnPropertyDescriptor(HTMLInputElement.prototype,'value').set.call(input,'draft_text');input.dispatchEvent(new Event('input',{bubbles:true}));const value=document.querySelector('.variables-popover textarea');Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype,'value').set.call(value,'Default draft');value.dispatchEvent(new Event('input',{bubbles:true}));})()`,
   );
   await wait(200);
-  await click(shell, ".variables-popover button:nth-last-of-type(2)");
+  await click(shell, ".variables-popover .popover-footer button:nth-child(2)");
   await until(async () => browser.visible, "variables close");
   const variable = store
     .flow()!
@@ -372,6 +378,242 @@ export async function runSelfTest({
   window.setContentSize(1344, 648);
   await wait(300);
   pass("narrow-workspace-scroll-repositions-browser-without-resizing-viewport");
+  // Cleanup regression coverage: real Creator UI against the isolated local fixture.
+  const evidence = async (name: string) => {
+    const layers = [];
+    if (browser.visible) {
+      layers.push({
+        input: (await page.capturePage()).toPNG(),
+        left: browser.bounds.x,
+        top: browser.bounds.y,
+      });
+      layers.push({
+        input: (await debug.capturePage()).toPNG(),
+        left: overlays.debug.getBounds().x,
+        top: overlays.debug.getBounds().y,
+      });
+    }
+    await sharp((await window.capturePage()).toPNG())
+      .composite(layers)
+      .png()
+      .toFile(path.join(project, "artifacts", name));
+  };
+  const fill = async (selector: string, value: string) => {
+    await shell.executeJavaScript(
+      `(()=>{const e=document.querySelector(${JSON.stringify(selector)});const proto=e.tagName==='TEXTAREA'?HTMLTextAreaElement.prototype:HTMLInputElement.prototype;Object.getOwnPropertyDescriptor(proto,'value').set.call(e,${JSON.stringify(value)});e.dispatchEvent(new Event('input',{bubbles:true}));})()`,
+    );
+    await wait(100);
+  };
+  const savedStep = store.step(step.id, 2),
+    savedOverrides = store.overrides(),
+    debugBounds = { ...overlays.debug.getBounds() };
+  assert.equal(
+    await shell.executeJavaScript(
+      `!!document.querySelector('[aria-label="New group name"]')`,
+    ),
+    false,
+  );
+  await byText(shell, "+ Group");
+  assert.equal(
+    await shell.executeJavaScript(
+      `document.activeElement.getAttribute("aria-label")`,
+    ),
+    "New group name",
+  );
+  await fill('[aria-label="New group name"]', "Review draft");
+  await evidence("ui-cleanup-group-form.png");
+  await click(shell, ".group-form button[type=submit]");
+  await until(
+    async () => browser.visible && store.flow()!.groups!.length === 1,
+    "group created",
+  );
+  const group = store.flow()!.groups![0];
+  assert.equal(group.slug, "review-draft");
+  await click(shell, `[aria-label="Menu ${step.name}"]`);
+  assert.equal(browser.visible, false);
+  assert.equal(overlays.debug.getVisible(), false);
+  await evidence("ui-cleanup-step-menu.png");
+  const beforeDismiss = (await page.executeJavaScript("window.fixtureRead()"))
+    .clicks;
+  await click(shell, ".ui-backdrop", {
+    x: browser.bounds.x + 270,
+    y: browser.bounds.y + 152,
+  });
+  await until(async () => browser.visible, "outside menu close");
+  assert.equal(
+    (await page.executeJavaScript("window.fixtureRead()")).clicks,
+    beforeDismiss,
+  );
+  assert.equal(
+    await shell.executeJavaScript(
+      `!!document.querySelector('.actions-popover')`,
+    ),
+    false,
+  );
+  await click(shell, `[aria-label="Menu ${step.name}"]`);
+  pass(
+    "outside-menu-dismiss-restores-native-views-without-clicking-through-to-browser",
+  );
+  await click(shell, ".actions-popover .menu-item:last-child");
+  await until(
+    async () =>
+      browser.visible && store.flow()!.groups![0].stepIds.includes(step.id),
+    "move into group",
+  );
+  assert.deepEqual(store.step(step.id, 2), savedStep);
+  assert.deepEqual(store.overrides(), savedOverrides);
+  await click(shell, ".folder-toggle");
+  assert.equal(
+    await shell.executeJavaScript(
+      `document.querySelectorAll('.group-steps .step-row').length`,
+    ),
+    0,
+  );
+  await click(shell, ".folder-toggle");
+  const beforeNameClick = (await page.executeJavaScript("window.fixtureRead()"))
+    .clicks;
+  await click(shell, ".group-steps .step");
+  assert.equal(
+    (await page.executeJavaScript("window.fixtureRead()")).clicks,
+    beforeNameClick,
+  );
+  assert.equal(overlays.debugOpen, true);
+  await click(shell, `[aria-label="Edit ${step.name}"]`);
+  assert.equal(overlays.editorOpen, true);
+  await click(shell, ".editor-column .panel-heading button");
+  await click(shell, `[aria-label="Menu ${step.name}"]`);
+  await click(shell, ".actions-popover .menu-item");
+  await until(
+    async () => browser.visible && !store.flow()!.groups![0].stepIds.length,
+    "move standalone",
+  );
+  await click(shell, `[aria-label="Menu ${step.name}"]`);
+  await click(shell, ".actions-popover .menu-item:last-child");
+  await until(
+    async () =>
+      browser.visible && store.flow()!.groups![0].stepIds.includes(step.id),
+    "restore group",
+  );
+  pass(
+    "compact-name-select-edit-and-context-menu-group-moves-preserve-step-and-overrides",
+  );
+  for (let i = 0; i < 24; i++)
+    store.saveStep(
+      `Review draft content ${i + 1} and media before continuing`,
+      step.payload,
+    );
+  const vars = store.flow()!.variables!;
+  const sampleVars = Array.from({ length: 12 }, (_, i) => ({
+    id: `ui-sample-${i}`,
+    key: `draft_section_${i + 1}`,
+    type: "text" as const,
+  }));
+  store.updateVariables([...vars, ...sampleVars], {
+    ...store.flow()!.defaultPattern!.values,
+    ...Object.fromEntries(
+      sampleVars.map((v) => [
+        v.id,
+        "Long Vietnamese draft — nội dung kiểm thử, không xuất bản. ".repeat(
+          12,
+        ),
+      ]),
+    ),
+  });
+  shell.reload();
+  await wait(500);
+  await until(
+    () =>
+      shell.executeJavaScript(
+        `document.querySelectorAll('.step-row').length===26`,
+      ),
+    "sample rows loaded",
+  );
+  const metrics = await shell.executeJavaScript(
+    `(()=>{const rows=[...document.querySelectorAll('.step-row')],list=document.querySelector('.steps');return{heights:rows.map(e=>e.getBoundingClientRect().height),selects:document.querySelectorAll('.step-row select').length,overflow:list.scrollHeight>list.clientHeight}})()`,
+  );
+  assert.ok(metrics.heights.every((h: number) => h === 38));
+  assert.equal(metrics.selects, 0);
+  assert.equal(metrics.overflow, true);
+  const scrollBefore = await page.executeJavaScript("scrollY");
+  await shell.executeJavaScript(
+    `document.querySelector('.steps').scrollTop=200`,
+  );
+  assert.equal(await page.executeJavaScript("scrollY"), scrollBefore);
+  await shell.executeJavaScript(`document.querySelector('.steps').scrollTop=0`);
+  assert.deepEqual(overlays.debug.getBounds(), debugBounds);
+  await evidence("ui-cleanup-compact.png");
+  pass(
+    "uniform-compact-rows-no-permanent-select-independent-step-scrolling-debug-unchanged",
+  );
+  await page.executeJavaScript(
+    `document.querySelector('#panel-modal').showModal()`,
+  );
+  await byText(shell, "Variables");
+  const popoverMetrics = await shell.executeJavaScript(
+    `(()=>{const p=document.querySelector('.variables-popover'),r=p.getBoundingClientRect(),t=document.querySelector('.variable-table-body');return{left:r.left,right:r.right,bottom:r.bottom,width:innerWidth,height:innerHeight,internalScroll:t.scrollHeight>t.clientHeight,hit:document.elementFromPoint(r.left+20,r.top+20)?.closest('.variables-popover')===p}})()`,
+  );
+  assert.ok(
+    popoverMetrics.left >= 0 &&
+      popoverMetrics.right <= popoverMetrics.width &&
+      popoverMetrics.bottom <= popoverMetrics.height,
+  );
+  assert.equal(popoverMetrics.internalScroll, true);
+  assert.equal(popoverMetrics.hit, true);
+  await evidence("ui-cleanup-variables.png");
+  await fill(".variable-row input", "caption");
+  await fill(".variable-row textarea", "UI saved default draft");
+  await click(shell, ".variable-row:last-child button");
+  await click(shell, ".variables-popover .popover-footer button:nth-child(2)");
+  await until(async () => browser.visible, "variables saved");
+  assert.equal(
+    store.flow()!.variables!.length,
+    vars.length + sampleVars.length - 1,
+  );
+  assert.equal(store.flow()!.variables![0].key, "caption");
+  assert.equal(
+    store.flow()!.defaultPattern!.values[variable.id],
+    "UI saved default draft",
+  );
+  assert.equal(store.step(variableStep.id, 1).version, 1);
+  assert.equal(
+    await page.executeJavaScript(`document.querySelector('#panel-modal').open`),
+    true,
+  );
+  await page.executeJavaScript(
+    `document.querySelector('#panel-modal').close()`,
+  );
+  assert.deepEqual(overlays.debug.getBounds(), debugBounds);
+  pass(
+    "variables-table-scroll-edit-delete-save-native-stacking-and-live-modal-preserved",
+  );
+  window.setFullScreen(true);
+  await wait(400);
+  const wideWidth = window.getContentSize()[0];
+  assert.equal(
+    browser.bounds.x,
+    320 + Math.max(0, Math.floor((wideWidth - 320 - 1024) / 2)),
+  );
+  assert.equal(browser.bounds.width, 1024);
+  assert.equal(browser.bounds.height, 560);
+  assert.equal(overlays.debug.getBounds().x, 320);
+  await evidence("ui-cleanup-wide.png");
+  await click(shell, `[aria-label="Edit ${step.name}"]`);
+  await wait(250);
+  assert.equal(browser.bounds.width, 1024);
+  assert.equal(
+    browser.bounds.x,
+    672 + Math.max(0, Math.floor((wideWidth - 672 - 1024) / 2)),
+  );
+  assert.equal(overlays.debug.getBounds().x, 672);
+  await evidence("ui-cleanup-wide-editor.png");
+  await click(shell, ".editor-column .panel-heading button");
+  window.setFullScreen(false);
+  await wait(300);
+  assert.equal(page.getZoomFactor(), zoom);
+  assert.equal(navigations, 0);
+  pass(
+    "wide-browser-centered-fixed-viewport-with-editor-and-original-debug-geometry",
+  );
   const layers = [
     {
       input: (await page.capturePage()).toPNG(),

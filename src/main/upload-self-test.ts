@@ -90,7 +90,7 @@ export async function runSelfTest({
   await fresh();
   await until(() => evaluate("!!window.creator"), "preload");
   await click("Tạo flow");
-  await click("+ Step mới");
+  await click("+ Step");
   await evaluate(
     `(()=>{const s=document.querySelector('[aria-label="Action"]');s.value='UPLOAD_FILE';s.dispatchEvent(new Event('change',{bubbles:true}))})()`,
   );

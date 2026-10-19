@@ -32,11 +32,16 @@ test("Editor occupies only the column beside Step List; Debug collapse frees the
         );
         assert.equal(layout.browser.height, 560);
         assert.equal(layout.browser.width, 1024);
-        assert.equal(layout.browser.x, editor && size[0] >= 1696 ? 672 : 320);
-        assert.equal(layout.debug.x, layout.browser.x);
+        const controlEdge = editor && size[0] >= 1696 ? 672 : 320;
+        assert.equal(
+          layout.browser.x,
+          controlEdge +
+            Math.max(0, Math.floor((size[0] - controlEdge - 1024) / 2)),
+        );
+        assert.equal(layout.debug.x, controlEdge);
         assert.equal(layout.debug.y + layout.debug.height, size[1]);
         assert.equal(layout.debug.height, debug ? 200 : 36);
-        assert.equal(layout.debug.width, size[0] - layout.browser.x);
+        assert.equal(layout.debug.width, size[0] - layout.debug.x);
       }
 });
 test("visual preflight rejects mismatched width, height and zoom for every visual action, without scaling ROI", () => {

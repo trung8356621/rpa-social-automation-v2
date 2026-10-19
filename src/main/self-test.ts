@@ -296,7 +296,7 @@ export async function runSelfTest(ctx: {
     assert.equal(await uiEval("typeof window.creator.invoke"), "function");
     passed("sandbox-preload-and-ipc-ready");
     await uiClick("Tạo");
-    await uiClick("+ Step mới");
+    await uiClick("+ Step");
     await uiSelect("Action", "CLICK_TARGET");
     await uiClick("Chụp & crop ROI");
     assert.equal(await uiEval('!!document.querySelector(".snapshot")'), true);

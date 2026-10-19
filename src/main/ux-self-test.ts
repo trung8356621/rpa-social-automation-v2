@@ -281,7 +281,17 @@ export async function runSelfTest({
       assert.equal(window.isFullScreenable(), true);
       assert.deepEqual(browser.view.getBounds(), {
         ...baseBounds,
-        x: window.getContentSize()[0] >= 1696 ? 672 : 320,
+        x:
+          (window.getContentSize()[0] >= 1696 ? 672 : 320) +
+          Math.max(
+            0,
+            Math.floor(
+              (window.getContentSize()[0] -
+                (window.getContentSize()[0] >= 1696 ? 672 : 320) -
+                1024) /
+                2,
+            ),
+          ),
       });
       assert.equal(browser.view.webContents.getZoomFactor(), zoom);
       assert.equal(store.flow()!.zoom, zoom);
