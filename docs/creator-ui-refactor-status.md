@@ -1,7 +1,11 @@
 > Cập nhật 2026-10-19: bỏ Bottom Test & Debug khỏi workspace; dùng Play cạnh Edit.
 > Browser rộng 1024 DIP, cao theo workspace; Editor cuộn nội bộ. Variables ở cột trái,
 > không ẩn/reload browser. Match To chỉ có với OCR xác nhận: Current giữ pipeline cũ;
-> Top/Middle/Bottom cuộn bằng JS tối đa hai lượt, đợi ngắn rồi OCR viewport, không thấy thì không click.
+> Top/Middle/Bottom OCR viewport hiện tại trước, rồi cuộn từng đoạn khoảng 200 DIP,
+> đợi 250ms, chụp mới và OCR lại. Dừng ngay khi tìm thấy; tọa độ OCR giữ theo viewport.
+> Giữ một scroll container trong isolated world; có modal thì không fallback trang nền.
+> Chặn khi tới đích, đổi modal/container hoặc hết giới hạn 40 lượt / 20 giây / 8000 DIP.
+> Đích cập nhật theo scrollHeight sau lazy-load nhưng hướng cuộn được giữ để tránh quay vòng.
 > Marker Creator là cửa sổ trong suốt 12px, bỏ qua chuột/focus, tự ẩn sau 3 giây.
 > Giữ kiểm tra môi trường target: target cũ khác chiều cao viewport vẫn bị chặn an toàn;
 > cần crop lại ở viewport hiện tại nếu gặp thông báo không khớp. Không tự sửa version/override.

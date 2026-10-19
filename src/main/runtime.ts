@@ -7,6 +7,7 @@ import type { Payload, Result } from "../shared/contracts.js";
 import { BrowserCore, InputNotReady } from "./browser-core.js";
 import { Store } from "./storage.js";
 import { localOcr, type OcrEngine } from "./ocr.js";
+import { advanceOcrSearch, clearOcrSearch } from "./ocr-match-scroll.js";
 import { resolveVisualTarget, TargetNotConfident } from "./target-resolver.js";
 import { inspectUploadFiles, UploadError } from "./upload-files.js";
 import { assertVisualEnvironment } from "../shared/visual-environment.js";
@@ -208,27 +209,6 @@ export class Runtime {
   ): Promise<Result> {
     // Screenshot capture can disturb native focus on this Electron/Windows build.
     // Focus-sensitive input runs first without a pre-capture or any refocus.
-    if (payload.target?.ocr?.confirmed && payload.target.matchTo && payload.target.matchTo !== "current") {
-      const fraction = { top: 0, middle: 0.5, bottom: 1 }[payload.target.matchTo];
-      // Two passes allow one lazy-load expansion; no unbounded scrolling loop.
-      for (let pass = 0; pass < 2; pass++) {
-        await this.browser.view.webContents.executeJavaScript(`(async () => {
-          const root = document.scrollingElement;
-          const candidates = [...document.querySelectorAll('[role="dialog"], [role="dialog"] *')]
-            .filter(el => el.clientHeight > 100 && el.scrollHeight > el.clientHeight &&
-              el.getBoundingClientRect().bottom > 0 && el.getBoundingClientRect().top < innerHeight &&
-              /auto|scroll/.test(getComputedStyle(el).overflowY));
-          const el = candidates.sort((a,b) => b.clientHeight - a.clientHeight)[0] || root;
-          if (el) {
-            const end = Math.max(0, el.scrollHeight - el.clientHeight);
-            el.scrollTo({ top: Math.max(0, end * ${fraction} + (${fraction} === 0 ? 80 : -80)), behavior: 'instant' });
-            await new Promise(resolve => setTimeout(resolve, 80));
-            el.scrollTo({ top: end * ${fraction}, behavior: 'instant' });
-          }
-        })()`);
-        await new Promise(r => setTimeout(r, 350));
-      }
-    }
     const before = ["TYPE_ONLY", "SCROLL"].includes(payload.action)
       ? undefined
       : await this.browser.capture();
@@ -264,32 +244,49 @@ export class Runtime {
         const template = await readFile(
           path.join(this.assetDir, payload.target!.asset),
         );
-        const deadline =
-          Date.now() +
-          (payload.action === "WAIT_VERIFY" ? (payload.timeoutMs ?? 3000) : 0);
+        const matchTo = payload.target?.ocr?.confirmed && payload.target.matchTo !== "current"
+          ? payload.target.matchTo : undefined;
+        const deadline = Date.now() + (matchTo ? 20000
+          : payload.action === "WAIT_VERIFY" ? (payload.timeoutMs ?? 3000) : 0);
+        let scrolls = 0;
+        let reached = false;
         let current = before!;
-        do {
-          try {
-            const resolved = await resolveVisualTarget(
-              this.browser.captureBuffer(current.id),
-              template,
-              payload,
-              this.ocr,
-            );
-            const { resolution: trace, ...position } = resolved;
-            match = position;
-            resolution = trace;
-            break;
-          } catch (error) {
-            if (
-              !(error instanceof TargetNotConfident) ||
-              Date.now() >= deadline
-            )
-              throw error;
-          }
-          await new Promise((r) => setTimeout(r, 200));
-          current = await this.browser.capture();
-        } while (true);
+        if (matchTo) await clearOcrSearch(this.browser.view.webContents);
+        try {
+          do {
+            try {
+              const resolved = await resolveVisualTarget(
+                this.browser.captureBuffer(current.id),
+                template,
+                payload,
+                this.ocr,
+              );
+              const { resolution: trace, ...position } = resolved;
+              if (matchTo && Date.now() >= deadline)
+                throw new TargetNotConfident("Match To hết thời gian tìm OCR; chưa gửi action.");
+              match = position;
+              resolution = trace;
+              break;
+            } catch (error) {
+              if (
+                !(error instanceof TargetNotConfident) || (matchTo && error.ambiguous) ||
+                Date.now() >= deadline || (matchTo && (reached || scrolls >= 40))
+              )
+                throw error;
+            }
+            if (matchTo) {
+              const progress = await advanceOcrSearch(this.browser.view.webContents, matchTo, this.browser.zoom);
+              reached = progress.reached;
+              scrolls++;
+              if (!progress.moved)
+                throw new TargetNotConfident("Match To đã đến vùng đích hoặc không thể cuộn; không tìm thấy OCR. Chưa gửi action.");
+            }
+            await new Promise((r) => setTimeout(r, matchTo ? 250 : 200));
+            current = await this.browser.capture();
+          } while (true);
+        } finally {
+          if (matchTo) await clearOcrSearch(this.browser.view.webContents);
+        }
         if (payload.action === "UPLOAD_FILE") {
           upload = await this.browser.uploadFiles(files!, () => {
             this.browser.click(match!.x, match!.y);
