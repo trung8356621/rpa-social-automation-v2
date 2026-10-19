@@ -2,7 +2,7 @@
 
 Creator đầu tiên, theo [baseline V2 trên Drive](https://docs.google.com/document/d/141N81qBlAg9VlX1WF-iaX9CfAieTcmBokjbWp5rpqUY/edit), đọc ngày 19/10/2026; mục 24 Action-first ưu tiên hơn các ý tưởng cũ.
 
-**Creator UX Refactor:** người dùng đã xác nhận POC Facebook và native Overlay POC. UI mới cần kiểm chứng lại trên Facebook; các báo cáo tự động chỉ dùng fixture. Xem [bố cục, kiểm thử và hướng dẫn Facebook](docs/creator-ui-refactor-status.md).
+**Creator layout/pointer:** đang xử lý báo cáo click không nhận trên Facebook. Editor chuyển thành cột cạnh Step List, mặc định ẩn; chỉ Test & Debug còn native overlay. Lỗi click vật lý chưa xác nhận đã sửa. Xem [bố cục, kiểm thử và hướng dẫn Facebook](docs/creator-ui-refactor-status.md).
 
 ## Chạy ứng dụng
 
@@ -13,13 +13,13 @@ Set-Location D:\workspace-2026\rpa\new
 npm start
 ```
 
-Ứng dụng mở ở content window 1344×648 DIP, sidebar 320 DIP và WebContentsView cố định 1024×560 DIP. Không resize thủ công; có thể maximize bằng nút cửa sổ và bật/tắt fullscreen bằng nút `Toàn màn hình` hoặc F11. Zoom, viewport web và gốc tọa độ crop/click không thay đổi khi chuyển chế độ; phần cửa sổ rộng thêm không scale trang web. Work area ban đầu cần tối thiểu 1360×688 DIP; app báo lỗi nếu không vừa, không âm thầm thu nhỏ web. Ở zoom 100%, web rộng 1024 CSS px; zoom 90/80% có CSS viewport rộng hơn. Zoom khóa sau khi flow có step; tạo flow mới để chọn môi trường khác.
+Ứng dụng mở ở content window 1344×648 DIP, sidebar 320 DIP. Browser rộng 1024 khi Editor ẩn, 672 khi Editor mở; luôn cao 560 DIP và giữ zoom. Visual Step bị chặn khi viewport khác target đã lưu. Không resize thủ công; có thể maximize bằng nút cửa sổ và bật/tắt fullscreen bằng nút `Toàn màn hình` hoặc F11. Zoom, chiều cao và chiều rộng chuẩn theo trạng thái Editor không thay đổi khi chuyển fullscreen/restore; phần cửa sổ rộng thêm không scale trang web. Work area ban đầu cần tối thiểu 1360×688 DIP; app báo lỗi nếu không vừa, không âm thầm thu nhỏ web. Ở zoom 100%, web rộng 1024 CSS px; zoom 90/80% có CSS viewport rộng hơn. Zoom khóa sau khi flow có step; tạo flow mới để chọn môi trường khác.
 
 Electron 44.9.0, React 19, Vite 8, TypeScript, Sharp, SQLite tích hợp trong Node của Electron (`node:sqlite`). Không có Puppeteer hay browser thứ hai. Browser session, ảnh, DB và log development đều nằm trong `new/.local/creator/`. Không xóa thư mục này nếu cần giữ đăng nhập. `.local/` bị gitignore. Chưa đóng gói installer; vị trí dữ liệu này dành cho POC trong workspace.
 
 ## Cách dùng
 
-1. Tạo flow bằng nút `Tạo flow` hoặc chọn flow ở top bar. Sidebar chỉ chứa danh sách Step và nút thêm Step. Step Editor nằm trên browser; Test & Debug nằm phía dưới, mỗi panel có nút −/+ để thu gọn/mở. Khi chưa có flow, ngay cạnh nút crop có lý do và nút `Đi tới bước 1`. Chọn zoom trước khi lưu step đầu tiên.
+1. Tạo flow bằng nút `Tạo flow` hoặc chọn flow ở top bar. Sidebar chỉ chứa danh sách Step và nút thêm Step; bấm `+ Step mới` để mở Editor. Step Editor là cột mở/ẩn cạnh Step List; Test & Debug là native overlay sát đáy, thu gọn native bounds bằng −/+. Khi chưa có flow, ngay cạnh nút crop có lý do và nút `Đi tới bước 1`. Chọn zoom trước khi lưu step đầu tiên.
 2. Chọn Action trước. CLICK_TARGET, CLICK_AND_TYPE, UPLOAD_FILE và WAIT/VERIFY cần `Chụp & crop ROI`; TYPE_ONLY và SCROLL không cần target. [Resolver AUTO](docs/AUTO-RESOLVER.md) ưu tiên ảnh rồi fallback sang chữ OCR đã xác nhận khi cần. Với composer đã mở, dùng CLICK_AND_TYPE để nhập hoặc [UPLOAD_FILE](docs/UPLOAD-FILE-POC.md) để chọn ảnh local và click nút Ảnh/Video. Chọn file chưa phải upload thành công: phải quan sát đủ preview rồi xác nhận.
 3. Kéo ROI trên ảnh, chọn `Dùng ROI` ở thanh trên cùng, rồi `Lưu Base v1`. `Quay lại browser` hoặc Escape hủy crop mà không lưu step. Nút thoát luôn ở thanh trên cùng, kể cả khi sidebar cuộn xuống hoặc crop báo lỗi. Trong crop mode, Escape thoát crop trước; khi đang ở browser fullscreen, Escape thoát fullscreen. Ảnh crop PNG được lưu thật.
 4. Test step đã lưu. CLICK_TARGET gửi click thật trên browser đang hiển thị và trả ACTION_SENT; không tự chụp ảnh sau click hay reset trang. Quan sát kết quả rồi chọn **Đúng — Hoàn thành Step** để VERIFIED và tạo Step tiếp theo từ trạng thái hiện tại, hoặc **Sai — Redesign Step** để sửa mà giữ Base. WAIT/VERIFY xác nhận điều kiện ảnh/chữ. Xem [quy trình Test & Debug](docs/TEST-DEBUG-UX.md) và [hướng dẫn OCR](docs/OCR-POC.md).
@@ -53,9 +53,9 @@ Bộ test mặc định chạy cả `creator-ui` cho bố cục native panel th�
 
 Bộ test hiện chạy thêm process UX với session riêng `.local/test-ux-<pid>/`, kiểm tra tạo flow, hủy/lỗi crop, maximize/fullscreen/restore. Có thể chạy riêng sau build bằng `node scripts/browser-test.mjs ux`. Báo cáo sửa UX: [docs/UX-FIXES.md](docs/UX-FIXES.md); kết quả máy: `artifacts/browser-ux.json`.
 
-Bản UPLOAD_FILE: 24 unit tests qua; 75 checks Electron đạt (27 first + 3 restart + 16 UX + 8 OCR/debug + 13 typing + 8 upload), còn 2 mục giới hạn/thủ công ở lần chạy cuối: screenshot khi ẩn view timeout và phím tắt vật lý chưa xác nhận. Screenshot/focus vẫn có thể không ổn định theo môi trường; CLICK_TARGET/CLICK_AND_TYPE/TYPE_ONLY không tự chụp sau input. Báo cáo: [UPLOAD_FILE](docs/UPLOAD-FILE-POC.md), [AUTO Resolver](docs/AUTO-RESOLVER.md), [CLICK_AND_TYPE](docs/CLICK-AND-TYPE.md), [TYPE_ONLY](docs/TYPE-ONLY-POC.md), [Test & Debug](docs/TEST-DEBUG-UX.md), [OCR](docs/OCR-POC.md). Các báo cáo POC/UX cũ giữ làm lịch sử; kết quả mới tại `artifacts/browser-*.json`.
+Lịch sử POC UPLOAD_FILE trước bố cục cột: 24 unit tests qua; 75 checks Electron đạt (27 first + 3 restart + 16 UX + 8 OCR/debug + 13 typing + 8 upload), còn 2 mục giới hạn/thủ công ở lần chạy cuối: screenshot khi ẩn view timeout và phím tắt vật lý chưa xác nhận. Screenshot/focus vẫn có thể không ổn định theo môi trường; CLICK_TARGET/CLICK_AND_TYPE/TYPE_ONLY không tự chụp sau input. Báo cáo: [UPLOAD_FILE](docs/UPLOAD-FILE-POC.md), [AUTO Resolver](docs/AUTO-RESOLVER.md), [CLICK_AND_TYPE](docs/CLICK-AND-TYPE.md), [TYPE_ONLY](docs/TYPE-ONLY-POC.md), [Test & Debug](docs/TEST-DEBUG-UX.md), [OCR](docs/OCR-POC.md). Các báo cáo POC/UX cũ giữ làm lịch sử; kết quả mới tại `artifacts/browser-*.json`.
 
-[Ảnh review UI](artifacts/creator-ui-composed.png) được ghép từ capture shell và capture browser thật, vì BrowserWindow.capturePage không chứa native child view. Đây không phải ảnh chụp desktop nguyên khối.
+[Ảnh review POC trước bố cục cột](artifacts/creator-ui-composed.png) được ghép từ capture shell và capture browser thật, vì BrowserWindow.capturePage không chứa native child view. Đây không phải ảnh chụp desktop nguyên khối.
 
 ## Bài Facebook cần người dùng kiểm tra
 

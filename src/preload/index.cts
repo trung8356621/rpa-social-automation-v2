@@ -49,7 +49,8 @@ window.addEventListener("DOMContentLoaded", () => {
       type,
       (event) => {
         const mouse = event as MouseEvent,
-          element = event.target as Element;
+          element = event.target;
+        if (!(element instanceof Element)) return;
         const control = element.closest("button,input,select,summary");
         ipcRenderer.send("creator:pointer-dom", {
           type,

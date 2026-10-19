@@ -1,7 +1,7 @@
 import { spawn } from "node:child_process";
 import { createRequire } from "node:module";
 import path from "node:path";
-import { readFile } from "node:fs/promises";
+import { readFile, mkdir, writeFile } from "node:fs/promises";
 const require = createRequire(import.meta.url);
 const electron = require("electron");
 const phases = process.argv.slice(2);
@@ -38,6 +38,22 @@ for (const phase of phases.length
       "address",
     ]) {
   const started = Date.now();
+  await mkdir("artifacts", { recursive: true });
+  await writeFile(
+    path.join("artifacts", `browser-${phase}.json`),
+    JSON.stringify(
+      {
+        timestamp: new Date().toISOString(),
+        status: "incomplete",
+        passedCount: 0,
+        pendingCount: 1,
+        reason:
+          "Fixture started but has not produced a fresh completed report.",
+      },
+      null,
+      2,
+    ),
+  );
   const code = await new Promise((resolve, reject) => {
     const env = { ...process.env };
     delete env.ELECTRON_RUN_AS_NODE;
@@ -71,7 +87,10 @@ for (const phase of phases.length
   const report = JSON.parse(
     await readFile(path.join("artifacts", `browser-${phase}.json`), "utf8"),
   );
-  if (Date.parse(report.timestamp) < started)
+  if (
+    Date.parse(report.timestamp) < started ||
+    !["passed", "partial"].includes(report.status)
+  )
     throw new Error(
       "No fresh test report; another instance may hold the session lock.",
     );
