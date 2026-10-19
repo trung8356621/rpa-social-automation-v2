@@ -1,3 +1,4 @@
+import { logMainError } from "./main-error-log.js";
 import { resolvePayload } from "../shared/flow-model.js";
 import { validatePayload } from "./storage.js";
 import path from "node:path";
@@ -266,6 +267,9 @@ export class Runtime {
                 throw new TargetNotConfident("Match To hết thời gian tìm OCR; chưa gửi action.");
               match = position;
               resolution = trace;
+              if (trace.attempts.some((attempt) => attempt.outcome === "failed"))
+                logMainError(this.runDir, "visual-fallback", new Error("Visual/OCR attempt failed; fallback selected"),
+                  { stepId, version, action: payload.action, resolution: trace });
               break;
             } catch (error) {
               if (
@@ -315,6 +319,10 @@ export class Runtime {
               : `Đã gửi click một lần${input ? " rồi gửi nội dung nhập" : ""}; chưa xác nhận kết quả nghiệp vụ.${input?.warning ? ` ${input.warning}` : ""}`;
       }
     } catch (e) {
+      logMainError(this.runDir, "runtime", e, {
+        stepId, version, overrideId, action: payload.action, matchTo: payload.target?.matchTo,
+        clickSent, resolution: e instanceof TargetNotConfident ? e.resolution : resolution,
+      });
       status =
         e instanceof TargetNotConfident ||
         e instanceof InputNotReady ||
@@ -325,7 +333,7 @@ export class Runtime {
         input = { method: payload.inputMethod ?? "keyboard", focus: e.focus };
       message =
         e instanceof TargetNotConfident
-          ? "Target chưa đủ rõ hoặc vị trí nhận diện không thống nhất. Chưa gửi thao tác; hãy Redesign target. Chi tiết trong Debug."
+          ? `BLOCKED: ${e.message}`
           : (e as Error).message;
       if (e instanceof TargetNotConfident) resolution = e.resolution;
       if (e instanceof UploadError && e.upload) upload = e.upload;
@@ -341,6 +349,7 @@ export class Runtime {
       try {
         after = await this.browser.capture();
       } catch (error) {
+        logMainError(this.runDir, "upload-evidence", error, { stepId, version });
         evidenceWarning = `Không chụp được ảnh sau upload: ${(error as Error).message}`;
       }
     } else

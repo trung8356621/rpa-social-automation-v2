@@ -1,3 +1,13 @@
+> Bổ sung: double-click chữ OCR đã xác nhận để sửa trong Editor; Enter nhận chữ,
+> Esc/blur hủy, X bỏ OCR. Lưu Step/Redesign theo luồng sẵn có để ghi thay đổi.
+> Giữ ảnh target, ROI và metadata OCR. Không tự tạo version khi Enter.
+> DevTools mặc định tắt. Chạy Creator với `$env:CREATOR_DEVTOOLS="1"` để dùng F12
+> mở/đóng DevTools Facebook bằng cửa sổ detached; không tự mở khi khởi động.
+> Flag bị vô hiệu khi app.isPackaged hoặc NODE_ENV=production. F11 và Ctrl shortcut giữ nguyên.
+> Lỗi OCR/Runtime Main Process ghi console và `runs/creator-errors.jsonl` dưới dataPath;
+> DevTools Facebook chỉ xem log của renderer Facebook. BLOCKED hiển thị lý do lỗi cụ thể.
+> Các thay đổi này chưa test theo yêu cầu; không chạy build/typecheck hay mở Electron.
+
 > Cập nhật 2026-10-19: bỏ Bottom Test & Debug khỏi workspace; dùng Play cạnh Edit.
 > Browser rộng 1024 DIP, cao theo workspace; Editor cuộn nội bộ. Variables ở cột trái,
 > không ẩn/reload browser. Match To chỉ có với OCR xác nhận: Current giữ pipeline cũ;

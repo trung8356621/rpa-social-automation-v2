@@ -18,6 +18,7 @@ import { ClickMarker } from "./click-marker.js";
 import { CreatorOverlays } from "./creator-overlays.js";
 import { BrowserCore } from "./browser-core.js";
 import { Store } from "./storage.js";
+import { logMainError } from "./main-error-log.js";
 import { Runtime } from "./runtime.js";
 import { startFixture } from "./fixture.js";
 import { localOcr } from "./ocr.js";
@@ -215,13 +216,26 @@ async function boot() {
     overlays.layout();
     publishLayout();
   });
+  const creatorDevtools = process.env.CREATOR_DEVTOOLS === "1" &&
+    !app.isPackaged && process.env.NODE_ENV !== "production";
   const windowKeys = (event: Electron.Event, input: Electron.Input) => {
     if (input.type !== "keyDown") return;
+    if (input.key === "F12" && !input.control && !input.shift && !input.alt && !input.meta) {
+      event.preventDefault();
+      if (creatorDevtools && !input.isAutoRepeat) {
+        const facebook = browser.view.webContents;
+        if (facebook.isDevToolsOpened()) facebook.closeDevTools();
+        else facebook.openDevTools({ mode: "detach" });
+      }
+      return;
+    }
     if (input.key === "F11") {
       event.preventDefault();
       window.setFullScreen(!window.isFullScreen());
     } else if (
       input.key === "Escape" &&
+      // Shell inputs handle Escape themselves (including inline OCR cancel).
+      browser.view.webContents.isFocused() &&
       browser.visible &&
       window.isFullScreen()
     ) {
@@ -231,6 +245,16 @@ async function boot() {
   };
   for (const editor of editors) editor.on("before-input-event", windowKeys);
   browser.view.webContents.on("before-input-event", windowKeys);
+  browser.view.webContents.on("devtools-opened", () => {
+    // Detached DevTools receives F12 while its own window has focus.
+    browser.view.webContents.devToolsWebContents?.on("before-input-event", (event, input) => {
+      if (creatorDevtools && input.type === "keyDown" && input.key === "F12" &&
+          !input.control && !input.shift && !input.alt && !input.meta) {
+        event.preventDefault();
+        if (!input.isAutoRepeat) browser.view.webContents.closeDevTools();
+      }
+    });
+  });
   browser.setZoom(store.flow()?.zoom ?? Number(store.setting("zoom") || 1));
   const marker = new ClickMarker(window, browser);
   const runtime = new Runtime(browser, store, assetDir, runDir, undefined,
@@ -377,9 +401,12 @@ async function boot() {
         isIdle();
         if (!/^[a-f0-9-]+\.png$/.test(command.asset))
           throw new Error("Asset không hợp lệ.");
-        return localOcr.recognize(
-          await readFile(path.join(assetDir, command.asset)),
-        );
+        try {
+          return await localOcr.recognize(await readFile(path.join(assetDir, command.asset)));
+        } catch (error) {
+          logMainError(runDir, "ocrTarget", error, { asset: command.asset });
+          throw error;
+        }
       }
       case "capture": {
         isIdle();
@@ -464,17 +491,19 @@ async function boot() {
           command.previewConfirmed,
         );
       case "test":
-        return runtime.test(
-          command.stepId,
-          command.version,
-          command.overrideId,
-        );
+        try {
+          return await runtime.test(command.stepId, command.version, command.overrideId);
+        } catch (error) {
+          logMainError(runDir, "test", error, { stepId: command.stepId, version: command.version });
+          throw error;
+        }
       case "testPair":
-        return runtime.testPair(
-          command.firstId,
-          command.secondId,
-          command.delayMs,
-        );
+        try {
+          return await runtime.testPair(command.firstId, command.secondId, command.delayMs);
+        } catch (error) {
+          logMainError(runDir, "testPair", error, { firstId: command.firstId, secondId: command.secondId });
+          throw error;
+        }
       case "disarmTest":
         armedTest = undefined;
         return;
@@ -541,11 +570,12 @@ async function boot() {
             .then((result) =>
               window.webContents.send("creator:shortcut-result", result),
             )
-            .catch((e) =>
+            .catch((e) => {
+              logMainError(runDir, "shortcut-test", e, { stepId: test.stepId, version: test.version });
               window.webContents.send("creator:shortcut-result", {
                 error: String(e.message || e),
-              }),
-            );
+              });
+            });
         });
       }
     }

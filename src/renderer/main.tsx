@@ -49,9 +49,12 @@ function Creator() {
   const [ocrResult, setOcrResult] = useDraft<OcrResult>("ocrResult");
   const [ocrError, setOcrError] = useDraft("ocrError", "");
   const [ocrLoading, setOcrLoading] = useDraft("ocrLoading", false);
+  const [ocrEdit, setOcrEdit] = useState<string>();
   const [ocrKind, setOcrKind] = useDraft<"line" | "word">("ocrKind", "line");
   const [selected, setSelected] = useDraft<Step>("selected");
   const [overrideId, setOverrideId] = useDraft("overrideId", "");
+  useEffect(() => setOcrEdit(undefined), [target?.asset, target?.ocr?.text,
+    selected?.id, selected?.version, overrideId]);
   const [shot, setShot] = useDraft<Capture>("shot");
   const [cropMode, setCropMode] = useDraft("cropMode", false);
   const [roi, setRoi] = useDraft<Rect>("roi");
@@ -1201,7 +1204,40 @@ function Creator() {
                       {target.ocr ? (
                         <div className="ocr-confirmed">
                           <small>OCR đã xác nhận</small>
-                          <b>{target.ocr.text}</b>
+                          {ocrEdit !== undefined ? (
+                            <input
+                              aria-label="Chỉnh sửa OCR đã xác nhận"
+                              autoFocus
+                              disabled={locked}
+                              maxLength={2000}
+                              value={ocrEdit}
+                              onFocus={(e) => e.currentTarget.select()}
+                              onChange={(e) => setOcrEdit(e.target.value)}
+                              onBlur={() => setOcrEdit(undefined)}
+                              onKeyDown={(e) => {
+                                if (e.nativeEvent.isComposing) return;
+                                if (e.key === "Escape") {
+                                  e.preventDefault();
+                                  e.stopPropagation();
+                                  setOcrEdit(undefined);
+                                } else if (e.key === "Enter") {
+                                  e.preventDefault();
+                                  e.stopPropagation();
+                                  const text = ocrEdit.trim();
+                                  if (!text) return;
+                                  setTarget((previous) => previous?.ocr
+                                    ? { ...previous, ocr: { ...previous.ocr, text } }
+                                    : previous);
+                                  setOcrEdit(undefined);
+                                }
+                              }}
+                            />
+                          ) : (
+                            <b title="Double-click để sửa · Enter lưu · Esc hủy"
+                              onDoubleClick={() => {
+                                if (!locked) setOcrEdit(target.ocr!.text);
+                              }}>{target.ocr.text}</b>
+                          )}
                           <p className="hint">
                             {Math.round(target.ocr.confidence)}% confidence
                           </p>
@@ -1210,6 +1246,7 @@ function Creator() {
                             className="ocr-clear"
                             disabled={locked}
                             onClick={() => {
+                              setOcrEdit(undefined);
                               setTarget((previous) => {
                                 if (!previous) return previous;
                                 const { ocr, matchTo, ...rest } = previous;
