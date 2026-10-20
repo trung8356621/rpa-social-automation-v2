@@ -53,10 +53,12 @@ function Creator() {
   const [ocrError, setOcrError] = useDraft("ocrError", "");
   const [ocrLoading, setOcrLoading] = useDraft("ocrLoading", false);
   const [ocrEdit, setOcrEdit] = useState<string>();
-  const [ocrKind, setOcrKind] = useDraft<"line" | "word">("ocrKind", "line");
+  const [ocrKind, setOcrKind] = useState<"none" | "line" | "word">("none");
   const [selected, setSelected] = useDraft<Step>("selected");
   const [overrideId, setOverrideId] = useDraft("overrideId", "");
   const [targetModal, setTargetModal] = useState(false);
+  useEffect(() => setOcrKind(target?.ocr?.kind ?? "none"),
+    [target?.asset, target?.ocr?.kind, selected?.id, selected?.version, overrideId]);
   useEffect(() => setTargetModal(false), [selected?.id, selected?.version, action, state?.flow?.id, overrideId]);
   useEffect(() => setOcrEdit(undefined), [target?.asset, target?.ocr?.text,
     selected?.id, selected?.version, overrideId]);
@@ -487,7 +489,17 @@ function Creator() {
       setOcrLoading(false);
     }
   }
+  function clearTargetOcr() {
+    setOcrKind("none");
+    setOcrEdit(undefined);
+    setTarget((previous) => {
+      if (!previous) return previous;
+      const { ocr, matchTo, ...rest } = previous;
+      return rest;
+    });
+  }
   function confirmOcr(segment: OcrSegment) {
+    setOcrKind(segment.kind);
     setTarget((previous) =>
       previous
         ? {
@@ -1149,61 +1161,53 @@ function Creator() {
                             aria-label="Clear confirmed OCR"
                             className="ocr-clear"
                             disabled={locked}
-                            onClick={() => {
-                              setOcrEdit(undefined);
-                              setTarget((previous) => {
-                                if (!previous) return previous;
-                                const { ocr, matchTo, ...rest } = previous;
-                                return rest;
-                              });
-                            }}
+                            onClick={clearTargetOcr}
                           >
                             ×
                           </button>
                         </div>
-                      ) : (
-                        <p className="hint">
-                          Chưa có chữ dự phòng được xác nhận; AUTO vẫn dùng ảnh.
-                        </p>
-                      )}
+                      ) : null}
 
                     </>}
                     ocrControls={<>
                   {needsTarget && target && (
                     <section className="ocr-panel" aria-label="OCR ROI">
+                      <label>
+                        Chọn chữ nhận diện
+                        <select aria-label="Chọn chữ nhận diện" value={ocrKind} disabled={locked}
+                          onChange={(e) => {
+                            const kind = e.target.value as "none" | "line" | "word";
+                            if (kind === "none") clearTargetOcr();
+                            else setOcrKind(kind);
+                          }}>
+                          <option value="none">Không dùng chữ</option>
+                          <option value="line">Cả dòng chữ</option>
+                          <option value="word">Từng từ</option>
+                        </select>
+                      </label>
+                      {ocrKind === "none" && <p className="hint">Nhận diện bằng ảnh</p>}
+                      {ocrKind !== "none" && !target.ocr && !ocrResult && !ocrLoading &&
+                        <p className="hint">Đọc lại OCR rồi chọn chữ để xác nhận.</p>}
+
                       {ocrLoading && <p role="note">Đang đọc OCR trên máy…</p>}
                       {ocrError && (
                         <p role="note" className="hint">
                           {ocrError}
                         </p>
                       )}
-                      {ocrResult && !ocrResult.segments.length && (
+                      {ocrKind !== "none" && ocrResult && !ocrResult.segments.length && (
                         <p className="hint">
                           ROI không có chữ đọc được. Có thể lưu image-only cho
                           nút icon.
                         </p>
                       )}
-                      {!target.ocr && ocrResult && ocrResult.segments.length > 0 && (
+                      {ocrKind !== "none" && ocrResult && ocrResult.segments.length > 0 && (
                         <>
                           <p className="hint">
                             {target.ocr
                               ? "Bấm dòng/từ khác để đổi chữ đã xác nhận."
                               : "Không tự chọn chữ. Bấm một dòng/từ bên dưới để xác nhận target."}
                           </p>
-                          <label>
-                            Đơn vị chọn
-                            <select
-                              aria-label="Đơn vị OCR"
-                              value={ocrKind}
-                              disabled={locked}
-                              onChange={(e) =>
-                                setOcrKind(e.target.value as "line" | "word")
-                              }
-                            >
-                              <option value="line">Dòng chữ</option>
-                              <option value="word">Từ riêng lẻ</option>
-                            </select>
-                          </label>
                           <div className="ocr-candidates">
                             {ocrResult.segments
                               .filter((s) => s.kind === ocrKind)
