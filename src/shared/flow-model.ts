@@ -8,11 +8,16 @@ export const slugify = (s: string) =>
     .replace(/[^a-z0-9]+/g, "-")
     .replace(/^-|-$/g, "") || "group";
 export function resolvePayload(p: Payload, f: Flow): Payload {
-  if (!["TYPE_ONLY", "CLICK_AND_TYPE", "UPLOAD_FILE"].includes(p.action))
+  if (!["TYPE_ONLY", "CLICK_AND_TYPE", "UPLOAD_FILE", "QUICK_TAG"].includes(p.action))
     return p;
   const v = f.variables?.find((v) => v.id === p.variableId),
     value = v && f.defaultPattern?.values[v.id];
   if (!v) throw new Error("Missing variable for Action");
+  if (p.action === "QUICK_TAG") {
+    if (v.type !== "integer" || typeof value !== "number" || !Number.isInteger(value) || value < 1 || value > 10 || value > (p.quickTagRows ?? 0))
+      throw new Error(`Variable ${v.key}: QUICK_TAG cần Integer Default Pattern 1–10, không vượt số hàng ROI`);
+    return { ...p, quickTagCount: value };
+  }
   if (p.action === "UPLOAD_FILE") {
     if (v.type === "file" && typeof value === "string" && value)
       return { ...p, files: [value] };
@@ -36,7 +41,7 @@ export function resolvePayload(p: Payload, f: Flow): Payload {
 }
 export function validateVariables(
   vars: Variable[],
-  values: Record<string, string | string[]>,
+  values: Record<string, string | string[] | number>,
 ) {
   const ids = new Set(),
     keys = new Set();
@@ -46,7 +51,7 @@ export function validateVariables(
       !v.key.trim() ||
       ids.has(v.id) ||
       keys.has(v.key) ||
-      !["text", "file", "files"].includes(v.type)
+      !["text", "file", "files", "integer"].includes(v.type)
     )
       throw new Error("Invalid or duplicate variable");
     ids.add(v.id);
@@ -54,7 +59,7 @@ export function validateVariables(
     const x = values[v.id];
     if (
       x !== undefined &&
-      (v.type === "files"
+      (v.type === "integer" ? typeof x !== "number" || !Number.isSafeInteger(x) : v.type === "files"
         ? !Array.isArray(x) || x.some((y) => typeof y !== "string")
         : typeof x !== "string")
     )

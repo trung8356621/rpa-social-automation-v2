@@ -15,7 +15,7 @@ export function Variables({ state, update, locked }: Props) {
     setOpen(false);
   }, [f?.id]);
   const [vars, setVars] = useState<Variable[]>([]),
-    [values, setValues] = useState<Record<string, string | string[]>>({});
+    [values, setValues] = useState<Record<string, string | string[] | number>>({});
   return (
     <div className="variables">
       <button
@@ -89,13 +89,18 @@ export function Variables({ state, update, locked }: Props) {
                       });
                     }}
                   >
-                    {["text", "file", "files"].map((t) => (
+                    {["text", "file", "files", "integer"].map((t) => (
                       <option key={t} value={t}>
                         {t[0].toUpperCase() + t.slice(1)}
                       </option>
                     ))}
                   </select>
-                  <textarea
+                  {v.type === "integer" ? <input
+                    type="number" step={1}
+                    aria-label={`Default value ${v.key}`}
+                    value={typeof values[v.id] === "number" ? values[v.id] as number : ""}
+                    onChange={e => setValues({ ...values, [v.id]: e.target.value === "" ? "" : Number(e.target.value) })}
+                  /> : <textarea
                     aria-label={`Default value ${v.key}`}
                     value={
                       Array.isArray(values[v.id])
@@ -111,7 +116,7 @@ export function Variables({ state, update, locked }: Props) {
                             : e.target.value,
                       })
                     }
-                  />
+                  />}
                   <button
                     className="icon-button"
                     aria-label={`Delete ${v.key}`}
@@ -131,6 +136,7 @@ export function Variables({ state, update, locked }: Props) {
           <p className="hint">
             Files: one local path per line. Values are used only by Default
             Pattern.
+            Integer: số nguyên; QUICK_TAG dùng 1–10, không vượt số hàng ROI.
           </p>
           <div className="popover-footer">
             <button

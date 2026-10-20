@@ -13,6 +13,7 @@ import { normalizeTargetText, resolveVisualTarget, TargetNotConfident, OcrNotFou
 import { inspectUploadFiles, UploadError } from "./upload-files.js";
 import { effectiveMatchTo, matchToLabel } from "../shared/match-to.js";
 import { WEB_HEIGHT } from "../shared/geometry.js";
+import { quickTag, QuickTagBlocked } from "./quick-tag.js";
 import { assertVisualEnvironment } from "../shared/visual-environment.js";
 type TestLogScope = { runId: string; batchRunId?: string; ocrPasses: number; scrolls: number };
 export class Runtime {
@@ -44,7 +45,7 @@ export class Runtime {
   private executionStart(payload: Payload, stepId: string, version: number, overrideId?: string): ExecutionStart {
     const matchTo = effectiveMatchTo(payload);
     return { stepId, version, overrideId, matchTo,
-      pipeline: matchTo === "none" ? "auto-roi" : "ocr-viewport" };
+      pipeline: payload.action === "QUICK_TAG" ? "quick-tag-position" : matchTo === "none" ? "auto-roi" : "ocr-viewport" };
   }
   async test(
     stepId: string,
@@ -290,6 +291,7 @@ export class Runtime {
     this.onExecution?.(execution);
     logMainEvent(this.runDir, "execution-start", { ...execution, action: payload.action });
     let before: Result["before"];
+    let afterQuickTag: Result["after"];
     let status: Result["status"] = "FAILED",
       message = "Input đã gửi; cần VERIFY riêng để xác nhận nghiệp vụ.",
       match: Result["match"],
@@ -308,7 +310,16 @@ export class Runtime {
         : undefined;
     try {
       before = ["TYPE_ONLY", "SCROLL"].includes(payload.action) ? undefined : await this.browser.capture();
-      if (payload.action === "TYPE_ONLY") {
+      if (payload.action === "QUICK_TAG") {
+        const template = await readFile(path.join(this.assetDir, payload.target!.asset));
+        afterQuickTag = await quickTag(this.browser, payload, before!, template, (x, y) => {
+          this.browser.click(x, y);
+          this.onClick?.(x, y);
+          clickSent = true;
+        }, details => logMainEvent(this.runDir, "quick-tag", { ...execution, ...details }));
+        status = "ACTION_SENT";
+        message = `QUICK_TAG: đã gửi ${payload.quickTagCount} click theo vị trí và quan sát hàng đầu thay đổi. Không xác minh danh tính; cần kiểm tra thủ công.`;
+      } else if (payload.action === "TYPE_ONLY") {
         input = await this.browser.typeOnly(payload.text!, payload.inputMethod);
         message = `Đã gửi ${input.method === "clipboard" ? "clipboard paste" : "native text + phím Shift+Enter"}; caret chưa được tự kiểm chứng. Quan sát chữ và xác nhận thủ công hoặc VERIFY riêng.${input.warning ? ` ${input.warning}` : ""}`;
         status = "ACTION_SENT";
@@ -501,7 +512,7 @@ export class Runtime {
       });
       status = ocrFailure ? "FAILED" :
         e instanceof TargetNotConfident ||
-        e instanceof InputNotReady ||
+        e instanceof InputNotReady || e instanceof QuickTagBlocked ||
         (e instanceof UploadError && !clickSent)
           ? "BLOCKED"
           : "FAILED";
@@ -515,6 +526,8 @@ export class Runtime {
       if (e instanceof UploadError && e.upload) upload = e.upload;
       if (payload.action === "CLICK_AND_TYPE" && clickSent)
         message = `Đã click target một lần; nhập liệu chưa hoàn tất và có thể đã nhập một phần. ${message}`;
+      if (payload.action === "QUICK_TAG" && clickSent)
+        message = `QUICK_TAG đã gửi click, có thể đã chọn một phần. Kiểm tra thủ công trước khi Play lại. ${message}`;
     }
     scope.ocrPasses += execution.ocrPasses;
     scope.scrolls += execution.scrolls;
@@ -524,7 +537,9 @@ export class Runtime {
     await new Promise((r) => setTimeout(r, 120));
     // Keep the live page/focus after input. Evidence capture is an explicit user action.
     let after: Result["after"], evidenceWarning: string | undefined;
-    if (payload.action === "UPLOAD_FILE") {
+    if (payload.action === "QUICK_TAG") {
+      after = afterQuickTag;
+    } else if (payload.action === "UPLOAD_FILE") {
       await new Promise((r) => setTimeout(r, 750));
       try {
         after = await this.browser.capture();

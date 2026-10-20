@@ -37,6 +37,7 @@ document.body.dataset.panel = panel || "shell";
 function Creator() {
   const [state, setState] = useDraft<State>("state");
   const [variableId, setVariableId] = useDraft("variableId", "");
+  const [quickTagRows, setQuickTagRows] = useDraft("quickTagRows", 5);
   const [url, setUrl] = useState("");
   const urlEdit = useRef({ dirty: false, revision: 0 });
   const [action, setAction] = useDraft<Action>("action", "CLICK_TARGET");
@@ -171,6 +172,7 @@ function Creator() {
     showEditor();
     setSelected(undefined);
     setVariableId("");
+    setQuickTagRows(5);
     setTarget(undefined);
     setTargetImage("");
     setOcrResult(undefined);
@@ -321,6 +323,7 @@ function Creator() {
     setVariableId(step.payload.variableId || "");
     setInputMethod(step.payload.inputMethod ?? "keyboard");
     setDelta(step.payload.deltaY ?? -400);
+    setQuickTagRows(step.payload.quickTagRows ?? 5);
     setTarget(step.payload.target);
     setOcrResult(undefined);
     setOcrError("");
@@ -342,6 +345,7 @@ function Creator() {
         : {}),
       ...(action === "SCROLL" ? { deltaY: delta } : {}),
       ...(action === "UPLOAD_FILE" ? { variableId } : {}),
+      ...(action === "QUICK_TAG" ? { variableId, quickTagRows, target: target ? { ...target, ocr: undefined, matchTo: "none" as const } : undefined } : {}),
       ...([
         "CLICK_TARGET",
         "CLICK_AND_TYPE",
@@ -475,6 +479,10 @@ function Creator() {
     setTargetImage(t.dataUrl);
     await closeShot();
     setTargetModal(true);
+    if (action === "QUICK_TAG") {
+      setMessage("ROI QUICK_TAG đã lưu. Khai báo số hàng và kiểm tra chấm click tại tâm hàng đầu; không xác minh danh tính.");
+      return;
+    }
     await readOcr(t.asset);
     setMessage(
       "ROI đã lưu. Chọn và xác nhận một dòng/từ OCR, hoặc giữ image-only; sau đó lưu Base/Override.",
@@ -547,6 +555,7 @@ function Creator() {
     };
   }
   const needsTarget = [
+    "QUICK_TAG",
     "CLICK_TARGET",
     "CLICK_AND_TYPE",
     "UPLOAD_FILE",
@@ -606,7 +615,7 @@ function Creator() {
     : selectedBase?.payload;
   function editableConfig(p: Payload) {
     const target = p.target ? { ...p.target, matchTo: effectiveMatchTo(p) } : null;
-    return JSON.stringify([p.action, p.variableId ?? "", p.inputMethod ?? "keyboard", p.deltaY ?? -400, target]);
+    return JSON.stringify([p.action, p.variableId ?? "", p.inputMethod ?? "keyboard", p.deltaY ?? -400, p.quickTagRows ?? null, target]);
   }
   const editorDirty = !selected || (ocrEdit !== undefined && ocrEdit.trim() !== target?.ocr?.text) || name !== selectedBase?.name || editableConfig(payload()) !== editableConfig(selectedBase!.payload);
   const expected = activePayload
@@ -732,7 +741,7 @@ function Creator() {
                 locked ||
                 !state?.flow ||
                 (needsTarget && !target) ||
-                (["UPLOAD_FILE", "TYPE_ONLY", "CLICK_AND_TYPE"].includes(
+                (["UPLOAD_FILE", "TYPE_ONLY", "CLICK_AND_TYPE", "QUICK_TAG"].includes(
                   action,
                 ) &&
                   !variableId)
@@ -1083,6 +1092,7 @@ function Creator() {
                       <option>CLICK_TARGET</option>
                       <option>CLICK_AND_TYPE</option>
                       <option>UPLOAD_FILE</option>
+                      <option>QUICK_TAG</option>
                       <option>TYPE_ONLY</option>
                       <option value="WAIT_VERIFY">WAIT / VERIFY</option>
                       <option>SCROLL</option>
@@ -1100,7 +1110,7 @@ function Creator() {
                   {needsTarget && <>
                     <button className="target-open" disabled={locked} aria-haspopup="dialog"
                       onClick={() => setTargetModal(true)}>{target ? "Xem target" : "Thêm target"} <span>↗</span></button>
-                    {target && <>
+                    {target && action !== "QUICK_TAG" && <>
                       {field("Match To",
                         <select aria-label="Match To" disabled={locked || !target.ocr?.confirmed}
                           title="None: không cuộn, AUTO Image Matching rồi OCR fallback trên viewport hiện tại. Top/Middle/Bottom: về đầu rồi quét xuống 1/3, 2/3 hoặc toàn vùng. OCR cần khớp ngữ cảnh ROI."
@@ -1117,10 +1127,11 @@ function Creator() {
                   </>}
                   {needsTarget && targetModal && <TargetModal
                     name={name} target={target} image={targetImage}
+                    quickTagRows={action === "QUICK_TAG" ? quickTagRows : undefined}
                     locked={locked} canCapture={!!state?.flow}
                     close={() => { setOcrEdit(undefined); setTargetModal(false); }}
                     crop={() => { setTargetModal(false); void task(capture); }}
-                    confirmed={target && <>
+                    confirmed={action !== "QUICK_TAG" && target && <>
                       <div className="eyebrow">OCR LOCAL · VIỆT + ANH</div>
                       {target.ocr ? (
                         <div className="ocr-confirmed">
@@ -1175,7 +1186,7 @@ function Creator() {
 
                     </>}
                     ocrControls={<>
-                  {needsTarget && target && (
+                  {needsTarget && target && action !== "QUICK_TAG" && (
                     <section className="ocr-panel" aria-label="OCR ROI">
                       <label>
                         Chọn chữ nhận diện
@@ -1303,6 +1314,19 @@ function Creator() {
                       </p>
                     </>
                   )}
+                  {action === "QUICK_TAG" && <section aria-label="Quick Tag">
+                    <p className="hint">Chọn theo vị trí, không xác minh danh tính người được chọn. Crop các hàng đầy đủ, cao đều nhau, bắt đầu từ hàng đầu muốn chọn. Không cuộn hoặc mở danh sách khác.</p>
+                    {field("Số hàng hiển thị trong ROI (1–20)", <input type="number" min={1} max={20} step={1}
+                      aria-label="Số hàng QUICK_TAG" disabled={locked} value={quickTagRows}
+                      onChange={e => setQuickTagRows(Number(e.target.value))} />)}
+                    <label>Số lượng chọn · Variable Integer
+                      <select aria-label="QUICK_TAG Integer variable" disabled={locked} value={variableId} onChange={e => setVariableId(e.target.value)}>
+                        <option value="">Chọn Variable Integer</option>
+                        {state?.flow?.variables?.filter(v => v.type === "integer").map(v => <option key={v.id} value={v.id}>{v.key}</option>)}
+                      </select>
+                    </label>
+                    <p className="hint">Dùng Default Pattern: 1–10, không vượt số hàng ROI. Click tâm hàng đầu rồi chờ hàng kế tiếp dồn lên và ổn định; nếu không đổi sẽ dừng. Không tự retry. Xem chấm tọa độ trong “Xem target”.</p>
+                  </section>}
                   {action === "UPLOAD_FILE" && (
                     <section aria-label="Ảnh upload">
                       <select
@@ -1346,7 +1370,7 @@ function Creator() {
                       locked ||
                       !state?.flow ||
                       (needsTarget && !target) ||
-                      (["UPLOAD_FILE", "TYPE_ONLY", "CLICK_AND_TYPE"].includes(
+                      (["UPLOAD_FILE", "TYPE_ONLY", "CLICK_AND_TYPE", "QUICK_TAG"].includes(
                         action,
                       ) &&
                         !variableId)

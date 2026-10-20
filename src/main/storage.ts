@@ -22,12 +22,15 @@ export function validatePayload(p: Payload) {
       "CLICK_TARGET",
       "CLICK_AND_TYPE",
       "UPLOAD_FILE",
+      "QUICK_TAG",
       "TYPE_ONLY",
       "WAIT_VERIFY",
       "SCROLL",
     ].includes(p.action)
   )
     throw new Error("Action không hỗ trợ.");
+  if (p.action === "QUICK_TAG" && (!p.variableId || !Number.isInteger(p.quickTagRows) || p.quickTagRows! < 1 || p.quickTagRows! > 20 || p.target?.ocr || !p.target?.environment || ![undefined, "none"].includes(p.target.matchTo)))
+    throw new Error("QUICK_TAG cần Variable Integer, ROI mới không OCR/scroll và số hàng 1–20.");
   if (p.action === "UPLOAD_FILE" && !p.variableId)
     validateUploadFileList(p.files);
   if (
@@ -43,14 +46,14 @@ export function validatePayload(p: Payload) {
   )
     throw new Error("Phương thức nhập không hợp lệ.");
   if (
-    ["CLICK_TARGET", "CLICK_AND_TYPE", "UPLOAD_FILE", "WAIT_VERIFY"].includes(
+    ["CLICK_TARGET", "CLICK_AND_TYPE", "UPLOAD_FILE", "WAIT_VERIFY", "QUICK_TAG"].includes(
       p.action,
     ) &&
     (!p.target || !/^[a-f0-9-]+\.png$/.test(p.target.asset))
   )
     throw new Error("Action cần ảnh target được crop.");
   if (
-    ["CLICK_TARGET", "CLICK_AND_TYPE", "UPLOAD_FILE", "WAIT_VERIFY"].includes(
+    ["CLICK_TARGET", "CLICK_AND_TYPE", "UPLOAD_FILE", "WAIT_VERIFY", "QUICK_TAG"].includes(
       p.action,
     )
   ) {
@@ -60,6 +63,8 @@ export function validatePayload(p: Payload) {
       p.target!.environment?.width ?? WEB_WIDTH,
       p.target!.environment?.height ?? WEB_HEIGHT,
     );
+    if (p.action === "QUICK_TAG" && (p.target!.roi.width < 40 || p.target!.roi.height / p.quickTagRows! < 16))
+      throw new Error("QUICK_TAG: ROI rộng ít nhất 40px và mỗi hàng cao ít nhất 16px.");
   }
   if (p.method !== undefined && !["auto", "image", "ocr"].includes(p.method))
     throw new Error("Phương thức target không hợp lệ.");
@@ -212,7 +217,7 @@ export class Store {
   }
   updateVariables(
     variables: Variable[],
-    values: Record<string, string | string[]>,
+    values: Record<string, string | string[] | number>,
   ) {
     const f = this.flow();
     if (!f) throw new Error("Create flow first");

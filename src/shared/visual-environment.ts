@@ -10,7 +10,7 @@ export function targetEnvironment(
   flowZoom: number,
 ): VisualEnvironment | undefined {
   if (
-    !["CLICK_TARGET", "CLICK_AND_TYPE", "UPLOAD_FILE", "WAIT_VERIFY"].includes(
+    !["CLICK_TARGET", "CLICK_AND_TYPE", "UPLOAD_FILE", "WAIT_VERIFY", "QUICK_TAG"].includes(
       payload.action,
     )
   )

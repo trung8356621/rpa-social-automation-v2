@@ -12,6 +12,7 @@ export function TargetModal({
   canCapture,
   crop,
   close,
+  quickTagRows,
 }: {
   name: string;
   target: Payload["target"];
@@ -22,6 +23,7 @@ export function TargetModal({
   canCapture: boolean;
   crop: () => void;
   close: () => void;
+  quickTagRows?: number;
 }) {
   return (
     <UiPopover
@@ -54,13 +56,18 @@ export function TargetModal({
               }}
             >
               <img src={image} alt="Ảnh crop của target đang chỉnh sửa" />
+              {quickTagRows !== undefined && Number.isInteger(quickTagRows) && quickTagRows >= 1 && quickTagRows <= 20 && <span
+                aria-label="Tọa độ click QUICK_TAG"
+                title={`Click (${(target.roi.x + target.roi.width / 2).toFixed(1)}, ${(target.roi.y + target.roi.height / quickTagRows / 2).toFixed(1)}) DIP`}
+                style={{ position: "absolute", left: "50%", top: `${50 / quickTagRows}%`, width: 12, height: 12,
+                  borderRadius: "50%", background: "#ef4444", border: "2px solid white", transform: "translate(-50%, -50%)", pointerEvents: "none" }} />}
             </div>
           ) : (
             <div className="target-empty">
               Chụp và crop để chọn target cho step này.
             </div>
           )}
-          <figcaption>Ảnh crop đang chọn</figcaption>
+          <figcaption>{quickTagRows !== undefined ? "QUICK_TAG · chấm đỏ là tâm hàng đầu. Chọn theo vị trí, không xác minh danh tính." : "Ảnh crop đang chọn"}</figcaption>
         </figure>
         <div className="target-confirmed">{confirmed}</div>
         <div className="target-ocr-controls">{target && ocrControls}</div>

@@ -3,6 +3,7 @@ export type Action =
   | "CLICK_TARGET"
   | "CLICK_AND_TYPE"
   | "UPLOAD_FILE"
+  | "QUICK_TAG"
   | "TYPE_ONLY"
   | "WAIT_VERIFY"
   | "SCROLL";
@@ -31,6 +32,10 @@ export type VisualTarget = {
 export type Payload = {
   action: Action;
   variableId?: string;
+  /** Number of complete, equally sized visible rows in the cropped ROI. */
+  quickTagRows?: number;
+  /** Runtime only: resolved from an Integer variable's Default Pattern. */
+  quickTagCount?: number;
   /** Legacy input, migrated by Store. */
   text?: string;
   inputMethod?: "keyboard" | "clipboard";
@@ -58,7 +63,7 @@ export type Override = {
 export type Variable = {
   id: string;
   key: string;
-  type: "text" | "file" | "files";
+  type: "text" | "file" | "files" | "integer";
   description?: string;
 };
 export type StepGroup = {
@@ -70,7 +75,7 @@ export type StepGroup = {
 };
 export type Flow = {
   variables?: Variable[];
-  defaultPattern?: { values: Record<string, string | string[]> };
+  defaultPattern?: { values: Record<string, string | string[] | number> };
   groups?: StepGroup[];
   id: string;
   name: string;
@@ -93,7 +98,7 @@ export type ExecutionStart = {
   version: number;
   overrideId?: string;
   matchTo: "none" | "current" | "top" | "middle" | "bottom";
-  pipeline: "auto-roi" | "ocr-viewport";
+  pipeline: "auto-roi" | "ocr-viewport" | "quick-tag-position";
 };
 export type ExecutionDetails = ExecutionStart & {
   runId: string;
@@ -191,7 +196,7 @@ export type Command =
   | {
       type: "variables";
       variables: Variable[];
-      values: Record<string, string | string[]>;
+      values: Record<string, string | string[] | number>;
     }
   | { type: "pointerReport" }
   | { type: "panel"; panel: "editor" | "debug"; expanded: boolean }
@@ -239,6 +244,7 @@ export const DRAFT_KEYS = [
   "name",
   "text",
   "delta",
+  "quickTagRows",
   "inputMethod",
   "pairDelay",
   "target",
