@@ -10,7 +10,7 @@ import type { OcrEngine } from "./ocr.js";
 import { effectiveMatchTo } from "../shared/match-to.js";
 import { findOcrCandidates, normalizeOcrText } from "./ocr-candidates.js";
 import { confirmOcrContext } from "./ocr-context.js";
-import { matchTemplate } from "./visual.js";
+import { matchTemplate, type ImageSearchTrace } from "./visual.js";
 export const MIN_OCR_CONFIDENCE = 80;
 export class TargetNotConfident extends Error {
   constructor(
@@ -83,6 +83,7 @@ export async function resolveVisualTarget(
   ocr: OcrEngine,
   searchRegion?: Rect,
   onOcr?: (event: { phase: "start" | "result"; offset: Rect; result?: OcrResult }) => void,
+  onImage?: (event: ImageSearchTrace) => void,
 ): Promise<NonNullable<Result["match"]> & { resolution: ResolutionTrace }> {
   const target = payload.target!;
   // Match To explicitly searches the visible OCR region after bounded scrolling.
@@ -158,7 +159,11 @@ export async function resolveVisualTarget(
   let imageReason = "";
   const threshold = Math.max(0.96, payload.threshold ?? 0.96);
   try {
-    image = await matchTemplate(frame, template, target.roi);
+    image = await matchTemplate(frame, template, target.roi, {
+      expand: !target.ocr?.confirmed,
+      threshold,
+      onSearch: onImage,
+    });
     imageReason = image.ambiguous
       ? "Ảnh có nhiều vị trí gần giống nhau."
       : image.score < threshold

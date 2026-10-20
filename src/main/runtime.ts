@@ -379,6 +379,7 @@ export class Runtime {
                       words: event.result!.segments.filter(segment => segment.kind === "word"), offset: event.offset, searchRegion });
                   }
                 },
+                (event) => logMainEvent(this.runDir, "image-search", { ...execution, captureId: current.id, ...event }),
               );
               const { resolution: trace, ...position } = resolved;
               if (matchTo && Date.now() >= deadline)
