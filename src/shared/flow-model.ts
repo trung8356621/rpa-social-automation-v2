@@ -91,6 +91,8 @@ export function validateOrganization(
       slugs.has(g.slug)
     )
       throw new Error("Invalid or duplicate group slug/ID");
+    if (g.emptyPosition !== undefined && (!Number.isInteger(g.emptyPosition) || g.emptyPosition < 0))
+      throw new Error("Invalid empty group position");
     ids.add(g.id);
     slugs.add(g.slug);
     g.stepIds.forEach((id, i) => {

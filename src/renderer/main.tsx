@@ -928,10 +928,13 @@ function Creator() {
                 play={(step) => void playSteps([step])}
                 locked={locked}
                 update={async (c) => {
+                  setBusy(true);
                   try {
                     setState(await invoke<State>(c));
                   } catch (e) {
                     setMessage(String(e));
+                  } finally {
+                    setBusy(false);
                   }
                 }}
                 select={(s) =>

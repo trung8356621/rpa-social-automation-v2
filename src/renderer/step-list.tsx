@@ -43,6 +43,8 @@ const FolderIcon = () => (
     <path d="M3 7V5h6l2 2h10v12H3Z" />
   </svg>
 );
+type SortItem = { id: string; scope: string };
+type DropPosition = SortItem & { after: boolean };
 export function StepList({
   state,
   selected,
@@ -69,6 +71,28 @@ export function StepList({
   update: (c: Command) => Promise<void>;
 }) {
   const [revealedGroup, setRevealedGroup] = useState("");
+  const [dragging, setDragging] = useState<SortItem>();
+  const dragRef = useRef<SortItem | undefined>(undefined);
+  const [dropPosition, setDropPosition] = useState<DropPosition>();
+  const [savingOrder, setSavingOrder] = useState(false);
+  const orderLock = useRef(false);
+  const clearDrag = () => {
+    dragRef.current = undefined;
+    setDragging(undefined);
+    setDropPosition(undefined);
+  };
+  useEffect(() => {
+    clearDrag();
+  }, [state.flow, locked]);
+  useEffect(() => {
+    const cancel = (event: KeyboardEvent) => { if (event.key === "Escape") clearDrag(); };
+    window.addEventListener("keydown", cancel);
+    window.addEventListener("blur", clearDrag);
+    return () => {
+      window.removeEventListener("keydown", cancel);
+      window.removeEventListener("blur", clearDrag);
+    };
+  }, []);
   useEffect(() => {
     setRevealedGroup("");
   }, [state.flow?.id]);
@@ -122,6 +146,99 @@ export function StepList({
   }
   for (const g of groups.filter((g) => !g.stepIds.length))
     blocks.push({ group: g, refs: [] });
+  // Existing flows without position metadata keep their original empty-at-end layout.
+  for (const g of groups.filter(g => !g.stepIds.length && g.emptyPosition !== undefined)
+    .sort((a, b) => a.emptyPosition! - b.emptyPosition!)) {
+    const index = blocks.findIndex(b => b.group?.id === g.id);
+    const [block] = blocks.splice(index, 1);
+    blocks.splice(Math.min(g.emptyPosition!, blocks.length), 0, block);
+  }
+  const rootScope = "root";
+  const blockId = (b: typeof blocks[number]) => b.group ? `group:${b.group.id}` : `step:${b.refs[0].id}`;
+  const itemForStep = (id: string): SortItem => {
+    const group = groups.find(g => g.stepIds.includes(id));
+    return { id: group ? id : `step:${id}`, scope: group ? `children:${group.id}` : rootScope };
+  };
+  const siblings = (item: SortItem) => item.scope === rootScope
+    ? blocks.map(blockId)
+    : groups.find(g => `children:${g.id}` === item.scope)?.stepIds ?? [];
+  const saveOrder = async (item: SortItem, targetId: string, after: boolean) => {
+    if (locked || orderLock.current || item.id === targetId) return;
+    const original = siblings(item);
+    if (!original.includes(item.id) || !original.includes(targetId)) return;
+    const order = original.filter(id => id !== item.id);
+    order.splice(order.indexOf(targetId) + (after ? 1 : 0), 0, item.id);
+    if (order.every((id, i) => id === original[i])) return;
+    let gs = groups;
+    let stepIds: string[];
+    if (item.scope === rootScope) {
+      const sorted = order.map(id => blocks.find(b => blockId(b) === id)!);
+      stepIds = sorted.flatMap(b => b.refs.map(ref => ref.id));
+      gs = sorted.filter(b => b.group).map((b) => ({ ...b.group!,
+        emptyPosition: b.refs.length ? undefined : sorted.indexOf(b) }));
+    } else {
+      gs = groups.map(g => `children:${g.id}` === item.scope ? { ...g, stepIds: order } : g);
+      stepIds = blocks.flatMap(b => b.group && `children:${b.group.id}` === item.scope ? order : b.refs.map(ref => ref.id));
+    }
+    orderLock.current = true;
+    setSavingOrder(true);
+    try { await update({ type: "organize", groups: gs, stepIds }); }
+    finally { orderLock.current = false; setSavingOrder(false); }
+  };
+  const moveOne = async (item: SortItem, direction: -1 | 1) => {
+    const order = siblings(item), index = order.indexOf(item.id), target = order[index + direction];
+    if (index >= 0 && target) await saveOrder(item, target, direction === 1);
+    await popup.close();
+  };
+  const handle = (item: SortItem, name: string) => <button
+    type="button" className="sort-handle" aria-label={`Kéo sắp xếp ${name}`} title="Kéo để sắp xếp"
+    disabled={locked || savingOrder} draggable={!locked && !savingOrder}
+    onClick={event => event.stopPropagation()}
+    onDragStart={event => {
+      if (locked || orderLock.current) { event.preventDefault(); return; }
+      event.stopPropagation();
+      dragRef.current = item;
+      setDragging(item);
+      event.dataTransfer.effectAllowed = "move";
+      event.dataTransfer.setData("application/x-rpa-sort", item.id);
+    }}
+    onDragEnd={clearDrag}>⋮⋮</button>;
+  const dropEvents = (item: SortItem) => ({
+    onDragOver: (event: React.DragEvent<HTMLElement>) => {
+      const source = dragRef.current;
+      if (!source) return;
+      if (source.scope !== item.scope || locked || savingOrder) {
+        setDropPosition(undefined);
+        return;
+      }
+      event.stopPropagation();
+      if (source.id === item.id) { setDropPosition(undefined); return; }
+      event.preventDefault();
+      event.dataTransfer.dropEffect = "move";
+      const container = list.current;
+      if (container) {
+        const bounds = container.getBoundingClientRect();
+        if (event.clientY < bounds.top + 28) container.scrollTop -= 12;
+        else if (event.clientY > bounds.bottom - 28) container.scrollTop += 12;
+      }
+      const rect = event.currentTarget.getBoundingClientRect();
+      setDropPosition({ ...item, after: event.clientY >= rect.top + rect.height / 2 });
+    },
+    onDrop: (event: React.DragEvent<HTMLElement>) => {
+      const source = dragRef.current;
+      if (!source || source.scope !== item.scope) return;
+      event.preventDefault();
+      event.stopPropagation();
+      const rect = event.currentTarget.getBoundingClientRect();
+      clearDrag();
+      void saveOrder(source, item.id, event.clientY >= rect.top + rect.height / 2);
+    },
+    onDragLeave: (event: React.DragEvent<HTMLElement>) => {
+      if (!event.currentTarget.contains(event.relatedTarget as Node | null)) setDropPosition(undefined);
+    },
+  });
+  const sortClass = (item: SortItem) =>
+    `${dragging?.id === item.id && dragging.scope === item.scope ? " is-dragging" : ""}${dropPosition?.id === item.id && dropPosition.scope === item.scope ? dropPosition.after ? " drop-after" : " drop-before" : ""}`;
   const move = (s: Step, groupId: string) => {
     const gs = groups.map((g) => ({
         ...g,
@@ -147,11 +264,13 @@ export function StepList({
     }[s.payload.action]);
     return (
       <div
-        className={`step-row${selected?.id === s.id ? " selected" : ""}${blockedSteps.has(s.id) ? " is-blocked-for-all" : ""}${playback[s.id]?.status === "running" ? " is-running" : ""}`}
+        className={`step-row${sortClass(itemForStep(s.id))}${selected?.id === s.id ? " selected" : ""}${blockedSteps.has(s.id) ? " is-blocked-for-all" : ""}${playback[s.id]?.status === "running" ? " is-running" : ""}`}
+        {...dropEvents(itemForStep(s.id))}
         data-step-id={s.id}
         data-play-status={playback[s.id]?.status ?? "idle"}
         key={s.id}
       >
+        {handle(itemForStep(s.id), s.name)}
         <span className="step-number" aria-label={`Step ${number}`}>
           {number}
         </span>
@@ -230,8 +349,10 @@ export function StepList({
     <div className="steps" ref={list}>
       {blocks.map((b, blockIndex) =>
         b.group ? (
-          <section key={b.group.id} className="step-group">
+          <section key={b.group.id} className={`step-group${sortClass({ id: blockId(b), scope: rootScope })}`}
+            {...dropEvents({ id: blockId(b), scope: rootScope })}>
             <div className="folder-row">
+              {handle({ id: blockId(b), scope: rootScope }, b.group.name)}
               <span className="step-number">
                 {String(blockIndex + 1).padStart(2, "0")}
               </span>
@@ -313,6 +434,16 @@ export function StepList({
               ×
             </button>
           </div>
+          {!menu.editing && (() => {
+            const item = menu.step ? itemForStep(menu.step.id) : { id: `group:${menu.groupId}`, scope: rootScope };
+            const order = siblings(item), index = order.indexOf(item.id);
+            return <>
+              <button className="menu-item" disabled={locked || savingOrder || index <= 0}
+                onClick={() => void moveOne(item, -1)}>↑ Move Up</button>
+              <button className="menu-item" disabled={locked || savingOrder || index < 0 || index >= order.length - 1}
+                onClick={() => void moveOne(item, 1)}>↓ Move Down</button>
+            </>;
+          })()}
           {menu.step ? (
             <>
               <p className="menu-label">Move to</p>
@@ -381,33 +512,6 @@ export function StepList({
                   ✎ Edit name / slug
                 </button>
               )}
-              <button
-                className="menu-item"
-                disabled={
-                  locked || groups.findIndex((g) => g.id === menu.groupId) === 0
-                }
-                onClick={() => {
-                  const i = groups.findIndex((g) => g.id === menu.groupId),
-                    g = groups[i],
-                    gs = [...groups];
-                  [gs[i - 1], gs[i]] = [gs[i], gs[i - 1]];
-                  const previous = groups[i - 1],
-                    remaining = f.steps
-                      .map((s) => s.id)
-                      .filter((id) => !g.stepIds.includes(id)),
-                    at = previous.stepIds.length
-                      ? remaining.indexOf(previous.stepIds[0])
-                      : remaining.length;
-                  remaining.splice(Math.max(0, at), 0, ...g.stepIds);
-                  void update({
-                    type: "organize",
-                    groups: gs,
-                    stepIds: remaining,
-                  }).then(() => popup.close());
-                }}
-              >
-                ↑ Move group up
-              </button>
             </>
           )}
         </UiPopover>

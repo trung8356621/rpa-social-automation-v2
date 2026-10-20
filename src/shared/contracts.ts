@@ -72,6 +72,8 @@ export type StepGroup = {
   slug: string;
   collapsed: boolean;
   stepIds: string[];
+  /** Empty groups have no Step reference to anchor their position in the list. */
+  emptyPosition?: number;
 };
 export type Flow = {
   variables?: Variable[];
