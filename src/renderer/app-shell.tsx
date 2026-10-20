@@ -1,5 +1,6 @@
-import React from "react";
-import type { AppPage, State } from "../shared/contracts";
+import React, { useState } from "react";
+import { UiPopover } from "./ui-popover";
+import type { AppPage, Command, ScenarioOrganization, State } from "../shared/contracts";
 
 const menus = [
   { page: "scenarios", label: "Scenarios", color: "#68d6a6", path: "M4 4h6v6H4zM14 14h6v6h-6zM7 10v7h7M10 7h7v7" },
@@ -30,27 +31,97 @@ export function AppNavigation({ page, collapsed, locked, navigate, toggle }: {
   </div>;
 }
 
-export function ScenariosPage({ state, name, setName, locked, open, create, sessionControl }: {
+export function ScenariosPage({ state, name, setName, locked, open, create, sessionControl, update }: {
   state?: State; name: string; setName: (name: string) => void; locked: boolean;
   open: (id: string) => void; create: () => void;
-  sessionControl?: React.ReactNode;
+  sessionControl?: React.ReactNode; update: (command: Command) => Promise<void>;
 }) {
+  const [creating, setCreating] = useState(false);
+  const [dialog, setDialog] = useState<{ kind: "create" | "rename" | "delete" | "move"; id?: string }>();
+  const [value, setValue] = useState("");
+  const [working, setWorking] = useState(false);
+  const [error, setError] = useState("");
+  const organization: ScenarioOrganization = state?.scenarioOrganization ?? { groups: [], membership: {}, ungroupedCollapsed: false };
+  const disabled = locked || working;
+  function show(kind: "create" | "rename" | "delete" | "move", id?: string, initial = "") {
+    setValue(initial); setError(""); setDialog({ kind, id });
+  }
+  async function apply(command: Command, close = false) {
+    if (disabled) return;
+    setWorking(true); setError("");
+    try { await update(command); if (close) setDialog(undefined); }
+    catch (e) { setError(String(e)); }
+    finally { setWorking(false); }
+  }
+  function submit() {
+    if (!dialog) return;
+    const command: Command = dialog.kind === "create" ? { type: "createScenarioGroup", name: value }
+      : dialog.kind === "rename" ? { type: "updateScenarioGroup", id: dialog.id!, name: value }
+      : dialog.kind === "delete" ? { type: "deleteScenarioGroup", id: dialog.id!, confirmed: true }
+      : { type: "moveScenarioToGroup", flowId: dialog.id!, groupId: value || undefined };
+    void apply(command, true);
+  }
+  const groups = [...organization.groups, { id: "", name: "Chưa phân nhóm", collapsed: organization.ungroupedCollapsed }];
   return <section className="app-page scenarios-page" aria-label="Scenarios">
     <div className="page-heading"><small>RPA Social Automation V2</small><h1>Scenarios</h1>
-      <p>Chọn kịch bản để mở Creator hoặc tạo kịch bản mới.</p></div>
-    <div className="scenario-session">{sessionControl}</div>
-    <form className="scenario-create" onSubmit={event => { event.preventDefault(); create(); }}>
-      <label>Tên Scenario mới<input aria-label="Tên flow mới" value={name} disabled={locked}
-        onChange={event => setName(event.target.value)} /></label>
-      <button className="primary" disabled={locked || !state || !name.trim()} type="submit">Tạo Scenario</button>
-    </form>
-    <div className="scenario-grid">
-      {state?.flows.map(flow => <article className="scenario-card" key={flow.id}>
-        <h2>{flow.name}</h2><p>{flow.steps.length} Step · Zoom {Math.round(flow.zoom * 100)}%</p>
-        <button disabled={locked} onClick={() => open(flow.id)}>Mở Creator →</button>
-      </article>)}
+      <p>Mở nhiều kịch bản bằng tab. Bản nháp Editor được giữ riêng trong mỗi tab.</p></div>
+    <div className="scenario-toolbar">
+      <button disabled={disabled} onClick={() => show("create")}>+ Group</button>
+      <button className="primary" disabled={disabled} onClick={() => setCreating(v => !v)}>+ Scenario</button>
+      {sessionControl}
     </div>
-    {state && !state.flows.length && <p className="page-empty">Chưa có Scenario. Tạo kịch bản đầu tiên để bắt đầu.</p>}
+    {creating && <form className="scenario-create" onSubmit={event => { event.preventDefault(); create(); }}>
+      <label>Tên Scenario mới<input aria-label="Tên flow mới" value={name} disabled={disabled}
+        onChange={event => setName(event.target.value)} /></label>
+      <button className="primary" disabled={disabled || !state || !name.trim()} type="submit">Tạo Scenario</button>
+    </form>}
+    {!dialog && error && <p role="alert">{error}</p>}
+    <div className="scenario-groups">
+      {groups.map(group => {
+        const flows = state?.flows.filter(f => {
+          const assigned = organization.membership[f.id];
+          return group.id ? assigned === group.id : !organization.groups.some(g => g.id === assigned);
+        }) ?? [];
+        return <section className="scenario-folder" key={group.id}>
+          <div className="scenario-folder-heading">
+            <button disabled={disabled} aria-expanded={!group.collapsed} onClick={() => void apply(group.id
+              ? { type: "updateScenarioGroup", id: group.id, collapsed: !group.collapsed }
+              : { type: "collapseUngroupedScenarios", collapsed: !group.collapsed })}>
+              {group.collapsed ? "▸" : "▾"} {group.name} <small>({flows.length})</small>
+            </button>
+            {group.id && <details><summary aria-label={`Menu Group ${group.name}`}>...</summary><div className="scenario-menu">
+              <button disabled={disabled} onClick={() => show("rename", group.id, group.name)}>Đổi tên</button>
+              <button disabled={disabled} onClick={() => show("delete", group.id)}>Xóa Group</button>
+            </div></details>}
+          </div>
+          {!group.collapsed && <div className="scenario-items">
+            {flows.map(flow => <div className="scenario-item" key={flow.id}>
+              <button className="scenario-title" disabled={disabled} onClick={() => open(flow.id)}>{flow.name}</button>
+              <small>{flow.steps.length} Step</small>
+              <button disabled={disabled} onClick={() => open(flow.id)}>Mở Creator</button>
+              <details><summary aria-label={`Menu Scenario ${flow.name}`}>...</summary><div className="scenario-menu">
+                <button disabled={disabled} onClick={() => show("move", flow.id, organization.membership[flow.id] ?? "")}>Move to Group</button>
+              </div></details>
+            </div>)}
+            {!flows.length && <p className="page-empty">Chưa có Scenario trong nhóm.</p>}
+          </div>}
+        </section>;
+      })}
+    </div>
+    {dialog && <UiPopover variant="modal" label="Scenario Group" className="unsaved-confirm"
+      close={() => { if (!working) setDialog(undefined); }}>
+      <div className="popover-heading"><b>{dialog.kind === "create" ? "Tạo Group" : dialog.kind === "rename" ? "Đổi tên Group" : dialog.kind === "delete" ? "Xóa Group" : "Move to Group"}</b>
+        <button disabled={working} onClick={() => setDialog(undefined)}>×</button></div>
+      {dialog.kind === "delete" ? <p>Xóa Group này? Các Scenario sẽ chuyển về Chưa phân nhóm, toàn bộ dữ liệu được giữ nguyên.</p>
+        : dialog.kind === "move" ? <label>Group<select value={value} disabled={working} onChange={e => setValue(e.target.value)}>
+          <option value="">Chưa phân nhóm</option>{organization.groups.map(g => <option key={g.id} value={g.id}>{g.name}</option>)}
+        </select></label>
+        : <label>Tên Group<input value={value} maxLength={80} disabled={working} onChange={e => setValue(e.target.value)} /></label>}
+      {error && <p role="alert">{error}</p>}
+      <div className="popover-footer"><button disabled={working} onClick={() => setDialog(undefined)}>Hủy</button>
+        <button className="primary" disabled={disabled || (["create", "rename"].includes(dialog.kind) && !value.trim())} onClick={submit}>
+          {dialog.kind === "delete" ? "Xóa Group" : "Lưu"}</button></div>
+    </UiPopover>}
   </section>;
 }
 

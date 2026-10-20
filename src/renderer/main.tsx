@@ -9,8 +9,11 @@ import { BrowserSessionsPage, SessionSelector } from "./browser-sessions";
 import { Variables, Groups } from "./flow-controls";
 import React, { useEffect, useRef, useState } from "react";
 import { createRoot } from "react-dom/client";
+import { unstable_batchedUpdates } from "react-dom";
+import { WorkspaceTabs } from "./workspace-tabs";
 import type {
   Action,
+  WorkspaceTab,
   AppPage,
   Capture,
   Command,
@@ -25,7 +28,7 @@ import type {
   Step,
 } from "../shared/contracts";
 import "./style.css";
-import { useDraft } from "./draft";
+import { useDraft, captureEditorDraft, restoreEditorDraft, type EditorDraft } from "./draft";
 import { targetEnvironment } from "../shared/visual-environment";
 import { WEB_WIDTH, WEB_HEIGHT, workspaceLayout, APP_NAV_COLLAPSED, APP_NAV_EXPANDED } from "../shared/geometry";
 import { defaultNetworkSettings, NETWORK_LABELS } from "../shared/network-mode";
@@ -40,13 +43,43 @@ const panel = new URLSearchParams(location.search).get("panel");
 const shell = !panel;
 document.body.dataset.panel = panel || "shell";
 
+type TabDraft = {
+  editor: EditorDraft; dirty: boolean; ocrEdit?: string; ocrKind: "none" | "line" | "word";
+  playback: Record<string, StepPlayback>; activeStepId: string; blocked: Set<string>;
+  execution?: ExecutionStart; urlInput: string; urlDirty: boolean;
+};
+
 function Creator() {
+  const [tabs, setTabs] = useState<WorkspaceTab[]>([]);
+  const tabsRef = useRef<WorkspaceTab[]>([]);
+  const [activeTabId, setActiveTabId] = useState<string>();
+  const tabDrafts = useRef(new Map<string, TabDraft>());
+  const workspaceRestoring = useRef(false);
+  const workspaceLock = useRef(false);
+  const browserUrl = useRef("");
+  const pendingCloseTab = useRef<string | undefined>(undefined);
+  const closeTabHandler = useRef<(id: string) => void>(() => {});
+  const [restoreRevision, setRestoreRevision] = useState(0);
+  const [exitIntent, setExitIntent] = useState<"close" | "reload">();
+  const [exitRevision, setExitRevision] = useState(0);
+  const exitReviewed = useRef(new Set<string>());
+  function updateTabs(next: WorkspaceTab[]) { tabsRef.current = next; setTabs(next); }
+
   const [state, setState] = useDraft<State>("state");
   const appPage = state?.appPage ?? "scenarios";
   const creatorVisible = appPage === "creator";
   const sidebarCollapsed = state?.sidebarCollapsed ?? false;
   const networkSettings = state?.networkSettings ?? defaultNetworkSettings();
   const networkDelays = networkSettings.presets[networkSettings.mode];
+  useEffect(() => {
+    // A renderer reload can return to an already active main-process Creator.
+    // Adopt that context without resetting its editor or creating another Browser.
+    if (!creatorVisible || !state?.flow || activeTabId || workspaceLock.current) return;
+    const tab: WorkspaceTab = { id: crypto.randomUUID(), kind: "creator", flowId: state.flow.id,
+      sessionId: state.activeBrowserSessionId, url: state.url || undefined };
+    updateTabs([tab]);
+    setActiveTabId(tab.id);
+  }, [creatorVisible, state?.flow?.id, activeTabId]);
   const [variableId, setVariableId] = useDraft("variableId", "");
   const [quickTagRows, setQuickTagRows] = useDraft("quickTagRows", 5);
   const [url, setUrl] = useState("");
@@ -69,7 +102,7 @@ function Creator() {
   const [selected, setSelected] = useDraft<Step>("selected");
   const [overrideId, setOverrideId] = useDraft("overrideId", "");
   const [targetModal, setTargetModal] = useState(false);
-  const [pendingNavigation, setPendingNavigation] = useState<{ proceed: () => void | Promise<void> }>();
+  const [pendingNavigation, setPendingNavigation] = useState<{ proceed: () => void | Promise<void>; closing?: boolean }>();
   const pendingNavigationRef = useRef(false);
   const [confirmWorking, setConfirmWorking] = useState(false);
   const [confirmError, setConfirmError] = useState("");
@@ -77,10 +110,10 @@ function Creator() {
   const allowUnload = useRef(false);
   const leaveHandler = useRef<() => void>(() => {});
   const reloadHandler = useRef<() => void>(() => {});
-  useEffect(() => setOcrKind(target?.ocr?.kind ?? "none"),
+  useEffect(() => { if (!workspaceRestoring.current) setOcrKind(target?.ocr?.kind ?? "none"); },
     [target?.asset, target?.ocr?.kind, selected?.id, selected?.version, overrideId]);
   useEffect(() => setTargetModal(false), [selected?.id, selected?.version, action, state?.flow?.id, overrideId]);
-  useEffect(() => setOcrEdit(undefined), [target?.asset, target?.ocr?.text,
+  useEffect(() => { if (!workspaceRestoring.current) setOcrEdit(undefined); }, [target?.asset, target?.ocr?.text,
     selected?.id, selected?.version, overrideId]);
   const [shot, setShot] = useDraft<Capture>("shot");
   const [cropMode, setCropMode] = useDraft("cropMode", false);
@@ -116,6 +149,7 @@ function Creator() {
   const [execution, setExecution] = useState<ExecutionStart>();
   const executionRef = useRef<ExecutionStart | undefined>(undefined);
   useEffect(() => {
+    if (workspaceRestoring.current) return;
     setStepPlayback({});
     setActiveStepId("");
     setResults([]);
@@ -278,6 +312,7 @@ function Creator() {
     });
     let navigationSeen = false;
     const syncUrl = (actual: string) => {
+      browserUrl.current = actual;
       if (!urlEdit.current.dirty) setUrl(actual);
     };
     const offNavigation = window.creator.onNavigation((actual) => {
@@ -320,8 +355,10 @@ function Creator() {
       offExecution();
     };
   }, []);
+  useEffect(() => { workspaceRestoring.current = false; }, [restoreRevision]);
   useEffect(() => {
     if (!shell) return;
+    if (workspaceRestoring.current || workspaceLock.current) return;
     if (selected && creatorVisible)
       void invoke({
         type: "armTest",
@@ -331,7 +368,14 @@ function Creator() {
       }).catch((e) => setMessage(String(e)));
     else
       void invoke({ type: "disarmTest" }).catch((e) => setMessage(String(e)));
-  }, [selected, overrideId, creatorVisible, state?.activeBrowserSessionId]);
+  }, [selected, overrideId, creatorVisible, state?.activeBrowserSessionId, busy, activeTabId, restoreRevision]);
+  useEffect(() => {
+    if (!busy && pendingCloseTab.current === activeTabId) {
+      const id = pendingCloseTab.current;
+      pendingCloseTab.current = undefined;
+      if (id) closeTabHandler.current(id);
+    }
+  }, [activeTabId, busy]);
   useEffect(() => {
     if (!shot) return;
     const escape = (event: KeyboardEvent) => {
@@ -584,29 +628,127 @@ function Creator() {
     setPageError("");
     window.scrollTo({ left: 0, top: 0 });
   }
+  function captureActiveTab() {
+    if (!activeTabId) return;
+    tabDrafts.current.set(activeTabId, {
+      editor: captureEditorDraft(), dirty: editorDirty, ocrEdit, ocrKind,
+      playback: stepPlayback, activeStepId, blocked: new Set(blockedSteps), execution,
+      urlInput: url, urlDirty: urlEdit.current.dirty,
+    });
+    if (creatorVisible) updateTabs(tabsRef.current.map(tab => tab.id === activeTabId
+      ? { ...tab, sessionId: state?.activeBrowserSessionId, url: browserUrl.current || undefined } : tab));
+  }
   function navigateApp(page: AppPage) {
-    if (page === appPage) return;
-    requestNavigation(() => changeAppPage(page));
+    if (page === appPage || busy || shot || ocrLoading || workspaceLock.current || pendingNavigationRef.current) return;
+    // Pages leave the editor mounted. Drafts are retained, so navigation need not discard them.
+    captureActiveTab();
+    void task(() => changeAppPage(page));
+  }
+  async function activateTab(tab: WorkspaceTab) {
+    captureActiveTab();
+    workspaceRestoring.current = true;
+    try {
+      const saved = tabDrafts.current.get(tab.id);
+      const next = await invoke<State>({ type: "activateWorkspace", flowId: tab.flowId,
+        sessionId: tab.sessionId, url: tab.url, editorExpanded: saved?.editor.editorExpanded === true });
+      unstable_batchedUpdates(() => {
+        setState(next);
+        restoreEditorDraft(saved?.editor);
+        setOcrEdit(saved?.ocrEdit);
+        setOcrKind(saved?.ocrKind ?? "none");
+        setStepPlayback(saved?.playback ?? {});
+        setActiveStepId(saved?.activeStepId ?? "");
+        setBlockedSteps(new Set(saved?.blocked ?? []));
+        setExecution(saved?.execution);
+        executionRef.current = saved?.execution;
+        listRunIds.current.clear();
+        setTargetModal(false);
+        browserUrl.current = next.url;
+        urlEdit.current = { dirty: saved?.urlDirty ?? false, revision: urlEdit.current.revision + 1 };
+        setUrl(saved?.urlDirty ? saved.urlInput : next.url);
+        const updated = { ...tab, sessionId: next.activeBrowserSessionId, url: next.url };
+        updateTabs(tabsRef.current.some(t => t.id === tab.id)
+          ? tabsRef.current.map(t => t.id === tab.id ? updated : t) : [...tabsRef.current, updated]);
+        setActiveTabId(tab.id);
+        setRestoreRevision(revision => revision + 1);
+        setPageError("");
+      });
+      window.scrollTo({ left: 0, top: 0 });
+    } catch (error) {
+      workspaceRestoring.current = false;
+      pendingCloseTab.current = undefined;
+      setExitIntent(undefined);
+      exitReviewed.current.clear();
+      throw error;
+    }
   }
   function openScenario(id: string) {
-    setPageError("");
-    requestNavigation(async () => {
-      if (id !== state?.flow?.id) {
-        setState(await invoke<State>({ type: "openFlow", id }));
-        resetStepDraft();
-      }
-      await changeAppPage("creator");
+    if (workspaceLock.current || pendingNavigationRef.current || busy || shot || ocrLoading) return;
+    const existing = tabsRef.current.find(tab => tab.flowId === id);
+    if (existing?.id === activeTabId && creatorVisible) return;
+    const tab = existing ?? { id: crypto.randomUUID(), kind: "creator" as const, flowId: id,
+      sessionId: state?.activeBrowserSessionId, url: browserUrl.current || undefined };
+    workspaceLock.current = true;
+    void task(async () => {
+      try { await activateTab(tab); }
+      finally { workspaceLock.current = false; }
     });
   }
   function createScenario() {
-    setPageError("");
-    requestNavigation(async () => {
-      setState(await invoke<State>({ type: "newFlow", name: flowName }));
-      resetStepDraft();
-      await changeAppPage("creator");
+    if (workspaceLock.current || pendingNavigationRef.current || busy || shot || ocrLoading) return;
+    workspaceLock.current = true;
+    void task(async () => {
+      let created: State | undefined;
+      try {
+        captureActiveTab();
+        created = await invoke<State>({ type: "newFlow", name: flowName });
+        await activateTab({ id: crypto.randomUUID(), kind: "creator", flowId: created.flow!.id,
+          sessionId: created.activeBrowserSessionId });
+      } catch (error) {
+        // newFlow selects its Flow immediately. If tab activation fails, restore
+        // the previous runtime context before the existing draft becomes editable.
+        if (created) setState(state?.flow
+          ? await invoke<State>({ type: "openFlow", id: state.flow.id }) : created);
+        throw error;
+      } finally { workspaceLock.current = false; }
     });
   }
+  async function removeTab(id: string) {
+    const remaining = tabsRef.current.filter(tab => tab.id !== id);
+    if (id === activeTabId) {
+      const index = tabsRef.current.findIndex(tab => tab.id === id);
+      const next = remaining[Math.min(index, remaining.length - 1)];
+      if (next) await activateTab(next);
+      else {
+        await changeAppPage("scenarios");
+        resetStepDraft();
+        await setEditorOpen(false);
+        setActiveTabId(undefined);
+      }
+    }
+    tabDrafts.current.delete(id);
+    updateTabs(remaining.map(tab => tabsRef.current.find(t => t.id === tab.id) ?? tab));
+  }
+  function closeTab(id: string) {
+    if (busy || shot || ocrLoading || workspaceLock.current || pendingNavigationRef.current) return;
+    if (id !== activeTabId) {
+      if (!tabDrafts.current.get(id)?.dirty) {
+        tabDrafts.current.delete(id);
+        updateTabs(tabsRef.current.filter(tab => tab.id !== id));
+        return;
+      }
+      const tab = tabsRef.current.find(t => t.id === id);
+      if (!tab) return;
+      pendingCloseTab.current = id;
+      openScenario(tab.flowId);
+      return;
+    }
+    requestNavigation(() => removeTab(id), true);
+  }
+  closeTabHandler.current = closeTab;
   async function updateBrowserSessions(command: Command) {
+    if (command.type === "deleteBrowserSession" && tabsRef.current.some(tab => tab.sessionId === command.id))
+      throw new Error("Đóng các tab đang nhớ Session này trước khi xóa Session.");
     setBusy(true);
     try { setState(await invoke<State>(command)); }
     finally { setBusy(false); }
@@ -616,6 +758,9 @@ function Creator() {
     void task(async () => {
       const snapshot = await invoke<State>({ type: "switchBrowserSession", id });
       setState(snapshot);
+      browserUrl.current = snapshot.url;
+      if (creatorVisible) updateTabs(tabsRef.current.map(tab => tab.id === activeTabId
+        ? { ...tab, sessionId: snapshot.activeBrowserSessionId, url: snapshot.url } : tab));
       urlEdit.current.dirty = false;
       urlEdit.current.revision++;
       setUrl(snapshot.url);
@@ -626,13 +771,18 @@ function Creator() {
     });
   }
   function openSession(id: string) {
-    requestNavigation(async () => {
-      const snapshot = await invoke<State>({ type: "switchBrowserSession", id });
-      setState(snapshot);
-      urlEdit.current.dirty = false;
-      urlEdit.current.revision++;
-      setUrl(snapshot.url);
-      await changeAppPage("creator");
+    if (busy || shot || ocrLoading || workspaceLock.current || pendingNavigationRef.current) return;
+    workspaceLock.current = true;
+    void task(async () => {
+      try {
+        const tab = tabsRef.current.find(t => t.id === activeTabId);
+        if (state?.flow) await activateTab({ ...(tab ?? { id: crypto.randomUUID(), kind: "creator" as const,
+          flowId: state.flow.id }), sessionId: id, url: undefined });
+        else {
+          setState(await invoke<State>({ type: "switchBrowserSession", id }));
+          await changeAppPage("scenarios");
+        }
+      } finally { workspaceLock.current = false; }
     });
   }
   function point(e: React.PointerEvent) {
@@ -721,15 +871,17 @@ function Creator() {
   const editorDirty = (ocrEdit !== undefined && ocrEdit.trim() !== target?.ocr?.text) || (selected
     ? name !== selectedBase?.name || editableConfig(payload()) !== editableConfig(selectedBase!.payload)
     : name !== "" || editableConfig(payload()) !== editableConfig({ action: "CLICK_TARGET" }));
-  function requestNavigation(proceed: () => void | Promise<void>) {
+  function requestNavigation(proceed: () => void | Promise<void>, closing = false) {
     if (pendingNavigationRef.current) return;
     if (!editorDirty) { void task(async () => { await proceed(); }); return; }
     pendingNavigationRef.current = true;
     setConfirmError("");
-    setPendingNavigation({ proceed });
+    setPendingNavigation({ proceed, closing });
   }
   function stayInEditor() {
     if (confirmWorking) return;
+    setExitIntent(undefined);
+    exitReviewed.current.clear();
     pendingNavigationRef.current = false;
     setPendingNavigation(undefined);
     setConfirmError("");
@@ -756,20 +908,40 @@ function Creator() {
   }
   leaveHandler.current = () => {
     if (busy) { setMessage("Đợi tác vụ hiện tại kết thúc trước khi đóng Creator."); return; }
-    requestNavigation(async () => {
-      await invoke({ type: "confirmWindowClose" });
-    });
+    exitReviewed.current.clear();
+    setExitIntent("close");
   };
   reloadHandler.current = () => {
     if (busy) { setMessage("Đợi tác vụ hiện tại kết thúc trước khi reload Creator."); return; }
-    requestNavigation(() => {
-      allowUnload.current = true;
-      setBusy(false);
-      window.location.reload();
-    });
+    exitReviewed.current.clear();
+    setExitIntent("reload");
   };
-  const dirtyRef = useRef(editorDirty);
-  dirtyRef.current = editorDirty;
+  const anyDirty = editorDirty || [...tabDrafts.current].some(([id, draft]) => id !== activeTabId && draft.dirty);
+  const dirtyRef = useRef(anyDirty);
+  dirtyRef.current = anyDirty;
+  // Reuse the same Save/Discard confirmation for every dirty tab before leaving
+  // the application. Inactive drafts must not disappear behind a clean active tab.
+  useEffect(() => {
+    if (!exitIntent || busy || pendingNavigationRef.current || workspaceLock.current) return;
+    const currentId = activeTabId ?? "initial";
+    if (editorDirty && !exitReviewed.current.has(currentId)) {
+      requestNavigation(() => {
+        exitReviewed.current.add(currentId);
+        setExitRevision(revision => revision + 1);
+      }, exitIntent === "close");
+      return;
+    }
+    const next = tabsRef.current.find(tab => tab.id !== activeTabId &&
+      tabDrafts.current.get(tab.id)?.dirty && !exitReviewed.current.has(tab.id));
+    if (next) { openScenario(next.flowId); return; }
+    allowUnload.current = true;
+    if (exitIntent === "reload") window.location.reload();
+    else void invoke({ type: "confirmWindowClose" }).catch(error => {
+      allowUnload.current = false;
+      setExitIntent(undefined);
+      setMessage(String(error));
+    });
+  }, [exitIntent, exitRevision, activeTabId, busy, editorDirty]);
   useEffect(() => {
     if (!shell) return;
     const off = window.creator.onRequestClose(() => leaveHandler.current());
@@ -824,6 +996,10 @@ function Creator() {
       setDebugExpanded(next);
     });
   }
+  const workspaceTabs = <WorkspaceTabs tabs={tabs} activeId={activeTabId} state={state}
+    locked={locked || ocrLoading || !!pendingNavigation || stepPlayback[activeStepId]?.status === "running"}
+    dirty={id => id === activeTabId ? editorDirty : tabDrafts.current.get(id)?.dirty ?? false}
+    open={tab => openScenario(tab.flowId)} close={closeTab} scenarios={() => navigateApp("scenarios")} />;
   return (
     <main className="app-shell" data-page={appPage} data-editor-overlay={creatorVisible && editorExpanded && !layout.editorBeside}
       style={{ "--app-nav-width": `${navigationWidth}px`, "--creator-min-width": `${layout.minWidth}px`,
@@ -837,7 +1013,7 @@ function Creator() {
         <p>Step đang có thay đổi chưa lưu. Chọn cách tiếp tục.</p>
         {confirmError && <p role="alert">{confirmError}</p>}
         <div className="popover-footer">
-          <button className="primary" disabled={confirmWorking} onClick={() => void continueNavigation(true)}>Lưu &amp; tiếp tục</button>
+          <button className="primary" disabled={confirmWorking} onClick={() => void continueNavigation(true)}>{pendingNavigation.closing ? "Lưu & đóng" : "Lưu & tiếp tục"}</button>
           <button disabled={confirmWorking} onClick={() => void continueNavigation(false)}>Không lưu</button>
           <button disabled={confirmWorking} onClick={stayInEditor}>Ở lại</button>
         </div>
@@ -846,8 +1022,10 @@ function Creator() {
         locked={locked || !state} navigate={navigateApp} toggle={() => void task(async () => {
           setState(await invoke<State>({ type: "appSidebar", collapsed: !sidebarCollapsed }));
         })} />}
+      {shell && !creatorVisible && <div className="workspace-page-strip">{workspaceTabs}</div>}
       {shell && appPage === "scenarios" && <ScenariosPage state={state} name={flowName} setName={setFlowName}
-        locked={locked} open={openScenario} create={createScenario}
+        locked={locked || ocrLoading} open={openScenario} create={createScenario}
+        update={async command => setState(await invoke<State>(command))}
         sessionControl={<SessionSelector state={state} locked={locked || stepPlayback[activeStepId]?.status === "running"} select={selectSession} />} />}
       {shell && appPage === "browser-sessions" && <BrowserSessionsPage state={state} locked={locked}
         update={updateBrowserSessions} open={openSession} />}
@@ -860,42 +1038,8 @@ function Creator() {
       {shell && creatorVisible && (
         <>
           <header>
-            <button disabled={locked} className="creator-back" onClick={() => navigateApp("scenarios")}>← Back</button>
-            <div className="brand">
-              ◈ <b>RPA Creator</b>
-              <span>V2 / POC</span>
-            </div>
+            {workspaceTabs}
             <SessionSelector state={state} locked={locked || stepPlayback[activeStepId]?.status === "running"} select={selectSession} />
-            <div className="flow-controls">
-              {" "}
-              <select
-                aria-label="Flow đã lưu"
-                disabled={locked}
-                value={state?.flow?.id || ""}
-                onChange={(e) => {
-                  const flowId = e.target.value;
-                  if (flowId === state?.flow?.id) return;
-                  requestNavigation(async () => {
-                    setState(
-                      await invoke<State>({
-                        type: "openFlow",
-                        id: flowId,
-                      }),
-                    );
-                    resetStepDraft();
-                  });
-                }}
-              >
-                <option value="" disabled>
-                  Chọn flow đã lưu
-                </option>
-                {state?.flows.map((f) => (
-                  <option value={f.id} key={f.id}>
-                    {f.name} · {Math.round(f.zoom * 100)}%
-                  </option>
-                ))}
-              </select>
-            </div>
             <button
               className="primary"
               disabled={

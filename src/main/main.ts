@@ -19,6 +19,7 @@ import { ClickMarker } from "./click-marker.js";
 import { CreatorOverlays } from "./creator-overlays.js";
 import { BrowserCore } from "./browser-core.js";
 import { BrowserSessions } from "./browser-sessions.js";
+import { ScenarioGroups } from "./scenario-groups.js";
 import { Store } from "./storage.js";
 import { logMainError, logMainEvent, logTestBoundary } from "./main-error-log.js";
 import { Runtime } from "./runtime.js";
@@ -96,6 +97,8 @@ async function boot() {
     await mkdir(dir, { recursive: true });
   const store = new Store(path.join(dataPath, "creator.sqlite"));
   const browserSessions = new BrowserSessions(store);
+  const scenarioGroups = new ScenarioGroups(store);
+  let switchingWorkspace = false;
   let activeSessionId = browserSessions.activeId();
   let switchingSession = false;
   let sessionError: string | undefined;
@@ -321,6 +324,7 @@ async function boot() {
   let armedTest:
     { stepId: string; version: number; overrideId?: string } | undefined;
   const state = (): State => ({
+    scenarioOrganization: scenarioGroups.read(),
     browserSessions: browserSessions.list(),
     activeBrowserSessionId: activeSessionId,
     sessionError,
@@ -348,6 +352,7 @@ async function boot() {
     { width: number; height: number; zoom: number }
   >();
   const isIdle = () => {
+    if (switchingWorkspace) throw new Error("Đang chuyển tab; vui lòng đợi.");
     if (runtime.busy) throw new Error("Đang test; đợi tác vụ kết thúc.");
     if (switchingSession) throw new Error("Đang chuyển Browser Session; vui lòng đợi.");
   };
@@ -356,8 +361,8 @@ async function boot() {
       browserSessions: browserSessions.list(), activeBrowserSessionId: activeSessionId, sessionError,
     });
   };
-  async function switchBrowserSession(id: string) {
-    isIdle();
+  async function switchBrowserSession(id: string, workspace = false) {
+    if (!workspace) isIdle();
     if (uiPlayAllRunId) throw new Error("Đợi Play All kết thúc trước khi chuyển Session.");
     if (!browser.visible) throw new Error("Thoát crop/ảnh trước khi chuyển Session.");
     const target = browserSessions.get(id);
@@ -397,6 +402,61 @@ async function boot() {
       sender: event.sender.id,
     });
     switch (command.type) {
+      case "createScenarioGroup":
+        isIdle();
+        scenarioGroups.create(command.name);
+        return state();
+      case "updateScenarioGroup":
+        isIdle();
+        scenarioGroups.update(command.id, command);
+        return state();
+      case "deleteScenarioGroup":
+        isIdle();
+        if (command.confirmed !== true) throw new Error("Cần xác nhận xóa Scenario Group.");
+        scenarioGroups.delete(command.id);
+        return state();
+      case "moveScenarioToGroup":
+        isIdle();
+        scenarioGroups.move(command.flowId, command.groupId);
+        return state();
+      case "collapseUngroupedScenarios":
+        isIdle();
+        scenarioGroups.collapseUngrouped(command.collapsed);
+        return state();
+      case "activateWorkspace": {
+        isIdle();
+        if (event.sender !== window.webContents) throw new Error("Invalid workspace sender");
+        if (uiPlayAllRunId) throw new Error("Đợi Play All kết thúc trước khi chuyển tab.");
+        if (!browser.visible) throw new Error("Thoát crop/ảnh trước khi chuyển tab.");
+        const flow = store.flows().find(f => f.id === command.flowId);
+        if (!flow) throw new Error("Không tìm thấy Scenario.");
+        if (typeof command.editorExpanded !== "boolean") throw new Error("Invalid editor state");
+        if (command.sessionId) browserSessions.get(command.sessionId);
+        if (command.url && command.url !== "about:blank" && !["http:", "https:"].includes(new URL(command.url).protocol))
+          throw new Error("URL tab không hợp lệ.");
+        switchingWorkspace = true;
+        armedTest = undefined;
+        try {
+          if (command.sessionId && command.sessionId !== activeSessionId)
+            await switchBrowserSession(command.sessionId, true);
+          if (command.url && command.url !== browser.view.webContents.getURL()) {
+            try {
+              if (command.url === "about:blank") await browser.view.webContents.loadURL(command.url);
+              else await browser.navigate(command.url);
+            } catch (error) {
+              sessionError = "Đã chuyển tab nhưng trang chưa tải được. Bạn có thể nhập URL khác.";
+              logMainError(runDir, "workspace-navigation", error, { flowId: flow.id });
+            }
+          }
+          store.setSetting("currentFlow", flow.id);
+          browser.setZoom(flow.zoom);
+          overlays.setExpanded("editor", command.editorExpanded);
+          overlays.setPage("creator");
+          window.webContents.focus();
+          publishLayout();
+          return state();
+        } finally { switchingWorkspace = false; }
+      }
       case "createBrowserSession":
         isIdle();
         browserSessions.create(command.name);
@@ -423,6 +483,7 @@ async function boot() {
         return switchBrowserSession(command.id);
       case "appPage":
         isIdle();
+        if (uiPlayAllRunId) throw new Error("Đợi Play All kết thúc trước khi chuyển màn hình.");
         if (event.sender !== window.webContents || !["scenarios", "creator", "browser-sessions", "test-lab", "settings"].includes(command.page))
           throw new Error("Invalid app page");
         overlays.setPage(command.page);
@@ -531,11 +592,13 @@ async function boot() {
       }
       case "newFlow":
         isIdle();
+        if (uiPlayAllRunId) throw new Error("Đợi Play All kết thúc trước khi tạo Scenario.");
         armedTest = undefined;
         store.newFlow(command.name, browser.zoom);
         return state();
       case "openFlow": {
         isIdle();
+        if (uiPlayAllRunId) throw new Error("Đợi Play All kết thúc trước khi chuyển Scenario.");
         const f = store.flows().find((f) => f.id === command.id);
         if (!f) throw new Error("Không tìm thấy flow.");
         armedTest = undefined;
@@ -707,6 +770,10 @@ async function boot() {
         armedTest = undefined;
         return;
       case "armTest":
+        if (switchingWorkspace || !store.flow()?.steps.some(step => step.id === command.stepId)) {
+          armedTest = undefined;
+          return;
+        }
         store.step(command.stepId, command.version);
         armedTest = {
           stepId: command.stepId,
@@ -734,7 +801,7 @@ async function boot() {
   browser.onViewCreated(wc => {
     let pendingShortcut = false;
     wc.on("before-input-event", (event, input) => {
-      if (switchingSession || uiPlayAllRunId || overlays.page !== "creator") return;
+      if (switchingWorkspace || switchingSession || uiPlayAllRunId || overlays.page !== "creator") return;
       if (
         input.type === "keyDown" &&
         input.control &&
@@ -766,7 +833,7 @@ async function boot() {
         if (armedTest) {
           const test = armedTest;
           setImmediate(() => {
-            if (switchingSession || uiPlayAllRunId || wc !== browser.view.webContents || overlays.page !== "creator") return;
+            if (switchingWorkspace || switchingSession || uiPlayAllRunId || test !== armedTest || wc !== browser.view.webContents || overlays.page !== "creator") return;
             void runtime
               .test(test.stepId, test.version, test.overrideId)
               .then((result) =>

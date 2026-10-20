@@ -1,6 +1,18 @@
 import type { NetworkSettings, NetworkRunSettings } from "./network-mode.js";
 export type Rect = { x: number; y: number; width: number; height: number };
 export type AppPage = "scenarios" | "creator" | "browser-sessions" | "test-lab" | "settings";
+export type ScenarioOrganization = {
+  groups: { id: string; name: string; collapsed: boolean }[];
+  membership: Record<string, string>;
+  ungroupedCollapsed: boolean;
+};
+export type WorkspaceTab = {
+  id: string;
+  kind: "creator";
+  flowId: string;
+  sessionId?: string;
+  url?: string;
+};
 export type BrowserSession = {
   id: string; name: string; partition: string; isDefault: boolean;
   lastUrl?: string; domains: string[]; createdAt: string; updatedAt: string;
@@ -194,6 +206,7 @@ export type ResolutionTrace = {
   }[];
 };
 export type State = {
+  scenarioOrganization?: ScenarioOrganization;
   browserSessions?: BrowserSession[];
   activeBrowserSessionId?: string;
   sessionError?: string;
@@ -212,6 +225,12 @@ export type State = {
   dataPath: string;
 };
 export type Command =
+  | { type: "createScenarioGroup"; name: string }
+  | { type: "updateScenarioGroup"; id: string; name?: string; collapsed?: boolean }
+  | { type: "deleteScenarioGroup"; id: string; confirmed: boolean }
+  | { type: "moveScenarioToGroup"; flowId: string; groupId?: string }
+  | { type: "collapseUngroupedScenarios"; collapsed: boolean }
+  | { type: "activateWorkspace"; flowId: string; sessionId?: string; url?: string; editorExpanded: boolean }
   | { type: "createBrowserSession"; name: string }
   | { type: "renameBrowserSession"; id: string; name: string }
   | { type: "deleteBrowserSession"; id: string; confirmed: boolean }

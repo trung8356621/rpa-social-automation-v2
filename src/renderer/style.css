@@ -1187,3 +1187,39 @@ body[data-panel="shell"] .app-shell[data-editor-overlay="true"] > aside.creator-
 }
 
 .step-label > small { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
+/* Tabs occupy the existing 36px header; the native Browser still starts at y=88. */
+.workspace-page-strip { margin-left: var(--app-nav-width); height: 36px; background: #142238; border-bottom: 1px solid #304359; }
+.workspace-page-strip ~ .app-page { height: calc(100vh - 36px); }
+.workspace-tabs { display: flex; align-items: stretch; height: 36px; min-width: 150px; flex: 1; overflow: hidden; }
+.workspace-tabs button { border-radius: 0; padding: 5px 10px; border: 0; background: transparent; white-space: nowrap; }
+.workspace-tabs .scenarios-tab { flex-shrink: 0; border-right: 1px solid #304359; }
+.workspace-tab-items { display: flex; overflow-x: auto; min-width: 0; scrollbar-width: thin; }
+.workspace-tab { display: flex; align-items: stretch; flex-shrink: 0; border-right: 1px solid #304359; border-top: 2px solid transparent; }
+.workspace-tab > button:first-child { max-width: 190px; overflow: hidden; text-overflow: ellipsis; }
+.workspace-tab.active, .workspace-tabs button[aria-current="page"] { background: #263d54; }
+.workspace-tab.active { border-top-color: #68d6a6; }
+.workspace-tab .tab-close { padding: 3px 8px; font-size: 17px; }
+body[data-panel="shell"] .app-shell > header { justify-content: flex-start; }
+body[data-panel="shell"] .app-shell > header .workspace-tabs { position: sticky; left: 0; z-index: 21; background: #142238; }
+body[data-panel="shell"] .app-shell > header > .environment { flex-shrink: 0; }
+.scenario-toolbar { display: flex; align-items: center; flex-wrap: wrap; gap: 12px; margin-bottom: 22px; }
+.scenario-toolbar .session-selector { margin-left: auto; }
+.scenario-groups { display: flex; flex-direction: column; gap: 14px; }
+.scenario-folder { border: 1px solid #32475f; border-radius: 8px; background: #162639; }
+.scenario-folder-heading { display: flex; align-items: center; justify-content: space-between; padding: 4px 10px; background: #1c3045; border-radius: 8px; }
+.scenario-folder-heading > button { flex: 1; text-align: left; background: transparent; border: 0; }
+.scenario-folder-heading small, .scenario-item > small { color: #9bb0c7; white-space: nowrap; }
+.scenario-items { padding: 5px 14px; }
+.scenario-item { display: flex; align-items: center; gap: 14px; padding: 8px 0; border-bottom: 1px solid #2a3b52; }
+.scenario-item:last-child { border-bottom: 0; }
+.scenario-title { flex: 1; text-align: left; border: 0; background: transparent; overflow-wrap: anywhere; min-width: 0; }
+.scenario-folder details { position: relative; }
+.scenario-folder summary { cursor: pointer; list-style: none; padding: 7px 12px; border: 1px solid #3a4c68; border-radius: 5px; }
+.scenario-menu { position: absolute; right: 0; top: 100%; z-index: 30; padding: 6px; background: #1c3045; border: 1px solid #45627a; border-radius: 6px; min-width: 150px; }
+.scenario-menu button { display: block; width: 100%; text-align: left; border: 0; background: transparent; }
+@media (max-width: 800px) {
+  body[data-panel="shell"] .app-shell > header > .environment { display: none; }
+  .scenario-item { gap: 5px; flex-wrap: wrap; }
+  .scenario-title { flex-basis: 50%; }
+}
