@@ -5,7 +5,23 @@ import type { Store } from "./storage.js";
 import type { BrowserSessions } from "./browser-sessions.js";
 
 export class TestLab {
-  constructor(private readonly store: Store, private readonly sessions: BrowserSessions) {}
+  constructor(private readonly store: Store, private readonly sessions: BrowserSessions) {
+    // A process interruption cannot leave a saved Case looking permanently busy.
+    const value = this.read();
+    let interrupted = false;
+    for (const item of value.cases) if (item.lastResult?.status === "RUNNING") {
+      interrupted = true;
+      const result = item.lastResult;
+      result.status = "ERROR"; result.finishedAt = new Date().toISOString();
+      result.message = "Ứng dụng đã dừng trước khi Test Run kết thúc. Kiểm tra website trước khi chạy lại.";
+      if (!result.screenshotPath) result.screenshotError = "Lượt chạy bị gián đoạn trước khi lưu screenshot cuối.";
+      for (const step of result.steps ?? []) {
+        if (step.status === "RUNNING") { step.status = "ERROR"; step.message = result.message; }
+        else if (step.status === "PENDING") { step.status = "SKIPPED"; step.message = "Lượt chạy bị gián đoạn."; }
+      }
+    }
+    if (interrupted) this.write(value);
+  }
   read(): TestLabState {
     const saved = this.store.setting("testLab");
     return saved ? JSON.parse(saved) as TestLabState : { groups: [], cases: [], ungroupedCollapsed: false };
@@ -20,7 +36,7 @@ export class TestLab {
     if (!item) throw new Error("Không tìm thấy Test Case.");
     return item;
   }
-  validate(config: TestCaseConfig) {
+  validate(config: TestCaseConfig, checkValues = true) {
     this.name(config.name);
     const flow = this.store.flows().find(f => f.id === config.flowId);
     if (!flow) throw new Error("Scenario không còn tồn tại.");
@@ -29,7 +45,7 @@ export class TestLab {
     try { url = new URL(config.startUrl); } catch { throw new Error("Start URL cần là HTTP/HTTPS hợp lệ."); }
     if (!["http:", "https:"].includes(url.protocol)) throw new Error("Start URL chỉ hỗ trợ HTTP/HTTPS.");
     if (!config.values || typeof config.values !== "object" || Array.isArray(config.values)) throw new Error("Values không hợp lệ.");
-    validateVariables(flow.variables ?? [], config.values);
+    if (checkValues) validateVariables(flow.variables ?? [], config.values);
     return flow;
   }
   save(id: string | undefined, config: TestCaseConfig) {

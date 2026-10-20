@@ -19,9 +19,10 @@ import { ClickMarker } from "./click-marker.js";
 import { CreatorOverlays } from "./creator-overlays.js";
 import { BrowserCore } from "./browser-core.js";
 import { BrowserSessions } from "./browser-sessions.js";
+import { TestRunEvidence } from "./test-run-evidence.js";
 import { TestLab } from "./test-lab.js";
 import { playSequential } from "../shared/playback.js";
-import { resolvePayload } from "../shared/flow-model.js";
+import { validateVariables, resolvePayload } from "../shared/flow-model.js";
 import { ScenarioGroups } from "./scenario-groups.js";
 import { Store } from "./storage.js";
 import { logMainError, logMainEvent, logTestBoundary } from "./main-error-log.js";
@@ -102,6 +103,7 @@ async function boot() {
   const browserSessions = new BrowserSessions(store);
   const scenarioGroups = new ScenarioGroups(store);
   const testLab = new TestLab(store, browserSessions);
+  const testEvidence = new TestRunEvidence(path.join(dataPath, "test-runs"));
   let runningTestCaseId: string | undefined;
   let switchingWorkspace = false;
   let activeSessionId = browserSessions.activeId();
@@ -420,19 +422,37 @@ async function boot() {
     const item = testLab.get(id);
     runningTestCaseId = id;
     armedTest = undefined;
-    const startedAt = new Date().toISOString();
+    const runId = randomUUID(), startedAt = new Date().toISOString();
+    const savedFlow = store.flows().find(flow => flow.id === item.flowId);
+    const session = browserSessions.list().find(session => session.id === item.sessionId);
     let batchId: string | undefined;
     let currentStep: Step | undefined;
-    let contextReady = false;
-    let outcome: CaseResult = { status: "BLOCKED", startedAt, finishedAt: startedAt, message: "Chưa chạy." };
+    let contextReady = false, screenshotAttempted = false;
+    let outcome: CaseResult = { runId, caseId: id, caseName: item.name,
+      flowId: item.flowId, scenarioName: savedFlow?.name ?? item.flowId,
+      sessionId: item.sessionId, sessionName: session?.name ?? item.sessionId, startUrl: item.startUrl,
+      status: "RUNNING", startedAt, finishedAt: startedAt, message: "Chuẩn bị Test Run.", steps: [] };
+    const publish = () => {
+      testLab.result(id, outcome);
+      window.webContents.send("creator:case-state", state());
+    };
+    const screenshot = async () => {
+      if (screenshotAttempted) return;
+      screenshotAttempted = true;
+      if (!contextReady) {
+        outcome.screenshotError = "Chưa mở được đúng Browser Session của Case; không chụp Browser của workspace khác.";
+        return;
+      }
+      try { Object.assign(outcome, await testEvidence.capture(browser, id, runId)); }
+      catch (error) { outcome.screenshotError = error instanceof Error ? error.message : String(error); }
+    };
     try {
-      const flow = structuredClone(testLab.validate(item));
+      publish();
+      const flow = structuredClone(testLab.validate(item, false));
       flow.defaultPattern = { values: structuredClone(item.values) };
       const steps = flow.steps.map(ref => store.step(ref.id, ref.version));
-      if (!steps.length) throw new Error("Scenario chưa có Step đã lưu.");
-      // Validate all values before navigating or sending an action.
-      for (const step of steps) { currentStep = step; resolvePayload(step.payload, flow); }
-      currentStep = undefined;
+      outcome.steps = steps.map(step => ({ stepId: step.id, name: step.name, version: step.version,
+        status: "PENDING", message: "Chưa chạy." }));
       batchId = runtime.startPlayAllLog(flow);
       await switchBrowserSession(item.sessionId, true, false);
       store.setSetting("currentFlow", flow.id);
@@ -440,8 +460,7 @@ async function boot() {
       overlays.setExpanded("editor", false);
       overlays.setPage("creator");
       contextReady = true;
-      publishLayout();
-      window.webContents.send("creator:case-state", state());
+      publishLayout(); publish();
       // loadURL awaits main-frame load completion. No DOM/login inspection or retries.
       let failedLoad = false;
       const wc = browser.view.webContents;
@@ -461,46 +480,75 @@ async function boot() {
         if (timer) clearTimeout(timer);
         wc.removeListener("did-fail-load", failed); wc.removeListener("did-navigate", response);
       }
-      let allVerified = true;
-      let stopped = false;
+      // Values are checked in the Case's Browser, before any Step sends input.
+      validateVariables(flow.variables ?? [], item.values);
+      for (const step of steps) { currentStep = step; resolvePayload(step.payload, flow); }
+      currentStep = undefined;
+      let allVerified = true, stopped = false;
       await playSequential(steps, async step => {
         currentStep = step;
-        const results = await runtime.test(step.id, step.version, undefined, batchId);
-        if (results.some(r => r.status !== "VERIFIED")) allVerified = false;
-        window.webContents.send("creator:shortcut-result", results);
-        return results;
+        try {
+          const results = await runtime.test(step.id, step.version, undefined, batchId);
+          if (results.some(result => result.status !== "VERIFIED")) allVerified = false;
+          // Capture on failure before progress, cleanup or any further Browser operation.
+          if (results.some(result => !result.ok)) await screenshot();
+          window.webContents.send("creator:shortcut-result", results);
+          return results;
+        } catch (error) { await screenshot(); throw error; }
       }, (step, progress) => {
+        const entry = outcome.steps!.find(entry => entry.stepId === step.id)!;
+        entry.status = progress.status === "running" ? "RUNNING" : progress.status === "blocked" ? "BLOCKED"
+          : progress.status === "fail" ? "ERROR" : progress.status === "skipped" ? "SKIPPED"
+          : progress.resultStatus === "ACTION_SENT" ? "ACTION_SENT" : "PASS";
+        entry.message = progress.message; entry.runtimeStatus = progress.resultStatus;
+        outcome.message = `${step.name}: ${progress.message}`;
         if (["blocked", "fail"].includes(progress.status)) {
           stopped = true;
-          outcome = { status: progress.status === "blocked" ? "BLOCKED" : "FAILED", startedAt,
-            finishedAt: new Date().toISOString(), message: progress.message, stepId: step.id, stepName: step.name, version: step.version };
+          Object.assign(outcome, { status: entry.status, message: progress.message,
+            stepId: step.id, stepName: step.name, version: step.version });
         }
-      }, undefined, async (previous, next) => {
-        currentStep = next;
-        await delayBetweenSteps(batchId!, previous, next);
-      });
-      if (!stopped) outcome = { status: allVerified ? "PASS" : "ACTION_SENT", startedAt,
-        finishedAt: new Date().toISOString(), message: allVerified
-          ? "Runtime xác nhận các Step đã lưu. Hãy tự kiểm tra kết quả nghiệp vụ trên website."
-          : "Đã gửi thao tác; cần kiểm tra website. Chưa xác nhận hoàn tất nghiệp vụ." };
+        publish();
+      }, undefined, async (previous, next) => { currentStep = next; await delayBetweenSteps(batchId!, previous, next); });
+      if (!stopped) Object.assign(outcome, { status: !steps.length ? "SKIPPED" : allVerified ? "PASS" : "ACTION_SENT",
+        message: !steps.length ? "Scenario chưa có Step đã lưu; không gửi thao tác."
+          : allVerified ? "Runtime xác nhận các Step đã lưu. Hãy tự kiểm tra kết quả nghiệp vụ trên website."
+          : "Đã gửi thao tác; cần kiểm tra website. Chưa xác nhận hoàn tất nghiệp vụ." });
     } catch (error) {
-      outcome = { status: currentStep || !contextReady ? "BLOCKED" : "FAILED", startedAt, finishedAt: new Date().toISOString(),
-        message: error instanceof Error ? error.message : String(error), stepId: currentStep?.id,
-        stepName: currentStep?.name, version: currentStep?.version };
+      const message = error instanceof Error ? error.message : String(error);
+      Object.assign(outcome, { status: /variable|Default Pattern|type mismatch|Viewport|Zoom|không thuộc flow/i.test(message) || !contextReady ? "BLOCKED" : "ERROR",
+        message, stepId: currentStep?.id, stepName: currentStep?.name, version: currentStep?.version });
+      if (currentStep) {
+        const entry = outcome.steps?.find(entry => entry.stepId === currentStep!.id);
+        if (entry) { entry.status = outcome.status === "BLOCKED" ? "BLOCKED" : "ERROR"; entry.message = message; }
+      }
+      await screenshot();
     } finally {
-      try { if (batchId) runtime.endPlayAllLog(batchId, !["PASS", "ACTION_SENT"].includes(outcome.status)); }
-      finally {
-        runningTestCaseId = undefined;
-        armedTest = undefined;
+      try {
+        if (!screenshotAttempted && contextReady && batchId && ["PASS", "ACTION_SENT"].includes(outcome.status))
+          await new Promise(resolve => setTimeout(resolve, Math.min(500, runtime.playAllNetwork(batchId!).stepDelayMs)));
+        await screenshot();
+        for (const entry of outcome.steps ?? []) if (entry.status === "PENDING") {
+          entry.status = "SKIPPED"; entry.message = "Không chạy vì lượt test đã dừng trước Step này.";
+        }
+        outcome.finishedAt = new Date().toISOString();
+        try { await testEvidence.metadata(id, outcome); }
+        catch (error) { outcome.evidenceError = `Không lưu được metadata ảnh: ${String(error)}`; }
+        // Commit the new reference before pruning; never overwrite the previous image while writing.
         testLab.result(id, outcome);
-        // Keep the final website visible only after the correct Case context was installed.
-        overlays.setPage(contextReady ? "creator" : "test-case");
-        publishLayout();
-        window.webContents.send("creator:case-state", state());
+        try { await testEvidence.prune(id, runId); }
+        catch (error) { outcome.evidenceError = [outcome.evidenceError, `Chưa dọn được ảnh cũ: ${String(error)}`].filter(Boolean).join(" "); testLab.result(id, outcome); }
+      } finally {
+        try { if (batchId) runtime.endPlayAllLog(batchId, !["PASS", "ACTION_SENT", "SKIPPED"].includes(outcome.status)); }
+        finally {
+          runningTestCaseId = undefined; armedTest = undefined;
+          overlays.setPage(contextReady ? "creator" : "test-case");
+          publishLayout(); window.webContents.send("creator:case-state", state());
+        }
       }
     }
     return state();
   }
+
   ipcMain.handle("creator:command", async (event, command: Command) => {
     if (!trusted(event)) throw new Error("IPC sender không hợp lệ.");
     if (!command || typeof command !== "object")
@@ -511,6 +559,11 @@ async function boot() {
       sender: event.sender.id,
     });
     switch (command.type) {
+      case "testCaseScreenshot": {
+        const result = testLab.get(command.caseId).lastResult;
+        if (!result || result.runId !== command.runId) throw new Error("Screenshot không thuộc Last Result hiện tại.");
+        return testEvidence.read(command.caseId, result);
+      }
       case "runTestCase":
         if (event.sender !== window.webContents) throw new Error("Invalid Test Case sender");
         return runTestCase(command.id);
@@ -519,7 +572,9 @@ async function boot() {
       case "deleteTestCase":
         isIdle();
         if (!command.confirmed) throw new Error("Cần xác nhận xóa Test Case.");
-        testLab.delete(command.id); return state();
+        testLab.delete(command.id);
+        await testEvidence.prune(command.id, undefined, true).catch(error => logMainError(runDir, "case-evidence-cleanup", error, { caseId: command.id }));
+        return state();
       case "moveTestCase":
         isIdle(); testLab.move(command.id, command.groupId); return state();
       case "testGroup":

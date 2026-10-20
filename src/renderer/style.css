@@ -1215,6 +1215,43 @@ body[data-panel="shell"] .app-shell > aside.creator-steps {
 .case-result p { margin: 5px 0; }
 .test-case-item { padding-bottom: 10px; border-bottom: 1px solid #304359; }
 .test-case-item > small { display: block; padding: 0 10px; color: #9bb0c7; overflow-wrap: anywhere; }
+.test-lab-rows { padding: 0 12px; }
+.test-lab-row { display: grid; grid-template-columns: minmax(110px, 1.5fr) minmax(80px, 1fr) minmax(80px, 1fr) 110px 56px 74px 42px; gap: 10px; align-items: center; min-height: 48px; padding: 7px 0; border-bottom: 1px solid #304359; }
+.test-lab-row:last-child { border-bottom: 0; }
+.test-lab-row > * { min-width: 0; }
+.test-lab-row > span, .test-lab-row .case-name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.test-lab-row button { padding: 6px 8px; }
+.test-lab-row .case-name { text-align: left; border: 0; background: transparent; font-weight: 600; }
+.test-lab-columns { color: #9bb0c7; min-height: 36px; font-size: 12px; }
+.case-run-status { display: inline-block; font-size: 11px; padding: 4px 7px; border: 1px solid #45627a; border-radius: 5px; white-space: nowrap; }
+.case-run-status[data-status="PASS"] { color: #8de1b9; border-color: #42795e; }
+.case-run-status[data-status="RUNNING"] { color: #8cc9ff; border-color: #467aac; }
+.case-run-status[data-status="BLOCKED"], .case-run-status[data-status="ACTION_SENT"] { color: #efc070; border-color: #8b7145; }
+.case-run-status[data-status="ERROR"] { color: #f29d9d; border-color: #a65a5a; }
+.case-run-status[data-status="SKIPPED"], .case-run-status[data-status="PENDING"] { color: #9bb0c7; }
+.case-result-heading { display: flex; align-items: center; flex-wrap: wrap; gap: 9px; }
+.case-result-heading > button { margin-left: auto; }
+.case-result-fields { display: grid; grid-template-columns: 90px minmax(0, 1fr); gap: 6px 10px; margin: 14px 0; }
+.case-result-fields dt { color: #9bb0c7; }
+.case-result-fields dd { margin: 0; overflow-wrap: anywhere; }
+.case-run-steps summary { cursor: pointer; padding: 8px 0; }
+.case-run-steps ol { padding-left: 22px; }
+.case-run-steps li { padding: 6px 0; border-bottom: 1px solid #304359; }
+.case-run-steps li > div { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; justify-content: space-between; }
+.case-run-steps li p { color: #afc0d5; }
+.case-screenshot { display: block; width: 100%; margin-top: 12px; padding: 6px; }
+.case-screenshot img { display: block; width: 100%; max-height: 260px; object-fit: contain; background: #0c1524; }
+.case-screenshot span { display: block; font-size: 12px; padding-top: 6px; color: #afc0d5; }
+.case-screenshot-modal { width: min(1150px, calc(100vw - 40px)); padding: 16px; overflow: auto; }
+.case-screenshot-modal img { display: block; width: 100%; max-height: 75vh; object-fit: contain; background: #0c1524; }
+@media (max-width: 1000px) {
+  .test-lab-columns { display: none; }
+  .test-lab-row { grid-template-columns: minmax(100px, 1fr) 110px 56px 74px 42px; gap: 8px; }
+  .test-lab-row .case-scenario { grid-column: 1 / 3; grid-row: 2; }
+  .test-lab-row .case-session { grid-column: 3 / 6; grid-row: 2; }
+  .case-scenario::before { content: "Scenario: "; color: #9bb0c7; }
+  .case-session::before { content: "Session: "; color: #9bb0c7; }
+}
 body[data-panel="shell"] .app-shell > header { justify-content: flex-start; }
 body[data-panel="shell"] .app-shell > header .workspace-tabs { position: sticky; left: 0; z-index: 21; background: #142238; }
 body[data-panel="shell"] .app-shell > header > .environment { flex-shrink: 0; }

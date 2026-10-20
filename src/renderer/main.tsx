@@ -66,6 +66,7 @@ function Creator() {
   const workspaceRestoring = useRef(false);
   const workspaceLock = useRef(false);
   const browserUrl = useRef("");
+  const caseRunRef = useRef<{ id?: string; runId?: string }>({});
   const pendingCloseTab = useRef<string | undefined>(undefined);
   const closeTabHandler = useRef<(id: string) => void>(() => {});
   const [restoreRevision, setRestoreRevision] = useState(0);
@@ -334,10 +335,23 @@ function Creator() {
     });
     const offCaseState = window.creator.onCaseState(snapshot => {
       setState(snapshot);
-      if (snapshot.runningTestCaseId) {
-        setResults([]); setStepPlayback({});
-        setExecution(undefined); executionRef.current = undefined;
+      const item = snapshot.testLab?.cases.find(item => item.id === (snapshot.runningTestCaseId ?? caseRunRef.current.id));
+      const run = item?.lastResult;
+      if (run?.runId && run.runId !== caseRunRef.current.runId) {
+        caseRunRef.current = { id: item!.id, runId: run.runId };
+        setResults([]); setExecution(undefined); executionRef.current = undefined;
       }
+      const playback: Record<string, StepPlayback> = {};
+      for (const step of run?.steps ?? []) if (step.status !== "PENDING") playback[step.stepId] = {
+        status: step.status === "RUNNING" ? "running" : step.status === "BLOCKED" ? "blocked"
+          : step.status === "ERROR" ? "fail" : step.status === "SKIPPED" ? "skipped" : "pass",
+        message: step.message, resultStatus: step.runtimeStatus,
+      };
+      setStepPlayback(playback);
+      const active = run?.steps?.find(step => step.status === "RUNNING")
+        ?? run?.steps?.find(step => ["BLOCKED", "ERROR"].includes(step.status))
+        ?? run?.steps?.filter(step => !["PENDING", "SKIPPED"].includes(step.status)).at(-1);
+      setActiveStepId(active?.stepId ?? "");
       browserUrl.current = snapshot.url;
       urlEdit.current = { dirty: false, revision: urlEdit.current.revision + 1 };
       setUrl(snapshot.url);
@@ -747,11 +761,23 @@ function Creator() {
     setState(next);
     updateTabs(tabsRef.current.map(t => t.id === tabId ? { ...t, caseId: item.id, flowId: item.flowId, sessionId: item.sessionId } : t));
   }
+  function canRunCase(id: string) {
+    const tab = tabsRef.current.find(tab => tab.kind === "test-case" && tab.caseId === id);
+    return !tab || !caseEditors.current.get(tab.id)?.dirty;
+  }
   function runCase(id: string) {
-    if (busy || shot || workspaceLock.current || !activeCaseTab || caseEditors.current.get(activeCaseTab.id)?.dirty) return;
+    if (busy || shot || ocrLoading || workspaceLock.current || pendingNavigationRef.current || !state || !canRunCase(id)) return;
+    const item = state.testLab?.cases.find(item => item.id === id);
+    if (!item) return;
+    const tab: WorkspaceTab = tabsRef.current.find(tab => tab.kind === "test-case" && tab.caseId === id)
+      ?? { id: crypto.randomUUID(), kind: "test-case", caseId: id, flowId: item.flowId, sessionId: item.sessionId };
+    workspaceLock.current = true;
     void task(async () => {
-      try { setState(await invoke<State>({ type: "runTestCase", id })); }
-      catch (error) { setState(await invoke<State>({ type: "state" })); throw error; }
+      try {
+        await activateTab(tab);
+        setState(await invoke<State>({ type: "runTestCase", id }));
+      } catch (error) { setState(await invoke<State>({ type: "state" })); throw error; }
+      finally { workspaceLock.current = false; }
     });
   }
   async function updateWorkspace(command: Command) {
@@ -1132,7 +1158,7 @@ function Creator() {
       {shell && appPage === "browser-sessions" && <BrowserSessionsPage state={state} locked={navigationLocked}
         update={updateBrowserSessions} open={openSession} />}
       {shell && appPage === "test-lab" && <TestLabPage state={state} locked={navigationLocked} update={updateWorkspace}
-        open={openCase} create={() => openCase()} canDelete={id => !tabsRef.current.some(t => t.caseId === id)} />}
+        open={openCase} run={runCase} canRun={canRunCase} create={() => openCase()} canDelete={id => !tabsRef.current.some(t => t.caseId === id)} />}
       {shell && state && tabs.filter(tab => tab.kind === "test-case").map(tab => <div key={tab.id} className="case-editor-host"
         hidden={tab.id !== activeTabId || appPage !== "test-case"}>
         <TestCaseEditor tabId={tab.id} item={state.testLab?.cases.find(c => c.id === tab.caseId)} state={state}
@@ -1294,7 +1320,8 @@ function Creator() {
             {activeCaseTab && <><b>Test Case · bản đã lưu</b>
               <p>{state?.runningTestCaseId ? "Đang chạy, vui lòng đợi." : "Đã kết thúc. Kiểm tra website hoặc mở Cấu hình Case để chạy lại."}</p>
               {!state?.runningTestCaseId && state?.testLab?.cases.find(c => c.id === activeCaseTab.caseId)?.lastResult &&
-                <CaseResultView item={state.testLab.cases.find(c => c.id === activeCaseTab.caseId)!} />}</>}
+                <CaseResultView item={state.testLab.cases.find(c => c.id === activeCaseTab.caseId)!} state={state}
+                  locked={navigationLocked || !canRunCase(activeCaseTab.caseId!)} runAgain={() => runCase(activeCaseTab.caseId!)} />}</>}
             {state?.sessionError && <p className="network-failure-hint" role="alert">{state.sessionError}</p>}
             {results.filter(result => result.networkHint).map(result =>
               <p key={result.id} className="network-failure-hint" role="alert">{result.networkHint}</p>)}

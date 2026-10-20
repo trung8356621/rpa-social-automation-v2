@@ -3,10 +3,21 @@ export type Rect = { x: number; y: number; width: number; height: number };
 export type MainPage = "scenarios" | "browser-sessions" | "test-lab" | "settings";
 export type AppPage = MainPage | "creator" | "test-case";
 export type VariableValues = Record<string, string | string[] | number>;
+export type CaseRunStatus = "RUNNING" | "PASS" | "BLOCKED" | "SKIPPED" | "ERROR" | "ACTION_SENT";
+export type CaseStepResult = {
+  stepId: string; name: string; version: number;
+  status: CaseRunStatus | "PENDING"; message: string;
+  runtimeStatus?: Result["status"];
+};
 export type CaseResult = {
-  status: "PASS" | "ACTION_SENT" | "BLOCKED" | "FAILED";
+  status: CaseRunStatus | "FAILED"; // FAILED remains readable for saved V1 results.
   startedAt: string; finishedAt: string; message: string;
   stepId?: string; stepName?: string; version?: number;
+  runId?: string; caseId?: string; caseName?: string;
+  flowId?: string; scenarioName?: string; sessionId?: string; sessionName?: string; startUrl?: string;
+  steps?: CaseStepResult[];
+  screenshotPath?: string; screenshotAt?: string; screenshotError?: string;
+  evidenceError?: string;
 };
 export type TestCaseConfig = { name: string; flowId: string; sessionId: string; startUrl: string; values: VariableValues };
 export type TestCase = TestCaseConfig & { id: string; groupId?: string; lastResult?: CaseResult };
@@ -241,6 +252,7 @@ export type State = {
   dataPath: string;
 };
 export type Command =
+  | { type: "testCaseScreenshot"; caseId: string; runId: string }
   | { type: "deleteScenario"; id: string; confirmed: boolean }
   | { type: "testGroup"; operation: "create" | "update" | "delete"; id?: string; name?: string; collapsed?: boolean; confirmed?: boolean }
   | { type: "collapseUngroupedCases"; collapsed: boolean }

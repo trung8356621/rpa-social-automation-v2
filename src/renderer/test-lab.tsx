@@ -74,20 +74,63 @@ export function TestCaseEditor({ tabId, item, state, locked, report, saved, savi
       <div className="case-actions"><button className="primary" disabled={disabled || !dirty} onClick={() => void save().catch(() => {})}>Lưu Case</button>
         <button disabled={disabled || dirty || !item} onClick={() => item && run(item.id)}>Run Test Case</button>
         {dirty && <small>Lưu cấu hình trước khi chạy.</small>}</div>
-      {item?.lastResult && <CaseResultView item={item} />}
+      {item?.lastResult && <CaseResultView item={item} state={state} locked={disabled || dirty} runAgain={() => run(item.id)} />}
     </div>
   </section>;
 }
-export function CaseResultView({ item }: { item: TestCase }) {
+const resultStatus = (status?: string) => status === "FAILED" ? "ERROR" : status ?? "Chưa chạy";
+export function CaseResultView({ item, state, locked = false, runAgain }: {
+  item: TestCase; state?: State; locked?: boolean; runAgain?: () => void;
+}) {
   const result = item.lastResult;
-  return result ? <div className="case-result" role="status"><b>{result.status}</b> · {new Date(result.finishedAt).toLocaleString()}
-    {result.stepId && <p>Step: {result.stepName ?? result.stepId} · v{result.version}</p>}<p>{result.message}</p>
-  </div> : <small>Chưa chạy</small>;
+  const [image, setImage] = useState<{ runId: string; src: string }>();
+  const [imageError, setImageError] = useState("");
+  const [large, setLarge] = useState(false);
+  useEffect(() => {
+    let cancelled = false;
+    setImage(undefined); setImageError(""); setLarge(false);
+    if (result?.runId && result.screenshotPath) void window.creator.invoke({ type: "testCaseScreenshot", caseId: item.id, runId: result.runId })
+      .then(value => { if (!cancelled) setImage({ runId: result.runId!, src: value as string }); })
+      .catch(error => { if (!cancelled) setImageError(String(error)); });
+    return () => { cancelled = true; };
+  }, [item.id, result?.runId, result?.screenshotPath]);
+  if (!result) return <small>Chưa chạy</small>;
+  const screenshot = image && image.runId === result.runId ? image.src : undefined;
+  const status = resultStatus(result.status);
+  const seconds = Math.max(0, (new Date(result.finishedAt).getTime() - new Date(result.startedAt).getTime()) / 1000);
+  return <section className="case-result" aria-label="Last Result">
+    <div className="case-result-heading"><b>Last Result</b><span className="case-run-status" data-status={status}>{status}</span>
+      {runAgain && <button disabled={locked || result.status === "RUNNING"} onClick={runAgain}>Run Again</button>}</div>
+    <dl className="case-result-fields">
+      <dt>Test Case</dt><dd>{result.caseName ?? item.name}</dd>
+      <dt>Scenario</dt><dd>{result.scenarioName ?? state?.flows.find(flow => flow.id === item.flowId)?.name ?? item.flowId}</dd>
+      <dt>Session</dt><dd>{result.sessionName ?? state?.browserSessions?.find(session => session.id === item.sessionId)?.name ?? item.sessionId}</dd>
+      <dt>URL</dt><dd>{result.startUrl ?? item.startUrl}</dd>
+      <dt>Bắt đầu</dt><dd>{new Date(result.startedAt).toLocaleString()}</dd>
+      <dt>Thời gian</dt><dd>{result.status === "RUNNING" ? "Đang chạy…" : `${seconds.toFixed(1)} giây`}</dd>
+      {result.stepId && <><dt>Step dừng</dt><dd>{result.stepName ?? result.stepId} · v{result.version}</dd></>}
+    </dl>
+    <p role="status">{result.message}</p>
+    <p className="hint">PASS chỉ theo xác nhận Runtime. ACTION_SENT cần kiểm tra website, không xác nhận hoàn tất nghiệp vụ.</p>
+    {!!result.steps?.length && <details className="case-run-steps"><summary>Steps ({result.steps.length})</summary>
+      <ol>{result.steps.map(step => <li key={step.stepId}>
+        <div><b>{step.name} · v{step.version}</b><span className="case-run-status" data-status={step.status}>{step.status}</span></div>
+        <p>{step.message}</p></li>)}</ol></details>}
+    {screenshot ? <button className="case-screenshot" onClick={() => setLarge(true)} title="Xem ảnh lớn">
+      <img src={screenshot} alt={`Screenshot cuối của ${result.caseName ?? item.name}`} /><span>Xem ảnh lớn · {result.screenshotAt && new Date(result.screenshotAt).toLocaleString()}</span>
+    </button> : <p className="hint" role={result.screenshotError || imageError ? "alert" : undefined}>{result.screenshotPath ? imageError || "Đang mở screenshot…" : result.screenshotError ? `Không có screenshot: ${result.screenshotError}` : (result.status === "RUNNING" ? "Ảnh sẽ được chụp trước khi kết thúc." : "Lượt chạy cũ chưa có screenshot.")}</p>}
+    {result.screenshotError && screenshot && <p role="alert">Lỗi chụp ảnh: {result.screenshotError}</p>}
+    {result.evidenceError && <p role="alert">{result.evidenceError}</p>}
+    {large && screenshot && <UiPopover variant="modal" label="Screenshot Test Run" className="case-screenshot-modal" close={() => setLarge(false)}>
+      <div className="popover-heading"><b>{result.caseName ?? item.name} · {status}</b><button onClick={() => setLarge(false)} aria-label="Đóng screenshot">×</button></div>
+      <img src={screenshot} alt="Screenshot nội dung Browser tại cuối lượt chạy" />
+    </UiPopover>}
+  </section>;
 }
 
-export function TestLabPage({ state, locked, update, open, create, canDelete }: {
+export function TestLabPage({ state, locked, update, open, run, canRun, create, canDelete }: {
   state?: State; locked: boolean; update: (command: Command) => Promise<void>;
-  open: (id: string) => void; create: () => void; canDelete: (id: string) => boolean;
+  open: (id: string) => void; run: (id: string) => void; canRun: (id: string) => boolean; create: () => void; canDelete: (id: string) => boolean;
 }) {
   const lab = state?.testLab ?? { groups: [], cases: [], ungroupedCollapsed: false };
   const [dialog, setDialog] = useState<{ kind: "create" | "rename" | "group-delete" | "delete" | "move"; id?: string; name?: string }>();
@@ -123,13 +166,21 @@ export function TestLabPage({ state, locked, update, open, create, canDelete }: 
           : { type: "collapseUngroupedCases", collapsed: !group.collapsed })}>{group.collapsed ? "▸" : "▾"} {group.name} ({cases.length})</button>
         {group.id && <details><summary>...</summary><div className="scenario-menu"><button disabled={disabled} onClick={() => show("rename", group.id, group.name, group.name)}>Đổi tên</button>
           <button disabled={disabled} onClick={() => show("group-delete", group.id, group.name)}>Xóa Group</button></div></details>}</div>
-        {!group.collapsed && <div className="scenario-items">{cases.map(item => <div className="test-case-item" key={item.id}>
-          <div className="scenario-item"><button className="scenario-title" disabled={disabled} onClick={() => open(item.id)}>{item.name}</button>
-            <small>{state?.flows.find(f => f.id === item.flowId)?.name}</small><button disabled={disabled} onClick={() => open(item.id)}>Mở Case</button>
-            <details><summary>...</summary><div className="scenario-menu"><button disabled={disabled} onClick={() => show("move", item.id, item.name, item.groupId ?? "")}>Move to Group</button>
-              <button disabled={disabled} onClick={() => show("delete", item.id, item.name)}>Delete Test Case</button></div></details></div>
-          <small>{state?.browserSessions?.find(s => s.id === item.sessionId)?.name} · {item.startUrl}</small><CaseResultView item={item} />
-        </div>)}{!cases.length && <p className="page-empty">Chưa có Test Case.</p>}</div>}
+        {!group.collapsed && <div className="test-lab-rows">
+          <div className="test-lab-row test-lab-columns" aria-hidden="true"><b>Test Case</b><b>Scenario</b><b>Session</b><b>Last Result</b><span /><span /><span /></div>
+          {cases.map(item => <div className="test-lab-row" key={item.id}>
+            <button className="case-name" disabled={disabled} onClick={() => open(item.id)} title={item.name}>{item.name}</button>
+            <span className="case-scenario" title={state?.flows.find(flow => flow.id === item.flowId)?.name}>{state?.flows.find(flow => flow.id === item.flowId)?.name ?? "Scenario không còn"}</span>
+            <span className="case-session" title={state?.browserSessions?.find(session => session.id === item.sessionId)?.name}>{state?.browserSessions?.find(session => session.id === item.sessionId)?.name ?? "Session không còn"}</span>
+            <span className="case-run-status" data-status={state?.runningTestCaseId === item.id ? "RUNNING" : resultStatus(item.lastResult?.status)} title={item.lastResult?.message}>
+              {state?.runningTestCaseId === item.id ? "RUNNING" : resultStatus(item.lastResult?.status)}</span>
+            <button disabled={disabled || !canRun(item.id)} onClick={() => run(item.id)} title={canRun(item.id) ? "Chạy Case đã lưu" : "Lưu hoặc bỏ draft Case trước khi chạy"}>Run</button>
+            <button disabled={disabled} onClick={() => open(item.id)}>Chi tiết</button>
+            <details><summary aria-label={`Menu ${item.name}`}>...</summary><div className="scenario-menu">
+              <button disabled={disabled} onClick={() => show("move", item.id, item.name, item.groupId ?? "")}>Move to Group</button>
+              <button disabled={disabled} onClick={() => show("delete", item.id, item.name)}>Delete Test Case</button></div></details>
+          </div>)}{!cases.length && <p className="page-empty">Chưa có Test Case.</p>}
+        </div>}
       </section>;
     })}</div>
     {dialog && <UiPopover variant="modal" label="Test Lab" className="unsaved-confirm" close={() => { if (!working) setDialog(undefined); }}>
