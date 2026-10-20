@@ -329,6 +329,12 @@ export class Runtime {
         let scrolls = 0;
         let reached = false;
         let resetScrolls = 0;
+        let recoveryScrolls = 0;
+        let recoveryAttempts = 0;
+        let recoveryExpected: { x: number; y: number; tolerance: number } | undefined;
+        let destinationSettles = 0;
+        let candidateTrace: Result["resolution"];
+        let candidatePass = 0;
         let searchRegion: Rect | undefined;
         let lastSearchTrace: Result["resolution"];
         let current = before!;
@@ -375,6 +381,9 @@ export class Runtime {
               const { resolution: trace, ...position } = resolved;
               if (matchTo && Date.now() >= deadline)
                 throw new TargetNotConfident("TIME_LIMIT: Match To hết thời gian tìm OCR; chưa gửi action.", trace);
+              if (recoveryExpected && (Math.abs(position.x-recoveryExpected.x) > recoveryExpected.tolerance ||
+                  Math.abs(position.y-recoveryExpected.y) > recoveryExpected.tolerance))
+                throw new TargetNotConfident("EDGE_RECOVERY_TARGET_CHANGED: OCR sau cuộn không còn cùng mục tiêu; không click.", trace, true);
               match = position;
               resolution = trace;
               logMainEvent(this.runDir, "ocr-pass", { ...execution, outcome: "MATCHED", captureId: current.id, method: position.method, position, context: trace.context, searchRegion });
@@ -387,9 +396,39 @@ export class Runtime {
                 // Recoverable OCR outcomes remain distinct while scanning; technical/ambiguous errors stop.
                 if (!(error instanceof OcrNotFound)) throw error;
                 lastSearchTrace = error.resolution;
-                logMainEvent(this.runDir, "ocr-pass", { ...execution, outcome: error.outcome, captureId: current.id, context: error.resolution?.context, attempts: error.resolution?.attempts, searchRegion });
-                if (Date.now() >= deadline) throw new TargetNotConfident("TIME_LIMIT: hết thời gian quét OCR.", lastSearchTrace);
-                if (reached || scrolls >= 40) throw new TargetNotConfident("SCROLL_LIMIT: hết giới hạn quét OCR.", lastSearchTrace);
+                if (error.outcome !== "NOT_FOUND" && (candidateTrace?.ocrOutcome !== "CONTEXT_REJECTED" || error.outcome === "CONTEXT_REJECTED")) {
+                  candidateTrace = error.resolution;
+                  candidatePass = execution.ocrPasses;
+                }
+                logMainEvent(this.runDir, "ocr-pass", { ...execution, outcome: error.outcome, captureId: current.id,
+                  context: error.resolution?.context, attempts: error.resolution?.attempts, searchRegion, recovery: error.recovery });
+                if (Date.now() >= deadline) throw new TargetNotConfident("TIME_LIMIT: hết thời gian quét OCR.", candidateTrace ?? lastSearchTrace);
+                if (reached || scrolls >= 40) throw new TargetNotConfident("SCROLL_LIMIT: hết giới hạn quét OCR.", candidateTrace ?? lastSearchTrace);
+                // Do not scan past a recognized edge target. Move it into a safe area,
+                // then use a fresh screenshot/OCR/context result, at most twice.
+                if (error.recovery || recoveryExpected) {
+                  if (recoveryAttempts >= 2)
+                    throw new TargetNotConfident(`EDGE_RECOVERY_EXHAUSTED: ${error.outcome}; không click.`, candidateTrace ?? lastSearchTrace);
+                  recoveryAttempts++;
+                  if (error.recovery) {
+                    const box = error.recovery;
+                    const x = box.x+box.width/2, y = box.y+box.height/2;
+                    if (recoveryExpected && (Math.abs(x-recoveryExpected.x) > recoveryExpected.tolerance ||
+                        Math.abs(y-recoveryExpected.y) > recoveryExpected.tolerance))
+                      throw new TargetNotConfident("EDGE_RECOVERY_TARGET_CHANGED: ứng viên OCR đã đổi; không click.", lastSearchTrace, true);
+                    const progress = await advanceOcrSearch(this.browser.view.webContents, matchTo, this.browser.zoom, false, false, y);
+                    if (progress.moved) recoveryScrolls++;
+                    reached = progress.reached;
+                    execution.scrolls = resetScrolls+scrolls+recoveryScrolls;
+                    recoveryExpected = { x, y: y-(progress.deltaYDip ?? 0), tolerance: Math.max(32,box.height) };
+                    logMainEvent(this.runDir, "ocr-edge-recovery", { ...execution, recoveryAttempts, candidate: box, ...progress });
+                  } else {
+                    logMainEvent(this.runDir, "ocr-edge-recheck", { ...execution, recoveryAttempts, outcome: error.outcome });
+                  }
+                  await new Promise(resolve => setTimeout(resolve,250));
+                  current = await this.browser.capture();
+                  continue;
+                }
               } else {
                 if (!(error instanceof TargetNotConfident) || Date.now() >= deadline) throw error;
               }
@@ -398,10 +437,18 @@ export class Runtime {
               const progress = await advanceOcrSearch(this.browser.view.webContents, matchTo, this.browser.zoom);
               reached = progress.reached;
               if (progress.moved) scrolls++;
-              execution.scrolls = scrolls + resetScrolls;
+              execution.scrolls = scrolls + resetScrolls + recoveryScrolls;
               logMainEvent(this.runDir, "ocr-scroll", { ...execution, ...progress });
-              if (!progress.moved)
-                throw new TargetNotConfident(`${progress.reason ?? "SCROLL_STALLED"}: ${lastSearchTrace?.ocrOutcome ?? "NOT_FOUND"}; chưa gửi action.`, lastSearchTrace);
+              if (!progress.moved) {
+                if (progress.reason === "DESTINATION_REACHED" && destinationSettles < 1 && Date.now() < deadline) {
+                  destinationSettles++;
+                  logMainEvent(this.runDir,"ocr-destination-settle", { ...execution, ...progress });
+                  await new Promise(resolve => setTimeout(resolve,250));
+                  current = await this.browser.capture();
+                  continue;
+                }
+                throw new TargetNotConfident(`${progress.reason ?? "SCROLL_STALLED"}: lastOCR=${lastSearchTrace?.ocrOutcome ?? "NOT_FOUND"}; bestCandidate=${candidateTrace?.ocrOutcome ?? "NOT_FOUND"}@OCR${candidatePass}; chưa gửi action.`, candidateTrace ?? lastSearchTrace);
+              }
             }
             await new Promise((r) => setTimeout(r, matchTo ? 250 : 200));
             current = await this.browser.capture();

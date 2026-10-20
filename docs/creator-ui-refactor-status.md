@@ -1,3 +1,24 @@
+> Audit regression v12 — dựa trên log có sẵn, không chạy app/test:
+> - Hai lượt thành công testRunId 9b25ed78…/e2f960b8… (07:18–07:19 ngày 20/10, Bangkok)
+>   đều ACTION_SENT ở OCR 2, confidence 93%, context có 2 anchor. Source tương ứng e1e85ee.
+> - Lượt lỗi 045fad3f… (09:04 cùng ngày) có word “Bạn viết gì đi...” 93–97% ở pass 2,
+>   nhưng dòng kèm glyph @ có confidence 74% (pass 3: glyph 76%, word 95–97%).
+>   Khử trùng candidate lấy min giữa line/word, làm glyph không thuộc mục tiêu kéo confidence xuống.
+>   c45697b đưa cơ chế này vào; e1e85ee→9acecef không đổi matching/scroll, nên không quy lỗi cho UI.
+> - Sửa ưu tiên confidence/bbox của đúng word span khi đủ bằng chứng word; vẫn lấy min của các word
+>   thực sự khớp và vẫn ngưỡng 80%. Không tăng confidence hay đổi công thức click.
+> - searchRegion giờ là viewport container đang thấy, không cắt theo phần trăm chiều cao trang;
+>   ghép candidate trước lọc theo container, giữ anchor nhìn thấy. Fraction vẫn giới hạn cuộn Top/Middle/Bottom.
+>   Đây là lỗi tiềm ẩn từ source; log lỗi cụ thể trên không bị cắt vùng (searchRegion luôn 1024×560).
+> - CONTEXT_EDGE_PENDING: một ứng viên đủ confidence sát mép/anchor dự kiến ngoài viewport được
+>   recenter trong cùng container, chụp mới và xác nhận lại tối đa 2 lần. Chỉ dùng bbox OCR mới để click;
+>   kiểm tra mục tiêu không đổi sau cuộn, không click đoán. Context/ambiguity guards giữ nguyên.
+> - Ở điểm đích đợi render thêm một lượt có giới hạn, tính lại goal từ scrollHeight hiện tại.
+>   Giữ 40 lượt scan / 120 giây / 8000 DIP; log OCR_LOW_CONFIDENCE/CONTEXT_REJECTED riêng từng pass,
+>   stopReason giữ bestCandidate/pass trước đó thay vì xóa sạch bằng NOT_FOUND cuối.
+> - Không sửa UI, Block Step, Click Marker, database hoặc dữ liệu/version. Chưa test theo yêu cầu;
+>   không chạy test/build/typecheck/Electron. Ghi chú bên dưới là lịch sử.
+
 > UI popup/Variables và Block Step (chưa test):
 > - Popup/menu và Variables được React portal vào about:blank cùng origin, qua createWindow
 >   tạo một WebContentsView trong suốt nằm trên Facebook. Khi đóng chỉ gỡ lớp UI này;

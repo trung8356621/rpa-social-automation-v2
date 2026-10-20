@@ -8,7 +8,7 @@ const generic = new Set(["thích", "bình luận", "chia sẻ", "like", "comment
 
 /** Text-only safety gate. Saved geometry is a loose neighborhood hint, never a crop or click coordinate. */
 export async function confirmOcrContext(frame: Buffer, template: Buffer, payload: Payload,
-  ocr: OcrEngine, found: NonNullable<Result["match"]>, viewportOcr: OcrResult, currentBox?: Rect,
+  ocr: OcrEngine, found: NonNullable<Result["match"]>, viewportOcr: OcrResult, currentBox?: Rect, visibleRegion?: Rect,
 ): Promise<NonNullable<ResolutionTrace["context"]>[number]> {
   const selected = payload.target!.ocr!;
   const context: NonNullable<ResolutionTrace["context"]>[number] = {
@@ -29,6 +29,9 @@ export async function confirmOcrContext(frame: Buffer, template: Buffer, payload
     savedOcr.set(template, pending);
     void pending.catch(() => savedOcr.delete(template));
   }
+  const viewport = visibleRegion ?? { x: 0, y: 0, width: size.width!, height: size.height! };
+  const edgeMargin = Math.max(48,Math.min(128,box.height*3));
+  const nearEdge = box.y < viewport.y+edgeMargin || box.y+box.height > viewport.y+viewport.height-edgeMargin;
   const saved = await pending;
   const selectedText = normalize(selected.text);
   const rawAnchors = saved.segments.filter(segment => {
@@ -51,15 +54,17 @@ export async function confirmOcrContext(frame: Buffer, template: Buffer, payload
   }
   const scale = Math.max(0.5, Math.min(2, box.height/selected.bbox.height));
   const matched: typeof anchors = [];
-  let visible = 0, ambiguous = false;
+  let visible = 0, ambiguous = false, clippedContext = false;
   for (const anchor of anchors) {
     const a = anchor.bbox, original = selected.bbox;
     const dx = (a.x+a.width/2-original.x-original.width/2)*scale;
     const dy = (a.y+a.height/2-original.y-original.height/2)*scale;
     const expectedX = found.x+dx, expectedY = found.y+dy;
+    if (expectedY-a.height*scale/2 < viewport.y || expectedY+a.height*scale/2 > viewport.y+viewport.height)
+      clippedContext = true;
     // Off-screen saved anchors are optional. Never require the old ROI to fit.
-    const expectedVisible = expectedX+a.width*scale/2 > 0 && expectedX-a.width*scale/2 < size.width! &&
-      expectedY+a.height*scale/2 > 0 && expectedY-a.height*scale/2 < size.height!;
+    const expectedVisible = expectedX+a.width*scale/2 > viewport.x && expectedX-a.width*scale/2 < viewport.x+viewport.width &&
+      expectedY+a.height*scale/2 > viewport.y && expectedY-a.height*scale/2 < viewport.y+viewport.height;
     if (expectedVisible) visible++;
     // Still look for a visible anchor shifted by reflow even when its old projection is off-screen.
     const toleranceX = Math.min(160,Math.max(64,box.width*0.5,Math.abs(dx)*0.75));
@@ -67,6 +72,8 @@ export async function confirmOcrContext(frame: Buffer, template: Buffer, payload
     const candidates = findOcrCandidates(viewportOcr, anchor).filter(candidate => {
       const b = candidate.bbox;
       if (candidate.confidence < 80 || b.x < 0 || b.y < 0 || b.x+b.width > size.width! || b.y+b.height > size.height!) return false;
+      const cx = b.x+b.width/2, cy = b.y+b.height/2;
+      if (cx < viewport.x || cx > viewport.x+viewport.width || cy < viewport.y || cy > viewport.y+viewport.height) return false;
       // Keep the same side of the target and a bounded local neighborhood despite reflow.
       const slack = Math.max(6,Math.min(16,box.height/2));
       if (a.y+a.height <= original.y && b.y+b.height > box.y+slack) return false;
@@ -97,6 +104,6 @@ export async function confirmOcrContext(frame: Buffer, template: Buffer, payload
   context.confirmed = strong || evidence.length >= 2;
   context.reason = context.confirmed
     ? `CONTEXT_CONFIRMED: bbox OCR hiện tại + ${evidence.length} anchor chữ lân cận; không kiểm tra pixel/ROI đầy đủ.`
-    : `CONTEXT_NOT_CONFIRMED: chưa đủ anchor chữ nhìn thấy (${matched.length}/${visible}); có thể ở mép viewport.`;
+    : `${nearEdge || clippedContext ? "CONTEXT_EDGE_PENDING" : "CONTEXT_NOT_CONFIRMED"}: chưa đủ anchor chữ nhìn thấy (${matched.length}/${visible}).`;
   return context;
 }

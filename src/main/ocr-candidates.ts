@@ -12,6 +12,7 @@ export function findOcrCandidates(result: OcrResult, selection: { text: string; 
   const expected = normalizeOcrText(selection.text);
   if (!expected) return [];
   const matches: OcrSegment[] = [];
+  const evidencePriority = new Map<OcrSegment, number>();
   const add = (parts: OcrSegment[]) => {
     const text = parts.map(part => part.text).join(" ");
     if (normalizeOcrText(text) !== expected) return;
@@ -27,9 +28,22 @@ export function findOcrCandidates(result: OcrResult, selection: { text: string; 
       return overlap/Math.max(1,Math.min(a.width*a.height,b.width*b.height)) >= 0.8 &&
         Math.abs(a.x+a.width/2-b.x-b.width/2) <= Math.max(a.height,b.height);
     });
-    // The same occurrence returned as a line and words is one candidate, using conservative confidence.
-    if (duplicate) duplicate.confidence = Math.min(duplicate.confidence,candidate.confidence);
-    else matches.push(candidate);
+    // Confidence must describe the matched tokens, not a surrounding avatar/@ glyph.
+    // Exact word evidence wins over a whole-line representation, even when the words
+    // are weaker. Within the same evidence class, retain the conservative minimum.
+    const priority = parts.every(part => part.kind === "word") ? 2 : 1;
+    if (duplicate) {
+      const previous = evidencePriority.get(duplicate)!;
+      if (priority > previous) {
+        candidate.id = duplicate.id;
+        matches[matches.indexOf(duplicate)] = candidate;
+        evidencePriority.set(candidate, priority);
+        evidencePriority.delete(duplicate);
+      } else if (priority === previous) duplicate.confidence = Math.min(duplicate.confidence,candidate.confidence);
+    } else {
+      matches.push(candidate);
+      evidencePriority.set(candidate,priority);
+    }
   };
   const valid = result.segments.filter(s => Object.values(s.bbox).every(Number.isFinite) && s.bbox.width > 0 && s.bbox.height > 0);
   for (const segment of valid) add([segment]);

@@ -10,8 +10,8 @@ export async function clearOcrSearch(contents: WebContents) {
   }]);
 }
 export async function advanceOcrSearch(
-  contents: WebContents, matchTo: "top" | "middle" | "bottom", zoom: number, start = false, inspect = false,
-): Promise<{ moved: boolean; reached: boolean; reason?: string; searchRegion?: Rect }> {
+  contents: WebContents, matchTo: "top" | "middle" | "bottom", zoom: number, start = false, inspect = false, recenterY?: number,
+): Promise<{ moved: boolean; reached: boolean; reason?: string; searchRegion?: Rect; deltaYDip?: number }> {
   const progress = await contents.executeJavaScriptInIsolatedWorld(WORLD, [{ code: `(() => {
     const visible = el => {
       const r = el.getBoundingClientRect(), style = getComputedStyle(el);
@@ -60,11 +60,22 @@ export async function advanceOcrSearch(
         : el.getBoundingClientRect();
       const left = Math.max(0,r.left), top = Math.max(0,r.top);
       const right = Math.min(innerWidth,r.right);
-      const bottom = Math.min(innerHeight,r.bottom,r.top+el.scrollHeight*state.fraction-el.scrollTop);
+      // The fraction limits how far the scan advances, never which visible pixels can be OCR'd.
+      const bottom = Math.min(innerHeight,r.bottom);
       return { x: Math.ceil(left*${zoom}), y: Math.ceil(top*${zoom}),
         width: Math.max(0,Math.floor(right*${zoom})-Math.ceil(left*${zoom})),
         height: Math.max(0,Math.floor(bottom*${zoom})-Math.ceil(top*${zoom})) };
     };
+    if (${recenterY !== undefined}) {
+      const viewport = region();
+      const center = (viewport.y+viewport.height/2)/${zoom};
+      const delta = Math.max(-400/${zoom},Math.min(400/${zoom},${recenterY ?? 0}/${zoom}-center));
+      el.scrollTo({ top: Math.max(0,Math.min(el.scrollHeight-el.clientHeight,before+delta)), behavior: 'instant' });
+      const moved = Math.abs(el.scrollTop-before);
+      state.traveled += moved;
+      return { moved: moved > 0.5, reached: state.traveled >= 8000/${zoom}, reason: 'EDGE_RECENTER',
+        deltaYDip: (el.scrollTop-before)*${zoom}, searchRegion: region(), scrollTop: el.scrollTop, scrollHeight: el.scrollHeight, goal };
+    }
     if (${inspect}) return { moved: false, reached: false, reason: 'SCAN_REGION', searchRegion: region(),
       scrollTop: el.scrollTop, scrollHeight: el.scrollHeight, goal };
     if (${start}) {
@@ -73,7 +84,8 @@ export async function advanceOcrSearch(
         reason: el.scrollTop <= 1 ? 'SCAN_START' : 'RESET_FAILED', scrollTop: el.scrollTop, goal };
     }
     const remaining = goal-before;
-    if (remaining <= 1) return { moved: false, reached: true, reason: "DESTINATION_REACHED" };
+    if (remaining <= 1) return { moved: false, reached: true, reason: "DESTINATION_REACHED",
+      scrollTop: el.scrollTop, scrollHeight: el.scrollHeight, goal, searchRegion: region() };
     // 200 DIP per capture, also capped by visible height to retain overlap.
     const distance = Math.min(200 / ${zoom}, el.clientHeight * 0.7, remaining);
     el.scrollTo({ top: before + distance, behavior: 'instant' });
