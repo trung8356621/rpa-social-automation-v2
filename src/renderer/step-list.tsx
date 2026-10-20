@@ -261,6 +261,7 @@ export function StepList({
       CLICK_TARGET: "Bấm target", CLICK_AND_TYPE: "Bấm và nhập chữ", UPLOAD_FILE: "Chọn ảnh upload",
       TYPE_ONLY: "Nhập nội dung", WAIT_VERIFY: "Chờ xác nhận", SCROLL: "Cuộn trang",
       QUICK_TAG: "Gắn thẻ theo vị trí",
+      SLEEP: "Chờ",
     }[s.payload.action]);
     return (
       <div

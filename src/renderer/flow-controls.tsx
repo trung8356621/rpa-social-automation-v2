@@ -89,14 +89,14 @@ export function Variables({ state, update, locked }: Props) {
                       });
                     }}
                   >
-                    {["text", "file", "files", "integer"].map((t) => (
+                    {["text", "file", "files", "integer", "number"].map((t) => (
                       <option key={t} value={t}>
                         {t[0].toUpperCase() + t.slice(1)}
                       </option>
                     ))}
                   </select>
-                  {v.type === "integer" ? <input
-                    type="number" step={1}
+                  {v.type === "integer" || v.type === "number" ? <input
+                    type="number" step={v.type === "integer" ? 1 : "any"}
                     aria-label={`Default value ${v.key}`}
                     value={typeof values[v.id] === "number" ? values[v.id] as number : ""}
                     onChange={e => setValues({ ...values, [v.id]: e.target.value === "" ? "" : Number(e.target.value) })}
@@ -137,6 +137,7 @@ export function Variables({ state, update, locked }: Props) {
             Files: one local path per line. Values are used only by Default
             Pattern.
             Integer: số nguyên; QUICK_TAG dùng 1–10, không vượt số hàng ROI.
+            Number: SLEEP dùng milliseconds, từ 0–60000.
           </p>
           <div className="popover-footer">
             <button

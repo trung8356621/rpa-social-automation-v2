@@ -6,7 +6,8 @@ export type Action =
   | "QUICK_TAG"
   | "TYPE_ONLY"
   | "WAIT_VERIFY"
-  | "SCROLL";
+  | "SCROLL"
+  | "SLEEP";
 export type OcrSegment = {
   id: string;
   text: string;
@@ -36,6 +37,8 @@ export type Payload = {
   quickTagRows?: number;
   /** Runtime only: resolved from an Integer variable's Default Pattern. */
   quickTagCount?: number;
+  /** Runtime only: milliseconds resolved from the bound numeric variable. */
+  sleepMs?: number;
   /** Legacy input, migrated by Store. */
   text?: string;
   inputMethod?: "keyboard" | "clipboard";
@@ -63,7 +66,7 @@ export type Override = {
 export type Variable = {
   id: string;
   key: string;
-  type: "text" | "file" | "files" | "integer";
+  type: "text" | "file" | "files" | "integer" | "number";
   description?: string;
 };
 export type StepGroup = {
@@ -100,7 +103,8 @@ export type ExecutionStart = {
   version: number;
   overrideId?: string;
   matchTo: "none" | "current" | "top" | "middle" | "bottom";
-  pipeline: "auto-roi" | "ocr-viewport" | "quick-tag-position";
+  pipeline: "auto-roi" | "ocr-viewport" | "quick-tag-position" | "sleep";
+  sleepMs?: number;
 };
 export type ExecutionDetails = ExecutionStart & {
   runId: string;
@@ -191,6 +195,7 @@ export type State = {
   dataPath: string;
 };
 export type Command =
+  | { type: "confirmWindowClose" }
   | { type: "state" }
   | { type: "workspaceScroll"; left: number; top: number }
   | { type: "closeUiOverlay"; name: string }
@@ -278,6 +283,7 @@ export interface CreatorApi {
   onDraft(callback: (key: string, entry: DraftEntry) => void): () => void;
   onLayout(callback: (bounds: Rect) => void): () => void;
   onFocusFlow(callback: () => void): () => void;
+  onRequestClose(callback: () => void): () => void;
   onNavigation(callback: (url: string) => void): () => void;
   invoke(command: Command): Promise<unknown>;
   onExecution(callback: (execution: ExecutionStart) => void): () => void;

@@ -24,6 +24,10 @@ contextBridge.exposeInMainWorld("creator", {
     ipcRenderer.on("creator:focus-flow", callback);
     return () => ipcRenderer.removeListener("creator:focus-flow", callback);
   },
+  onRequestClose: (callback: () => void) => {
+    ipcRenderer.on("creator:request-close", callback);
+    return () => ipcRenderer.removeListener("creator:request-close", callback);
+  },
   invoke: (command: Command) => ipcRenderer.invoke("creator:command", command),
   onNavigation: (callback: (url: string) => void) => {
     const handler = (_event: Electron.IpcRendererEvent, url: string) =>

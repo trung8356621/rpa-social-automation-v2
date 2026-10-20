@@ -2,6 +2,7 @@ import { effectiveMatchTo, matchToLabel } from "../shared/match-to";
 import { playSequential, playbackResult, type StepPlayback } from "./playback";
 import { StepList } from "./step-list";
 import { TargetModal } from "./target-modal";
+import { UiPopover } from "./ui-popover";
 import { Variables, Groups } from "./flow-controls";
 import React, { useEffect, useRef, useState } from "react";
 import { createRoot } from "react-dom/client";
@@ -58,6 +59,13 @@ function Creator() {
   const [selected, setSelected] = useDraft<Step>("selected");
   const [overrideId, setOverrideId] = useDraft("overrideId", "");
   const [targetModal, setTargetModal] = useState(false);
+  const [pendingNavigation, setPendingNavigation] = useState<{ proceed: () => void | Promise<void> }>();
+  const pendingNavigationRef = useRef(false);
+  const [confirmWorking, setConfirmWorking] = useState(false);
+  const [confirmError, setConfirmError] = useState("");
+  const allowUnload = useRef(false);
+  const leaveHandler = useRef<() => void>(() => {});
+  const reloadHandler = useRef<() => void>(() => {});
   useEffect(() => setOcrKind(target?.ocr?.kind ?? "none"),
     [target?.asset, target?.ocr?.kind, selected?.id, selected?.version, overrideId]);
   useEffect(() => setTargetModal(false), [selected?.id, selected?.version, action, state?.flow?.id, overrideId]);
@@ -114,6 +122,7 @@ function Creator() {
   const flowInput = useRef<HTMLInputElement>(null);
   const resultPanel = useRef<HTMLDivElement>(null);
   function executionLabel(run: ExecutionStart) {
+    if (run.pipeline === "sleep") return `${run.stepId.slice(0, 8)} · v${run.version} · Đang chờ ${run.sleepMs}ms`;
     return `${run.stepId.slice(0, 8)} · v${run.version} · ${run.overrideId ? "Override" : "Base"} · Match To ${matchToLabel(run.matchTo)} · ${run.pipeline}`;
   }
   function executionFailed(message: string) {
@@ -168,8 +177,7 @@ function Creator() {
     setEditorRevision((value) => value + 1);
     void setEditorOpen(true).catch((e) => setMessage(String(e)));
   }
-  function newStep() {
-    showEditor();
+  function resetStepDraft() {
     setSelected(undefined);
     setVariableId("");
     setQuickTagRows(5);
@@ -181,15 +189,18 @@ function Creator() {
     setOverrideId("");
     setResults([]);
     setAction("CLICK_TARGET");
+    setDelta(-400);
     setInputMethod("keyboard");
-    setMessage(
-      "Chọn Action cho Step tiếp theo từ trạng thái browser hiện tại. Không chạy lại flow.",
-    );
-    requestAnimationFrame(() =>
-      document
-        .querySelector('[aria-label="Action"]')
-        ?.scrollIntoView({ block: "center" }),
-    );
+    setOcrEdit(undefined);
+  }
+  function newStep() {
+    requestNavigation(async () => {
+      resetStepDraft();
+      await setEditorOpen(true);
+      setEditorRevision(value => value + 1);
+      setMessage("Chọn Action cho Step tiếp theo từ trạng thái browser hiện tại. Không chạy lại flow.");
+      requestAnimationFrame(() => document.querySelector('[aria-label="Action"]')?.scrollIntoView({ block: "center" }));
+    });
   }
   async function reviewClick(result: Result, verdict: "correct" | "incorrect") {
     if (shot) await closeShot();
@@ -345,6 +356,7 @@ function Creator() {
         : {}),
       ...(action === "SCROLL" ? { deltaY: delta } : {}),
       ...(action === "UPLOAD_FILE" ? { variableId } : {}),
+      ...(action === "SLEEP" ? { variableId } : {}),
       ...(action === "QUICK_TAG" ? { variableId, quickTagRows, target: target ? { ...target, ocr: undefined, matchTo: "none" as const } : undefined } : {}),
       ...([
         "CLICK_TARGET",
@@ -434,6 +446,14 @@ function Creator() {
       playLock.current = false;
       setBusy(false);
     }
+  }
+  function playSavedSteps(step?: Step) {
+    requestNavigation(async () => {
+      const snapshot = window.creator.readDraft("state", state).value as State;
+      const refs = snapshot.flow?.steps.filter(ref => !step || ref.id === step.id) ?? [];
+      const steps = refs.map(ref => snapshot.steps.find(s => s.id === ref.id && s.version === ref.version)!).filter(Boolean);
+      await playSteps(steps, !step);
+    });
   }
   async function closeShot() {
     await invoke({ type: "browserVisible", visible: true });
@@ -593,18 +613,22 @@ function Creator() {
     return result.message;
   }
   async function saveBase() {
+    if (selected && !editorDirty) return;
+    const draftPayload = payload();
+    if (ocrEdit !== undefined && draftPayload.target?.ocr)
+      draftPayload.target = { ...draftPayload.target, ocr: { ...draftPayload.target.ocr, text: ocrEdit.trim() } };
     const next = await invoke<State>({
       type: "saveStep",
       id: selected?.id,
       name,
-      payload: payload(),
+      payload: draftPayload,
     });
     setState(next);
     const ref = selected
       ? next.flow!.steps.find((s) => s.id === selected.id)!
       : next.flow!.steps.at(-1)!;
     await loadStep(
-      next.steps.find((s) => s.id === ref.id && s.version === ref.version)!,
+      next.steps.find((s) => s.id === ref.id && s.version === ref.version)!, false,
     );
     setMessage(`Đã lưu Base v${ref.version}; version cũ vẫn được giữ.`);
   }
@@ -617,7 +641,70 @@ function Creator() {
     const target = p.target ? { ...p.target, matchTo: effectiveMatchTo(p) } : null;
     return JSON.stringify([p.action, p.variableId ?? "", p.inputMethod ?? "keyboard", p.deltaY ?? -400, p.quickTagRows ?? null, target]);
   }
-  const editorDirty = !selected || (ocrEdit !== undefined && ocrEdit.trim() !== target?.ocr?.text) || name !== selectedBase?.name || editableConfig(payload()) !== editableConfig(selectedBase!.payload);
+  const editorDirty = (ocrEdit !== undefined && ocrEdit.trim() !== target?.ocr?.text) || (selected
+    ? name !== selectedBase?.name || editableConfig(payload()) !== editableConfig(selectedBase!.payload)
+    : name !== "" || editableConfig(payload()) !== editableConfig({ action: "CLICK_TARGET" }));
+  function requestNavigation(proceed: () => void | Promise<void>) {
+    if (pendingNavigationRef.current) return;
+    if (!editorDirty) { void task(async () => { await proceed(); }); return; }
+    pendingNavigationRef.current = true;
+    setConfirmError("");
+    setPendingNavigation({ proceed });
+  }
+  function stayInEditor() {
+    if (confirmWorking) return;
+    pendingNavigationRef.current = false;
+    setPendingNavigation(undefined);
+    setConfirmError("");
+  }
+  async function continueNavigation(save: boolean) {
+    if (!pendingNavigation || confirmWorking) return;
+    setConfirmWorking(true);
+    setBusy(true);
+    try {
+      if (save) await saveBase();
+      else if (selectedBase) await loadStep(selectedBase, false);
+      else resetStepDraft();
+      const proceed = pendingNavigation.proceed;
+      pendingNavigationRef.current = false;
+      setPendingNavigation(undefined);
+      await proceed();
+    } catch (error) {
+      setConfirmError(String(error));
+      setMessage(String(error));
+    } finally {
+      setConfirmWorking(false);
+      setBusy(false);
+    }
+  }
+  leaveHandler.current = () => {
+    if (busy) { setMessage("Đợi tác vụ hiện tại kết thúc trước khi đóng Creator."); return; }
+    requestNavigation(async () => {
+      await invoke({ type: "confirmWindowClose" });
+    });
+  };
+  reloadHandler.current = () => {
+    if (busy) { setMessage("Đợi tác vụ hiện tại kết thúc trước khi reload Creator."); return; }
+    requestNavigation(() => {
+      allowUnload.current = true;
+      setBusy(false);
+      window.location.reload();
+    });
+  };
+  const dirtyRef = useRef(editorDirty);
+  dirtyRef.current = editorDirty;
+  useEffect(() => {
+    if (!shell) return;
+    const off = window.creator.onRequestClose(() => leaveHandler.current());
+    const beforeUnload = (event: BeforeUnloadEvent) => {
+      if (allowUnload.current || !dirtyRef.current) return;
+      event.preventDefault();
+      event.returnValue = "";
+      setTimeout(() => reloadHandler.current(), 0);
+    };
+    window.addEventListener("beforeunload", beforeUnload);
+    return () => { off(); window.removeEventListener("beforeunload", beforeUnload); };
+  }, []);
   const expected = activePayload
     ? targetEnvironment(activePayload, state?.flow?.zoom ?? 1)
     : undefined;
@@ -651,7 +738,8 @@ function Creator() {
   function togglePanel() {
     const next = !expanded;
     if (shell) {
-      void task(() => setEditorOpen(next));
+      if (next) void task(() => setEditorOpen(true));
+      else requestNavigation(() => setEditorOpen(false));
       return;
     }
     void task(async () => {
@@ -661,6 +749,19 @@ function Creator() {
   }
   return (
     <main>
+      {shell && pendingNavigation && <UiPopover variant="modal" label="Thay đổi chưa lưu"
+        className="unsaved-confirm" close={stayInEditor}>
+        <div className="popover-heading"><b>Thay đổi chưa lưu</b>
+          <button className="icon-button" aria-label="Ở lại Editor" disabled={confirmWorking} onClick={stayInEditor}>×</button>
+        </div>
+        <p>Step đang có thay đổi chưa lưu. Chọn cách tiếp tục.</p>
+        {confirmError && <p role="alert">{confirmError}</p>}
+        <div className="popover-footer">
+          <button className="primary" disabled={confirmWorking} onClick={() => void continueNavigation(true)}>Lưu &amp; tiếp tục</button>
+          <button disabled={confirmWorking} onClick={() => void continueNavigation(false)}>Không lưu</button>
+          <button disabled={confirmWorking} onClick={stayInEditor}>Ở lại</button>
+        </div>
+      </UiPopover>}
       {shell && (
         <>
           <header>
@@ -674,23 +775,19 @@ function Creator() {
                 aria-label="Flow đã lưu"
                 disabled={locked}
                 value={state?.flow?.id || ""}
-                onChange={(e) =>
-                  void task(async () => {
+                onChange={(e) => {
+                  const flowId = e.target.value;
+                  if (flowId === state?.flow?.id) return;
+                  requestNavigation(async () => {
                     setState(
                       await invoke<State>({
                         type: "openFlow",
-                        id: e.target.value,
+                        id: flowId,
                       }),
                     );
-                    setSelected(undefined);
-                    setVariableId("");
-                    setTarget(undefined);
-                    setTargetImage("");
-                    setOcrResult(undefined);
-                    setOcrError("");
-                    setResults([]);
-                  })
-                }
+                    resetStepDraft();
+                  });
+                }}
               >
                 <option value="" disabled>
                   Chọn flow đã lưu
@@ -711,20 +808,14 @@ function Creator() {
                 <button
                   disabled={locked}
                   onClick={() =>
-                    void task(async () => {
+                    requestNavigation(async () => {
                       setState(
                         await invoke<State>({
                           type: "newFlow",
                           name: flowName,
                         }),
                       );
-                      setSelected(undefined);
-                      setVariableId("");
-                      setTarget(undefined);
-                      setTargetImage("");
-                      setOcrResult(undefined);
-                      setOcrError("");
-                      setResults([]);
+                      resetStepDraft();
                       setMessage(
                         `Đã tạo flow “${flowName}”. Có thể chụp & crop ROI; chọn zoom trước khi lưu step đầu tiên.`,
                       );
@@ -741,7 +832,7 @@ function Creator() {
                 locked ||
                 !state?.flow ||
                 (needsTarget && !target) ||
-                (["UPLOAD_FILE", "TYPE_ONLY", "CLICK_AND_TYPE", "QUICK_TAG"].includes(
+                (["UPLOAD_FILE", "TYPE_ONLY", "CLICK_AND_TYPE", "QUICK_TAG", "SLEEP"].includes(
                   action,
                 ) &&
                   !variableId)
@@ -899,19 +990,7 @@ function Creator() {
             {state && (
               <Groups
                 newStep={newStep}
-                playAll={() =>
-                  void playSteps(
-                    state.flow?.steps
-                      .map((ref) =>
-                        state.steps.find(
-                          (step) =>
-                            step.id === ref.id && step.version === ref.version,
-                        )!,
-                      )
-                      .filter(Boolean) ?? [],
-                    true,
-                  )
-                }
+                playAll={() => playSavedSteps()}
                 state={state}
                 locked={locked}
                 update={async (c) => setState(await invoke<State>(c))}
@@ -925,7 +1004,7 @@ function Creator() {
                 activeStepId={activeStepId}
                 blockedSteps={blockedSteps}
                 toggleBlocked={toggleBlocked}
-                play={(step) => void playSteps([step])}
+                play={playSavedSteps}
                 locked={locked}
                 update={async (c) => {
                   setBusy(true);
@@ -938,13 +1017,17 @@ function Creator() {
                   }
                 }}
                 select={(s) =>
-                  void task(async () => {
-                    await loadStep(s, false);
+                  requestNavigation(async () => {
+                    const current = window.creator.readDraft("selected", undefined).value as Step | undefined;
+                    await loadStep(s.id === selected?.id && current?.id === s.id ? current : s, false);
                     await setEditorOpen(false);
                     setResults([]);
                   })
                 }
-                edit={(s) => void task(() => loadStep(s))}
+                edit={(s) => {
+                  if (s.id === selected?.id && s.version === selected.version) showEditor();
+                  else requestNavigation(() => loadStep(s));
+                }}
               />
             )}
             {!state?.flow?.steps.length && (
@@ -1099,6 +1182,7 @@ function Creator() {
                       <option>TYPE_ONLY</option>
                       <option value="WAIT_VERIFY">WAIT / VERIFY</option>
                       <option>SCROLL</option>
+                      <option>SLEEP</option>
                     </select>,
                   )}
                   {field(
@@ -1148,7 +1232,6 @@ function Creator() {
                               value={ocrEdit}
                               onFocus={(e) => e.currentTarget.select()}
                               onChange={(e) => setOcrEdit(e.target.value)}
-                              onBlur={() => setOcrEdit(undefined)}
                               onKeyDown={(e) => {
                                 if (e.nativeEvent.isComposing) return;
                                 if (e.key === "Escape") {
@@ -1317,6 +1400,15 @@ function Creator() {
                       </p>
                     </>
                   )}
+                  {action === "SLEEP" && <section aria-label="Sleep">
+                    <label>Thời gian chờ (ms) · Variable Number
+                      <select aria-label="SLEEP Number variable" value={variableId} disabled={locked} onChange={e => setVariableId(e.target.value)}>
+                        <option value="">Chọn Variable Number</option>
+                        {state?.flow?.variables?.filter(v => v.type === "number" || v.type === "integer").map(v => <option key={v.id} value={v.id}>{v.key}</option>)}
+                      </select>
+                    </label>
+                    <p className="hint">Dùng Default Pattern, 0–60000 milliseconds. Không cần Target hoặc thao tác Browser.</p>
+                  </section>}
                   {action === "QUICK_TAG" && <section aria-label="Quick Tag">
                     <p className="hint">Chọn theo vị trí, không xác minh danh tính người được chọn. Crop các hàng đầy đủ, cao đều nhau, bắt đầu từ hàng đầu muốn chọn. Không cuộn hoặc mở danh sách khác.</p>
                     {field("Số hàng hiển thị trong ROI (1–20)", <input type="number" min={1} max={20} step={1}
@@ -1373,7 +1465,7 @@ function Creator() {
                       locked ||
                       !state?.flow ||
                       (needsTarget && !target) ||
-                      (["UPLOAD_FILE", "TYPE_ONLY", "CLICK_AND_TYPE", "QUICK_TAG"].includes(
+                      (["UPLOAD_FILE", "TYPE_ONLY", "CLICK_AND_TYPE", "QUICK_TAG", "SLEEP"].includes(
                         action,
                       ) &&
                         !variableId)
@@ -1394,17 +1486,10 @@ function Creator() {
                             aria-label="Base version"
                             disabled={locked}
                             value={selected.version}
-                            onChange={(e) =>
-                              void task(() =>
-                                loadStep(
-                                  state!.steps.find(
-                                    (s) =>
-                                      s.id === selected.id &&
-                                      s.version === Number(e.target.value),
-                                  )!,
-                                ),
-                              )
-                            }
+                            onChange={(e) => {
+                              const step = state!.steps.find(s => s.id === selected.id && s.version === Number(e.target.value))!;
+                              if (step.version !== selected.version) requestNavigation(() => loadStep(step));
+                            }}
                           >
                             {state?.steps
                               .filter((s) => s.id === selected.id)
@@ -1560,7 +1645,7 @@ function Creator() {
                                   )
                                 }
                                 onClick={() =>
-                                  void task(() => reviewClick(r, "incorrect"))
+                                  requestNavigation(() => reviewClick(r, "incorrect"))
                                 }
                               >
                                 Sai — Redesign Step
@@ -1579,7 +1664,7 @@ function Creator() {
                               </p>
                               <button
                                 disabled={locked}
-                                onClick={() => void task(() => openRedesign(r))}
+                                onClick={() => requestNavigation(() => openRedesign(r))}
                               >
                                 Redesign Step bị chặn
                               </button>

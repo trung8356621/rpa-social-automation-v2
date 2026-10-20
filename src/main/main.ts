@@ -179,7 +179,6 @@ async function boot() {
       return layer.webContents;
     } };
   });
-  window.once("close", () => { for (const name of [...uiLayers.keys()]) closeUiLayer(name); });
   window.webContents.on("will-navigate", (event) => event.preventDefault());
   const browser = new BrowserCore(
     window,
@@ -349,6 +348,12 @@ async function boot() {
     switch (command.type) {
       case "pointerReport":
         return pointerTrace.report();
+      case "confirmWindowClose":
+        if (event.sender !== window.webContents) throw new Error("Invalid close sender");
+        isIdle();
+        closeApproved = true;
+        setImmediate(() => window.close());
+        return;
       case "focusFlow":
         window.webContents.focus();
         window.webContents.send("creator:focus-flow");
@@ -677,10 +682,16 @@ async function boot() {
     }
   });
   let closing = false;
+  let closeApproved = selfTest;
   window.on("close", (event) => {
     if (closing) return;
     event.preventDefault();
+    if (!closeApproved && !window.webContents.isDestroyed()) {
+      window.webContents.send("creator:request-close");
+      return;
+    }
     closing = true;
+    for (const name of [...uiLayers.keys()]) closeUiLayer(name);
     void browser
       .flush()
       .catch(console.error)

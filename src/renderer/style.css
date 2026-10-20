@@ -1071,6 +1071,8 @@ body[data-panel="ui-overlay"] .ui-backdrop { background: rgb(6 13 23 / 14%); }
   z-index: 1001;
 }
 .target-modal { display: flex; flex-direction: column; overflow: hidden; }
+.unsaved-confirm { width: min(480px, calc(100vw - 40px)); padding: 20px; overflow: auto; }
+.unsaved-confirm .popover-footer { flex-wrap: wrap; }
 .target-modal-heading, .target-modal-footer { display: flex; justify-content: space-between; align-items: center; gap: 20px; padding: 16px 22px; }
 .target-modal-heading { border-bottom: 1px solid #304660; }
 .target-modal-heading, .target-modal-footer { flex-shrink: 0; }

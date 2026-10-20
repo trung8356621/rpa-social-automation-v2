@@ -45,7 +45,8 @@ export class Runtime {
   private executionStart(payload: Payload, stepId: string, version: number, overrideId?: string): ExecutionStart {
     const matchTo = effectiveMatchTo(payload);
     return { stepId, version, overrideId, matchTo,
-      pipeline: payload.action === "QUICK_TAG" ? "quick-tag-position" : matchTo === "none" ? "auto-roi" : "ocr-viewport" };
+      ...(payload.action === "SLEEP" ? { sleepMs: payload.sleepMs } : {}),
+      pipeline: payload.action === "SLEEP" ? "sleep" : payload.action === "QUICK_TAG" ? "quick-tag-position" : matchTo === "none" ? "auto-roi" : "ocr-viewport" };
   }
   async test(
     stepId: string,
@@ -309,8 +310,16 @@ export class Runtime {
           }
         : undefined;
     try {
-      before = ["TYPE_ONLY", "SCROLL"].includes(payload.action) ? undefined : await this.browser.capture();
-      if (payload.action === "QUICK_TAG") {
+      before = ["TYPE_ONLY", "SCROLL", "SLEEP"].includes(payload.action) ? undefined : await this.browser.capture();
+      if (payload.action === "SLEEP") {
+        const startedAt = Date.now();
+        logMainEvent(this.runDir, "sleep-start", { ...execution, sleepMs: payload.sleepMs });
+        await new Promise(resolve => setTimeout(resolve, payload.sleepMs!));
+        const elapsedMs = Date.now() - startedAt;
+        logMainEvent(this.runDir, "sleep-end", { ...execution, sleepMs: payload.sleepMs, elapsedMs });
+        status = "VERIFIED";
+        message = `SLEEP: đã chờ ${payload.sleepMs}ms (thực tế ${elapsedMs}ms).`;
+      } else if (payload.action === "QUICK_TAG") {
         const template = await readFile(path.join(this.assetDir, payload.target!.asset));
         afterQuickTag = await quickTag(this.browser, payload, before!, template, (x, y) => {
           this.browser.click(x, y);
@@ -497,7 +506,7 @@ export class Runtime {
               ? `VERIFIED: điều kiện ${match.method === "ocr" ? `chữ “${match.text}”` : "ảnh"} đã khớp. Chỉ xác nhận điều kiện của step.`
               : `Đã gửi click một lần${input ? " rồi gửi nội dung nhập" : ""}; chưa xác nhận kết quả nghiệp vụ.${input?.warning ? ` ${input.warning}` : ""}`;
       }
-      execution.stopReason = match ? (resolution?.context?.some(context => context.confirmed) ? "MATCHED_CONTEXT_CONFIRMED" : "MATCHED") : "ACTION_SENT";
+      execution.stopReason = payload.action === "SLEEP" ? "SLEEP_COMPLETED" : match ? (resolution?.context?.some(context => context.confirmed) ? "MATCHED_CONTEXT_CONFIRMED" : "MATCHED") : "ACTION_SENT";
     } catch (e) {
       const ocrFailure = e instanceof TargetNotConfident
         ? e.resolution?.attempts.find(attempt => attempt.method === "ocr" && attempt.outcome === "failed") : undefined;
@@ -548,7 +557,7 @@ export class Runtime {
         evidenceWarning = `Không chụp được ảnh sau upload: ${(error as Error).message}`;
       }
     } else
-      after = ["CLICK_TARGET", "CLICK_AND_TYPE", "TYPE_ONLY"].includes(
+      after = ["CLICK_TARGET", "CLICK_AND_TYPE", "TYPE_ONLY", "SLEEP"].includes(
         payload.action,
       )
         ? undefined

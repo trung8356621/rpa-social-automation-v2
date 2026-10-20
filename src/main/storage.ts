@@ -26,9 +26,12 @@ export function validatePayload(p: Payload) {
       "TYPE_ONLY",
       "WAIT_VERIFY",
       "SCROLL",
+      "SLEEP",
     ].includes(p.action)
   )
     throw new Error("Action không hỗ trợ.");
+  if (p.action === "SLEEP" && (!p.variableId || p.target || (p.sleepMs !== undefined && (!Number.isFinite(p.sleepMs) || p.sleepMs < 0 || p.sleepMs > 60000))))
+    throw new Error("SLEEP cần Variable Number, không dùng target; giới hạn 0–60000ms.");
   if (p.action === "QUICK_TAG" && (!p.variableId || !Number.isInteger(p.quickTagRows) || p.quickTagRows! < 1 || p.quickTagRows! > 20 || p.target?.ocr || !p.target?.environment || ![undefined, "none"].includes(p.target.matchTo)))
     throw new Error("QUICK_TAG cần Variable Integer, ROI mới không OCR/scroll và số hàng 1–20.");
   if (p.action === "UPLOAD_FILE" && !p.variableId)
