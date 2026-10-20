@@ -1083,7 +1083,20 @@ function Creator() {
                   {needsTarget && <>
                     <button className="target-open" disabled={locked} aria-haspopup="dialog"
                       onClick={() => setTargetModal(true)}>{target ? "Xem target" : "Thêm target"} <span>↗</span></button>
-                    <p className="hint">{target ? target.ocr?.confirmed ? `OCR · Match To ${matchToLabel(effectiveMatchTo({ target }))}` : "Target ảnh · Match To None" : "Chưa chọn ảnh target"}</p>
+                    {target && <>
+                      {field("Match To",
+                        <select aria-label="Match To" disabled={locked || !target.ocr?.confirmed}
+                          title="None: không cuộn, AUTO Image Matching rồi OCR fallback trên viewport hiện tại. Top/Middle/Bottom: về đầu rồi quét xuống 1/3, 2/3 hoặc toàn vùng. OCR cần khớp ngữ cảnh ROI."
+                          value={effectiveMatchTo({ target })}
+                          onChange={(e) => setTarget({ ...target, matchTo: e.target.value as NonNullable<NonNullable<Payload["target"]>["matchTo"]> })}>
+                          <option value="none">None</option>
+                          <option value="top">Top</option>
+                          <option value="middle">Middle</option>
+                          <option value="bottom">Bottom</option>
+                        </select>)}
+
+                    </>}
+                    {!target && <p className="hint">Chưa chọn ảnh target</p>}
                   </>}
                   {needsTarget && targetModal && <TargetModal
                     name={name} target={target} image={targetImage}
@@ -1153,19 +1166,6 @@ function Creator() {
                           Chưa có chữ dự phòng được xác nhận; AUTO vẫn dùng ảnh.
                         </p>
                       )}
-
-                    </>}
-                    matchControls={target && <>
-                      {field("Match To",
-                        <select aria-label="Match To" disabled={locked || !target.ocr?.confirmed}
-                          title="None: không cuộn, AUTO Image Matching rồi OCR fallback trên viewport hiện tại. Top/Middle/Bottom: về đầu rồi quét xuống 1/3, 2/3 hoặc toàn vùng. OCR cần khớp ngữ cảnh ROI."
-                          value={effectiveMatchTo({ target })}
-                          onChange={(e) => setTarget({ ...target, matchTo: e.target.value as NonNullable<NonNullable<Payload["target"]>["matchTo"]> })}>
-                          <option value="none">None</option>
-                          <option value="top">Top</option>
-                          <option value="middle">Middle</option>
-                          <option value="bottom">Bottom</option>
-                        </select>)}
 
                     </>}
                     ocrControls={<>

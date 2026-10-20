@@ -1051,19 +1051,13 @@ body[data-panel="ui-overlay"] .ui-backdrop { background: rgb(6 13 23 / 14%); }
 .target-hero { margin: 0; padding: 20px; min-height: 150px; max-height: 42vh; overflow: auto; border-radius: 10px; border: 1px solid #3c536e; background: #0c1524; }
 .target-image-frame { position: relative; max-width: 100%; margin: auto; }
 .target-image-frame img { display: block; width: 100%; height: auto; border-radius: 5px; }
-.target-ocr-box { position: absolute; border: 2px solid #27ba95; background: #27ba951a; pointer-events: none; }
 .target-hero figcaption { margin-top: 12px; font-size: 12px; text-align: center; color: #a9bed6; }
 .target-empty { padding: 28px 12px; color: #a9bed6; text-align: center; }
 .target-confirmed .ocr-confirmed { margin: 16px 0 22px; }
 .target-confirmed .ocr-confirmed > b, .target-confirmed input { font-size: 20px; line-height: 1.5; overflow-wrap: anywhere; }
-.target-settings { display: grid; grid-template-columns: 150px minmax(0, 1fr); gap: 24px; margin-top: 18px; }
-.target-settings nav { display: flex; flex-direction: column; gap: 8px; }
-.target-settings nav button { text-align: left; background: transparent; border-color: transparent; color: #adc1d9; }
-.target-settings nav button[aria-pressed="true"] { background: #22445c; color: #e9f6ff; border-color: #4884a4; }
-.target-settings-content { min-width: 0; }
-.target-settings-content .ocr-panel { margin: 0; padding: 0; border: 0; }
-.target-settings-content .ocr-candidates { max-height: 220px; overflow: auto; }
-.target-settings-content details { margin-top: 14px; color: #a9bed6; }
+.target-ocr-controls .ocr-panel { margin: 0; padding: 0; border: 0; }
+.target-ocr-controls .ocr-candidates { max-height: 220px; overflow: auto; }
+.target-crop-controls { margin-top: 14px; }
 .target-modal-footer { border-top: 1px solid #304660; font-size: 12px; }
 .target-open { width: 100%; display: flex; align-items: center; justify-content: space-between; margin-top: 12px; }
 .editor-task-summary { margin-bottom: 16px; }
@@ -1078,8 +1072,6 @@ body[data-panel="ui-overlay"] .ui-backdrop { background: rgb(6 13 23 / 14%); }
 .step .step-label .step-target-text { color: #c3e9df; }
 .step .step-label > small { font-size: 10px; color: #92aac4; }
 @media (max-width: 620px) {
-  .target-settings { grid-template-columns: minmax(0, 1fr); gap: 12px; }
-  .target-settings nav { flex-direction: row; flex-wrap: wrap; }
   .target-modal-body { padding: 14px; }
   .target-modal-footer { gap: 12px; padding: 12px 14px; }
 }

@@ -1,6 +1,5 @@
-import React, { useState } from "react";
+import React from "react";
 import type { Payload } from "../shared/contracts";
-import { matchToLabel, effectiveMatchTo } from "../shared/match-to";
 import { UiPopover } from "./ui-popover";
 
 export function TargetModal({
@@ -9,7 +8,6 @@ export function TargetModal({
   image,
   confirmed,
   ocrControls,
-  matchControls,
   locked,
   canCapture,
   crop,
@@ -20,14 +18,11 @@ export function TargetModal({
   image: string;
   confirmed: React.ReactNode;
   ocrControls: React.ReactNode;
-  matchControls: React.ReactNode;
   locked: boolean;
   canCapture: boolean;
   crop: () => void;
   close: () => void;
 }) {
-  const [section, setSection] = useState<"image" | "ocr" | "match">("image");
-  const box = target?.ocr?.bbox;
   return (
     <UiPopover
       variant="modal"
@@ -59,101 +54,21 @@ export function TargetModal({
               }}
             >
               <img src={image} alt="Ảnh crop của target đang chỉnh sửa" />
-              {section === "ocr" && box && (
-                <span
-                  className="target-ocr-box"
-                  aria-hidden="true"
-                  style={{
-                    left: `${(box.x / target.roi.width) * 100}%`,
-                    top: `${(box.y / target.roi.height) * 100}%`,
-                    width: `${(box.width / target.roi.width) * 100}%`,
-                    height: `${(box.height / target.roi.height) * 100}%`,
-                  }}
-                />
-              )}
             </div>
           ) : (
             <div className="target-empty">
               Chụp và crop để chọn target cho step này.
             </div>
           )}
-          <figcaption>
-            {section === "image"
-              ? "Ảnh crop đang chọn"
-              : section === "ocr"
-                ? "Chữ nhận diện · khung xanh là bbox đã lưu"
-                : `Phạm vi tìm: ${matchToLabel(effectiveMatchTo({ target }))}`}
-          </figcaption>
+          <figcaption>Ảnh crop đang chọn</figcaption>
         </figure>
         <div className="target-confirmed">{confirmed}</div>
-        <div className="target-settings">
-          <nav aria-label="Cấu hình target">
-            {(
-              [
-                ["image", "Ảnh crop"],
-                ["ocr", "OCR text"],
-                ["match", "Match To"],
-              ] as const
-            ).map(([id, label]) => (
-              <button
-                key={id}
-                aria-pressed={section === id}
-                onClick={() => setSection(id)}
-              >
-                {label}
-              </button>
-            ))}
-          </nav>
-          <section
-            className="target-settings-content"
-            aria-label={
-              section === "image"
-                ? "Ảnh crop"
-                : section === "ocr"
-                  ? "OCR text"
-                  : "Match To"
-            }
-          >
-            {section === "image" ? (
-              <>
-                <button disabled={locked || !canCapture} onClick={crop}>
-                  {target ? "Chụp & crop lại" : "Chụp & crop ROI"}
-                </button>
-                {!canCapture && (
-                  <p className="hint">Tạo hoặc chọn flow trước khi chụp.</p>
-                )}
-                {target && (
-                  <details>
-                    <summary>Thông số ảnh</summary>
-                    <p className="hint">
-                      {target.roi.width}×{target.roi.height} · ROI x
-                      {target.roi.x}, y{target.roi.y}
-                      {target.environment && (
-                        <>
-                          {" "}
-                          · Viewport {target.environment.width}×
-                          {target.environment.height} · Zoom{" "}
-                          {target.environment.zoom * 100}%
-                        </>
-                      )}
-                    </p>
-                  </details>
-                )}
-              </>
-            ) : section === "ocr" ? (
-              target ? (
-                ocrControls
-              ) : (
-                <p className="hint">Crop target trước khi đọc OCR.</p>
-              )
-            ) : (
-              matchControls || (
-                <p className="hint">
-                  Crop target trước khi cấu hình phạm vi tìm.
-                </p>
-              )
-            )}
-          </section>
+        <div className="target-ocr-controls">{target && ocrControls}</div>
+        <div className="target-crop-controls">
+          <button disabled={locked || !canCapture} onClick={crop}>
+            {target ? "Chụp & crop lại" : "Chụp & crop ROI"}
+          </button>
+          {!canCapture && <p className="hint">Tạo hoặc chọn flow trước khi chụp.</p>}
         </div>
       </div>
       <div className="target-modal-footer">
