@@ -1,3 +1,19 @@
+> OCR candidates và phân cách Test (chưa test theo yêu cầu):
+> - Bỏ điều kiện bắt buộc kind runtime giống kind đã chọn. Expected text/kind vẫn lấy từ Step Version/Override được Runtime nạp.
+> - So khớp exact token sau NFKC, lowercase, bỏ zero-width, chuẩn hóa khoảng trắng/dấu câu hiển thị và @ đầu token.
+>   Giữ dấu tiếng Việt, số và ký tự có nghĩa như +/#/_/-; không edit-distance, không bỏ từ, không đoán gần đúng.
+> - Ghép các word/line liền kề theo bbox, thứ tự token; tối đa ba hàng sát nhau/cùng lề.
+>   Khử trùng line/word của cùng một vị trí; confidence ứng viên là min, ngưỡng vẫn 80%.
+> - NOT_FOUND chỉ khi không có ứng viên; OCR_LOW_CONFIDENCE khi có chữ nhưng confidence yếu;
+>   CONTEXT_REJECTED khi chữ đủ tin cậy nhưng ROI/ảnh chưa xác nhận. Trace giữ outcome khi dừng ở giới hạn.
+> - Không bỏ xác minh ngữ cảnh/ảnh, không click nếu nhiều ứng viên mơ hồ, không đổi hướng cuộn/click/marker.
+> - `ocr-expected` và `ocr-raw` trong console và runs/creator-execution.jsonl: version, expected text/kind,
+>   raw text, mọi line/word/confidence/bbox, số lượt OCR, captureId, offset và phạm vi quét.
+> - Mỗi Test Step có đúng một cặp RPA TEST START/END với runId. Play All có cặp tổng riêng và các cặp Step con,
+>   kèm batchRunId. Execution JSON có testRunId để liên kết với separator và batchRunId để liên kết Play All.
+> - File phân cách dễ copy: runs/creator-tests.log. END có status và tổng OCR/scroll, kể cả lỗi preflight/exception.
+> - Không chạy test, build, typecheck hoặc Electron. Các ghi chú phía dưới là lịch sử.
+
 > Match To cập nhật 2026-10-20 (chưa test):
 > - Top = 1/3 đầu, Middle = 2/3 đầu, Bottom = toàn vùng cuộn. Cả ba về đầu container,
 >   đợi render, chụp mới rồi mới OCR; tiếp tục xuống từng đoạn 200 DIP. Không OCR vị trí cũ trước reset.

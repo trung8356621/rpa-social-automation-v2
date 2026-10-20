@@ -368,7 +368,10 @@ function Creator() {
     setBusy(true);
     setResults([]);
     if (all) setStepPlayback({});
+    let batchRunId: string | undefined;
+    let failed = false;
     try {
+      if (all) batchRunId = await invoke<string>({ type: "startPlayAllLog" });
       await setEditorOpen(false);
       await playSequential(
         steps,
@@ -379,6 +382,7 @@ function Creator() {
             type: "test",
             stepId: step.id,
             version: step.version,
+            batchRunId,
           });
           next.forEach((result) => listRunIds.current.add(result.id));
           setResults(next);
@@ -391,8 +395,13 @@ function Creator() {
         },
       );
     } catch (error) {
+      failed = true;
       setMessage(String(error));
     } finally {
+      if (batchRunId) {
+        try { await invoke({ type: "endPlayAllLog", runId: batchRunId, failed }); }
+        catch (error) { setMessage(String(error)); }
+      }
       playLock.current = false;
       setBusy(false);
     }

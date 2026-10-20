@@ -1,4 +1,4 @@
-import { logMainError, logMainEvent } from "./main-error-log.js";
+import { logMainError, logMainEvent, logTestBoundary } from "./main-error-log.js";
 import { resolvePayload } from "../shared/flow-model.js";
 import { validatePayload } from "./storage.js";
 import path from "node:path";
@@ -9,13 +9,28 @@ import { BrowserCore, InputNotReady } from "./browser-core.js";
 import { Store } from "./storage.js";
 import { localOcr, type OcrEngine } from "./ocr.js";
 import { advanceOcrSearch, clearOcrSearch } from "./ocr-match-scroll.js";
-import { resolveVisualTarget, TargetNotConfident, OcrNotFound, OcrTechnicalError } from "./target-resolver.js";
+import { normalizeTargetText, resolveVisualTarget, TargetNotConfident, OcrNotFound, OcrTechnicalError } from "./target-resolver.js";
 import { inspectUploadFiles, UploadError } from "./upload-files.js";
 import { WEB_HEIGHT } from "../shared/geometry.js";
 import { assertVisualEnvironment } from "../shared/visual-environment.js";
+type TestLogScope = { runId: string; batchRunId?: string; ocrPasses: number; scrolls: number };
 export class Runtime {
   busy = false;
   private latestRuns = new Set<string>();
+  private batch?: TestLogScope & { status: string };
+  startPlayAllLog() {
+    if (this.busy || this.batch) throw new Error("Đang có lượt chạy.");
+    this.batch = { runId: randomUUID(), ocrPasses: 0, scrolls: 0, status: "COMPLETED" };
+    logTestBoundary(this.runDir, "START", { ...this.batch, label: "Play All" });
+    return this.batch.runId;
+  }
+  endPlayAllLog(runId: string, failed = false) {
+    if (!this.batch || this.batch.runId !== runId) throw new Error("Play All log runId không khớp.");
+    if (this.busy) throw new Error("Step đang chạy; chưa kết thúc Play All.");
+    const batch = this.batch;
+    this.batch = undefined;
+    logTestBoundary(this.runDir, "END", { ...batch, label: "Play All", status: failed ? "FAILED" : batch.status });
+  }
   constructor(
     readonly browser: BrowserCore,
     readonly store: Store,
@@ -34,8 +49,9 @@ export class Runtime {
     stepId: string,
     version: number,
     overrideId?: string,
+    batchRunId?: string,
   ): Promise<Result[]> {
-    return this.testRequests([{ stepId, version, overrideId }]);
+    return this.testRequests([{ stepId, version, overrideId }], 0, batchRunId);
   }
   async testPair(
     firstId: string,
@@ -74,6 +90,43 @@ export class Runtime {
   private async testRequests(
     requests: { stepId: string; version: number; overrideId?: string }[],
     delayMs = 0,
+    batchRunId?: string,
+  ): Promise<Result[]> {
+    const scope: TestLogScope = { runId: randomUUID(), batchRunId, ocrPasses: 0, scrolls: 0 };
+    const label = requests.map(request => {
+      let matchTo = "unknown";
+      try {
+        const payload = request.overrideId
+          ? this.store.overrides().find(o => o.id === request.overrideId)?.segment[0]
+          : this.store.step(request.stepId,request.version).payload;
+        matchTo = payload?.target?.ocr?.confirmed ? payload.target.matchTo ?? "current" : "current";
+      } catch { /* Invalid versions still receive a paired boundary and validation error. */ }
+      return `Step ${request.stepId} | v${request.version} | Match To ${matchTo}`;
+    }).join(" → ");
+    let status = "FAILED";
+    logTestBoundary(this.runDir, "START", { ...scope, label });
+    try {
+      if ((batchRunId && this.batch?.runId !== batchRunId) || (this.batch && !batchRunId))
+        throw new Error("Play All log runId không khớp.");
+      const results = await this.runRequests(requests, delayMs, scope);
+      status = results.find(result => !result.ok)?.status ?? results.at(-1)?.status ?? "FAILED";
+      return results;
+    } catch (error) {
+      status = /Viewport|Zoom|variable|không thuộc flow/i.test(error instanceof Error ? error.message : String(error)) ? "BLOCKED" : "FAILED";
+      throw error;
+    } finally {
+      logTestBoundary(this.runDir, "END", { ...scope, label, status });
+      if (this.batch && this.batch.runId === batchRunId) {
+        this.batch.ocrPasses += scope.ocrPasses;
+        this.batch.scrolls += scope.scrolls;
+        if (!["ACTION_SENT", "VERIFIED"].includes(status)) this.batch.status = status;
+      }
+    }
+  }
+  private async runRequests(
+    requests: { stepId: string; version: number; overrideId?: string }[],
+    delayMs: number,
+    scope: TestLogScope,
   ): Promise<Result[]> {
     if (this.busy) throw new Error("Đang có một tác vụ chạy.");
     this.latestRuns.clear();
@@ -144,6 +197,7 @@ export class Runtime {
             version,
             source,
             overrideId,
+            scope,
           );
           results.push(result);
           this.latestRuns.add(result.id);
@@ -225,12 +279,13 @@ export class Runtime {
     stepId: string,
     version: number,
     source: "base" | "override",
-    overrideId?: string,
+    overrideId: string | undefined,
+    scope: TestLogScope,
   ): Promise<Result> {
     // Screenshot capture can disturb native focus on this Electron/Windows build.
     // Focus-sensitive input runs first without a pre-capture or any refocus.
     const execution: ExecutionDetails = { ...this.executionStart(payload, stepId, version, overrideId),
-      runId: randomUUID(), ocrPasses: 0, scrolls: 0, stopReason: "STARTED" };
+      runId: randomUUID(), testRunId: scope.runId, batchRunId: scope.batchRunId, ocrPasses: 0, scrolls: 0, stopReason: "STARTED" };
     this.onExecution?.(execution);
     logMainEvent(this.runDir, "execution-start", { ...execution, action: payload.action });
     let before: Result["before"];
@@ -294,7 +349,6 @@ export class Runtime {
                 searchRegion = scope.searchRegion;
                 if (!searchRegion?.width || !searchRegion.height)
                   throw new TargetNotConfident("SCAN_RANGE_EMPTY: phạm vi quét không còn hiển thị.");
-                execution.ocrPasses++;
               }
               const resolved = await resolveVisualTarget(
                 this.browser.captureBuffer(current.id),
@@ -302,9 +356,23 @@ export class Runtime {
                 payload,
                 this.ocr,
                 searchRegion,
+                (event) => {
+                  const expected = payload.target?.ocr;
+                  if (event.phase === "start") {
+                    execution.ocrPasses++;
+                    logMainEvent(this.runDir, "ocr-expected", { ...execution, captureId: current.id,
+                      expectedText: expected?.text, expectedKind: expected?.kind,
+                      normalizedExpected: normalizeTargetText(expected?.text ?? ""), offset: event.offset, searchRegion });
+                  } else {
+                    logMainEvent(this.runDir, "ocr-raw", { ...execution, captureId: current.id,
+                      expectedText: expected?.text, expectedKind: expected?.kind,
+                      rawText: event.result!.text, confidence: event.result!.confidence,
+                      lines: event.result!.segments.filter(segment => segment.kind === "line"),
+                      words: event.result!.segments.filter(segment => segment.kind === "word"), offset: event.offset, searchRegion });
+                  }
+                },
               );
               const { resolution: trace, ...position } = resolved;
-              if (!matchTo) execution.ocrPasses += trace.attempts.filter(a => a.method === "ocr" && a.outcome !== "unavailable").length;
               if (matchTo && Date.now() >= deadline)
                 throw new TargetNotConfident("TIME_LIMIT: Match To hết thời gian tìm OCR; chưa gửi action.", trace);
               match = position;
@@ -316,15 +384,13 @@ export class Runtime {
               break;
             } catch (error) {
               if (matchTo) {
-                // Only absence is recoverable by scrolling. Technical/ambiguous/weak OCR is distinct.
+                // Recoverable OCR outcomes remain distinct while scanning; technical/ambiguous errors stop.
                 if (!(error instanceof OcrNotFound)) throw error;
                 lastSearchTrace = error.resolution;
-                logMainEvent(this.runDir, "ocr-pass", { ...execution, outcome: error.resolution?.context?.length ? "CONTEXT_REJECTED" : "NOT_FOUND", captureId: current.id, context: error.resolution?.context, attempts: error.resolution?.attempts, searchRegion });
+                logMainEvent(this.runDir, "ocr-pass", { ...execution, outcome: error.outcome, captureId: current.id, context: error.resolution?.context, attempts: error.resolution?.attempts, searchRegion });
                 if (Date.now() >= deadline) throw new TargetNotConfident("TIME_LIMIT: hết thời gian quét OCR.", lastSearchTrace);
                 if (reached || scrolls >= 40) throw new TargetNotConfident("SCROLL_LIMIT: hết giới hạn quét OCR.", lastSearchTrace);
               } else {
-                if (error instanceof TargetNotConfident)
-                  execution.ocrPasses += error.resolution?.attempts.filter(a => a.method === "ocr" && a.outcome !== "unavailable").length ?? 0;
                 if (!(error instanceof TargetNotConfident) || Date.now() >= deadline) throw error;
               }
             }
@@ -335,7 +401,7 @@ export class Runtime {
               execution.scrolls = scrolls + resetScrolls;
               logMainEvent(this.runDir, "ocr-scroll", { ...execution, ...progress });
               if (!progress.moved)
-                throw new TargetNotConfident(`${progress.reason ?? "SCROLL_STALLED"}: chưa tìm được mục tiêu có ngữ cảnh tin cậy; chưa gửi action.`, lastSearchTrace);
+                throw new TargetNotConfident(`${progress.reason ?? "SCROLL_STALLED"}: ${lastSearchTrace?.ocrOutcome ?? "NOT_FOUND"}; chưa gửi action.`, lastSearchTrace);
             }
             await new Promise((r) => setTimeout(r, matchTo ? 250 : 200));
             current = await this.browser.capture();
@@ -375,7 +441,7 @@ export class Runtime {
       const ocrFailure = e instanceof TargetNotConfident
         ? e.resolution?.attempts.find(attempt => attempt.method === "ocr" && attempt.outcome === "failed") : undefined;
       execution.stopReason = e instanceof OcrTechnicalError || ocrFailure ? "OCR_TECHNICAL"
-        : e instanceof OcrNotFound ? "NOT_FOUND"
+        : e instanceof OcrNotFound ? e.outcome
         : e instanceof TargetNotConfident && e.ambiguous ? "OCR_AMBIGUOUS"
         : e instanceof Error ? e.message.split(":")[0] : "RUNTIME_ERROR";
       logMainError(this.runDir, "runtime", e, {
@@ -400,6 +466,8 @@ export class Runtime {
       if (payload.action === "CLICK_AND_TYPE" && clickSent)
         message = `Đã click target một lần; nhập liệu chưa hoàn tất và có thể đã nhập một phần. ${message}`;
     }
+    scope.ocrPasses += execution.ocrPasses;
+    scope.scrolls += execution.scrolls;
     logMainEvent(this.runDir, "execution-stop", { ...execution, status, clickSent, resolution });
     message = `v${version} · ${overrideId ? "Override" : "Base"} · Match To ${execution.matchTo} · ${execution.pipeline}: ${message}`;
     if (upload?.cleanupWarning) message += ` ${upload.cleanupWarning}`;

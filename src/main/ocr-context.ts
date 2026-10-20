@@ -2,8 +2,9 @@ import sharp from "sharp";
 import type { OcrResult, Payload, Result, ResolutionTrace } from "../shared/contracts.js";
 import type { OcrEngine } from "./ocr.js";
 
+import { findOcrCandidates, normalizeOcrText as normalize } from "./ocr-candidates.js";
+
 const savedOcr = new WeakMap<Buffer, Promise<OcrResult>>();
-const normalize = (text: string) => text.normalize("NFC").trim().replace(/\s+/gu, " ").toLocaleLowerCase("vi");
 const generic = new Set(["thích", "bình luận", "chia sẻ", "like", "comment", "share", "viết bình luận", "xem thêm", "see more"]);
 
 /** Safety gate only: never replaces OCR click coordinates or searches via the DOM. */
@@ -40,10 +41,10 @@ export async function confirmOcrContext(frame: Buffer, template: Buffer, payload
     context.reason = "CONTEXT_CLIPPED: ngữ cảnh ROI chưa hiển thị đầy đủ.";
     return context;
   }
-  const anchorsConfirmed = anchors.every(anchor => viewportOcr.segments.some(segment =>
-    segment.kind === anchor.kind && segment.confidence >= 80 && normalize(segment.text) === normalize(anchor.text) &&
+  const anchorsConfirmed = anchors.every(anchor => findOcrCandidates(viewportOcr, anchor).filter(segment =>
+    segment.confidence >= 80 &&
     Math.abs(segment.bbox.x+segment.bbox.width/2-(left+anchor.bbox.x+anchor.bbox.width/2)) <= 12 &&
-    Math.abs(segment.bbox.y+segment.bbox.height/2-(top+anchor.bbox.y+anchor.bbox.height/2)) <= 12));
+    Math.abs(segment.bbox.y+segment.bbox.height/2-(top+anchor.bbox.y+anchor.bbox.height/2)) <= 12).length === 1);
   if (!anchorsConfirmed) { context.reason = "CONTEXT_ANCHOR_MISMATCH: chữ trùng nhưng ngữ cảnh không khớp vị trí."; return context; }
   context.anchor = anchors.map(anchor => anchor.text).join(" | ");
   const reference = await sharp(template).removeAlpha().raw().toBuffer({ resolveWithObject: true });

@@ -96,6 +96,8 @@ export type ExecutionStart = {
 };
 export type ExecutionDetails = ExecutionStart & {
   runId: string;
+  testRunId?: string;
+  batchRunId?: string;
   ocrPasses: number;
   scrolls: number;
   stopReason: string;
@@ -150,6 +152,7 @@ export type UploadInfo = {
   cleanupWarning?: string;
 };
 export type ResolutionTrace = {
+  ocrOutcome?: "NOT_FOUND" | "OCR_LOW_CONFIDENCE" | "CONTEXT_REJECTED";
   context?: { x: number; y: number; confirmed: boolean; reason: string; imageScore?: number; anchor?: string }[];
   mode: "auto";
   legacyMethod?: "image" | "ocr";
@@ -212,7 +215,9 @@ export type Command =
       name: string;
       segment: Payload[];
     }
-  | { type: "test"; stepId: string; version: number; overrideId?: string }
+  | { type: "test"; stepId: string; version: number; overrideId?: string; batchRunId?: string }
+  | { type: "startPlayAllLog" }
+  | { type: "endPlayAllLog"; runId: string; failed?: boolean }
   | { type: "testPair"; firstId: string; secondId: string; delayMs: number }
   | {
       type: "reviewTest";

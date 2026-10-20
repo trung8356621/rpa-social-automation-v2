@@ -7,6 +7,7 @@ import type {
   ResolutionTrace,
 } from "../shared/contracts.js";
 import type { OcrEngine } from "./ocr.js";
+import { findOcrCandidates, normalizeOcrText } from "./ocr-candidates.js";
 import { confirmOcrContext } from "./ocr-context.js";
 import { matchTemplate } from "./visual.js";
 export const MIN_OCR_CONFIDENCE = 80;
@@ -20,7 +21,10 @@ export class TargetNotConfident extends Error {
   }
 }
 export class OcrNotFound extends TargetNotConfident {
-  constructor(resolution?: ResolutionTrace) { super("OCR_NOT_FOUND: chưa thấy mục tiêu có ngữ cảnh được xác nhận trong viewport.", resolution); }
+  constructor(resolution?: ResolutionTrace, readonly outcome: "NOT_FOUND" | "OCR_LOW_CONFIDENCE" | "CONTEXT_REJECTED" = "NOT_FOUND") {
+    super(`${outcome}: ${outcome === "NOT_FOUND" ? "không có ứng viên chữ phù hợp" : outcome === "OCR_LOW_CONFIDENCE" ? "có ứng viên chữ nhưng confidence dưới ngưỡng" : "có ứng viên chữ nhưng ngữ cảnh chưa xác nhận"}.`, resolution);
+    if (resolution) resolution.ocrOutcome = outcome;
+  }
 }
 export class OcrTechnicalError extends Error {
   constructor(readonly cause: unknown) {
@@ -28,23 +32,13 @@ export class OcrTechnicalError extends Error {
     this.name = "OcrTechnicalError";
   }
 }
-export function normalizeTargetText(text: string) {
-  return text
-    .normalize("NFC")
-    .trim()
-    .replace(/\s+/gu, " ")
-    .toLocaleLowerCase("vi");
-}
+export const normalizeTargetText = normalizeOcrText;
 export function resolveOcrText(
   result: OcrResult,
   selection: NonNullable<NonNullable<Payload["target"]>["ocr"]>,
   offset: Rect,
 ): NonNullable<Result["match"]> {
-  const matches = result.segments.filter(
-    (segment) =>
-      segment.kind === selection.kind &&
-      normalizeTargetText(segment.text) === normalizeTargetText(selection.text),
-  );
+  const matches = findOcrCandidates(result, selection);
   if (!matches.length) throw new OcrNotFound();
   if (matches.length !== 1)
     throw new TargetNotConfident(
@@ -87,45 +81,52 @@ export async function resolveVisualTarget(
   payload: Payload,
   ocr: OcrEngine,
   searchRegion?: Rect,
+  onOcr?: (event: { phase: "start" | "result"; offset: Rect; result?: OcrResult }) => void,
 ): Promise<NonNullable<Result["match"]> & { resolution: ResolutionTrace }> {
   const target = payload.target!;
   // Match To explicitly searches the visible OCR region after bounded scrolling.
   if (target.ocr?.confirmed && target.matchTo && target.matchTo !== "current") {
     const size = await sharp(frame).metadata();
     let result: OcrResult;
-    try { result = await ocr.recognize(frame); }
+    const offset = { x: 0, y: 0, width: size.width!, height: size.height! };
+    onOcr?.({ phase: "start", offset });
+    try { result = await ocr.recognize(frame); onOcr?.({ phase: "result", offset, result }); }
     catch (error) { throw new OcrTechnicalError(error); }
     if (searchRegion) result = { ...result, segments: result.segments.filter(segment => {
       const b = segment.bbox, r = searchRegion;
       return b.x >= r.x && b.y >= r.y && b.x+b.width <= r.x+r.width && b.y+b.height <= r.y+r.height;
     }) };
     const trace: ResolutionTrace = { mode: "auto", attempts: [], context: [] };
-    const candidates = result.segments.filter(segment => segment.kind === target.ocr!.kind &&
-      normalizeTargetText(segment.text) === normalizeTargetText(target.ocr!.text));
+    const candidates = findOcrCandidates(result, target.ocr);
     if (!candidates.length) throw new OcrNotFound(trace);
     if (candidates.length > 32) throw new TargetNotConfident("CONTEXT_AMBIGUOUS: quá nhiều dòng chữ trùng trong viewport; không click.", trace, true);
     const confirmed: NonNullable<Result["match"]>[] = [];
+    let confidentCandidates = 0;
     for (const candidate of candidates) {
       let found: NonNullable<Result["match"]>;
       try {
         found = resolveOcrText({ ...result, segments: [candidate] }, target.ocr,
           { x: 0, y: 0, width: size.width!, height: size.height! });
       } catch (error) {
+        if (!(error instanceof TargetNotConfident) || !error.message.startsWith("OCR_LOW_CONFIDENCE")) throw error;
         trace.attempts.push({ method: "ocr", outcome: "not_confident", reason: (error as Error).message,
           x: candidate.bbox.x+candidate.bbox.width/2, y: candidate.bbox.y+candidate.bbox.height/2, confidence: candidate.confidence });
         continue;
       }
+      confidentCandidates++;
       trace.attempts.push({ method: "ocr", outcome: "matched", x: found.x, y: found.y, confidence: found.confidence });
       let context: NonNullable<ResolutionTrace["context"]>[number];
       try { context = await confirmOcrContext(frame, template, payload, ocr, found, result); }
       catch (error) { throw new OcrTechnicalError(error); }
       trace.context!.push(context);
-      if (context.reason.startsWith("CONTEXT_INSUFFICIENT"))
-        throw new TargetNotConfident(context.reason, trace);
+      if (context.reason.startsWith("CONTEXT_INSUFFICIENT")) {
+        trace.ocrOutcome = "CONTEXT_REJECTED";
+        throw new TargetNotConfident(`CONTEXT_REJECTED: ${context.reason}`, trace);
+      }
       if (context.confirmed) confirmed.push(found);
     }
     if (confirmed.length > 1) throw new TargetNotConfident("CONTEXT_AMBIGUOUS: nhiều mục tiêu cùng chữ/ngữ cảnh; không click.", trace, true);
-    if (!confirmed.length) throw new OcrNotFound(trace);
+    if (!confirmed.length) throw new OcrNotFound(trace, confidentCandidates ? "CONTEXT_REJECTED" : "OCR_LOW_CONFIDENCE");
     trace.selectedMethod = "ocr";
     return { ...confirmed[0], resolution: trace };
   }
@@ -177,6 +178,7 @@ export async function resolveVisualTarget(
   if (!imageGood) trace.fallbackReason = imageReason;
   let textMatch: NonNullable<Result["match"]> | undefined;
   let viewportOcr: OcrResult | undefined;
+  let ocrRejection: TargetNotConfident | undefined;
   if (target.ocr?.confirmed) {
     const size = await sharp(frame).metadata();
     const left = Math.max(0, target.roi.x - 64),
@@ -189,7 +191,9 @@ export async function resolveVisualTarget(
         .extract({ left, top, width: roi.width, height: roi.height })
         .png()
         .toBuffer();
+      onOcr?.({ phase: "start", offset: roi });
       const recognized = await ocr.recognize(image);
+      onOcr?.({ phase: "result", offset: roi, result: recognized });
       viewportOcr = { ...recognized, segments: recognized.segments.map(segment => ({ ...segment,
         bbox: { ...segment.bbox, x: segment.bbox.x+roi.x, y: segment.bbox.y+roi.y } })) };
       textMatch = resolveOcrText(recognized, target.ocr, roi);
@@ -205,6 +209,11 @@ export async function resolveVisualTarget(
           : "Fallback từ Image Matching.",
       });
     } catch (error) {
+      if (error instanceof TargetNotConfident) {
+        ocrRejection = error;
+        trace.ocrOutcome = error instanceof OcrNotFound ? error.outcome
+          : error.message.startsWith("OCR_LOW_CONFIDENCE") ? "OCR_LOW_CONFIDENCE" : undefined;
+      }
       const ambiguous = error instanceof TargetNotConfident && error.ambiguous;
       trace.attempts.push({
         method: "ocr",
@@ -250,10 +259,11 @@ export async function resolveVisualTarget(
     try { context = await confirmOcrContext(frame, template, payload, ocr, textMatch, viewportOcr!); }
     catch (error) { throw new OcrTechnicalError(error); }
     trace.context = [context];
-    if (!context.confirmed) throw new TargetNotConfident(context.reason, trace);
+    if (!context.confirmed) { trace.ocrOutcome = "CONTEXT_REJECTED"; throw new TargetNotConfident(`CONTEXT_REJECTED: ${context.reason}`, trace); }
     trace.selectedMethod = "ocr";
     return { ...textMatch, resolution: trace };
   }
+  if (ocrRejection) throw new TargetNotConfident(ocrRejection.message, trace, ocrRejection.ambiguous);
   return block(
     "Không xác định được target đủ tin cậy bằng AUTO. Chưa gửi click/nhập; hãy Redesign target.",
   );

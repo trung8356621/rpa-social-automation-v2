@@ -491,9 +491,13 @@ async function boot() {
           command.verdict,
           command.previewConfirmed,
         );
+      case "startPlayAllLog":
+        return runtime.startPlayAllLog();
+      case "endPlayAllLog":
+        return runtime.endPlayAllLog(command.runId, command.failed);
       case "test":
         try {
-          return await runtime.test(command.stepId, command.version, command.overrideId);
+          return await runtime.test(command.stepId, command.version, command.overrideId, command.batchRunId);
         } catch (error) {
           logMainError(runDir, "test", error, { stepId: command.stepId, version: command.version });
           throw error;
