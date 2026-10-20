@@ -7,7 +7,7 @@ export class QuickTagBlocked extends Error {}
 
 // Compare pixels only. This does not read names or establish identity.
 async function pixels(buffer: Buffer, roi: Rect) {
-  return sharp(buffer).extract(roi).resize(96, 48, { fit: "fill" })
+  return sharp(buffer).extract({ left: roi.x, top: roi.y, width: roi.width, height: roi.height }).resize(96, 48, { fit: "fill" })
     .toColourspace("srgb").removeAlpha().raw().toBuffer();
 }
 function difference(a: Buffer, b: Buffer) {
