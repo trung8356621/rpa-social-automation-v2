@@ -1108,6 +1108,62 @@ body[data-panel="ui-overlay"] .ui-backdrop { background: rgb(6 13 23 / 14%); }
 .editor-save-state summary { cursor: pointer; }
 .step-row { height: auto; min-height: 52px; padding-top: 6px; padding-bottom: 6px; }
 .step-row .step { height: auto; min-height: 38px; }
+
+/* Application navigation is separate from the fixed native Creator viewport. */
+body[data-panel="shell"] { width: 100vw; height: 100vh; overflow-x: auto; overflow-y: hidden; }
+body[data-panel="shell"] main.app-shell { position: relative; width: 100vw; min-width: 0; min-height: 100vh; }
+body[data-panel="shell"] main.app-shell[data-page="creator"] {
+  width: max(100vw, var(--creator-min-width));
+  min-width: var(--creator-min-width);
+}
+.app-sidebar {
+  position: fixed; inset: 0 auto 0 0; width: var(--app-nav-width); z-index: 25;
+  background: #111f30; border-right: 1px solid #304359; display: flex; flex-direction: column;
+}
+.app-sidebar-heading { min-height: 56px; padding: 10px 12px; display: flex; align-items: center; justify-content: space-between; gap: 6px; }
+.app-sidebar-heading b { white-space: nowrap; font-size: 15px; }
+.app-sidebar-heading small { color: #829ab5; font-size: 10px; }
+.app-sidebar-heading button { padding: 4px 9px; font-size: 18px; }
+.app-sidebar.collapsed .app-sidebar-heading { justify-content: center; padding: 10px 4px; }
+.app-menu { display: flex; flex-direction: column; align-items: stretch; gap: 5px; height: auto; padding: 8px; background: transparent; }
+.app-menu button { display: flex; align-items: center; gap: 12px; padding: 11px 9px; text-align: left; background: transparent; border: 1px solid transparent; }
+.app-menu button svg { flex-shrink: 0; }
+.app-menu button[aria-current="page"] { background: #22394e; border-color: #45627a; }
+.app-sidebar.collapsed .app-menu { padding: 8px 5px; }
+.app-sidebar.collapsed .app-menu button { justify-content: center; padding: 11px 5px; }
+.app-page { margin-left: var(--app-nav-width); width: calc(100% - var(--app-nav-width)); height: 100vh; overflow-y: auto; padding: 32px clamp(20px, 4vw, 56px); }
+.page-heading { margin-bottom: 28px; max-width: 760px; }
+.page-heading h1 { margin: 6px 0 10px; font-size: 28px; font-weight: 600; }
+.page-heading p, .page-heading small { color: #98aec7; line-height: 1.65; }
+.scenario-create { display: flex; align-items: flex-end; flex-wrap: wrap; gap: 12px; max-width: 680px; margin-bottom: 28px; }
+.scenario-create label { flex: 1; min-width: 200px; margin: 0; }
+.scenario-create button { min-height: 35px; }
+.scenario-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(min(260px, 100%), 1fr)); gap: 16px; }
+.scenario-card { background: #162639; border: 1px solid #32475f; padding: 20px; border-radius: 10px; }
+.scenario-card h2 { font-size: 17px; margin: 0 0 12px; overflow-wrap: anywhere; }
+.scenario-card p, .page-empty { color: #9bb0c7; }
+.scenario-card button { margin-top: 12px; }
+.app-page-error { position: fixed; left: calc(var(--app-nav-width) + 20px); bottom: 16px; max-width: calc(100vw - var(--app-nav-width) - 40px); padding: 12px; background: #472d2d; border: 1px solid #b87777; border-radius: 6px; }
+.network-settings-page { max-width: 720px; padding: 24px; background: #162639; border: 1px solid #32475f; border-radius: 10px; }
+.network-settings-page h2 { margin-top: 0; }
+.network-settings-page > label { max-width: 300px; }
+.network-settings-page .popover-footer { flex-wrap: wrap; }
+body[data-panel="shell"] .app-shell > header,
+body[data-panel="shell"] .app-shell > nav {
+  margin-left: var(--app-nav-width); width: calc(100% - var(--app-nav-width));
+  padding-left: 8px; padding-right: 8px; gap: 8px;
+}
+body[data-panel="shell"] .app-shell > header { height: 36px; }
+body[data-panel="shell"] .app-shell > nav { height: 52px; padding-top: 6px; padding-bottom: 6px; }
+.creator-back { position: sticky; left: 8px; z-index: 21; }
+body[data-panel="shell"] .app-shell > aside.creator-steps {
+  left: var(--steps-left); top: 88px; width: 320px; height: var(--web-height);
+  padding: 10px 8px; border-right: 0; border-left: 1px solid #3c4b63;
+}
+body[data-panel="shell"] .app-shell > .editor-column {
+  left: var(--editor-left); width: var(--editor-width); top: 88px; height: var(--web-height);
+}
+body[data-panel="shell"] .app-shell[data-editor-overlay="true"] > aside.creator-steps { visibility: hidden; }
 .step .step-label > b, .step .step-label .step-target-text { color: #e3eaf4; font-size: 13px; font-weight: 600; line-height: 1.45; white-space: normal; overflow-wrap: anywhere; }
 .step .step-label > b, .step .step-label .step-target-text { display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 2; overflow: hidden; }
 .step .step-label .step-target-text { color: #c3e9df; }

@@ -123,7 +123,7 @@ async function boot() {
     maximizable: true,
     fullscreenable: true,
     show: false,
-    title: "RPA Creator V2 · POC",
+    title: "RPA Social Automation V2",
     webPreferences: {
       preload: path.join(root, "preload/index.cjs"),
       contextIsolation: true,
@@ -189,6 +189,7 @@ async function boot() {
     window,
     path.join(root, "preload/index.cjs"),
     browser,
+    store.setting("appSidebarCollapsed") === "true",
   );
   const pointerTrace = new PointerTrace(
     window,
@@ -313,6 +314,8 @@ async function boot() {
   let armedTest:
     { stepId: string; version: number; overrideId?: string } | undefined;
   const state = (): State => ({
+    appPage: overlays.page,
+    sidebarCollapsed: overlays.sidebarCollapsed,
     networkSettings: store.networkSettings(),
     flow: store.flow(),
     flows: store.flows(),
@@ -322,7 +325,7 @@ async function boot() {
     zoom: browser.zoom,
     browserBounds: browser.bounds,
     focused: browser.view.webContents.isFocused(),
-    visible: browser.visible,
+    visible: browser.visible && overlays.page === "creator",
     dataPath,
   });
   const publishLayout = () => {
@@ -347,6 +350,22 @@ async function boot() {
       sender: event.sender.id,
     });
     switch (command.type) {
+      case "appPage":
+        isIdle();
+        if (event.sender !== window.webContents || !["scenarios", "creator", "browser-sessions", "test-lab", "settings"].includes(command.page))
+          throw new Error("Invalid app page");
+        overlays.setPage(command.page);
+        if (command.page !== "creator") armedTest = undefined;
+        window.webContents.focus();
+        publishLayout();
+        return state();
+      case "appSidebar":
+        isIdle();
+        if (event.sender !== window.webContents || typeof command.collapsed !== "boolean") throw new Error("Invalid sidebar setting");
+        store.setSetting("appSidebarCollapsed", String(command.collapsed));
+        overlays.setSidebarCollapsed(command.collapsed);
+        publishLayout();
+        return state();
       case "setNetworkSettings":
         store.setNetworkSettings(command.settings);
         return state();

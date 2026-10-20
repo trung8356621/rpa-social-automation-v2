@@ -53,21 +53,31 @@ export function imageToInput(
 }
 
 export const EDITOR_WIDTH = 352;
-/** Fixed browser viewport; narrow windows place Editor over the Step List. */
+export const APP_NAV_EXPANDED = 208;
+export const APP_NAV_COLLAPSED = 56;
+/** Preserve the native viewport. Controls move to its right, never over it. */
 export function workspaceLayout(
   editorOpen: boolean,
   debugOpen: boolean,
   contentWidth: number,
   contentHeight: number,
+  sidebarCollapsed = false,
 ) {
-  const x =
-    SIDE_WIDTH +
-    (editorOpen && contentWidth >= SIDE_WIDTH + EDITOR_WIDTH + WEB_WIDTH
-      ? EDITOR_WIDTH
-      : 0);
+  const requestedNav = sidebarCollapsed ? APP_NAV_COLLAPSED : APP_NAV_EXPANDED;
+  const navigationWidth = contentWidth >= WEB_WIDTH + SIDE_WIDTH + requestedNav ? requestedNav
+    : contentWidth >= WEB_WIDTH + SIDE_WIDTH + APP_NAV_COLLAPSED ? APP_NAV_COLLAPSED : 0;
+  const editorBeside = editorOpen && contentWidth >= navigationWidth + WEB_WIDTH + SIDE_WIDTH + EDITOR_WIDTH;
+  const controlsWidth = SIDE_WIDTH + (editorBeside ? EDITOR_WIDTH : 0);
+  const x = navigationWidth + Math.max(0, Math.floor((contentWidth - navigationWidth - WEB_WIDTH - controlsWidth) / 2));
   return {
+    navigationWidth,
+    minWidth: navigationWidth + WEB_WIDTH + controlsWidth,
+    stepsLeft: x + WEB_WIDTH,
+    editorLeft: x + WEB_WIDTH + (editorBeside ? SIDE_WIDTH : 0),
+    editorWidth: editorBeside ? EDITOR_WIDTH : SIDE_WIDTH,
+    editorBeside,
     browser: {
-      x: x + Math.max(0, Math.floor((contentWidth - x - WEB_WIDTH) / 2)),
+      x,
       y: TOP_HEIGHT,
       width: WEB_WIDTH,
       height: Math.max(1, contentHeight - TOP_HEIGHT),

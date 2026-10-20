@@ -1,5 +1,6 @@
 import type { NetworkSettings, NetworkRunSettings } from "./network-mode.js";
 export type Rect = { x: number; y: number; width: number; height: number };
+export type AppPage = "scenarios" | "creator" | "browser-sessions" | "test-lab" | "settings";
 export type Action =
   | "CLICK_TARGET"
   | "CLICK_AND_TYPE"
@@ -186,6 +187,8 @@ export type ResolutionTrace = {
   }[];
 };
 export type State = {
+  appPage?: AppPage;
+  sidebarCollapsed?: boolean;
   networkSettings?: NetworkSettings;
   flow: Flow | null;
   flows: Flow[];
@@ -199,6 +202,8 @@ export type State = {
   dataPath: string;
 };
 export type Command =
+  | { type: "appPage"; page: AppPage }
+  | { type: "appSidebar"; collapsed: boolean }
   | { type: "setNetworkSettings"; settings: NetworkSettings }
   | { type: "confirmWindowClose" }
   | { type: "state" }

@@ -4,11 +4,13 @@ import { StepList } from "./step-list";
 import { TargetModal } from "./target-modal";
 import { UiPopover } from "./ui-popover";
 import { NetworkSettings } from "./network-settings";
+import { AppNavigation, ScenariosPage, PlaceholderPage } from "./app-shell";
 import { Variables, Groups } from "./flow-controls";
 import React, { useEffect, useRef, useState } from "react";
 import { createRoot } from "react-dom/client";
 import type {
   Action,
+  AppPage,
   Capture,
   Command,
   CreatorApi,
@@ -24,7 +26,7 @@ import type {
 import "./style.css";
 import { useDraft } from "./draft";
 import { targetEnvironment } from "../shared/visual-environment";
-import { WEB_WIDTH, EDITOR_WIDTH, WEB_HEIGHT } from "../shared/geometry";
+import { WEB_WIDTH, WEB_HEIGHT, workspaceLayout, APP_NAV_COLLAPSED, APP_NAV_EXPANDED } from "../shared/geometry";
 import { defaultNetworkSettings, NETWORK_LABELS } from "../shared/network-mode";
 document.documentElement.style.setProperty("--web-height", `${WEB_HEIGHT}px`);
 declare global {
@@ -39,6 +41,9 @@ document.body.dataset.panel = panel || "shell";
 
 function Creator() {
   const [state, setState] = useDraft<State>("state");
+  const appPage = state?.appPage ?? "scenarios";
+  const creatorVisible = appPage === "creator";
+  const sidebarCollapsed = state?.sidebarCollapsed ?? false;
   const networkSettings = state?.networkSettings ?? defaultNetworkSettings();
   const networkDelays = networkSettings.presets[networkSettings.mode];
   const [variableId, setVariableId] = useDraft("variableId", "");
@@ -67,6 +72,7 @@ function Creator() {
   const pendingNavigationRef = useRef(false);
   const [confirmWorking, setConfirmWorking] = useState(false);
   const [confirmError, setConfirmError] = useState("");
+  const [pageError, setPageError] = useState("");
   const allowUnload = useRef(false);
   const leaveHandler = useRef<() => void>(() => {});
   const reloadHandler = useRef<() => void>(() => {});
@@ -90,6 +96,8 @@ function Creator() {
   const [editorExpanded, setEditorExpanded] = useDraft("editorExpanded", false);
   useEffect(() => { if (!editorExpanded) setTargetModal(false); }, [editorExpanded]);
   const [debugExpanded, setDebugExpanded] = useDraft("debugExpanded", true);
+  const layout = workspaceLayout(editorExpanded, debugExpanded, window.innerWidth, window.innerHeight, sidebarCollapsed);
+  const navigationWidth = creatorVisible ? layout.navigationWidth : sidebarCollapsed ? APP_NAV_COLLAPSED : APP_NAV_EXPANDED;
   const [stepPlayback, setStepPlayback] = useState<
     Record<string, StepPlayback>
   >({});
@@ -123,7 +131,7 @@ function Creator() {
       }));
   }, [results]);
   const drag = useRef<{ x: number; y: number } | undefined>(undefined);
-  const flowInput = useRef<HTMLInputElement>(null);
+  const goToFlowRef = useRef<() => void>(() => {});
   const resultPanel = useRef<HTMLDivElement>(null);
   function executionLabel(run: ExecutionStart) {
     if (run.pipeline === "sleep") return `${run.stepId.slice(0, 8)} · v${run.version} · Đang chờ ${run.sleepMs}ms`;
@@ -253,13 +261,14 @@ function Creator() {
     } catch (e) {
       executionFailed((e as Error).message);
       setMessage((e as Error).message);
+      if (!creatorVisible) setPageError((e as Error).message);
     } finally {
       setBusy(false);
     }
   }
   useEffect(() => {
     if (!shell) return;
-    const offFocus = window.creator.onFocusFlow(goToFlow);
+    const offFocus = window.creator.onFocusFlow(() => goToFlowRef.current());
     const offLayout = window.creator.onLayout((bounds) => {
       setState((previous) =>
         previous ? { ...previous, browserBounds: bounds } : previous,
@@ -307,7 +316,7 @@ function Creator() {
   }, []);
   useEffect(() => {
     if (!shell) return;
-    if (selected)
+    if (selected && creatorVisible)
       void invoke({
         type: "armTest",
         stepId: selected.id,
@@ -316,7 +325,7 @@ function Creator() {
       }).catch((e) => setMessage(String(e)));
     else
       void invoke({ type: "disarmTest" }).catch((e) => setMessage(String(e)));
-  }, [selected, overrideId]);
+  }, [selected, overrideId, creatorVisible]);
   useEffect(() => {
     if (!shot) return;
     const escape = (event: KeyboardEvent) => {
@@ -560,9 +569,36 @@ function Creator() {
       void invoke({ type: "focusFlow" });
       return;
     }
-    flowInput.current?.scrollIntoView({ block: "center" });
-    flowInput.current?.focus();
-    setMessage("Bước 1: nhập tên và bấm Tạo flow, hoặc chọn một flow đã lưu.");
+    navigateApp("scenarios");
+  }
+  goToFlowRef.current = goToFlow;
+  async function changeAppPage(page: AppPage) {
+    const next = await invoke<State>({ type: "appPage", page });
+    setState(next);
+    setPageError("");
+    window.scrollTo({ left: 0, top: 0 });
+  }
+  function navigateApp(page: AppPage) {
+    if (page === appPage) return;
+    requestNavigation(() => changeAppPage(page));
+  }
+  function openScenario(id: string) {
+    setPageError("");
+    requestNavigation(async () => {
+      if (id !== state?.flow?.id) {
+        setState(await invoke<State>({ type: "openFlow", id }));
+        resetStepDraft();
+      }
+      await changeAppPage("creator");
+    });
+  }
+  function createScenario() {
+    setPageError("");
+    requestNavigation(async () => {
+      setState(await invoke<State>({ type: "newFlow", name: flowName }));
+      resetStepDraft();
+      await changeAppPage("creator");
+    });
   }
   function point(e: React.PointerEvent) {
     const r = e.currentTarget.getBoundingClientRect();
@@ -734,13 +770,13 @@ function Creator() {
     );
     document.documentElement.style.setProperty(
       "--editor-left",
-      `${window.innerWidth >= 1696 ? 320 : 0}px`,
+      `${layout.editorLeft}px`,
     );
     document.documentElement.style.setProperty(
       "--editor-width",
-      `${window.innerWidth >= 1696 ? 352 : 320}px`,
+      `${layout.editorWidth}px`,
     );
-  }, [state?.browserBounds.x, state?.browserBounds.width, state?.browserBounds.height, shot?.height]);
+  }, [state?.browserBounds.x, state?.browserBounds.width, state?.browserBounds.height, shot?.height, layout.editorLeft, layout.editorWidth]);
   function togglePanel() {
     const next = !expanded;
     if (shell) {
@@ -754,7 +790,10 @@ function Creator() {
     });
   }
   return (
-    <main>
+    <main className="app-shell" data-page={appPage} data-editor-overlay={creatorVisible && editorExpanded && !layout.editorBeside}
+      style={{ "--app-nav-width": `${navigationWidth}px`, "--creator-min-width": `${layout.minWidth}px`,
+        "--steps-left": `${layout.stepsLeft}px`, "--editor-left": `${layout.editorLeft}px`,
+        "--editor-width": `${layout.editorWidth}px` } as React.CSSProperties}>
       {shell && pendingNavigation && <UiPopover variant="modal" label="Thay đổi chưa lưu"
         className="unsaved-confirm" close={stayInEditor}>
         <div className="popover-heading"><b>Thay đổi chưa lưu</b>
@@ -768,9 +807,22 @@ function Creator() {
           <button disabled={confirmWorking} onClick={stayInEditor}>Ở lại</button>
         </div>
       </UiPopover>}
-      {shell && (
+      {shell && navigationWidth > 0 && <AppNavigation page={appPage} collapsed={navigationWidth === APP_NAV_COLLAPSED}
+        locked={locked || !state} navigate={navigateApp} toggle={() => void task(async () => {
+          setState(await invoke<State>({ type: "appSidebar", collapsed: !sidebarCollapsed }));
+        })} />}
+      {shell && appPage === "scenarios" && <ScenariosPage state={state} name={flowName} setName={setFlowName}
+        locked={locked} open={openScenario} create={createScenario} />}
+      {shell && (appPage === "browser-sessions" || appPage === "test-lab") && <PlaceholderPage page={appPage} />}
+      {shell && appPage === "settings" && <section className="app-page" aria-label="Settings">
+        <div className="page-heading"><h1>Settings</h1><p>Cấu hình local cho ứng dụng trên máy này.</p></div>
+        <NetworkSettings state={state} locked={locked} update={async command => setState(await invoke<State>(command))} />
+      </section>}
+      {shell && !creatorVisible && pageError && <p className="app-page-error" role="alert">{pageError}</p>}
+      {shell && creatorVisible && (
         <>
           <header>
+            <button disabled={locked} className="creator-back" onClick={() => navigateApp("scenarios")}>← Back</button>
             <div className="brand">
               ◈ <b>RPA Creator</b>
               <span>V2 / POC</span>
@@ -804,33 +856,6 @@ function Creator() {
                   </option>
                 ))}
               </select>
-              <div className="row">
-                <input
-                  ref={flowInput}
-                  aria-label="Tên flow mới"
-                  value={flowName}
-                  onChange={(e) => setFlowName(e.target.value)}
-                />
-                <button
-                  disabled={locked}
-                  onClick={() =>
-                    requestNavigation(async () => {
-                      setState(
-                        await invoke<State>({
-                          type: "newFlow",
-                          name: flowName,
-                        }),
-                      );
-                      resetStepDraft();
-                      setMessage(
-                        `Đã tạo flow “${flowName}”. Có thể chụp & crop ROI; chọn zoom trước khi lưu step đầu tiên.`,
-                      );
-                    })
-                  }
-                >
-                  Tạo flow
-                </button>
-              </div>
             </div>
             <button
               className="primary"
@@ -852,16 +877,6 @@ function Creator() {
               {state?.browserBounds.width ?? WEB_WIDTH} × {state?.browserBounds.height ?? WEB_HEIGHT} DIP ·{" "}
               {Math.round((state?.zoom || 1) * 100)}% zoom
             </div>
-            <button
-              className="window-mode"
-              onClick={() =>
-                void invoke({ type: "toggleFullscreen" }).catch((e) =>
-                  setMessage(String(e)),
-                )
-              }
-            >
-              Toàn màn hình · F11
-            </button>
             {state && (
               <Variables
                 state={state}
@@ -869,8 +884,6 @@ function Creator() {
                 update={async (c) => setState(await invoke<State>(c))}
               />
             )}
-            <NetworkSettings state={state} locked={locked}
-              update={async command => setState(await invoke<State>(command))} />
           </header>
           <nav>
             <div className="workspace-scroll" aria-label="Workspace scrolling">
@@ -985,7 +998,7 @@ function Creator() {
               </>
             )}
           </nav>
-          <aside aria-label="Steps">
+          <aside className="creator-steps" aria-label="Steps">
             {results.filter(result => result.networkHint).map(result =>
               <p key={result.id} className="network-failure-hint" role="alert">{result.networkHint}</p>)}
             <div className="execution-summary" role="status" aria-label="Lượt chạy hiện tại">
@@ -1106,7 +1119,7 @@ function Creator() {
           )}{" "}
         </>
       )}
-      {(shell && editorExpanded && !shot) && (
+      {(shell && creatorVisible && editorExpanded && !shot) && (
         <section
           className={shell ? "panel editor-column" : "panel"}
           aria-label={shell ? "Step Editor" : "Test & Debug"}

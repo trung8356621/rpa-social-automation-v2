@@ -1,18 +1,23 @@
 import { WebContentsView, type BrowserWindow } from "electron";
 import type { BrowserCore } from "./browser-core.js";
 import { workspaceLayout } from "../shared/geometry.js";
+import type { AppPage } from "../shared/contracts.js";
 
 /** Shell Editor and browser layout. Debug is detached for legacy diagnostics. */
 export class CreatorOverlays {
   readonly debug: WebContentsView;
   private expanded = { editor: false, debug: true };
   private visible = true;
+  page: AppPage = "scenarios";
+  sidebarCollapsed: boolean;
   scroll = {left: 0, top: 0};
   constructor(
     readonly window: BrowserWindow,
     preload: string,
     readonly browser: BrowserCore,
+    sidebarCollapsed = false,
   ) {
+    this.sidebarCollapsed = sidebarCollapsed;
     this.debug = new WebContentsView({
       webPreferences: {
         preload,
@@ -43,11 +48,14 @@ export class CreatorOverlays {
       this.expanded.debug,
       width,
       height,
+      this.sidebarCollapsed,
     );
-    bounds.browser.x -= this.scroll.left;
+    const scrollLeft = Math.min(this.scroll.left, Math.max(0, bounds.minWidth - width));
+    bounds.browser.x -= scrollLeft;
     bounds.browser.y -= this.scroll.top;
     Object.assign(this.browser.bounds, bounds.browser);
     this.browser.view.setBounds(bounds.browser);
+    this.browser.view.setVisible(this.page === "creator" && this.browser.visible);
     // Legacy diagnostics can inspect bounds, but no Debug surface is attached.
     this.debug.setBounds(bounds.debug);
     this.debug.setVisible(false);
@@ -63,6 +71,16 @@ export class CreatorOverlays {
   setVisible(visible: boolean) {
     this.visible = visible;
     this.debug.setVisible(false);
+    this.layout();
+  }
+  setPage(page: AppPage) {
+    this.page = page;
+    this.scroll = { left: 0, top: 0 };
+    this.layout();
+  }
+  setSidebarCollapsed(collapsed: boolean) {
+    this.sidebarCollapsed = collapsed;
+    this.layout();
   }
   async load(file: string) {
     // No bottom Test & Debug renderer.
