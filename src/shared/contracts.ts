@@ -1,6 +1,13 @@
 import type { NetworkSettings, NetworkRunSettings } from "./network-mode.js";
 export type Rect = { x: number; y: number; width: number; height: number };
 export type AppPage = "scenarios" | "creator" | "browser-sessions" | "test-lab" | "settings";
+export type BrowserSession = {
+  id: string; name: string; partition: string; isDefault: boolean;
+  lastUrl?: string; domains: string[]; createdAt: string; updatedAt: string;
+};
+export type BrowserSessionsState = {
+  browserSessions: BrowserSession[]; activeBrowserSessionId: string; sessionError?: string;
+};
 export type Action =
   | "CLICK_TARGET"
   | "CLICK_AND_TYPE"
@@ -187,6 +194,9 @@ export type ResolutionTrace = {
   }[];
 };
 export type State = {
+  browserSessions?: BrowserSession[];
+  activeBrowserSessionId?: string;
+  sessionError?: string;
   appPage?: AppPage;
   sidebarCollapsed?: boolean;
   networkSettings?: NetworkSettings;
@@ -202,6 +212,11 @@ export type State = {
   dataPath: string;
 };
 export type Command =
+  | { type: "createBrowserSession"; name: string }
+  | { type: "renameBrowserSession"; id: string; name: string }
+  | { type: "deleteBrowserSession"; id: string; confirmed: boolean }
+  | { type: "removeSessionDomain"; id: string; domain: string }
+  | { type: "switchBrowserSession"; id: string }
   | { type: "appPage"; page: AppPage }
   | { type: "appSidebar"; collapsed: boolean }
   | { type: "setNetworkSettings"; settings: NetworkSettings }
@@ -296,6 +311,7 @@ export interface CreatorApi {
   onFocusFlow(callback: () => void): () => void;
   onRequestClose(callback: () => void): () => void;
   onNavigation(callback: (url: string) => void): () => void;
+  onBrowserSessions(callback: (snapshot: BrowserSessionsState) => void): () => void;
   invoke(command: Command): Promise<unknown>;
   onExecution(callback: (execution: ExecutionStart) => void): () => void;
   onTest(callback: (result: Result[] | { error: string }) => void): () => void;

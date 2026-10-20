@@ -5,6 +5,7 @@ import { TargetModal } from "./target-modal";
 import { UiPopover } from "./ui-popover";
 import { NetworkSettings } from "./network-settings";
 import { AppNavigation, ScenariosPage, PlaceholderPage } from "./app-shell";
+import { BrowserSessionsPage, SessionSelector } from "./browser-sessions";
 import { Variables, Groups } from "./flow-controls";
 import React, { useEffect, useRef, useState } from "react";
 import { createRoot } from "react-dom/client";
@@ -117,10 +118,11 @@ function Creator() {
   useEffect(() => {
     setStepPlayback({});
     setActiveStepId("");
+    setResults([]);
     listRunIds.current.clear();
     setExecution(undefined);
     executionRef.current = undefined;
-  }, [state?.flow?.id]);
+  }, [state?.flow?.id, state?.activeBrowserSessionId]);
   useEffect(() => {
     if (shell && !playLock.current && results.length)
       setStepPlayback((previous) => ({
@@ -282,6 +284,9 @@ function Creator() {
       navigationSeen = true;
       syncUrl(actual);
     });
+    const offSessions = window.creator.onBrowserSessions(snapshot => {
+      setState(previous => previous ? { ...previous, ...snapshot } : previous);
+    });
     void invoke<State>({ type: "state" })
       .then((snapshot) => {
         setState(snapshot);
@@ -310,6 +315,7 @@ function Creator() {
       offLayout();
       offFocus();
       offNavigation();
+      offSessions();
       offTest();
       offExecution();
     };
@@ -325,7 +331,7 @@ function Creator() {
       }).catch((e) => setMessage(String(e)));
     else
       void invoke({ type: "disarmTest" }).catch((e) => setMessage(String(e)));
-  }, [selected, overrideId, creatorVisible]);
+  }, [selected, overrideId, creatorVisible, state?.activeBrowserSessionId]);
   useEffect(() => {
     if (!shot) return;
     const escape = (event: KeyboardEvent) => {
@@ -600,6 +606,35 @@ function Creator() {
       await changeAppPage("creator");
     });
   }
+  async function updateBrowserSessions(command: Command) {
+    setBusy(true);
+    try { setState(await invoke<State>(command)); }
+    finally { setBusy(false); }
+  }
+  function selectSession(id: string) {
+    if (id === state?.activeBrowserSessionId) return;
+    void task(async () => {
+      const snapshot = await invoke<State>({ type: "switchBrowserSession", id });
+      setState(snapshot);
+      urlEdit.current.dirty = false;
+      urlEdit.current.revision++;
+      setUrl(snapshot.url);
+      if (snapshot.sessionError) {
+        setMessage(snapshot.sessionError);
+        if (!creatorVisible) setPageError(snapshot.sessionError);
+      } else setPageError("");
+    });
+  }
+  function openSession(id: string) {
+    requestNavigation(async () => {
+      const snapshot = await invoke<State>({ type: "switchBrowserSession", id });
+      setState(snapshot);
+      urlEdit.current.dirty = false;
+      urlEdit.current.revision++;
+      setUrl(snapshot.url);
+      await changeAppPage("creator");
+    });
+  }
   function point(e: React.PointerEvent) {
     const r = e.currentTarget.getBoundingClientRect();
     return {
@@ -812,8 +847,11 @@ function Creator() {
           setState(await invoke<State>({ type: "appSidebar", collapsed: !sidebarCollapsed }));
         })} />}
       {shell && appPage === "scenarios" && <ScenariosPage state={state} name={flowName} setName={setFlowName}
-        locked={locked} open={openScenario} create={createScenario} />}
-      {shell && (appPage === "browser-sessions" || appPage === "test-lab") && <PlaceholderPage page={appPage} />}
+        locked={locked} open={openScenario} create={createScenario}
+        sessionControl={<SessionSelector state={state} locked={locked || stepPlayback[activeStepId]?.status === "running"} select={selectSession} />} />}
+      {shell && appPage === "browser-sessions" && <BrowserSessionsPage state={state} locked={locked}
+        update={updateBrowserSessions} open={openSession} />}
+      {shell && appPage === "test-lab" && <PlaceholderPage page={appPage} />}
       {shell && appPage === "settings" && <section className="app-page" aria-label="Settings">
         <div className="page-heading"><h1>Settings</h1><p>Cấu hình local cho ứng dụng trên máy này.</p></div>
         <NetworkSettings state={state} locked={locked} update={async command => setState(await invoke<State>(command))} />
@@ -827,6 +865,7 @@ function Creator() {
               ◈ <b>RPA Creator</b>
               <span>V2 / POC</span>
             </div>
+            <SessionSelector state={state} locked={locked || stepPlayback[activeStepId]?.status === "running"} select={selectSession} />
             <div className="flow-controls">
               {" "}
               <select
@@ -999,6 +1038,7 @@ function Creator() {
             )}
           </nav>
           <aside className="creator-steps" aria-label="Steps">
+            {state?.sessionError && <p className="network-failure-hint" role="alert">{state.sessionError}</p>}
             {results.filter(result => result.networkHint).map(result =>
               <p key={result.id} className="network-failure-hint" role="alert">{result.networkHint}</p>)}
             <div className="execution-summary" role="status" aria-label="Lượt chạy hiện tại">

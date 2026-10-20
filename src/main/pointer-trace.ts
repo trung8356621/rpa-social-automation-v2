@@ -16,11 +16,7 @@ export class PointerTrace {
     this.file = path.join(dataPath, "pointer-routing.jsonl");
     if (!enabled) return;
     mkdirSync(dataPath, { recursive: true });
-    for (const [name, wc] of [
-      ["shell", window.webContents],
-      ["browser", browser.view.webContents],
-      ["debug", overlays.debug.webContents],
-    ] as const) {
+    const attach = (name: string, wc: WebContents) => {
       wc.on("before-mouse-event", (_event, mouse) => {
         if (["mouseDown", "mouseUp"].includes(mouse.type))
           this.record({
@@ -38,7 +34,10 @@ export class PointerTrace {
         this.record({ kind: "focus", view: name, id: wc.id }),
       );
       wc.on("blur", () => this.record({ kind: "blur", view: name, id: wc.id }));
-    }
+    };
+    attach("shell", window.webContents);
+    attach("debug", overlays.debug.webContents);
+    browser.onViewCreated(wc => attach("browser", wc));
     this.record({ kind: "initial-layout", ...this.snapshot() });
   }
   snapshot() {

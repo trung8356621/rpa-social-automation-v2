@@ -30,7 +30,10 @@ export class InputNotReady extends Error {
 }
 
 export class BrowserCore {
-  readonly view: WebContentsView;
+  private currentView: WebContentsView;
+  get view() { return this.currentView; }
+  private readonly viewListeners = new Set<(contents: WebContents) => void>();
+  private partition: string;
   readonly bounds: Rect = {
     x: SIDE_WIDTH,
     y: TOP_HEIGHT,
@@ -59,7 +62,17 @@ export class BrowserCore {
     readonly evidenceDir: string,
     partition: string,
   ) {
-    this.view = new WebContentsView({
+    this.partition = partition;
+    this.currentView = this.createView(partition);
+    window.contentView.addChildView(this.view);
+    this.view.setBounds(this.bounds);
+    window.webContents.on("before-mouse-event", () => { this.inputRoute = "editor"; });
+    window.webContents.on("before-input-event", () => { this.inputRoute = "editor"; });
+    window.webContents.on("focus", () => { this.inputRoute = "editor"; });
+    window.on("blur", () => { this.inputRoute = "unknown"; });
+  }
+  private createView(partition: string) {
+    const view = new WebContentsView({
       webPreferences: {
         partition,
         contextIsolation: true,
@@ -68,26 +81,13 @@ export class BrowserCore {
         backgroundThrottling: false,
       },
     });
-    window.contentView.addChildView(this.view);
-    this.view.setBounds(this.bounds);
-    const wc = this.view.webContents;
+    view.setVisible(false);
+    const wc = view.webContents;
     wc.on("before-mouse-event", () => {
       this.inputRoute = "browser";
     });
     wc.on("before-input-event", () => {
       this.inputRoute = "browser";
-    });
-    window.webContents.on("before-mouse-event", () => {
-      this.inputRoute = "editor";
-    });
-    window.webContents.on("before-input-event", () => {
-      this.inputRoute = "editor";
-    });
-    window.webContents.on("focus", () => {
-      this.inputRoute = "editor";
-    });
-    window.on("blur", () => {
-      this.inputRoute = "unknown";
     });
     wc.setWindowOpenHandler(({ url }) => {
       if (/^https?:\/\//.test(url)) void this.navigate(url).catch(() => {});
@@ -108,6 +108,34 @@ export class BrowserCore {
     wc.session.setPermissionRequestHandler((_wc, _permission, callback) =>
       callback(false),
     );
+    return view;
+  }
+  onViewCreated(listener: (contents: WebContents) => void) {
+    this.viewListeners.add(listener);
+    listener(this.view.webContents);
+    return () => { this.viewListeners.delete(listener); };
+  }
+  async switchPartition(partition: string) {
+    if (partition === this.partition) return;
+    await this.flush(); // Abort replacement if the current persistent data cannot be flushed.
+    const previous = this.view;
+    const next = this.createView(partition);
+    try { for (const listener of this.viewListeners) listener(next.webContents); }
+    catch (error) { next.webContents.close(); throw error; }
+    const index = this.window.contentView.children.indexOf(previous);
+    next.setBounds(this.bounds);
+    this.window.contentView.removeChildView(previous);
+    try { this.window.contentView.addChildView(next, Math.max(0, index)); }
+    catch (error) {
+      this.window.contentView.addChildView(previous, Math.max(0, index));
+      next.webContents.close();
+      throw error;
+    }
+    this.currentView = next;
+    this.partition = partition;
+    this.inputRoute = "unknown";
+    this.captures.clear();
+    previous.webContents.close({ waitForBeforeUnload: false });
   }
   async navigate(url: string) {
     this.inputRoute = "unknown";

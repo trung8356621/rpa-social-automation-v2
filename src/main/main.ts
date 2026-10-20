@@ -18,6 +18,7 @@ import { PointerTrace } from "./pointer-trace.js";
 import { ClickMarker } from "./click-marker.js";
 import { CreatorOverlays } from "./creator-overlays.js";
 import { BrowserCore } from "./browser-core.js";
+import { BrowserSessions } from "./browser-sessions.js";
 import { Store } from "./storage.js";
 import { logMainError, logMainEvent, logTestBoundary } from "./main-error-log.js";
 import { Runtime } from "./runtime.js";
@@ -94,6 +95,10 @@ async function boot() {
   for (const dir of [assetDir, evidenceDir, runDir])
     await mkdir(dir, { recursive: true });
   const store = new Store(path.join(dataPath, "creator.sqlite"));
+  const browserSessions = new BrowserSessions(store);
+  let activeSessionId = browserSessions.activeId();
+  let switchingSession = false;
+  let sessionError: string | undefined;
   const fixture = await startFixture(
     selfTest
       ? phase === "address"
@@ -183,7 +188,7 @@ async function boot() {
   const browser = new BrowserCore(
     window,
     evidenceDir,
-    "persist:creator-default",
+    browserSessions.get(activeSessionId).partition,
   );
   const overlays = new CreatorOverlays(
     window,
@@ -294,15 +299,17 @@ async function boot() {
     }
   };
   for (const editor of editors) editor.on("before-input-event", windowKeys);
-  browser.view.webContents.on("before-input-event", windowKeys);
-  browser.view.webContents.on("devtools-opened", () => {
-    // Detached DevTools receives F12 while its own window has focus.
-    browser.view.webContents.devToolsWebContents?.on("before-input-event", (event, input) => {
-      if (creatorDevtools && input.type === "keyDown" && input.key === "F12" &&
-          !input.control && !input.shift && !input.alt && !input.meta) {
-        event.preventDefault();
-        if (!input.isAutoRepeat) browser.view.webContents.closeDevTools();
-      }
+  browser.onViewCreated(wc => {
+    wc.on("before-input-event", windowKeys);
+    wc.on("devtools-opened", () => {
+      // Detached DevTools receives F12 while its own window has focus.
+      wc.devToolsWebContents?.on("before-input-event", (event, input) => {
+        if (creatorDevtools && input.type === "keyDown" && input.key === "F12" &&
+            !input.control && !input.shift && !input.alt && !input.meta) {
+          event.preventDefault();
+          if (!input.isAutoRepeat) wc.closeDevTools();
+        }
+      });
     });
   });
   browser.setZoom(store.flow()?.zoom ?? Number(store.setting("zoom") || 1));
@@ -314,6 +321,9 @@ async function boot() {
   let armedTest:
     { stepId: string; version: number; overrideId?: string } | undefined;
   const state = (): State => ({
+    browserSessions: browserSessions.list(),
+    activeBrowserSessionId: activeSessionId,
+    sessionError,
     appPage: overlays.page,
     sidebarCollapsed: overlays.sidebarCollapsed,
     networkSettings: store.networkSettings(),
@@ -339,7 +349,44 @@ async function boot() {
   >();
   const isIdle = () => {
     if (runtime.busy) throw new Error("Đang test; đợi tác vụ kết thúc.");
+    if (switchingSession) throw new Error("Đang chuyển Browser Session; vui lòng đợi.");
   };
+  const publishSessions = () => {
+    if (!window.webContents.isDestroyed()) window.webContents.send("creator:browser-sessions", {
+      browserSessions: browserSessions.list(), activeBrowserSessionId: activeSessionId, sessionError,
+    });
+  };
+  async function switchBrowserSession(id: string) {
+    isIdle();
+    if (uiPlayAllRunId) throw new Error("Đợi Play All kết thúc trước khi chuyển Session.");
+    if (!browser.visible) throw new Error("Thoát crop/ảnh trước khi chuyển Session.");
+    const target = browserSessions.get(id);
+    if (id === activeSessionId) return state();
+    switchingSession = true;
+    sessionError = undefined;
+    armedTest = undefined;
+    try {
+      // Successful URLs are persisted by main-frame navigation events before this
+      // flush. Do not re-add a manually removed Domain Tag just by leaving a Session.
+      await browser.switchPartition(target.partition);
+      activeSessionId = id;
+      browserSessions.select(id);
+      captures.clear();
+      browser.setZoom(browser.zoom);
+      overlays.layout();
+      publishLayout();
+      publishUrl();
+      publishSessions();
+      try {
+        if (target.lastUrl) await browser.navigate(target.lastUrl);
+        else await browser.view.webContents.loadURL("about:blank");
+      } catch (error) {
+        sessionError = "Session đã mở nhưng trang chưa tải được. Bạn có thể nhập URL khác.";
+        logMainError(runDir, "session-navigation", error, { sessionId: id });
+      }
+      return state();
+    } finally { switchingSession = false; publishSessions(); }
+  }
   ipcMain.handle("creator:command", async (event, command: Command) => {
     if (!trusted(event)) throw new Error("IPC sender không hợp lệ.");
     if (!command || typeof command !== "object")
@@ -350,6 +397,30 @@ async function boot() {
       sender: event.sender.id,
     });
     switch (command.type) {
+      case "createBrowserSession":
+        isIdle();
+        browserSessions.create(command.name);
+        publishSessions();
+        return state();
+      case "renameBrowserSession":
+        isIdle();
+        browserSessions.rename(command.id, command.name);
+        publishSessions();
+        return state();
+      case "deleteBrowserSession":
+        isIdle();
+        if (uiPlayAllRunId) throw new Error("Đợi Play All kết thúc trước khi xóa Session.");
+        if (command.confirmed !== true) throw new Error("Cần xác nhận xóa Session.");
+        browserSessions.delete(command.id, activeSessionId);
+        publishSessions();
+        return state();
+      case "removeSessionDomain":
+        isIdle();
+        browserSessions.removeDomain(command.id, command.domain);
+        publishSessions();
+        return state();
+      case "switchBrowserSession":
+        return switchBrowserSession(command.id);
       case "appPage":
         isIdle();
         if (event.sender !== window.webContents || !["scenarios", "creator", "browser-sessions", "test-lab", "settings"].includes(command.page))
@@ -609,6 +680,7 @@ async function boot() {
         return;
       }
       case "startPlayAllLog":
+        isIdle();
         uiPlayAllRunId = runtime.startPlayAllLog();
         return uiPlayAllRunId;
       case "endPlayAllLog":
@@ -617,6 +689,7 @@ async function boot() {
         return;
       case "test":
         try {
+          isIdle();
           return await runtime.test(command.stepId, command.version, command.overrideId, command.batchRunId);
         } catch (error) {
           logMainError(runDir, "test", error, { stepId: command.stepId, version: command.version });
@@ -624,6 +697,7 @@ async function boot() {
         }
       case "testPair":
         try {
+          isIdle();
           return await runtime.testPair(command.firstId, command.secondId, command.delayMs);
         } catch (error) {
           logMainError(runDir, "testPair", error, { firstId: command.firstId, secondId: command.secondId });
@@ -657,53 +731,57 @@ async function boot() {
   });
   // Browser shortcut does not transfer focus to the editor. TYPE_ONLY can therefore
   // prove keyboard behavior with the same current focus as manual browsing.
-  let pendingShortcut = false;
-  browser.view.webContents.on("before-input-event", (event, input) => {
-    if (
-      input.type === "keyDown" &&
-      input.control &&
-      input.shift &&
-      input.key.toLowerCase() === "t"
-    ) {
-      event.preventDefault();
-      pendingShortcut = true;
-    }
-    // Do not inject text while the user still holds Ctrl/Shift from the shortcut.
-    const controlHeld = input.control && input.key !== "Control";
-    const shiftHeld = input.shift && input.key !== "Shift";
-    if (
-      pendingShortcut &&
-      input.type === "keyUp" &&
-      !controlHeld &&
-      !shiftHeld
-    ) {
-      pendingShortcut = false;
-      if (selfTest)
-        console.log(
-          "SHORTCUT_MAIN",
-          input.key,
-          input.control,
-          input.shift,
-          browser.view.webContents.isFocused(),
-          !!armedTest,
-        );
-      if (armedTest) {
-        const test = armedTest;
-        setImmediate(() => {
-          void runtime
-            .test(test.stepId, test.version, test.overrideId)
-            .then((result) =>
-              window.webContents.send("creator:shortcut-result", result),
-            )
-            .catch((e) => {
-              logMainError(runDir, "shortcut-test", e, { stepId: test.stepId, version: test.version });
-              window.webContents.send("creator:shortcut-result", {
-                error: String(e.message || e),
-              });
-            });
-        });
+  browser.onViewCreated(wc => {
+    let pendingShortcut = false;
+    wc.on("before-input-event", (event, input) => {
+      if (switchingSession || uiPlayAllRunId || overlays.page !== "creator") return;
+      if (
+        input.type === "keyDown" &&
+        input.control &&
+        input.shift &&
+        input.key.toLowerCase() === "t"
+      ) {
+        event.preventDefault();
+        pendingShortcut = true;
       }
-    }
+      // Do not inject text while the user still holds Ctrl/Shift from the shortcut.
+      const controlHeld = input.control && input.key !== "Control";
+      const shiftHeld = input.shift && input.key !== "Shift";
+      if (
+        pendingShortcut &&
+        input.type === "keyUp" &&
+        !controlHeld &&
+        !shiftHeld
+      ) {
+        pendingShortcut = false;
+        if (selfTest)
+          console.log(
+            "SHORTCUT_MAIN",
+            input.key,
+            input.control,
+            input.shift,
+            browser.view.webContents.isFocused(),
+            !!armedTest,
+          );
+        if (armedTest) {
+          const test = armedTest;
+          setImmediate(() => {
+            if (switchingSession || uiPlayAllRunId || wc !== browser.view.webContents || overlays.page !== "creator") return;
+            void runtime
+              .test(test.stepId, test.version, test.overrideId)
+              .then((result) =>
+                window.webContents.send("creator:shortcut-result", result),
+              )
+              .catch((e) => {
+                logMainError(runDir, "shortcut-test", e, { stepId: test.stepId, version: test.version });
+                window.webContents.send("creator:shortcut-result", {
+                  error: String(e.message || e),
+                });
+              });
+          });
+        }
+      }
+    });
   });
   let closing = false;
   let closeApproved = selfTest;
@@ -737,25 +815,57 @@ async function boot() {
         browser.view.webContents.getURL(),
       );
   };
-  browser.view.webContents.on("did-navigate", publishUrl);
-  browser.view.webContents.on(
-    "did-navigate-in-page",
-    (_event, _url, isMainFrame) => {
-      if (isMainFrame) publishUrl();
-    },
-  );
+  browser.onViewCreated(wc => {
+    let pendingSuccess = false;
+    let successfulDocument = false;
+    const current = () => !closing && wc === browser.view.webContents;
+    const record = (url: string) => {
+      if (!current()) return;
+      try {
+        browserSessions.recordVisit(activeSessionId, url);
+        sessionError = undefined;
+        publishSessions();
+      } catch (error) { logMainError(runDir, "session-metadata", error, { sessionId: activeSessionId }); }
+    };
+    wc.on("did-start-navigation", (details) => {
+      if (details.isMainFrame && !details.isSameDocument) {
+        pendingSuccess = false; successfulDocument = false;
+      }
+    });
+    wc.on("did-navigate", (_event, _url, status) => {
+      pendingSuccess = status >= 200 && status < 400;
+      if (current()) publishUrl();
+    });
+    wc.on("did-fail-load", (_event, _code, _description, _url, mainFrame) => {
+      if (mainFrame) { pendingSuccess = false; successfulDocument = false; }
+    });
+    wc.on("did-finish-load", () => {
+      if (!current()) return;
+      if (pendingSuccess) { successfulDocument = true; pendingSuccess = false; record(wc.getURL()); }
+      publishUrl();
+    });
+    wc.on("did-navigate-in-page", (_event, url, mainFrame) => {
+      if (!mainFrame || !current()) return;
+      if (successfulDocument) record(url);
+      publishUrl();
+    });
+  });
   await window.loadFile(path.join(root, "renderer/index.html"));
   await overlays.load(path.join(root, "renderer/index.html"));
   window.show();
   // Load the web page after its host is shown so Chromium has a live compositor.
   await new Promise((resolve) => setTimeout(resolve, 100));
   window.show();
-  await browser.navigate(
-    selfTest ? fixture.url : store.setting("lastUrl") || fixture.url,
-  );
-  browser.view.webContents.on("did-navigate", (_event, url) =>
-    store.setSetting("lastUrl", url),
-  );
+  const initialSession = browserSessions.get(activeSessionId);
+  try {
+    if (selfTest || initialSession.lastUrl || initialSession.isDefault)
+      await browser.navigate(selfTest ? fixture.url : initialSession.lastUrl || fixture.url);
+    else await browser.view.webContents.loadURL("about:blank");
+  } catch (error) {
+    sessionError = "Chưa tải được URL đã lưu. Bạn có thể nhập URL khác trong Creator.";
+    logMainError(runDir, "session-startup-navigation", error, { sessionId: activeSessionId });
+    publishSessions();
+  }
   window.show();
   if (selfTest) {
     try {

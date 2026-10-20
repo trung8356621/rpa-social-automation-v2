@@ -30,13 +30,15 @@ export function AppNavigation({ page, collapsed, locked, navigate, toggle }: {
   </div>;
 }
 
-export function ScenariosPage({ state, name, setName, locked, open, create }: {
+export function ScenariosPage({ state, name, setName, locked, open, create, sessionControl }: {
   state?: State; name: string; setName: (name: string) => void; locked: boolean;
   open: (id: string) => void; create: () => void;
+  sessionControl?: React.ReactNode;
 }) {
   return <section className="app-page scenarios-page" aria-label="Scenarios">
     <div className="page-heading"><small>RPA Social Automation V2</small><h1>Scenarios</h1>
       <p>Chọn kịch bản để mở Creator hoặc tạo kịch bản mới.</p></div>
+    <div className="scenario-session">{sessionControl}</div>
     <form className="scenario-create" onSubmit={event => { event.preventDefault(); create(); }}>
       <label>Tên Scenario mới<input aria-label="Tên flow mới" value={name} disabled={locked}
         onChange={event => setName(event.target.value)} /></label>

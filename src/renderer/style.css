@@ -1164,6 +1164,19 @@ body[data-panel="shell"] .app-shell > .editor-column {
   left: var(--editor-left); width: var(--editor-width); top: 88px; height: var(--web-height);
 }
 body[data-panel="shell"] .app-shell[data-editor-overlay="true"] > aside.creator-steps { visibility: hidden; }
+.session-selector { display: flex; align-items: center; gap: 7px; margin: 0; white-space: nowrap; }
+.session-selector select { width: 180px; max-width: 220px; margin: 0; }
+.scenario-session { margin-bottom: 18px; }
+.session-active { color: #68d6a6; font-size: 11px; font-weight: 400; margin-left: 6px; }
+.session-domains { display: flex; align-items: center; flex-wrap: wrap; gap: 6px; min-height: 30px; }
+.session-domains > small { color: #90a5bf; }
+.session-domain { display: inline-flex; align-items: center; gap: 7px; padding: 3px 6px; border: 1px solid #41627c; border-radius: 14px; color: #a8d3f5; max-width: 100%; overflow-wrap: anywhere; }
+.session-domain button { padding: 0 3px; margin: 0; border: 0; background: transparent; }
+.session-last-url { font-size: 11px; overflow-wrap: anywhere; }
+.session-actions, .session-rename { display: flex; flex-wrap: wrap; gap: 7px; }
+.session-rename { margin-bottom: 12px; }
+.session-rename input { flex: 1 1 160px; }
+.session-rename button { margin-top: 0; }
 .step .step-label > b, .step .step-label .step-target-text { color: #e3eaf4; font-size: 13px; font-weight: 600; line-height: 1.45; white-space: normal; overflow-wrap: anywhere; }
 .step .step-label > b, .step .step-label .step-target-text { display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 2; overflow: hidden; }
 .step .step-label .step-target-text { color: #c3e9df; }
