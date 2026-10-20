@@ -131,12 +131,12 @@ async function boot() {
       sandbox: true,
     },
   });
-  const uiLayers = new Map<string, WebContentsView>();
+  const uiLayers = new Map<string, { layer: WebContentsView; cleanup: () => void }>();
   const closeUiLayer = (name: string) => {
-    const layer = uiLayers.get(name);
-    if (!layer) return;
-    uiLayers.delete(name);
-    window.contentView.removeChildView(layer);
+    const entry = uiLayers.get(name);
+    if (!entry) return;
+    const { layer, cleanup } = entry;
+    cleanup();
     if (!layer.webContents.isDestroyed()) layer.webContents.close();
   };
   // window.open provides the same-origin portal document; createWindow places its
@@ -144,8 +144,10 @@ async function boot() {
   window.webContents.setWindowOpenHandler(({ url, frameName }) => {
     if (url !== "about:blank" || !/^creator-ui-overlay-[a-f0-9-]+$/.test(frameName)) return { action: "deny" };
     return { action: "allow", createWindow: (options) => {
-      const layer = new WebContentsView({ webPreferences: options.webPreferences });
-      uiLayers.set(frameName, layer);
+      // Electron supplies the window.open guest as options.webContents at runtime.
+      // Pass options intact so the view adopts that guest, rather than creating
+      // unrelated WebContents (which violates createWindow's identity contract).
+      const layer = new WebContentsView(options);
       layer.setBackgroundColor("#00000000");
       const align = () => {
         const [width,height] = window.getContentSize();
@@ -155,15 +157,24 @@ async function boot() {
       window.contentView.addChildView(layer);
       window.on("resize", align);
       layer.webContents.setWindowOpenHandler(() => ({ action: "deny" }));
-      layer.webContents.on("will-navigate", event => event.preventDefault());
+      const preventNavigation = (event: Electron.Event) => event.preventDefault();
+      layer.webContents.on("will-navigate", preventNavigation);
       layer.webContents.on("before-input-event", windowKeys);
-      layer.webContents.once("destroyed", () => {
+      let cleaned = false;
+      const cleanup = () => {
+        if (cleaned) return;
+        cleaned = true;
         window.removeListener("resize", align);
-        if (uiLayers.get(frameName) === layer) {
+        layer.webContents.removeListener("will-navigate", preventNavigation);
+        layer.webContents.removeListener("before-input-event", windowKeys);
+        layer.webContents.removeListener("destroyed", cleanup);
+        if (uiLayers.get(frameName)?.layer === layer) {
           uiLayers.delete(frameName);
-          if (!window.isDestroyed()) window.contentView.removeChildView(layer);
         }
-      });
+        if (!window.isDestroyed()) window.contentView.removeChildView(layer);
+      };
+      uiLayers.set(frameName, { layer, cleanup });
+      layer.webContents.once("destroyed", cleanup);
       layer.webContents.focus();
       return layer.webContents;
     } };
