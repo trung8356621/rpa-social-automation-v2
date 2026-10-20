@@ -20,12 +20,15 @@ export async function playSequential(
   execute: (step: Step) => Promise<Result[]>,
   progress: (step: Step, state: StepPlayback) => void,
   skip?: (step: Step) => Promise<boolean>,
+  betweenSteps?: (previous: Step, next: Step) => Promise<void>,
 ) {
+  let previousPassed: Step | undefined;
   for (const step of steps) {
     if (skip && await skip(step)) {
       progress(step, { status: "skipped", message: "SKIPPED · Blocked for Play All (memory only)" });
       continue;
     }
+    if (previousPassed && betweenSteps) await betweenSteps(previousPassed, step);
     progress(step, { status: "running", message: "Running" });
     let state: StepPlayback;
     try {
@@ -44,5 +47,6 @@ export async function playSequential(
     }
     progress(step, state);
     if (state.status !== "pass") return;
+    previousPassed = step;
   }
 }

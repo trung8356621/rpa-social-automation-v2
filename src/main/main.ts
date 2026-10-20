@@ -561,6 +561,24 @@ async function boot() {
         logTestBoundary(runDir, "END", { runId, batchRunId: command.batchRunId, label, status: "SKIPPED", ocrPasses: 0, scrolls: 0 });
         return;
       }
+      case "playAllTransition": {
+        isIdle();
+        if (!uiPlayAllRunId || command.batchRunId !== uiPlayAllRunId)
+          throw new Error("Play All log runId không khớp.");
+        const previous = store.step(command.previousStepId, command.previousVersion);
+        const next = store.step(command.nextStepId, command.nextVersion);
+        if (![previous, next].every(step => store.flow()?.steps.some(ref => ref.id === step.id)))
+          throw new Error("Step không thuộc flow.");
+        const delayMs = 1000;
+        const startedAt = Date.now();
+        const context = { batchRunId: command.batchRunId,
+          previousStepId: previous.id, previousVersion: previous.version,
+          nextStepId: next.id, nextVersion: next.version, delayMs };
+        logMainEvent(runDir, "play-all-transition-start", context);
+        await new Promise(resolve => setTimeout(resolve, delayMs));
+        logMainEvent(runDir, "play-all-transition-end", { ...context, elapsedMs: Date.now() - startedAt });
+        return;
+      }
       case "startPlayAllLog":
         uiPlayAllRunId = runtime.startPlayAllLog();
         return uiPlayAllRunId;

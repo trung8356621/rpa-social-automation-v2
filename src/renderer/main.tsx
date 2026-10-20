@@ -413,6 +413,11 @@ function Creator() {
           await invoke({ type: "playAllSkipped", stepId: step.id, version: step.version, batchRunId: batchRunId! });
           return true;
         } : undefined,
+        all ? async (previous, next) => {
+          await invoke({ type: "playAllTransition", batchRunId: batchRunId!,
+            previousStepId: previous.id, previousVersion: previous.version,
+            nextStepId: next.id, nextVersion: next.version });
+        } : undefined,
       );
     } catch (error) {
       failed = true;

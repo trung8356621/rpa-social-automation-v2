@@ -219,6 +219,7 @@ export type Command =
     }
   | { type: "test"; stepId: string; version: number; overrideId?: string; batchRunId?: string }
   | { type: "playAllSkipped"; stepId: string; version: number; batchRunId: string }
+  | { type: "playAllTransition"; batchRunId: string; previousStepId: string; previousVersion: number; nextStepId: string; nextVersion: number }
   | { type: "startPlayAllLog" }
   | { type: "endPlayAllLog"; runId: string; failed?: boolean }
   | { type: "testPair"; firstId: string; secondId: string; delayMs: number }
