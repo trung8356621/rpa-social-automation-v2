@@ -2,7 +2,8 @@ import { effectiveMatchTo, matchToLabel } from "../shared/match-to";
 import type { StepPlayback } from "./playback";
 import React, { useEffect, useRef, useState } from "react";
 import { UiPopover, usePopover } from "./ui-popover";
-import { slugify, sleepDuration } from "../shared/flow-model";
+import { slugify } from "../shared/flow-model";
+import { defaultNetworkSettings, NETWORK_LABELS } from "../shared/network-mode";
 import type { State, Step, Command, StepGroup } from "../shared/contracts";
 const EditIcon = () => (
   <svg
@@ -259,8 +260,8 @@ export function StepList({
     const customName = s.name !== s.payload.action && s.name !== "WAIT / VERIFY";
     let sleepText = "";
     if (s.payload.action === "SLEEP") {
-      try { sleepText = `Chờ ${(sleepDuration(s.payload, f) / 1000).toLocaleString("vi-VN", { maximumFractionDigits: 6 })} giây`; }
-      catch { sleepText = "Chờ · thời gian chưa hợp lệ"; }
+      const network = state.networkSettings ?? defaultNetworkSettings();
+      sleepText = `Chờ ${(network.presets[network.mode].sleepDelayMs / 1000).toLocaleString("vi-VN")} giây · ${NETWORK_LABELS[network.mode]}`;
     }
     const title = customName ? s.name : sleepText || text || ({
       CLICK_TARGET: "Bấm target", CLICK_AND_TYPE: "Bấm và nhập chữ", UPLOAD_FILE: "Chọn ảnh upload",

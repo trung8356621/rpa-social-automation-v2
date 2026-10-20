@@ -1073,6 +1073,14 @@ body[data-panel="ui-overlay"] .ui-backdrop { background: rgb(6 13 23 / 14%); }
 .target-modal { display: flex; flex-direction: column; overflow: hidden; }
 .unsaved-confirm { width: min(480px, calc(100vw - 40px)); padding: 20px; overflow: auto; }
 .unsaved-confirm .popover-footer { flex-wrap: wrap; }
+.network-settings-control { display: flex; flex-direction: column; gap: 3px; }
+.network-settings-control > small { color: #a9bed6; font-size: 10px; white-space: nowrap; }
+.network-settings-modal { width: min(580px, calc(100vw - 40px)); padding: 20px; overflow: auto; }
+.network-settings-modal .popover-footer { flex-wrap: wrap; }
+.network-presets { width: 100%; margin-top: 14px; border-collapse: collapse; }
+.network-presets th, .network-presets td { padding: 6px; text-align: left; }
+.network-presets input { width: 100%; min-width: 0; }
+.network-failure-hint { padding: 10px; margin: 8px; border: 1px solid #b88c49; border-radius: 6px; color: #efc070; }
 .target-modal-heading, .target-modal-footer { display: flex; justify-content: space-between; align-items: center; gap: 20px; padding: 16px 22px; }
 .target-modal-heading { border-bottom: 1px solid #304660; }
 .target-modal-heading, .target-modal-footer { flex-shrink: 0; }

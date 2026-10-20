@@ -3,6 +3,7 @@ import { playSequential, playbackResult, type StepPlayback } from "./playback";
 import { StepList } from "./step-list";
 import { TargetModal } from "./target-modal";
 import { UiPopover } from "./ui-popover";
+import { NetworkSettings } from "./network-settings";
 import { Variables, Groups } from "./flow-controls";
 import React, { useEffect, useRef, useState } from "react";
 import { createRoot } from "react-dom/client";
@@ -24,7 +25,7 @@ import "./style.css";
 import { useDraft } from "./draft";
 import { targetEnvironment } from "../shared/visual-environment";
 import { WEB_WIDTH, EDITOR_WIDTH, WEB_HEIGHT } from "../shared/geometry";
-import { sleepDuration } from "../shared/flow-model";
+import { defaultNetworkSettings, NETWORK_LABELS } from "../shared/network-mode";
 document.documentElement.style.setProperty("--web-height", `${WEB_HEIGHT}px`);
 declare global {
   interface Window {
@@ -38,9 +39,10 @@ document.body.dataset.panel = panel || "shell";
 
 function Creator() {
   const [state, setState] = useDraft<State>("state");
+  const networkSettings = state?.networkSettings ?? defaultNetworkSettings();
+  const networkDelays = networkSettings.presets[networkSettings.mode];
   const [variableId, setVariableId] = useDraft("variableId", "");
   const [quickTagRows, setQuickTagRows] = useDraft("quickTagRows", 5);
-  const [sleepMs, setSleepMs] = useDraft("sleepMs", 2000);
   const [url, setUrl] = useState("");
   const urlEdit = useRef({ dirty: false, revision: 0 });
   const [action, setAction] = useDraft<Action>("action", "CLICK_TARGET");
@@ -183,7 +185,6 @@ function Creator() {
     setSelected(undefined);
     setVariableId("");
     setQuickTagRows(5);
-    setSleepMs(2000);
     setTarget(undefined);
     setTargetImage("");
     setOcrResult(undefined);
@@ -338,10 +339,6 @@ function Creator() {
     setInputMethod(step.payload.inputMethod ?? "keyboard");
     setDelta(step.payload.deltaY ?? -400);
     setQuickTagRows(step.payload.quickTagRows ?? 5);
-    if (step.payload.action === "SLEEP") {
-      try { setSleepMs(sleepDuration(step.payload, state?.flow ?? undefined)); }
-      catch { setSleepMs(Number.NaN); }
-    } else setSleepMs(2000);
     setTarget(step.payload.target);
     setOcrResult(undefined);
     setOcrError("");
@@ -363,7 +360,6 @@ function Creator() {
         : {}),
       ...(action === "SCROLL" ? { deltaY: delta } : {}),
       ...(action === "UPLOAD_FILE" ? { variableId } : {}),
-      ...(action === "SLEEP" ? { sleepMs } : {}),
       ...(action === "QUICK_TAG" ? { variableId, quickTagRows, target: target ? { ...target, ocr: undefined, matchTo: "none" as const } : undefined } : {}),
       ...([
         "CLICK_TARGET",
@@ -620,9 +616,7 @@ function Creator() {
     return result.message;
   }
   async function saveBase() {
-    if (action === "SLEEP") sleepDuration(payload());
-    const legacySleep = selected?.payload.action === "SLEEP" && selected.payload.sleepMs === undefined;
-    if (selected && !editorDirty && !legacySleep) return;
+    if (selected && !editorDirty) return;
     const draftPayload = payload();
     if (ocrEdit !== undefined && draftPayload.target?.ocr)
       draftPayload.target = { ...draftPayload.target, ocr: { ...draftPayload.target.ocr, text: ocrEdit.trim() } };
@@ -648,8 +642,7 @@ function Creator() {
     : selectedBase?.payload;
   function editableConfig(p: Payload) {
     if (p.action === "SLEEP") {
-      try { return JSON.stringify([p.action, sleepDuration(p, state?.flow ?? undefined)]); }
-      catch { return JSON.stringify([p.action, "invalid", p.variableId ?? ""]); }
+      return JSON.stringify([p.action]);
     }
     const target = p.target ? { ...p.target, matchTo: effectiveMatchTo(p) } : null;
     return JSON.stringify([p.action, p.variableId ?? "", p.inputMethod ?? "keyboard", p.deltaY ?? -400, p.quickTagRows ?? null, target]);
@@ -845,7 +838,6 @@ function Creator() {
                 locked ||
                 !state?.flow ||
                 (needsTarget && !target) ||
-                (action === "SLEEP" && (!Number.isFinite(sleepMs) || sleepMs < 0 || sleepMs > 60000)) ||
                 (["UPLOAD_FILE", "TYPE_ONLY", "CLICK_AND_TYPE", "QUICK_TAG"].includes(
                   action,
                 ) &&
@@ -877,6 +869,8 @@ function Creator() {
                 update={async (c) => setState(await invoke<State>(c))}
               />
             )}
+            <NetworkSettings state={state} locked={locked}
+              update={async command => setState(await invoke<State>(command))} />
           </header>
           <nav>
             <div className="workspace-scroll" aria-label="Workspace scrolling">
@@ -992,6 +986,8 @@ function Creator() {
             )}
           </nav>
           <aside aria-label="Steps">
+            {results.filter(result => result.networkHint).map(result =>
+              <p key={result.id} className="network-failure-hint" role="alert">{result.networkHint}</p>)}
             <div className="execution-summary" role="status" aria-label="Lượt chạy hiện tại">
               {execution ? <><b>Bản đã chạy: {executionLabel(execution)}</b>
                 <p>{stepPlayback[execution.stepId]?.status ?? "running"} · {stepPlayback[execution.stepId]?.message}</p>
@@ -1415,16 +1411,8 @@ function Creator() {
                     </>
                   )}
                   {action === "SLEEP" && <section aria-label="Sleep">
-                    <label>Thời gian chờ
-                      <input type="number" aria-label="Thời gian chờ" min={0} max={60000} step="any"
-                        value={Number.isFinite(sleepMs) ? sleepMs : ""} disabled={locked}
-                        onChange={e => setSleepMs(e.target.value === "" ? Number.NaN : Number(e.target.value))} />
-                      <span>ms</span>
-                    </label>
-                    <p className="hint">0–60000ms. Thời gian cố định được lưu cùng Version của Step.</p>
-                    {(!Number.isFinite(sleepMs) || sleepMs < 0 || sleepMs > 60000) && <p role="alert">Nhập thời gian chờ hợp lệ từ 0–60000ms.</p>}
-                    {selected?.payload.action === "SLEEP" && selected.payload.sleepMs === undefined &&
-                      <p className="hint">Step cũ liên kết Variable: giá trị hiện tại được lấy từ Default Pattern. Lưu lại để chuyển Version mới sang thời gian cố định; Variable và Version cũ được giữ nguyên.</p>}
+                    <p>Chờ {networkDelays.sleepDelayMs}ms · {NETWORK_LABELS[networkSettings.mode]}</p>
+                    <p className="hint">Thời gian chờ theo Network Mode trong Settings, được chốt khi bắt đầu lượt chạy. Không dùng Variable hoặc thời gian riêng trong Step.</p>
                   </section>}
                   {action === "QUICK_TAG" && <section aria-label="Quick Tag">
                     <p className="hint">Chọn theo vị trí, không xác minh danh tính người được chọn. Crop các hàng đầy đủ, cao đều nhau, bắt đầu từ hàng đầu muốn chọn. Không cuộn hoặc mở danh sách khác.</p>
@@ -1482,7 +1470,6 @@ function Creator() {
                       locked ||
                       !state?.flow ||
                       (needsTarget && !target) ||
-                      (action === "SLEEP" && (!Number.isFinite(sleepMs) || sleepMs < 0 || sleepMs > 60000)) ||
                       (["UPLOAD_FILE", "TYPE_ONLY", "CLICK_AND_TYPE", "QUICK_TAG"].includes(
                         action,
                       ) &&

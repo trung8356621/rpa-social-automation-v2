@@ -1,3 +1,4 @@
+import type { NetworkSettings, NetworkRunSettings } from "./network-mode.js";
 export type Rect = { x: number; y: number; width: number; height: number };
 export type Action =
   | "CLICK_TARGET"
@@ -37,7 +38,7 @@ export type Payload = {
   quickTagRows?: number;
   /** Runtime only: resolved from an Integer variable's Default Pattern. */
   quickTagCount?: number;
-  /** Fixed wait in milliseconds. Legacy SLEEP payloads may bind a variable instead. */
+  /** Retained for legacy versions. Runtime replaces this with the run's Network Mode Sleep Delay. */
   sleepMs?: number;
   /** Legacy input, migrated by Store. */
   text?: string;
@@ -107,6 +108,7 @@ export type ExecutionStart = {
   sleepMs?: number;
 };
 export type ExecutionDetails = ExecutionStart & {
+  network?: NetworkRunSettings;
   runId: string;
   testRunId?: string;
   batchRunId?: string;
@@ -115,6 +117,7 @@ export type ExecutionDetails = ExecutionStart & {
   stopReason: string;
 };
 export type Result = {
+  networkHint?: string;
   execution?: ExecutionDetails;
   id: string;
   ok: boolean;
@@ -183,6 +186,7 @@ export type ResolutionTrace = {
   }[];
 };
 export type State = {
+  networkSettings?: NetworkSettings;
   flow: Flow | null;
   flows: Flow[];
   steps: Step[];
@@ -195,6 +199,7 @@ export type State = {
   dataPath: string;
 };
 export type Command =
+  | { type: "setNetworkSettings"; settings: NetworkSettings }
   | { type: "confirmWindowClose" }
   | { type: "state" }
   | { type: "workspaceScroll"; left: number; top: number }

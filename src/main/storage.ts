@@ -15,6 +15,7 @@ import {
   WEB_HEIGHT,
 } from "../shared/geometry.js";
 import { validateVisualEnvironment } from "../shared/visual-environment.js";
+import { defaultNetworkSettings, validateNetworkSettings, type NetworkSettings } from "../shared/network-mode.js";
 export function validatePayload(p: Payload) {
   if (
     !p ||
@@ -30,8 +31,8 @@ export function validatePayload(p: Payload) {
     ].includes(p.action)
   )
     throw new Error("Action không hỗ trợ.");
-  if (p.action === "SLEEP" && (p.target || (p.sleepMs === undefined ? !p.variableId : typeof p.sleepMs !== "number" || !Number.isFinite(p.sleepMs) || p.sleepMs < 0 || p.sleepMs > 60000)))
-    throw new Error("SLEEP cần thời gian chờ hợp lệ từ 0–60000ms; Step cũ vẫn có thể dùng Variable.");
+  if (p.action === "SLEEP" && p.target)
+    throw new Error("SLEEP không dùng target.");
   if (p.action === "QUICK_TAG" && (!p.variableId || !Number.isInteger(p.quickTagRows) || p.quickTagRows! < 1 || p.quickTagRows! > 20 || p.target?.ocr || !p.target?.environment || ![undefined, "none"].includes(p.target.matchTo)))
     throw new Error("QUICK_TAG cần Variable Integer, ROI mới không OCR/scroll và số hàng 1–20.");
   if (p.action === "UPLOAD_FILE" && !p.variableId)
@@ -263,6 +264,17 @@ export class Store {
       this.db.prepare("SELECT value FROM settings WHERE key=?").get(key) as
         { value: string } | undefined
     )?.value;
+  }
+  networkSettings(): NetworkSettings {
+    const saved = this.setting("networkMode");
+    if (!saved) return defaultNetworkSettings();
+    const settings = JSON.parse(saved) as NetworkSettings;
+    validateNetworkSettings(settings);
+    return settings;
+  }
+  setNetworkSettings(settings: NetworkSettings) {
+    validateNetworkSettings(settings);
+    this.setSetting("networkMode", JSON.stringify(settings));
   }
   setSetting(key: string, value: string) {
     this.db

@@ -15,14 +15,16 @@ import { effectiveMatchTo, matchToLabel } from "../shared/match-to.js";
 import { WEB_HEIGHT } from "../shared/geometry.js";
 import { quickTag, QuickTagBlocked } from "./quick-tag.js";
 import { assertVisualEnvironment } from "../shared/visual-environment.js";
-type TestLogScope = { runId: string; batchRunId?: string; ocrPasses: number; scrolls: number };
+import { snapshotNetworkSettings, type NetworkRunSettings } from "../shared/network-mode.js";
+type TestLogScope = { runId: string; batchRunId?: string; ocrPasses: number; scrolls: number; network: NetworkRunSettings };
 export class Runtime {
   busy = false;
   private latestRuns = new Set<string>();
   private batch?: TestLogScope & { status: string };
   startPlayAllLog() {
     if (this.busy || this.batch) throw new Error("Đang có lượt chạy.");
-    this.batch = { runId: randomUUID(), ocrPasses: 0, scrolls: 0, status: "COMPLETED" };
+    this.batch = { runId: randomUUID(), ocrPasses: 0, scrolls: 0, status: "COMPLETED",
+      network: snapshotNetworkSettings(this.store.networkSettings()) };
     logTestBoundary(this.runDir, "START", { ...this.batch, label: "Play All" });
     return this.batch.runId;
   }
@@ -32,6 +34,10 @@ export class Runtime {
     const batch = this.batch;
     this.batch = undefined;
     logTestBoundary(this.runDir, "END", { ...batch, label: "Play All", status: failed ? "FAILED" : batch.status });
+  }
+  playAllNetwork(runId: string): NetworkRunSettings {
+    if (!this.batch || this.batch.runId !== runId) throw new Error("Play All log runId không khớp.");
+    return this.batch.network;
   }
   constructor(
     readonly browser: BrowserCore,
@@ -95,7 +101,8 @@ export class Runtime {
     delayMs = 0,
     batchRunId?: string,
   ): Promise<Result[]> {
-    const scope: TestLogScope = { runId: randomUUID(), batchRunId, ocrPasses: 0, scrolls: 0 };
+    const network = batchRunId ? this.playAllNetwork(batchRunId) : snapshotNetworkSettings(this.store.networkSettings());
+    const scope: TestLogScope = { runId: randomUUID(), batchRunId, ocrPasses: 0, scrolls: 0, network };
     const label = requests.map(request => {
       let matchTo = "unknown";
       try {
@@ -160,7 +167,9 @@ export class Runtime {
         version,
         overrideId,
         payloads: (override?.segment || [step.payload]).map((p) => {
-          const resolved = resolvePayload(p, flow);
+          const resolved: Payload = p.action === "SLEEP"
+            ? { action: "SLEEP", sleepMs: scope.network.sleepDelayMs }
+            : resolvePayload(p, flow);
           validatePayload(resolved);
           return resolved;
         }),
@@ -288,7 +297,7 @@ export class Runtime {
     // Screenshot capture can disturb native focus on this Electron/Windows build.
     // Focus-sensitive input runs first without a pre-capture or any refocus.
     const execution: ExecutionDetails = { ...this.executionStart(payload, stepId, version, overrideId),
-      runId: randomUUID(), testRunId: scope.runId, batchRunId: scope.batchRunId, ocrPasses: 0, scrolls: 0, stopReason: "STARTED" };
+      runId: randomUUID(), testRunId: scope.runId, batchRunId: scope.batchRunId, ocrPasses: 0, scrolls: 0, stopReason: "STARTED", network: scope.network };
     this.onExecution?.(execution);
     logMainEvent(this.runDir, "execution-start", { ...execution, action: payload.action });
     let before: Result["before"];
@@ -299,6 +308,8 @@ export class Runtime {
       input: Result["input"];
     let resolution: Result["resolution"];
     let clickSent = false;
+    let networkHint: string | undefined;
+    const pageWasLoading = this.browser.view.webContents.isLoading();
     let upload: Result["upload"] =
       payload.action === "UPLOAD_FILE"
         ? {
@@ -537,10 +548,21 @@ export class Runtime {
         message = `Đã click target một lần; nhập liệu chưa hoàn tất và có thể đã nhập một phần. ${message}`;
       if (payload.action === "QUICK_TAG" && clickSent)
         message = `QUICK_TAG đã gửi click, có thể đã chọn một phần. Kiểm tra thủ công trước khi Play lại. ${message}`;
+      // Offer timing advice only with evidence of loading and an image-only miss.
+      // OCR/data/viewport/focus errors and ambiguous targets need a different fix.
+      if (e instanceof TargetNotConfident && !(e instanceof OcrNotFound) && !e.ambiguous &&
+          !payload.target?.ocr && !clickSent && !ocrFailure &&
+          (pageWasLoading || this.browser.view.webContents.isLoading()) &&
+          e.resolution?.attempts.some(attempt => attempt.method === "image" && attempt.outcome === "not_confident")) {
+        networkHint = scope.network.mode === "very-slow"
+          ? "Trang có thể chưa tải xong. Hãy thử chỉnh giá trị delay trong Settings rồi chạy lại."
+          : "Trang có thể chưa tải xong. Hãy thử chuyển Network Mode sang mức chậm hơn rồi chạy lại.";
+        message += ` ${networkHint}`;
+      }
     }
     scope.ocrPasses += execution.ocrPasses;
     scope.scrolls += execution.scrolls;
-    logMainEvent(this.runDir, "execution-stop", { ...execution, status, clickSent, resolution });
+    logMainEvent(this.runDir, "execution-stop", { ...execution, status, clickSent, resolution, networkHint });
     message = `v${version} · ${overrideId ? "Override" : "Base"} · Match To ${matchToLabel(execution.matchTo)} · ${execution.pipeline}: ${message}`;
     if (upload?.cleanupWarning) message += ` ${upload.cleanupWarning}`;
     await new Promise((r) => setTimeout(r, 120));
@@ -569,6 +591,7 @@ export class Runtime {
       status,
       action: payload.action,
       message,
+      networkHint,
       before,
       after,
       match,

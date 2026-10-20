@@ -313,6 +313,7 @@ async function boot() {
   let armedTest:
     { stepId: string; version: number; overrideId?: string } | undefined;
   const state = (): State => ({
+    networkSettings: store.networkSettings(),
     flow: store.flow(),
     flows: store.flows(),
     steps: store.steps(),
@@ -346,6 +347,9 @@ async function boot() {
       sender: event.sender.id,
     });
     switch (command.type) {
+      case "setNetworkSettings":
+        store.setNetworkSettings(command.settings);
+        return state();
       case "pointerReport":
         return pointerTrace.report();
       case "confirmWindowClose":
@@ -574,11 +578,12 @@ async function boot() {
         const next = store.step(command.nextStepId, command.nextVersion);
         if (![previous, next].every(step => store.flow()?.steps.some(ref => ref.id === step.id)))
           throw new Error("Step không thuộc flow.");
-        const delayMs = 1000;
+        const network = runtime.playAllNetwork(command.batchRunId);
+        const delayMs = network.stepDelayMs;
         const startedAt = Date.now();
         const context = { batchRunId: command.batchRunId,
           previousStepId: previous.id, previousVersion: previous.version,
-          nextStepId: next.id, nextVersion: next.version, delayMs };
+          nextStepId: next.id, nextVersion: next.version, delayMs, network };
         logMainEvent(runDir, "play-all-transition-start", context);
         await new Promise(resolve => setTimeout(resolve, delayMs));
         logMainEvent(runDir, "play-all-transition-end", { ...context, elapsedMs: Date.now() - startedAt });
