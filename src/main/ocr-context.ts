@@ -1,20 +1,28 @@
 import sharp from "sharp";
-import type { OcrResult, Payload, Result, ResolutionTrace } from "../shared/contracts.js";
+import type { OcrResult, Payload, Rect, Result, ResolutionTrace } from "../shared/contracts.js";
 import type { OcrEngine } from "./ocr.js";
-
 import { findOcrCandidates, normalizeOcrText as normalize } from "./ocr-candidates.js";
 
 const savedOcr = new WeakMap<Buffer, Promise<OcrResult>>();
 const generic = new Set(["thích", "bình luận", "chia sẻ", "like", "comment", "share", "viết bình luận", "xem thêm", "see more"]);
 
-/** Safety gate only: never replaces OCR click coordinates or searches via the DOM. */
+/** Text-only safety gate. Saved geometry is a loose neighborhood hint, never a crop or click coordinate. */
 export async function confirmOcrContext(frame: Buffer, template: Buffer, payload: Payload,
-  ocr: OcrEngine, found: NonNullable<Result["match"]>, viewportOcr: OcrResult,
+  ocr: OcrEngine, found: NonNullable<Result["match"]>, viewportOcr: OcrResult, currentBox?: Rect,
 ): Promise<NonNullable<ResolutionTrace["context"]>[number]> {
-  const target = payload.target!, selected = target.ocr!;
+  const selected = payload.target!.ocr!;
   const context: NonNullable<ResolutionTrace["context"]>[number] = {
     x: found.x, y: found.y, confirmed: false, reason: "CONTEXT_INSUFFICIENT",
   };
+  const box = currentBox ?? findOcrCandidates(viewportOcr, selected).find(candidate =>
+    Math.abs(candidate.bbox.x+candidate.bbox.width/2-found.x) <= 1 &&
+    Math.abs(candidate.bbox.y+candidate.bbox.height/2-found.y) <= 1)?.bbox;
+  const size = await sharp(frame).metadata();
+  if (!box || !Object.values(box).every(Number.isFinite) || box.width <= 0 || box.height <= 0 ||
+      box.x < 0 || box.y < 0 || box.x+box.width > size.width! || box.y+box.height > size.height!) {
+    context.reason = "CONTEXT_INVALID_TARGET_BBOX: bbox OCR hiện tại không hợp lệ.";
+    return context;
+  }
   let pending = savedOcr.get(template);
   if (!pending) {
     pending = ocr.recognize(template);
@@ -23,48 +31,72 @@ export async function confirmOcrContext(frame: Buffer, template: Buffer, payload
   }
   const saved = await pending;
   const selectedText = normalize(selected.text);
-  // Require independent saved text, not another copy/word of the clicked label.
-  const anchors = saved.segments.filter(segment => {
+  const rawAnchors = saved.segments.filter(segment => {
     const text = normalize(segment.text), b = segment.bbox, a = selected.bbox;
     const outside = b.x+b.width <= a.x || b.x >= a.x+a.width || b.y+b.height <= a.y || b.y >= a.y+a.height;
-    return outside && segment.kind === "line" && segment.confidence >= 80 && text.length >= 10 && /\p{L}/u.test(text) &&
+    return outside && Object.values(b).every(Number.isFinite) && b.width > 0 && b.height > 0 &&
+      segment.confidence >= 80 && text.length >= (segment.kind === "line" ? 6 : 4) && /\p{L}/u.test(text) &&
       !generic.has(text) && !selectedText.includes(text) && !text.includes(selectedText);
   });
+  // Prefer a complete saved line over its constituent words before judging ambiguity.
+  const anchors = rawAnchors.filter(anchor => !rawAnchors.some(other => {
+    if (anchor === other || other.kind !== "line" || anchor.kind !== "word") return false;
+    const a = anchor.bbox, b = other.bbox;
+    return a.x >= b.x && a.y >= b.y && a.x+a.width <= b.x+b.width && a.y+a.height <= b.y+b.height &&
+      normalize(other.text).includes(normalize(anchor.text));
+  }));
   if (!anchors.length) {
-    context.reason = "CONTEXT_INSUFFICIENT: ROI thiếu chữ ngữ cảnh độc lập; cần crop rộng hơn (tác giả/tiêu đề).";
+    context.reason = "CONTEXT_INSUFFICIENT: ảnh lưu không có chữ ngữ cảnh độc lập đáng tin cậy.";
     return context;
   }
-  const left = Math.round(found.x - selected.bbox.x - selected.bbox.width/2);
-  const top = Math.round(found.y - selected.bbox.y - selected.bbox.height/2);
-  const size = await sharp(frame).metadata();
-  if (left < 0 || top < 0 || left+target.roi.width > size.width! || top+target.roi.height > size.height!) {
-    context.reason = "CONTEXT_CLIPPED: ngữ cảnh ROI chưa hiển thị đầy đủ.";
+  const scale = Math.max(0.5, Math.min(2, box.height/selected.bbox.height));
+  const matched: typeof anchors = [];
+  let visible = 0, ambiguous = false;
+  for (const anchor of anchors) {
+    const a = anchor.bbox, original = selected.bbox;
+    const dx = (a.x+a.width/2-original.x-original.width/2)*scale;
+    const dy = (a.y+a.height/2-original.y-original.height/2)*scale;
+    const expectedX = found.x+dx, expectedY = found.y+dy;
+    // Off-screen saved anchors are optional. Never require the old ROI to fit.
+    const expectedVisible = expectedX+a.width*scale/2 > 0 && expectedX-a.width*scale/2 < size.width! &&
+      expectedY+a.height*scale/2 > 0 && expectedY-a.height*scale/2 < size.height!;
+    if (expectedVisible) visible++;
+    // Still look for a visible anchor shifted by reflow even when its old projection is off-screen.
+    const toleranceX = Math.min(160,Math.max(64,box.width*0.5,Math.abs(dx)*0.75));
+    const toleranceY = Math.min(160,Math.max(48,box.height*2,Math.abs(dy)*0.75));
+    const candidates = findOcrCandidates(viewportOcr, anchor).filter(candidate => {
+      const b = candidate.bbox;
+      if (candidate.confidence < 80 || b.x < 0 || b.y < 0 || b.x+b.width > size.width! || b.y+b.height > size.height!) return false;
+      // Keep the same side of the target and a bounded local neighborhood despite reflow.
+      const slack = Math.max(6,Math.min(16,box.height/2));
+      if (a.y+a.height <= original.y && b.y+b.height > box.y+slack) return false;
+      if (a.y >= original.y+original.height && b.y < box.y+box.height-slack) return false;
+      if (a.x+a.width <= original.x && b.x+b.width > box.x+slack) return false;
+      if (a.x >= original.x+original.width && b.x < box.x+box.width-slack) return false;
+      return Math.abs(b.x+b.width/2-expectedX) <= toleranceX && Math.abs(b.y+b.height/2-expectedY) <= toleranceY;
+    });
+    if (candidates.length > 1) { ambiguous = true; continue; }
+    if (candidates.length === 1) matched.push(anchor);
+  }
+  // Line/word alternatives from the same saved label are one piece of evidence.
+  const evidence = matched.filter((anchor,index) => !matched.some((other,otherIndex) => {
+    if (index === otherIndex) return false;
+    const a = anchor.bbox, b = other.bbox;
+    const contained = a.x >= b.x && a.y >= b.y && a.x+a.width <= b.x+b.width && a.y+a.height <= b.y+b.height;
+    return contained && (normalize(other.text).length > normalize(anchor.text).length || otherIndex < index);
+  }));
+  context.anchor = evidence.map(anchor => anchor.text).join(" | ");
+  if (ambiguous) {
+    context.reason = "CONTEXT_AMBIGUOUS: nhiều anchor cùng chữ trong vùng lân cận mục tiêu.";
     return context;
   }
-  const anchorsConfirmed = anchors.every(anchor => findOcrCandidates(viewportOcr, anchor).filter(segment =>
-    segment.confidence >= 80 &&
-    Math.abs(segment.bbox.x+segment.bbox.width/2-(left+anchor.bbox.x+anchor.bbox.width/2)) <= 12 &&
-    Math.abs(segment.bbox.y+segment.bbox.height/2-(top+anchor.bbox.y+anchor.bbox.height/2)) <= 12).length === 1);
-  if (!anchorsConfirmed) { context.reason = "CONTEXT_ANCHOR_MISMATCH: chữ trùng nhưng ngữ cảnh không khớp vị trí."; return context; }
-  context.anchor = anchors.map(anchor => anchor.text).join(" | ");
-  const reference = await sharp(template).removeAlpha().raw().toBuffer({ resolveWithObject: true });
-  const candidate = await sharp(frame).extract({ left, top, width: target.roi.width, height: target.roi.height })
-    .removeAlpha().raw().toBuffer({ resolveWithObject: true });
-  if (reference.info.width !== target.roi.width || reference.info.height !== target.roi.height ||
-      reference.info.channels !== candidate.info.channels) throw new Error("CONTEXT_IMAGE_SIZE: ảnh target không khớp ROI.");
-  let difference = 0, count = 0, min = 255, max = 0;
-  const box = selected.bbox, channels = reference.info.channels;
-  for (let y=0; y<target.roi.height; y++) for (let x=0; x<target.roi.width; x++) {
-    if (x >= box.x-3 && x < box.x+box.width+3 && y >= box.y-3 && y < box.y+box.height+3) continue;
-    for (let ch=0; ch<channels; ch++) {
-      const i = (y*target.roi.width+x)*channels+ch, value = reference.data[i];
-      difference += Math.abs(value-candidate.data[i]); count++;
-      min = Math.min(min,value); max = Math.max(max,value);
-    }
-  }
-  context.imageScore = count ? 1-difference/(count*255) : 0;
-  context.confirmed = count >= 192 && max-min >= 25 && context.imageScore >= Math.max(0.96,payload.threshold ?? 0.96);
-  context.reason = context.confirmed ? "CONTEXT_CONFIRMED: anchor độc lập + ảnh ngoài chữ khớp."
-    : "CONTEXT_IMAGE_MISMATCH: ảnh quanh chữ không đủ tin cậy.";
+  const strong = evidence.some(anchor => {
+    const text = normalize(anchor.text);
+    return text.length >= 10 || (text.length >= 8 && text.split(" ").length >= 2);
+  });
+  context.confirmed = strong || evidence.length >= 2;
+  context.reason = context.confirmed
+    ? `CONTEXT_CONFIRMED: bbox OCR hiện tại + ${evidence.length} anchor chữ lân cận; không kiểm tra pixel/ROI đầy đủ.`
+    : `CONTEXT_NOT_CONFIRMED: chưa đủ anchor chữ nhìn thấy (${matched.length}/${visible}); có thể ở mép viewport.`;
   return context;
 }
