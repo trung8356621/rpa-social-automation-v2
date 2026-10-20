@@ -1,3 +1,15 @@
+> Match To None (chưa test theo yêu cầu):
+> - UI mặc định None; `current` cũ và cấu hình thiếu Match To được diễn giải là None bằng helper dùng chung.
+>   Không mutate payload lưu trữ, thêm migration hoặc ghi đè DB hàng loạt; đổi nhãn không tự Save/tạo version.
+> - None: AUTO Image Matching → OCR fallback trong viewport, không gọi OCR scroll scan.
+>   Top/Middle/Bottom: chỉ OCR đã xác nhận mới dùng OCR viewport và scan hiện có.
+> - Không có OCR: hiển thị None, disable selectbox; validation vẫn từ chối cấu hình scan thiếu OCR.
+> - Editor dirty comparison chuẩn hóa None/current tương đương. Chỉ Save/Redesign chủ động mới lưu cấu hình None mới.
+> - Giữ guard viewport: target 672×560 so với Browser 1024×560 bị chặn trước input;
+>   thông báo yêu cầu crop tại viewport hiện tại rồi lưu redesign, không scale hoặc click đoán.
+> - Không thay đổi tọa độ click, Click Marker, context verification hoặc Block/Skip.
+> - Không chạy test/build/typecheck/Electron. Các ghi chú dưới đây là lịch sử.
+
 > Audit regression v12 — dựa trên log có sẵn, không chạy app/test:
 > - Hai lượt thành công testRunId 9b25ed78…/e2f960b8… (07:18–07:19 ngày 20/10, Bangkok)
 >   đều ACTION_SENT ở OCR 2, confidence 93%, context có 2 anchor. Source tương ứng e1e85ee.

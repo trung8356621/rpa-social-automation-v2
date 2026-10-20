@@ -64,8 +64,8 @@ export function validatePayload(p: Payload) {
   if (p.method !== undefined && !["auto", "image", "ocr"].includes(p.method))
     throw new Error("Phương thức target không hợp lệ.");
   if (p.target?.matchTo !== undefined &&
-      (!["current", "top", "middle", "bottom"].includes(p.target.matchTo) ||
-       (p.target.matchTo !== "current" && !p.target.ocr?.confirmed)))
+      (!["none", "current", "top", "middle", "bottom"].includes(p.target.matchTo) ||
+       (!["none", "current"].includes(p.target.matchTo) && !p.target.ocr?.confirmed)))
     throw new Error("Match To cần OCR đã xác nhận.");
   if (p.target?.ocr) {
     const o = p.target.ocr,

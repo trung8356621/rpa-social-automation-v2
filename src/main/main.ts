@@ -32,6 +32,7 @@ import {
   validateRect,
   validateZoom,
 } from "../shared/geometry.js";
+import { effectiveMatchTo, matchToLabel } from "../shared/match-to.js";
 import { DRAFT_KEYS } from "../shared/contracts.js";
 import type { Command, State } from "../shared/contracts.js";
 
@@ -541,8 +542,8 @@ async function boot() {
         if (!store.flow()?.steps.some(ref => ref.id === step.id) || !uiPlayAllRunId || command.batchRunId !== uiPlayAllRunId)
           throw new Error("Step bị skip không thuộc flow/lượt Play All.");
         const runId = randomUUID();
-        const matchTo = step.payload.target?.ocr?.confirmed ? step.payload.target.matchTo ?? "current" : "current";
-        const label = `Step ${step.id} | v${step.version} | Match To ${matchTo}`;
+        const matchTo = effectiveMatchTo(step.payload);
+        const label = `Step ${step.id} | v${step.version} | Match To ${matchToLabel(matchTo)}`;
         logTestBoundary(runDir, "START", { runId, batchRunId: command.batchRunId, label });
         logMainEvent(runDir, "play-all-step-skipped", { runId, batchRunId: command.batchRunId,
           stepId: step.id, version: step.version, status: "SKIPPED", reason: "UI_MEMORY_BLOCK", matchTo });

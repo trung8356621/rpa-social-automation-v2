@@ -1,3 +1,4 @@
+import { effectiveMatchTo, matchToLabel } from "../shared/match-to";
 import { playSequential, playbackResult, type StepPlayback } from "./playback";
 import { StepList } from "./step-list";
 import { Variables, Groups } from "./flow-controls";
@@ -106,7 +107,7 @@ function Creator() {
   const flowInput = useRef<HTMLInputElement>(null);
   const resultPanel = useRef<HTMLDivElement>(null);
   function executionLabel(run: ExecutionStart) {
-    return `${run.stepId.slice(0, 8)} · v${run.version} · ${run.overrideId ? "Override" : "Base"} · Match To ${run.matchTo} · ${run.pipeline}`;
+    return `${run.stepId.slice(0, 8)} · v${run.version} · ${run.overrideId ? "Override" : "Base"} · Match To ${matchToLabel(run.matchTo)} · ${run.pipeline}`;
   }
   function executionFailed(message: string) {
     const run = executionRef.current;
@@ -341,7 +342,7 @@ function Creator() {
         "UPLOAD_FILE",
         "WAIT_VERIFY",
       ].includes(action)
-        ? { target, method: "auto", threshold: 0.96, timeoutMs: 3000 }
+        ? { target: target ? { ...target, matchTo: effectiveMatchTo({ target }) } : target, method: "auto", threshold: 0.96, timeoutMs: 3000 }
         : {}),
     };
   }
@@ -582,14 +583,14 @@ function Creator() {
     ? state?.overrides.find((o) => o.id === overrideId)?.segment[0]
     : selectedBase?.payload;
   function editableConfig(p: Payload) {
-    const target = p.target ? { ...p.target, matchTo: p.target.ocr?.confirmed ? p.target.matchTo ?? "current" : undefined } : null;
+    const target = p.target ? { ...p.target, matchTo: effectiveMatchTo(p) } : null;
     return JSON.stringify([p.action, p.variableId ?? "", p.inputMethod ?? "keyboard", p.deltaY ?? -400, target]);
   }
   const editorDirty = !selected || (ocrEdit !== undefined && ocrEdit.trim() !== target?.ocr?.text) || name !== selectedBase?.name || editableConfig(payload()) !== editableConfig(selectedBase!.payload);
   const expected = activePayload
     ? targetEnvironment(activePayload, state?.flow?.zoom ?? 1)
     : undefined;
-  const viewportOcr = activePayload?.target?.ocr?.confirmed && activePayload.target.matchTo && activePayload.target.matchTo !== "current";
+  const viewportOcr = effectiveMatchTo(activePayload) !== "none";
   const environmentMismatch =
     expected &&
     state &&
@@ -860,7 +861,7 @@ function Creator() {
                 <p>{stepPlayback[execution.stepId]?.status ?? "running"} · {stepPlayback[execution.stepId]?.message}</p>
               </> : <small>Play dùng version Base đã ghim trong danh sách; không dùng bản nháp Editor.</small>}
               {results.map(result => <p key={result.id}>
-                v{result.version} · {result.status} · {result.execution?.matchTo ?? "current"}
+                v{result.version} · {result.status} · {matchToLabel(result.execution?.matchTo)}
                 {result.execution && <> · OCR {result.execution.ocrPasses} / scroll {result.execution.scrolls} · {result.execution.stopReason}</>}
               </p>)}
             </div>
@@ -1013,7 +1014,7 @@ function Creator() {
                   ×{state!.browserBounds.height}. Test sẽ bị chặn khi khác môi
                   trường.
                   <p>
-                    Crop lại target ở viewport chuẩn và lưu version mới. Target
+                    Crop lại target ở viewport hiện tại rồi lưu redesign. Target
                     cũ được giữ nguyên.
                   </p>
                 </div>
@@ -1033,8 +1034,8 @@ function Creator() {
                   <p>{stepPlayback[execution.stepId]?.status} · {stepPlayback[execution.stepId]?.message}</p></>}
                 Editor: {selected ? `${selected.name} · Base v${selected.version}` : "Step mới"}
                 <br />{editorDirty ? "Có thay đổi chưa lưu — Play không dùng bản nháp này." : "Đã lưu."}
-                <br />Match To Editor: {target?.ocr?.confirmed ? target.matchTo ?? "current" : "không có OCR"}
-                {selected && <><br />Ctrl+Shift+T: v{selected.version} · {overrideId ? "Override" : "Base"} · Match To {activePayload?.target?.ocr?.confirmed ? activePayload.target.matchTo ?? "current" : "current"}</>}
+                <br />Match To Editor: {matchToLabel(effectiveMatchTo({ target }))}
+                {selected && <><br />Ctrl+Shift+T: v{selected.version} · {overrideId ? "Override" : "Base"} · Match To {matchToLabel(effectiveMatchTo(activePayload))}</>}
               </div>}
               {shell ? (
                 <>
@@ -1319,12 +1320,12 @@ function Creator() {
                           Chưa có chữ dự phòng được xác nhận; AUTO vẫn dùng ảnh.
                         </p>
                       )}
-                      {target.ocr?.confirmed && field("Match To",
-                        <select aria-label="Match To" disabled={locked}
-                          title="Current: chỉ viewport hiện tại. Top/Middle/Bottom: về đầu rồi quét xuống 1/3, 2/3 hoặc toàn vùng. OCR cần khớp ngữ cảnh ROI."
-                          value={target.matchTo ?? "current"}
+                      {field("Match To",
+                        <select aria-label="Match To" disabled={locked || !target.ocr?.confirmed}
+                          title="None: không cuộn, AUTO Image Matching rồi OCR fallback trên viewport hiện tại. Top/Middle/Bottom: về đầu rồi quét xuống 1/3, 2/3 hoặc toàn vùng. OCR cần khớp ngữ cảnh ROI."
+                          value={effectiveMatchTo({ target })}
                           onChange={(e) => setTarget({ ...target, matchTo: e.target.value as NonNullable<NonNullable<Payload["target"]>["matchTo"]> })}>
-                          <option value="current">Current</option>
+                          <option value="none">None</option>
                           <option value="top">Top</option>
                           <option value="middle">Middle</option>
                           <option value="bottom">Bottom</option>

@@ -46,6 +46,6 @@ export function assertVisualEnvironment(
     expected.zoom !== current.zoom
   )
     throw new Error(
-      `Viewport không khớp target: cần ${expected.width}×${expected.height} @${expected.zoom * 100}%, hiện tại ${current.width}×${current.height} @${current.zoom * 100}%. Crop lại target ở viewport chuẩn và lưu version mới; dữ liệu target cũ được giữ nguyên. Chưa gửi input.`,
+      `Viewport không khớp target: cần ${expected.width}×${expected.height} @${expected.zoom * 100}%, hiện tại ${current.width}×${current.height} @${current.zoom * 100}%. Cần crop lại target ở viewport hiện tại ${current.width}×${current.height} rồi lưu redesign. Target/version cũ được giữ nguyên; không tự scale hoặc click đoán. Chưa gửi input.`,
     );
 }

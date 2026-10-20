@@ -11,6 +11,7 @@ import { localOcr, type OcrEngine } from "./ocr.js";
 import { advanceOcrSearch, clearOcrSearch } from "./ocr-match-scroll.js";
 import { normalizeTargetText, resolveVisualTarget, TargetNotConfident, OcrNotFound, OcrTechnicalError } from "./target-resolver.js";
 import { inspectUploadFiles, UploadError } from "./upload-files.js";
+import { effectiveMatchTo, matchToLabel } from "../shared/match-to.js";
 import { WEB_HEIGHT } from "../shared/geometry.js";
 import { assertVisualEnvironment } from "../shared/visual-environment.js";
 type TestLogScope = { runId: string; batchRunId?: string; ocrPasses: number; scrolls: number };
@@ -41,9 +42,9 @@ export class Runtime {
     readonly onExecution?: (execution: ExecutionStart) => void,
   ) {}
   private executionStart(payload: Payload, stepId: string, version: number, overrideId?: string): ExecutionStart {
-    const matchTo = payload.target?.ocr?.confirmed ? payload.target.matchTo ?? "current" : "current";
+    const matchTo = effectiveMatchTo(payload);
     return { stepId, version, overrideId, matchTo,
-      pipeline: matchTo === "current" ? "auto-roi" : "ocr-viewport" };
+      pipeline: matchTo === "none" ? "auto-roi" : "ocr-viewport" };
   }
   async test(
     stepId: string,
@@ -99,9 +100,9 @@ export class Runtime {
         const payload = request.overrideId
           ? this.store.overrides().find(o => o.id === request.overrideId)?.segment[0]
           : this.store.step(request.stepId,request.version).payload;
-        matchTo = payload?.target?.ocr?.confirmed ? payload.target.matchTo ?? "current" : "current";
+        matchTo = effectiveMatchTo(payload);
       } catch { /* Invalid versions still receive a paired boundary and validation error. */ }
-      return `Step ${request.stepId} | v${request.version} | Match To ${matchTo}`;
+      return `Step ${request.stepId} | v${request.version} | Match To ${matchToLabel(matchTo)}`;
     }).join(" → ");
     let status = "FAILED";
     logTestBoundary(this.runDir, "START", { ...scope, label });
@@ -171,7 +172,7 @@ export class Runtime {
     for (const plan of plans)
       for (const payload of plan.payloads) {
         try {
-          const viewportOcr = payload.target?.ocr?.confirmed && payload.target.matchTo && payload.target.matchTo !== "current";
+          const viewportOcr = effectiveMatchTo(payload) !== "none";
           assertVisualEnvironment(payload, flow.zoom, { ...this.browser.bounds,
             height: viewportOcr ? payload.target?.environment?.height ?? WEB_HEIGHT : this.browser.bounds.height,
             zoom: this.browser.zoom });
@@ -322,8 +323,9 @@ export class Runtime {
         const template = await readFile(
           path.join(this.assetDir, payload.target!.asset),
         );
-        const matchTo = payload.target?.ocr?.confirmed && payload.target.matchTo !== "current"
-          ? payload.target.matchTo : undefined;
+        const mode = effectiveMatchTo(payload);
+        // None uses AUTO in-place; only explicit OCR scan modes may scroll.
+        const matchTo = mode === "none" ? undefined : mode;
         const deadline = Date.now() + (matchTo ? 120000
           : payload.action === "WAIT_VERIFY" ? (payload.timeoutMs ?? 3000) : 0);
         let scrolls = 0;
@@ -516,7 +518,7 @@ export class Runtime {
     scope.ocrPasses += execution.ocrPasses;
     scope.scrolls += execution.scrolls;
     logMainEvent(this.runDir, "execution-stop", { ...execution, status, clickSent, resolution });
-    message = `v${version} · ${overrideId ? "Override" : "Base"} · Match To ${execution.matchTo} · ${execution.pipeline}: ${message}`;
+    message = `v${version} · ${overrideId ? "Override" : "Base"} · Match To ${matchToLabel(execution.matchTo)} · ${execution.pipeline}: ${message}`;
     if (upload?.cleanupWarning) message += ` ${upload.cleanupWarning}`;
     await new Promise((r) => setTimeout(r, 120));
     // Keep the live page/focus after input. Evidence capture is an explicit user action.

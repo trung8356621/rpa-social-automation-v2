@@ -7,6 +7,7 @@ import type {
   ResolutionTrace,
 } from "../shared/contracts.js";
 import type { OcrEngine } from "./ocr.js";
+import { effectiveMatchTo } from "../shared/match-to.js";
 import { findOcrCandidates, normalizeOcrText } from "./ocr-candidates.js";
 import { confirmOcrContext } from "./ocr-context.js";
 import { matchTemplate } from "./visual.js";
@@ -85,7 +86,7 @@ export async function resolveVisualTarget(
 ): Promise<NonNullable<Result["match"]> & { resolution: ResolutionTrace }> {
   const target = payload.target!;
   // Match To explicitly searches the visible OCR region after bounded scrolling.
-  if (target.ocr?.confirmed && target.matchTo && target.matchTo !== "current") {
+  if (target.ocr?.confirmed && effectiveMatchTo(payload) !== "none") {
     const size = await sharp(frame).metadata();
     let result: OcrResult;
     const offset = { x: 0, y: 0, width: size.width!, height: size.height! };

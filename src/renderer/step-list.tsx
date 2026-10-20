@@ -1,3 +1,4 @@
+import { effectiveMatchTo, matchToLabel } from "../shared/match-to";
 import type { StepPlayback } from "./playback";
 import React, { useEffect, useRef, useState } from "react";
 import { UiPopover, usePopover } from "./ui-popover";
@@ -155,7 +156,7 @@ export function StepList({
         >
           <span className="step-label">
             <b>{blockedSteps.has(s.id) && <span className="step-block-flag" title="Blocked for Play All">⊘ </span>}{s.name}</b>
-            <small>v{s.version} · Base · {s.payload.target?.ocr?.confirmed ? s.payload.target.matchTo ?? "current" : "image"}{blockedSteps.has(s.id) && <span className="step-block-flag"> · BLOCKED (All)</span>}</small>
+            <small>v{s.version} · Base · {matchToLabel(effectiveMatchTo(s.payload))}{blockedSteps.has(s.id) && <span className="step-block-flag"> · BLOCKED (All)</span>}</small>
             {playback[s.id] && (
               <small
                 className={`step-status ${playback[s.id].status}`}
@@ -173,7 +174,7 @@ export function StepList({
         <button
           className="icon-button step-play"
           aria-label={`Play ${s.name}`}
-          title={`Play Base v${s.version} · Match To ${s.payload.target?.ocr?.confirmed ? s.payload.target.matchTo ?? "current" : "current"}`}
+          title={`Play Base v${s.version} · Match To ${matchToLabel(effectiveMatchTo(s.payload))}`}
           disabled={locked}
           onClick={() => play(s)}
         >
