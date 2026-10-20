@@ -1,6 +1,19 @@
 import type { NetworkSettings, NetworkRunSettings } from "./network-mode.js";
 export type Rect = { x: number; y: number; width: number; height: number };
-export type AppPage = "scenarios" | "creator" | "browser-sessions" | "test-lab" | "settings";
+export type MainPage = "scenarios" | "browser-sessions" | "test-lab" | "settings";
+export type AppPage = MainPage | "creator" | "test-case";
+export type VariableValues = Record<string, string | string[] | number>;
+export type CaseResult = {
+  status: "PASS" | "ACTION_SENT" | "BLOCKED" | "FAILED";
+  startedAt: string; finishedAt: string; message: string;
+  stepId?: string; stepName?: string; version?: number;
+};
+export type TestCaseConfig = { name: string; flowId: string; sessionId: string; startUrl: string; values: VariableValues };
+export type TestCase = TestCaseConfig & { id: string; groupId?: string; lastResult?: CaseResult };
+export type TestLabState = {
+  groups: { id: string; name: string; collapsed: boolean }[];
+  cases: TestCase[]; ungroupedCollapsed: boolean;
+};
 export type ScenarioOrganization = {
   groups: { id: string; name: string; collapsed: boolean }[];
   membership: Record<string, string>;
@@ -8,7 +21,8 @@ export type ScenarioOrganization = {
 };
 export type WorkspaceTab = {
   id: string;
-  kind: "creator";
+  kind: "creator" | "test-case";
+  caseId?: string;
   flowId: string;
   sessionId?: string;
   url?: string;
@@ -206,6 +220,8 @@ export type ResolutionTrace = {
   }[];
 };
 export type State = {
+  testLab?: TestLabState;
+  runningTestCaseId?: string;
   scenarioOrganization?: ScenarioOrganization;
   browserSessions?: BrowserSession[];
   activeBrowserSessionId?: string;
@@ -225,6 +241,13 @@ export type State = {
   dataPath: string;
 };
 export type Command =
+  | { type: "deleteScenario"; id: string; confirmed: boolean }
+  | { type: "testGroup"; operation: "create" | "update" | "delete"; id?: string; name?: string; collapsed?: boolean; confirmed?: boolean }
+  | { type: "collapseUngroupedCases"; collapsed: boolean }
+  | { type: "saveTestCase"; id?: string; config: TestCaseConfig }
+  | { type: "deleteTestCase"; id: string; confirmed: boolean }
+  | { type: "moveTestCase"; id: string; groupId?: string }
+  | { type: "runTestCase"; id: string }
   | { type: "createScenarioGroup"; name: string }
   | { type: "updateScenarioGroup"; id: string; name?: string; collapsed?: boolean }
   | { type: "deleteScenarioGroup"; id: string; confirmed: boolean }
@@ -323,6 +346,7 @@ export const DRAFT_KEYS = [
 export type DraftKey = (typeof DRAFT_KEYS)[number];
 export type DraftEntry = { revision: number; value: unknown };
 export interface CreatorApi {
+  onCaseState(callback: (state: State) => void): () => void;
   readDraft(key: DraftKey, initial: unknown): DraftEntry;
   writeDraft(key: DraftKey, value: unknown): DraftEntry;
   onDraft(callback: (key: string, entry: DraftEntry) => void): () => void;

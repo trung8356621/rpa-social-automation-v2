@@ -4,7 +4,7 @@ import { validatePayload } from "./storage.js";
 import path from "node:path";
 import { readFile, writeFile } from "node:fs/promises";
 import { randomUUID } from "node:crypto";
-import type { Payload, Result, ExecutionStart, ExecutionDetails, Rect } from "../shared/contracts.js";
+import type { Flow, Payload, Result, ExecutionStart, ExecutionDetails, Rect } from "../shared/contracts.js";
 import { BrowserCore, InputNotReady } from "./browser-core.js";
 import { Store } from "./storage.js";
 import { localOcr, type OcrEngine } from "./ocr.js";
@@ -21,10 +21,12 @@ export class Runtime {
   busy = false;
   private latestRuns = new Set<string>();
   private batch?: TestLogScope & { status: string };
-  startPlayAllLog() {
+  private batchFlow?: Flow;
+  startPlayAllLog(flow?: Flow) {
     if (this.busy || this.batch) throw new Error("Đang có lượt chạy.");
     this.batch = { runId: randomUUID(), ocrPasses: 0, scrolls: 0, status: "COMPLETED",
       network: snapshotNetworkSettings(this.store.networkSettings()) };
+    this.batchFlow = flow ? structuredClone(flow) : undefined;
     logTestBoundary(this.runDir, "START", { ...this.batch, label: "Play All" });
     return this.batch.runId;
   }
@@ -33,6 +35,7 @@ export class Runtime {
     if (this.busy) throw new Error("Step đang chạy; chưa kết thúc Play All.");
     const batch = this.batch;
     this.batch = undefined;
+    this.batchFlow = undefined;
     logTestBoundary(this.runDir, "END", { ...batch, label: "Play All", status: failed ? "FAILED" : batch.status });
   }
   playAllNetwork(runId: string): NetworkRunSettings {
@@ -140,7 +143,8 @@ export class Runtime {
   ): Promise<Result[]> {
     if (this.busy) throw new Error("Đang có một tác vụ chạy.");
     this.latestRuns.clear();
-    const flow = this.store.flow();
+    // Test Case values are scoped to this batch; never write them to Default Pattern.
+    const flow = scope.batchRunId ? this.batchFlow ?? this.store.flow() : this.store.flow();
     if (
       !flow ||
       requests.some((r) => !flow.steps.some((s) => s.id === r.stepId))

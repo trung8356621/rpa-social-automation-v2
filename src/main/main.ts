@@ -19,6 +19,9 @@ import { ClickMarker } from "./click-marker.js";
 import { CreatorOverlays } from "./creator-overlays.js";
 import { BrowserCore } from "./browser-core.js";
 import { BrowserSessions } from "./browser-sessions.js";
+import { TestLab } from "./test-lab.js";
+import { playSequential } from "../shared/playback.js";
+import { resolvePayload } from "../shared/flow-model.js";
 import { ScenarioGroups } from "./scenario-groups.js";
 import { Store } from "./storage.js";
 import { logMainError, logMainEvent, logTestBoundary } from "./main-error-log.js";
@@ -36,7 +39,7 @@ import {
 } from "../shared/geometry.js";
 import { effectiveMatchTo, matchToLabel } from "../shared/match-to.js";
 import { DRAFT_KEYS } from "../shared/contracts.js";
-import type { Command, State } from "../shared/contracts.js";
+import type { Command, State, CaseResult, Step } from "../shared/contracts.js";
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const project = path.resolve(root, "..");
@@ -98,6 +101,8 @@ async function boot() {
   const store = new Store(path.join(dataPath, "creator.sqlite"));
   const browserSessions = new BrowserSessions(store);
   const scenarioGroups = new ScenarioGroups(store);
+  const testLab = new TestLab(store, browserSessions);
+  let runningTestCaseId: string | undefined;
   let switchingWorkspace = false;
   let activeSessionId = browserSessions.activeId();
   let switchingSession = false;
@@ -324,6 +329,7 @@ async function boot() {
   let armedTest:
     { stepId: string; version: number; overrideId?: string } | undefined;
   const state = (): State => ({
+    testLab: testLab.read(), runningTestCaseId,
     scenarioOrganization: scenarioGroups.read(),
     browserSessions: browserSessions.list(),
     activeBrowserSessionId: activeSessionId,
@@ -352,6 +358,7 @@ async function boot() {
     { width: number; height: number; zoom: number }
   >();
   const isIdle = () => {
+    if (runningTestCaseId) throw new Error("Đang chạy Test Case; vui lòng đợi.");
     if (switchingWorkspace) throw new Error("Đang chuyển tab; vui lòng đợi.");
     if (runtime.busy) throw new Error("Đang test; đợi tác vụ kết thúc.");
     if (switchingSession) throw new Error("Đang chuyển Browser Session; vui lòng đợi.");
@@ -361,7 +368,7 @@ async function boot() {
       browserSessions: browserSessions.list(), activeBrowserSessionId: activeSessionId, sessionError,
     });
   };
-  async function switchBrowserSession(id: string, workspace = false) {
+  async function switchBrowserSession(id: string, workspace = false, restoreUrl = true) {
     if (!workspace) isIdle();
     if (uiPlayAllRunId) throw new Error("Đợi Play All kết thúc trước khi chuyển Session.");
     if (!browser.visible) throw new Error("Thoát crop/ảnh trước khi chuyển Session.");
@@ -383,14 +390,116 @@ async function boot() {
       publishUrl();
       publishSessions();
       try {
-        if (target.lastUrl) await browser.navigate(target.lastUrl);
-        else await browser.view.webContents.loadURL("about:blank");
+        if (restoreUrl) {
+          if (target.lastUrl) await browser.navigate(target.lastUrl);
+          else await browser.view.webContents.loadURL("about:blank");
+        }
       } catch (error) {
         sessionError = "Session đã mở nhưng trang chưa tải được. Bạn có thể nhập URL khác.";
         logMainError(runDir, "session-navigation", error, { sessionId: id });
       }
       return state();
     } finally { switchingSession = false; publishSessions(); }
+  }
+  async function delayBetweenSteps(batchRunId: string, previous: Step, next: Step) {
+    if (![previous, next].every(step => store.flow()?.steps.some(ref => ref.id === step.id)))
+      throw new Error("Step không thuộc flow.");
+    const network = runtime.playAllNetwork(batchRunId);
+    const delayMs = network.stepDelayMs;
+    const startedAt = Date.now();
+    const context = { batchRunId,
+      previousStepId: previous.id, previousVersion: previous.version,
+      nextStepId: next.id, nextVersion: next.version, delayMs, network };
+    logMainEvent(runDir, "play-all-transition-start", context);
+    await new Promise(resolve => setTimeout(resolve, delayMs));
+    logMainEvent(runDir, "play-all-transition-end", { ...context, elapsedMs: Date.now() - startedAt });
+  }
+  async function runTestCase(id: string) {
+    isIdle();
+    if (uiPlayAllRunId || !browser.visible) throw new Error("Đợi Play All kết thúc và thoát crop trước khi chạy Case.");
+    const item = testLab.get(id);
+    runningTestCaseId = id;
+    armedTest = undefined;
+    const startedAt = new Date().toISOString();
+    let batchId: string | undefined;
+    let currentStep: Step | undefined;
+    let contextReady = false;
+    let outcome: CaseResult = { status: "BLOCKED", startedAt, finishedAt: startedAt, message: "Chưa chạy." };
+    try {
+      const flow = structuredClone(testLab.validate(item));
+      flow.defaultPattern = { values: structuredClone(item.values) };
+      const steps = flow.steps.map(ref => store.step(ref.id, ref.version));
+      if (!steps.length) throw new Error("Scenario chưa có Step đã lưu.");
+      // Validate all values before navigating or sending an action.
+      for (const step of steps) { currentStep = step; resolvePayload(step.payload, flow); }
+      currentStep = undefined;
+      batchId = runtime.startPlayAllLog(flow);
+      await switchBrowserSession(item.sessionId, true, false);
+      store.setSetting("currentFlow", flow.id);
+      browser.setZoom(flow.zoom);
+      overlays.setExpanded("editor", false);
+      overlays.setPage("creator");
+      contextReady = true;
+      publishLayout();
+      window.webContents.send("creator:case-state", state());
+      // loadURL awaits main-frame load completion. No DOM/login inspection or retries.
+      let failedLoad = false;
+      const wc = browser.view.webContents;
+      const failed = (_event: unknown, _code: number, _description: string, _url: string, main: boolean) => { if (main) failedLoad = true; };
+      const response = (_event: unknown, _url: string, status: number) => { if (status >= 400) failedLoad = true; };
+      wc.on("did-fail-load", failed); wc.on("did-navigate", response);
+      let timer: ReturnType<typeof setTimeout> | undefined;
+      try {
+        await Promise.race([
+          browser.navigate(item.startUrl),
+          new Promise<never>((_, reject) => {
+            timer = setTimeout(() => { reject(new Error("Start URL chưa tải xong sau 30 giây; Case chưa gửi thao tác.")); wc.stop(); }, 30000);
+          }),
+        ]);
+        if (failedLoad) throw new Error("Start URL chưa tải thành công; Case chưa gửi thao tác.");
+      } finally {
+        if (timer) clearTimeout(timer);
+        wc.removeListener("did-fail-load", failed); wc.removeListener("did-navigate", response);
+      }
+      let allVerified = true;
+      let stopped = false;
+      await playSequential(steps, async step => {
+        currentStep = step;
+        const results = await runtime.test(step.id, step.version, undefined, batchId);
+        if (results.some(r => r.status !== "VERIFIED")) allVerified = false;
+        window.webContents.send("creator:shortcut-result", results);
+        return results;
+      }, (step, progress) => {
+        if (["blocked", "fail"].includes(progress.status)) {
+          stopped = true;
+          outcome = { status: progress.status === "blocked" ? "BLOCKED" : "FAILED", startedAt,
+            finishedAt: new Date().toISOString(), message: progress.message, stepId: step.id, stepName: step.name, version: step.version };
+        }
+      }, undefined, async (previous, next) => {
+        currentStep = next;
+        await delayBetweenSteps(batchId!, previous, next);
+      });
+      if (!stopped) outcome = { status: allVerified ? "PASS" : "ACTION_SENT", startedAt,
+        finishedAt: new Date().toISOString(), message: allVerified
+          ? "Runtime xác nhận các Step đã lưu. Hãy tự kiểm tra kết quả nghiệp vụ trên website."
+          : "Đã gửi thao tác; cần kiểm tra website. Chưa xác nhận hoàn tất nghiệp vụ." };
+    } catch (error) {
+      outcome = { status: currentStep || !contextReady ? "BLOCKED" : "FAILED", startedAt, finishedAt: new Date().toISOString(),
+        message: error instanceof Error ? error.message : String(error), stepId: currentStep?.id,
+        stepName: currentStep?.name, version: currentStep?.version };
+    } finally {
+      try { if (batchId) runtime.endPlayAllLog(batchId, !["PASS", "ACTION_SENT"].includes(outcome.status)); }
+      finally {
+        runningTestCaseId = undefined;
+        armedTest = undefined;
+        testLab.result(id, outcome);
+        // Keep the final website visible only after the correct Case context was installed.
+        overlays.setPage(contextReady ? "creator" : "test-case");
+        publishLayout();
+        window.webContents.send("creator:case-state", state());
+      }
+    }
+    return state();
   }
   ipcMain.handle("creator:command", async (event, command: Command) => {
     if (!trusted(event)) throw new Error("IPC sender không hợp lệ.");
@@ -402,6 +511,28 @@ async function boot() {
       sender: event.sender.id,
     });
     switch (command.type) {
+      case "runTestCase":
+        if (event.sender !== window.webContents) throw new Error("Invalid Test Case sender");
+        return runTestCase(command.id);
+      case "saveTestCase":
+        isIdle(); testLab.save(command.id, command.config); return state();
+      case "deleteTestCase":
+        isIdle();
+        if (!command.confirmed) throw new Error("Cần xác nhận xóa Test Case.");
+        testLab.delete(command.id); return state();
+      case "moveTestCase":
+        isIdle(); testLab.move(command.id, command.groupId); return state();
+      case "testGroup":
+        isIdle();
+        if (command.operation === "delete" && command.confirmed !== true) throw new Error("Cần xác nhận xóa Test Group.");
+        testLab.group(command.operation, command.id, command.name, command.collapsed); return state();
+      case "collapseUngroupedCases":
+        isIdle(); testLab.collapse(command.collapsed); return state();
+      case "deleteScenario":
+        isIdle();
+        if (uiPlayAllRunId) throw new Error("Đợi Play All kết thúc trước khi xóa Scenario.");
+        if (command.confirmed !== true) throw new Error("Cần xác nhận xóa Scenario.");
+        store.deleteFlow(command.id); armedTest = undefined; return state();
       case "createScenarioGroup":
         isIdle();
         scenarioGroups.create(command.name);
@@ -469,6 +600,8 @@ async function boot() {
         return state();
       case "deleteBrowserSession":
         isIdle();
+        if (testLab.read().cases.some(c => c.sessionId === command.id))
+          throw new Error("Test Case đang dùng Session này. Hãy đổi Session hoặc xóa Case trước.");
         if (uiPlayAllRunId) throw new Error("Đợi Play All kết thúc trước khi xóa Session.");
         if (command.confirmed !== true) throw new Error("Cần xác nhận xóa Session.");
         browserSessions.delete(command.id, activeSessionId);
@@ -484,7 +617,7 @@ async function boot() {
       case "appPage":
         isIdle();
         if (uiPlayAllRunId) throw new Error("Đợi Play All kết thúc trước khi chuyển màn hình.");
-        if (event.sender !== window.webContents || !["scenarios", "creator", "browser-sessions", "test-lab", "settings"].includes(command.page))
+        if (event.sender !== window.webContents || !["scenarios", "creator", "browser-sessions", "test-lab", "settings", "test-case"].includes(command.page))
           throw new Error("Invalid app page");
         overlays.setPage(command.page);
         if (command.page !== "creator") armedTest = undefined;
@@ -727,19 +860,8 @@ async function boot() {
         isIdle();
         if (!uiPlayAllRunId || command.batchRunId !== uiPlayAllRunId)
           throw new Error("Play All log runId không khớp.");
-        const previous = store.step(command.previousStepId, command.previousVersion);
-        const next = store.step(command.nextStepId, command.nextVersion);
-        if (![previous, next].every(step => store.flow()?.steps.some(ref => ref.id === step.id)))
-          throw new Error("Step không thuộc flow.");
-        const network = runtime.playAllNetwork(command.batchRunId);
-        const delayMs = network.stepDelayMs;
-        const startedAt = Date.now();
-        const context = { batchRunId: command.batchRunId,
-          previousStepId: previous.id, previousVersion: previous.version,
-          nextStepId: next.id, nextVersion: next.version, delayMs, network };
-        logMainEvent(runDir, "play-all-transition-start", context);
-        await new Promise(resolve => setTimeout(resolve, delayMs));
-        logMainEvent(runDir, "play-all-transition-end", { ...context, elapsedMs: Date.now() - startedAt });
+        await delayBetweenSteps(command.batchRunId,
+          store.step(command.previousStepId, command.previousVersion), store.step(command.nextStepId, command.nextVersion));
         return;
       }
       case "startPlayAllLog":
@@ -770,7 +892,7 @@ async function boot() {
         armedTest = undefined;
         return;
       case "armTest":
-        if (switchingWorkspace || !store.flow()?.steps.some(step => step.id === command.stepId)) {
+        if (runningTestCaseId || switchingWorkspace || !store.flow()?.steps.some(step => step.id === command.stepId)) {
           armedTest = undefined;
           return;
         }
@@ -801,7 +923,7 @@ async function boot() {
   browser.onViewCreated(wc => {
     let pendingShortcut = false;
     wc.on("before-input-event", (event, input) => {
-      if (switchingWorkspace || switchingSession || uiPlayAllRunId || overlays.page !== "creator") return;
+      if (runningTestCaseId || switchingWorkspace || switchingSession || uiPlayAllRunId || overlays.page !== "creator") return;
       if (
         input.type === "keyDown" &&
         input.control &&
@@ -833,7 +955,7 @@ async function boot() {
         if (armedTest) {
           const test = armedTest;
           setImmediate(() => {
-            if (switchingWorkspace || switchingSession || uiPlayAllRunId || test !== armedTest || wc !== browser.view.webContents || overlays.page !== "creator") return;
+            if (runningTestCaseId || switchingWorkspace || switchingSession || uiPlayAllRunId || test !== armedTest || wc !== browser.view.webContents || overlays.page !== "creator") return;
             void runtime
               .test(test.stepId, test.version, test.overrideId)
               .then((result) =>

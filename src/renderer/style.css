@@ -1200,6 +1200,21 @@ body[data-panel="shell"] .app-shell[data-editor-overlay="true"] > aside.creator-
 .workspace-tab.active, .workspace-tabs button[aria-current="page"] { background: #263d54; }
 .workspace-tab.active { border-top-color: #68d6a6; }
 .workspace-tab .tab-close { padding: 3px 8px; font-size: 17px; }
+body[data-panel="shell"] .app-shell > aside.creator-steps {
+  width: var(--steps-width, 320px); min-width: 0; margin: 0;
+  overflow-x: hidden; overflow-y: auto; overscroll-behavior: contain; scrollbar-gutter: stable;
+}
+.creator-steps .steps, .creator-steps .step-row, .creator-steps .step-label { min-width: 0; max-width: 100%; }
+.creator-steps .execution-summary { overflow-wrap: anywhere; }
+.case-editor-host[hidden] { display: none; }
+.case-editor-host .app-page { height: calc(100vh - 36px); }
+.case-form { max-width: 760px; padding: 20px; background: #162639; border: 1px solid #32475f; border-radius: 8px; }
+.case-form h2 { font-size: 16px; margin-top: 24px; }
+.case-actions { display: flex; flex-wrap: wrap; align-items: center; gap: 10px; margin-top: 20px; }
+.case-result { padding: 10px; margin: 10px 0; border: 1px solid #45627a; border-radius: 6px; overflow-wrap: anywhere; }
+.case-result p { margin: 5px 0; }
+.test-case-item { padding-bottom: 10px; border-bottom: 1px solid #304359; }
+.test-case-item > small { display: block; padding: 0 10px; color: #9bb0c7; overflow-wrap: anywhere; }
 body[data-panel="shell"] .app-shell > header { justify-content: flex-start; }
 body[data-panel="shell"] .app-shell > header .workspace-tabs { position: sticky; left: 0; z-index: 21; background: #142238; }
 body[data-panel="shell"] .app-shell > header > .environment { flex-shrink: 0; }

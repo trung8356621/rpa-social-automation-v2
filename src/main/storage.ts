@@ -319,6 +319,35 @@ export class Store {
     this.saveFlow(f);
     return f;
   }
+  deleteFlow(id: string) {
+    const flow = this.flows().find(f => f.id === id);
+    if (!flow) throw new Error("Không tìm thấy Scenario.");
+    this.db.exec("BEGIN IMMEDIATE");
+    try {
+      const lab = JSON.parse(this.setting("testLab") ?? '{"cases":[]}') as { cases: { flowId: string }[] };
+      const count = lab.cases.filter(c => c.flowId === id).length;
+      if (count) throw new Error(`${count} Test Case đang dùng Scenario này. Hãy sửa hoặc xóa các Case trước.`);
+      const others = this.flows().filter(f => f.id !== id);
+      const owned = flow.steps.filter(s => !others.some(f => f.steps.some(ref => ref.id === s.id))).map(s => s.id);
+      for (const stepId of owned) {
+        this.db.prepare("DELETE FROM overrides WHERE step_id=?").run(stepId);
+        this.db.prepare("DELETE FROM steps WHERE id=?").run(stepId);
+      }
+      for (const row of this.db.prepare("SELECT id,payload FROM runs").all() as { id: string; payload: string }[]) {
+        const run = JSON.parse(row.payload) as { flowId?: string; stepId?: string };
+        if (run.flowId === id || (!run.flowId && run.stepId && owned.includes(run.stepId)))
+          this.db.prepare("DELETE FROM runs WHERE id=?").run(row.id);
+      }
+      this.db.prepare("DELETE FROM flows WHERE id=?").run(id);
+      if (this.setting("currentFlow") === id) this.setSetting("currentFlow", others[0]?.id ?? "");
+      const organization = this.setting("scenarioOrganization");
+      if (organization) {
+        const value = JSON.parse(organization) as { membership: Record<string, string> };
+        delete value.membership[id]; this.setSetting("scenarioOrganization", JSON.stringify(value));
+      }
+      this.db.exec("COMMIT");
+    } catch (error) { this.db.exec("ROLLBACK"); throw error; }
+  }
   steps(): Step[] {
     return (
       this.db.prepare("SELECT payload FROM steps ORDER BY rowid").all() as {

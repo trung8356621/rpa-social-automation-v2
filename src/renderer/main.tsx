@@ -4,16 +4,19 @@ import { StepList } from "./step-list";
 import { TargetModal } from "./target-modal";
 import { UiPopover } from "./ui-popover";
 import { NetworkSettings } from "./network-settings";
-import { AppNavigation, ScenariosPage, PlaceholderPage } from "./app-shell";
+import { AppNavigation, ScenariosPage } from "./app-shell";
 import { BrowserSessionsPage, SessionSelector } from "./browser-sessions";
+import { TestLabPage, TestCaseEditor, CaseResultView, type CaseEditorHandle } from "./test-lab";
 import { Variables, Groups } from "./flow-controls";
-import React, { useEffect, useRef, useState } from "react";
+import React, { useCallback, useEffect, useRef, useState } from "react";
 import { createRoot } from "react-dom/client";
 import { unstable_batchedUpdates } from "react-dom";
 import { WorkspaceTabs } from "./workspace-tabs";
 import type {
   Action,
   WorkspaceTab,
+  MainPage,
+  TestCase,
   AppPage,
   Capture,
   Command,
@@ -50,6 +53,12 @@ type TabDraft = {
 };
 
 function Creator() {
+  const [mainPage, setMainPage] = useState<MainPage>("scenarios");
+  const caseEditors = useRef(new Map<string, CaseEditorHandle>());
+  const [, setCaseRevision] = useState(0);
+  const reportCase = useCallback((id: string, handle: CaseEditorHandle) => {
+    caseEditors.current.set(id, handle); setCaseRevision(value => value + 1);
+  }, []);
   const [tabs, setTabs] = useState<WorkspaceTab[]>([]);
   const tabsRef = useRef<WorkspaceTab[]>([]);
   const [activeTabId, setActiveTabId] = useState<string>();
@@ -68,6 +77,10 @@ function Creator() {
   const [state, setState] = useDraft<State>("state");
   const appPage = state?.appPage ?? "scenarios";
   const creatorVisible = appPage === "creator";
+  const activeCaseTab = tabs.find(t => t.id === activeTabId && t.kind === "test-case");
+  useEffect(() => {
+    if (["scenarios", "browser-sessions", "test-lab", "settings"].includes(appPage)) setMainPage(appPage as MainPage);
+  }, [appPage]);
   const sidebarCollapsed = state?.sidebarCollapsed ?? false;
   const networkSettings = state?.networkSettings ?? defaultNetworkSettings();
   const networkDelays = networkSettings.presets[networkSettings.mode];
@@ -102,7 +115,7 @@ function Creator() {
   const [selected, setSelected] = useDraft<Step>("selected");
   const [overrideId, setOverrideId] = useDraft("overrideId", "");
   const [targetModal, setTargetModal] = useState(false);
-  const [pendingNavigation, setPendingNavigation] = useState<{ proceed: () => void | Promise<void>; closing?: boolean }>();
+  const [pendingNavigation, setPendingNavigation] = useState<{ proceed: () => void | Promise<void>; closing?: boolean; caseTabId?: string }>();
   const pendingNavigationRef = useRef(false);
   const [confirmWorking, setConfirmWorking] = useState(false);
   const [confirmError, setConfirmError] = useState("");
@@ -319,6 +332,16 @@ function Creator() {
       navigationSeen = true;
       syncUrl(actual);
     });
+    const offCaseState = window.creator.onCaseState(snapshot => {
+      setState(snapshot);
+      if (snapshot.runningTestCaseId) {
+        setResults([]); setStepPlayback({});
+        setExecution(undefined); executionRef.current = undefined;
+      }
+      browserUrl.current = snapshot.url;
+      urlEdit.current = { dirty: false, revision: urlEdit.current.revision + 1 };
+      setUrl(snapshot.url);
+    });
     const offSessions = window.creator.onBrowserSessions(snapshot => {
       setState(previous => previous ? { ...previous, ...snapshot } : previous);
     });
@@ -351,6 +374,7 @@ function Creator() {
       offFocus();
       offNavigation();
       offSessions();
+      offCaseState();
       offTest();
       offExecution();
     };
@@ -359,7 +383,7 @@ function Creator() {
   useEffect(() => {
     if (!shell) return;
     if (workspaceRestoring.current || workspaceLock.current) return;
-    if (selected && creatorVisible)
+    if (selected && creatorVisible && !activeCaseTab)
       void invoke({
         type: "armTest",
         stepId: selected.id,
@@ -368,7 +392,7 @@ function Creator() {
       }).catch((e) => setMessage(String(e)));
     else
       void invoke({ type: "disarmTest" }).catch((e) => setMessage(String(e)));
-  }, [selected, overrideId, creatorVisible, state?.activeBrowserSessionId, busy, activeTabId, restoreRevision]);
+  }, [selected, overrideId, creatorVisible, state?.activeBrowserSessionId, busy, activeTabId, restoreRevision, !!activeCaseTab]);
   useEffect(() => {
     if (!busy && pendingCloseTab.current === activeTabId) {
       const id = pendingCloseTab.current;
@@ -625,11 +649,12 @@ function Creator() {
   async function changeAppPage(page: AppPage) {
     const next = await invoke<State>({ type: "appPage", page });
     setState(next);
+    if (["scenarios", "browser-sessions", "test-lab", "settings"].includes(page)) setMainPage(page as MainPage);
     setPageError("");
     window.scrollTo({ left: 0, top: 0 });
   }
   function captureActiveTab() {
-    if (!activeTabId) return;
+    if (!activeTabId || tabsRef.current.find(t => t.id === activeTabId)?.kind !== "creator") return;
     tabDrafts.current.set(activeTabId, {
       editor: captureEditorDraft(), dirty: editorDirty, ocrEdit, ocrKind,
       playback: stepPlayback, activeStepId, blocked: new Set(blockedSteps), execution,
@@ -648,6 +673,20 @@ function Creator() {
     captureActiveTab();
     workspaceRestoring.current = true;
     try {
+      if (tab.kind === "test-case") {
+        const next = await invoke<State>({ type: "appPage", page: "test-case" });
+        unstable_batchedUpdates(() => {
+          setState(next); restoreEditorDraft(); setOcrEdit(undefined); setOcrKind("none");
+          setStepPlayback({}); setExecution(undefined); executionRef.current = undefined;
+          setActiveStepId(""); setBlockedSteps(new Set()); setTargetModal(false);
+          browserUrl.current = next.url;
+          urlEdit.current = { dirty: false, revision: urlEdit.current.revision + 1 };
+          setUrl(next.url);
+          if (!tabsRef.current.some(t => t.id === tab.id)) updateTabs([...tabsRef.current, tab]);
+          setActiveTabId(tab.id); setRestoreRevision(value => value + 1); setPageError("");
+        });
+        return;
+      }
       const saved = tabDrafts.current.get(tab.id);
       const next = await invoke<State>({ type: "activateWorkspace", flowId: tab.flowId,
         sessionId: tab.sessionId, url: tab.url, editorExpanded: saved?.editor.editorExpanded === true });
@@ -684,7 +723,7 @@ function Creator() {
   }
   function openScenario(id: string) {
     if (workspaceLock.current || pendingNavigationRef.current || busy || shot || ocrLoading) return;
-    const existing = tabsRef.current.find(tab => tab.flowId === id);
+    const existing = tabsRef.current.find(tab => tab.kind === "creator" && tab.flowId === id);
     if (existing?.id === activeTabId && creatorVisible) return;
     const tab = existing ?? { id: crypto.randomUUID(), kind: "creator" as const, flowId: id,
       sessionId: state?.activeBrowserSessionId, url: browserUrl.current || undefined };
@@ -693,6 +732,48 @@ function Creator() {
       try { await activateTab(tab); }
       finally { workspaceLock.current = false; }
     });
+  }
+  function openCase(id?: string) {
+    if (busy || shot || ocrLoading || workspaceLock.current || pendingNavigationRef.current || !state) return;
+    const existing = id ? tabsRef.current.find(t => t.kind === "test-case" && t.caseId === id) : undefined;
+    const item = id ? state.testLab?.cases.find(c => c.id === id) : undefined;
+    if (id && !item) return;
+    const tab: WorkspaceTab = existing ?? { id: crypto.randomUUID(), kind: "test-case", caseId: id,
+      flowId: item?.flowId ?? state.flows[0]?.id ?? "", sessionId: item?.sessionId };
+    workspaceLock.current = true;
+    void task(async () => { try { await activateTab(tab); } finally { workspaceLock.current = false; } });
+  }
+  function caseSaved(tabId: string, item: TestCase, next: State) {
+    setState(next);
+    updateTabs(tabsRef.current.map(t => t.id === tabId ? { ...t, caseId: item.id, flowId: item.flowId, sessionId: item.sessionId } : t));
+  }
+  function runCase(id: string) {
+    if (busy || shot || workspaceLock.current || !activeCaseTab || caseEditors.current.get(activeCaseTab.id)?.dirty) return;
+    void task(async () => {
+      try { setState(await invoke<State>({ type: "runTestCase", id })); }
+      catch (error) { setState(await invoke<State>({ type: "state" })); throw error; }
+    });
+  }
+  async function updateWorkspace(command: Command) {
+    if (command.type === "deleteScenario") {
+      const count = state?.testLab?.cases.filter(c => c.flowId === command.id).length ?? 0;
+      if (count) throw new Error(`${count} Test Case đang dùng Scenario này. Hãy sửa hoặc xóa các Case trước.`);
+      if (tabsRef.current.some(t => t.kind === "creator" && t.flowId === command.id) ||
+          [...caseEditors.current.values()].some(editor => editor.flowId === command.id))
+        throw new Error("Đóng các tab đang dùng Scenario này trước khi xóa. Bản nháp chưa lưu được giữ nguyên.");
+    }
+    if (command.type === "deleteTestCase" && tabsRef.current.some(t => t.caseId === command.id))
+      throw new Error("Đóng tab Test Case này trước khi xóa.");
+    setBusy(true);
+    try {
+      const next = await invoke<State>(command); setState(next);
+      if (command.type === "deleteScenario" && state?.flow?.id === command.id) resetStepDraft();
+    } finally { setBusy(false); }
+  }
+  function tabDirty(id: string) {
+    const tab = tabsRef.current.find(t => t.id === id);
+    return tab?.kind === "test-case" ? caseEditors.current.get(id)?.dirty ?? false
+      : id === activeTabId ? editorDirty : tabDrafts.current.get(id)?.dirty ?? false;
   }
   function createScenario() {
     if (workspaceLock.current || pendingNavigationRef.current || busy || shot || ocrLoading) return;
@@ -720,34 +801,39 @@ function Creator() {
       const next = remaining[Math.min(index, remaining.length - 1)];
       if (next) await activateTab(next);
       else {
-        await changeAppPage("scenarios");
+        await changeAppPage(mainPage);
         resetStepDraft();
         await setEditorOpen(false);
         setActiveTabId(undefined);
       }
     }
     tabDrafts.current.delete(id);
+    caseEditors.current.delete(id);
     updateTabs(remaining.map(tab => tabsRef.current.find(t => t.id === tab.id) ?? tab));
   }
   function closeTab(id: string) {
     if (busy || shot || ocrLoading || workspaceLock.current || pendingNavigationRef.current) return;
     if (id !== activeTabId) {
-      if (!tabDrafts.current.get(id)?.dirty) {
+      if (!tabDirty(id)) {
         tabDrafts.current.delete(id);
+        caseEditors.current.delete(id);
         updateTabs(tabsRef.current.filter(tab => tab.id !== id));
         return;
       }
       const tab = tabsRef.current.find(t => t.id === id);
       if (!tab) return;
       pendingCloseTab.current = id;
-      openScenario(tab.flowId);
+      if (tab.kind === "test-case") {
+        workspaceLock.current = true;
+        void task(async () => { try { await activateTab(tab); } finally { workspaceLock.current = false; } });
+      } else openScenario(tab.flowId);
       return;
     }
     requestNavigation(() => removeTab(id), true);
   }
   closeTabHandler.current = closeTab;
   async function updateBrowserSessions(command: Command) {
-    if (command.type === "deleteBrowserSession" && tabsRef.current.some(tab => tab.sessionId === command.id))
+    if (command.type === "deleteBrowserSession" && (tabsRef.current.some(tab => tab.sessionId === command.id) || [...caseEditors.current.values()].some(editor => editor.sessionId === command.id)))
       throw new Error("Đóng các tab đang nhớ Session này trước khi xóa Session.");
     setBusy(true);
     try { setState(await invoke<State>(command)); }
@@ -775,7 +861,7 @@ function Creator() {
     workspaceLock.current = true;
     void task(async () => {
       try {
-        const tab = tabsRef.current.find(t => t.id === activeTabId);
+        const tab = tabsRef.current.find(t => t.kind === "creator" && t.flowId === state?.flow?.id);
         if (state?.flow) await activateTab({ ...(tab ?? { id: crypto.randomUUID(), kind: "creator" as const,
           flowId: state.flow.id }), sessionId: id, url: undefined });
         else {
@@ -817,7 +903,8 @@ function Creator() {
           s.payload.action === "CLICK_TARGET",
       )
     : undefined;
-  const locked = busy || !!shot;
+  const navigationLocked = busy || !!shot || !!state?.runningTestCaseId;
+  const locked = navigationLocked || !!activeCaseTab;
   const field = (label: string, child: React.ReactNode) => (
     <label>
       {label}
@@ -873,10 +960,10 @@ function Creator() {
     : name !== "" || editableConfig(payload()) !== editableConfig({ action: "CLICK_TARGET" }));
   function requestNavigation(proceed: () => void | Promise<void>, closing = false) {
     if (pendingNavigationRef.current) return;
-    if (!editorDirty) { void task(async () => { await proceed(); }); return; }
+    if (!(activeTabId ? tabDirty(activeTabId) : editorDirty)) { void task(async () => { await proceed(); }); return; }
     pendingNavigationRef.current = true;
     setConfirmError("");
-    setPendingNavigation({ proceed, closing });
+    setPendingNavigation({ proceed, closing, caseTabId: activeCaseTab?.id });
   }
   function stayInEditor() {
     if (confirmWorking) return;
@@ -891,7 +978,11 @@ function Creator() {
     setConfirmWorking(true);
     setBusy(true);
     try {
-      if (save) await saveBase();
+      if (pendingNavigation.caseTabId) {
+        const handle = caseEditors.current.get(pendingNavigation.caseTabId);
+        if (!handle) throw new Error("Không tìm thấy draft Test Case.");
+        if (save) await handle.save(); else handle.discard();
+      } else if (save) await saveBase();
       else if (selectedBase) await loadStep(selectedBase, false);
       else resetStepDraft();
       const proceed = pendingNavigation.proceed;
@@ -916,7 +1007,7 @@ function Creator() {
     exitReviewed.current.clear();
     setExitIntent("reload");
   };
-  const anyDirty = editorDirty || [...tabDrafts.current].some(([id, draft]) => id !== activeTabId && draft.dirty);
+  const anyDirty = editorDirty || tabs.some(tab => tabDirty(tab.id));
   const dirtyRef = useRef(anyDirty);
   dirtyRef.current = anyDirty;
   // Reuse the same Save/Discard confirmation for every dirty tab before leaving
@@ -924,7 +1015,7 @@ function Creator() {
   useEffect(() => {
     if (!exitIntent || busy || pendingNavigationRef.current || workspaceLock.current) return;
     const currentId = activeTabId ?? "initial";
-    if (editorDirty && !exitReviewed.current.has(currentId)) {
+    if ((activeTabId ? tabDirty(activeTabId) : editorDirty) && !exitReviewed.current.has(currentId)) {
       requestNavigation(() => {
         exitReviewed.current.add(currentId);
         setExitRevision(revision => revision + 1);
@@ -932,8 +1023,12 @@ function Creator() {
       return;
     }
     const next = tabsRef.current.find(tab => tab.id !== activeTabId &&
-      tabDrafts.current.get(tab.id)?.dirty && !exitReviewed.current.has(tab.id));
-    if (next) { openScenario(next.flowId); return; }
+      tabDirty(tab.id) && !exitReviewed.current.has(tab.id));
+    if (next) {
+      workspaceLock.current = true;
+      void task(async () => { try { await activateTab(next); } finally { workspaceLock.current = false; } });
+      return;
+    }
     allowUnload.current = true;
     if (exitIntent === "reload") window.location.reload();
     else void invoke({ type: "confirmWindowClose" }).catch(error => {
@@ -941,12 +1036,12 @@ function Creator() {
       setExitIntent(undefined);
       setMessage(String(error));
     });
-  }, [exitIntent, exitRevision, activeTabId, busy, editorDirty]);
+  }, [exitIntent, exitRevision, activeTabId, busy, editorDirty, anyDirty]);
   useEffect(() => {
     if (!shell) return;
     const off = window.creator.onRequestClose(() => leaveHandler.current());
     const beforeUnload = (event: BeforeUnloadEvent) => {
-      if (allowUnload.current || !dirtyRef.current) return;
+      if (allowUnload.current || (!dirtyRef.current && !latest.current.busy)) return;
       event.preventDefault();
       event.returnValue = "";
       setTimeout(() => reloadHandler.current(), 0);
@@ -997,20 +1092,27 @@ function Creator() {
     });
   }
   const workspaceTabs = <WorkspaceTabs tabs={tabs} activeId={activeTabId} state={state}
-    locked={locked || ocrLoading || !!pendingNavigation || stepPlayback[activeStepId]?.status === "running"}
-    dirty={id => id === activeTabId ? editorDirty : tabDrafts.current.get(id)?.dirty ?? false}
-    open={tab => openScenario(tab.flowId)} close={closeTab} scenarios={() => navigateApp("scenarios")} />;
+    mainPage={mainPage} locked={navigationLocked || ocrLoading || !!pendingNavigation || stepPlayback[activeStepId]?.status === "running"}
+    dirty={tabDirty} caseName={id => caseEditors.current.get(id)?.name}
+    open={tab => {
+      if (tab.kind === "creator") openScenario(tab.flowId);
+      else if (!navigationLocked && !workspaceLock.current && !pendingNavigationRef.current) {
+        workspaceLock.current = true;
+        void task(async () => { try { await activateTab(tab); } finally { workspaceLock.current = false; } });
+      }
+    }} close={closeTab} scenarios={() => navigateApp(mainPage)} />;
   return (
     <main className="app-shell" data-page={appPage} data-editor-overlay={creatorVisible && editorExpanded && !layout.editorBeside}
       style={{ "--app-nav-width": `${navigationWidth}px`, "--creator-min-width": `${layout.minWidth}px`,
         "--steps-left": `${layout.stepsLeft}px`, "--editor-left": `${layout.editorLeft}px`,
+        "--steps-width": `${layout.editorBeside ? 320 : Math.max(320, Math.min(420, window.innerWidth - layout.stepsLeft))}px`,
         "--editor-width": `${layout.editorWidth}px` } as React.CSSProperties}>
       {shell && pendingNavigation && <UiPopover variant="modal" label="Thay đổi chưa lưu"
         className="unsaved-confirm" close={stayInEditor}>
         <div className="popover-heading"><b>Thay đổi chưa lưu</b>
           <button className="icon-button" aria-label="Ở lại Editor" disabled={confirmWorking} onClick={stayInEditor}>×</button>
         </div>
-        <p>Step đang có thay đổi chưa lưu. Chọn cách tiếp tục.</p>
+        <p>Tab đang có thay đổi chưa lưu. Chọn cách tiếp tục.</p>
         {confirmError && <p role="alert">{confirmError}</p>}
         <div className="popover-footer">
           <button className="primary" disabled={confirmWorking} onClick={() => void continueNavigation(true)}>{pendingNavigation.closing ? "Lưu & đóng" : "Lưu & tiếp tục"}</button>
@@ -1018,27 +1120,34 @@ function Creator() {
           <button disabled={confirmWorking} onClick={stayInEditor}>Ở lại</button>
         </div>
       </UiPopover>}
-      {shell && navigationWidth > 0 && <AppNavigation page={appPage} collapsed={navigationWidth === APP_NAV_COLLAPSED}
-        locked={locked || !state} navigate={navigateApp} toggle={() => void task(async () => {
+      {shell && navigationWidth > 0 && <AppNavigation page={creatorVisible || appPage === "test-case" ? mainPage : appPage} collapsed={navigationWidth === APP_NAV_COLLAPSED}
+        locked={navigationLocked || !state} navigate={navigateApp} toggle={() => void task(async () => {
           setState(await invoke<State>({ type: "appSidebar", collapsed: !sidebarCollapsed }));
         })} />}
       {shell && !creatorVisible && <div className="workspace-page-strip">{workspaceTabs}</div>}
       {shell && appPage === "scenarios" && <ScenariosPage state={state} name={flowName} setName={setFlowName}
-        locked={locked || ocrLoading} open={openScenario} create={createScenario}
-        update={async command => setState(await invoke<State>(command))}
-        sessionControl={<SessionSelector state={state} locked={locked || stepPlayback[activeStepId]?.status === "running"} select={selectSession} />} />}
-      {shell && appPage === "browser-sessions" && <BrowserSessionsPage state={state} locked={locked}
+        locked={navigationLocked || ocrLoading} open={openScenario} create={createScenario}
+        update={updateWorkspace}
+        sessionControl={<SessionSelector state={state} locked={navigationLocked || stepPlayback[activeStepId]?.status === "running"} select={selectSession} />} />}
+      {shell && appPage === "browser-sessions" && <BrowserSessionsPage state={state} locked={navigationLocked}
         update={updateBrowserSessions} open={openSession} />}
-      {shell && appPage === "test-lab" && <PlaceholderPage page={appPage} />}
+      {shell && appPage === "test-lab" && <TestLabPage state={state} locked={navigationLocked} update={updateWorkspace}
+        open={openCase} create={() => openCase()} canDelete={id => !tabsRef.current.some(t => t.caseId === id)} />}
+      {shell && state && tabs.filter(tab => tab.kind === "test-case").map(tab => <div key={tab.id} className="case-editor-host"
+        hidden={tab.id !== activeTabId || appPage !== "test-case"}>
+        <TestCaseEditor tabId={tab.id} item={state.testLab?.cases.find(c => c.id === tab.caseId)} state={state}
+          locked={navigationLocked} report={reportCase} saved={caseSaved} saving={setBusy} run={runCase} />
+      </div>)}
       {shell && appPage === "settings" && <section className="app-page" aria-label="Settings">
         <div className="page-heading"><h1>Settings</h1><p>Cấu hình local cho ứng dụng trên máy này.</p></div>
-        <NetworkSettings state={state} locked={locked} update={async command => setState(await invoke<State>(command))} />
+        <NetworkSettings state={state} locked={navigationLocked} update={async command => setState(await invoke<State>(command))} />
       </section>}
       {shell && !creatorVisible && pageError && <p className="app-page-error" role="alert">{pageError}</p>}
       {shell && creatorVisible && (
         <>
           <header>
             {workspaceTabs}
+            {activeCaseTab && <button disabled={navigationLocked} onClick={() => navigateApp("test-case")}>Cấu hình Case</button>}
             <SessionSelector state={state} locked={locked || stepPlayback[activeStepId]?.status === "running"} select={selectSession} />
             <button
               className="primary"
@@ -1182,6 +1291,10 @@ function Creator() {
             )}
           </nav>
           <aside className="creator-steps" aria-label="Steps">
+            {activeCaseTab && <><b>Test Case · bản đã lưu</b>
+              <p>{state?.runningTestCaseId ? "Đang chạy, vui lòng đợi." : "Đã kết thúc. Kiểm tra website hoặc mở Cấu hình Case để chạy lại."}</p>
+              {!state?.runningTestCaseId && state?.testLab?.cases.find(c => c.id === activeCaseTab.caseId)?.lastResult &&
+                <CaseResultView item={state.testLab.cases.find(c => c.id === activeCaseTab.caseId)!} />}</>}
             {state?.sessionError && <p className="network-failure-hint" role="alert">{state.sessionError}</p>}
             {results.filter(result => result.networkHint).map(result =>
               <p key={result.id} className="network-failure-hint" role="alert">{result.networkHint}</p>)}
@@ -1194,7 +1307,7 @@ function Creator() {
                 {result.execution && <> · OCR {result.execution.ocrPasses} / scroll {result.execution.scrolls} · {result.execution.stopReason}</>}
               </p>)}
             </div>
-            {state && (
+            {state && !activeCaseTab && (
               <Groups
                 newStep={newStep}
                 playAll={() => playSavedSteps()}
@@ -1303,7 +1416,7 @@ function Creator() {
           )}{" "}
         </>
       )}
-      {(shell && creatorVisible && editorExpanded && !shot) && (
+      {(shell && creatorVisible && !activeCaseTab && editorExpanded && !shot) && (
         <section
           className={shell ? "panel editor-column" : "panel"}
           aria-label={shell ? "Step Editor" : "Test & Debug"}
