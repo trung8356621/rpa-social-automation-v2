@@ -1,6 +1,7 @@
 import {
   app,
   BrowserWindow,
+  WebContentsView,
   ipcMain,
   Menu,
   dialog,
@@ -18,7 +19,7 @@ import { ClickMarker } from "./click-marker.js";
 import { CreatorOverlays } from "./creator-overlays.js";
 import { BrowserCore } from "./browser-core.js";
 import { Store } from "./storage.js";
-import { logMainError } from "./main-error-log.js";
+import { logMainError, logMainEvent, logTestBoundary } from "./main-error-log.js";
 import { Runtime } from "./runtime.js";
 import { startFixture } from "./fixture.js";
 import { localOcr } from "./ocr.js";
@@ -129,7 +130,44 @@ async function boot() {
       sandbox: true,
     },
   });
-  window.webContents.setWindowOpenHandler(() => ({ action: "deny" }));
+  const uiLayers = new Map<string, WebContentsView>();
+  const closeUiLayer = (name: string) => {
+    const layer = uiLayers.get(name);
+    if (!layer) return;
+    uiLayers.delete(name);
+    window.contentView.removeChildView(layer);
+    if (!layer.webContents.isDestroyed()) layer.webContents.close();
+  };
+  // window.open provides the same-origin portal document; createWindow places its
+  // WebContentsView above Facebook rather than hiding/reparenting the browser.
+  window.webContents.setWindowOpenHandler(({ url, frameName }) => {
+    if (url !== "about:blank" || !/^creator-ui-overlay-[a-f0-9-]+$/.test(frameName)) return { action: "deny" };
+    return { action: "allow", createWindow: (options) => {
+      const layer = new WebContentsView({ webPreferences: options.webPreferences });
+      uiLayers.set(frameName, layer);
+      layer.setBackgroundColor("#00000000");
+      const align = () => {
+        const [width,height] = window.getContentSize();
+        if (!layer.webContents.isDestroyed()) layer.setBounds({ x: 0, y: 0, width, height });
+      };
+      align();
+      window.contentView.addChildView(layer);
+      window.on("resize", align);
+      layer.webContents.setWindowOpenHandler(() => ({ action: "deny" }));
+      layer.webContents.on("will-navigate", event => event.preventDefault());
+      layer.webContents.on("before-input-event", windowKeys);
+      layer.webContents.once("destroyed", () => {
+        window.removeListener("resize", align);
+        if (uiLayers.get(frameName) === layer) {
+          uiLayers.delete(frameName);
+          if (!window.isDestroyed()) window.contentView.removeChildView(layer);
+        }
+      });
+      layer.webContents.focus();
+      return layer.webContents;
+    } };
+  });
+  window.once("close", () => { for (const name of [...uiLayers.keys()]) closeUiLayer(name); });
   window.webContents.on("will-navigate", (event) => event.preventDefault());
   const browser = new BrowserCore(
     window,
@@ -260,6 +298,7 @@ async function boot() {
   const runtime = new Runtime(browser, store, assetDir, runDir, undefined,
     (x, y) => marker.show(x, y),
     (execution) => window.webContents.send("creator:execution-start", execution));
+  let uiPlayAllRunId: string | undefined;
   let armedTest:
     { stepId: string; version: number; overrideId?: string } | undefined;
   const state = (): State => ({
@@ -491,10 +530,32 @@ async function boot() {
           command.verdict,
           command.previewConfirmed,
         );
+      case "closeUiOverlay":
+        if (event.sender !== window.webContents || typeof command.name !== "string") throw new Error("Invalid UI layer sender");
+        closeUiLayer(command.name);
+        window.webContents.focus();
+        return;
+      case "playAllSkipped": {
+        isIdle();
+        const step = store.step(command.stepId, command.version);
+        if (!store.flow()?.steps.some(ref => ref.id === step.id) || !uiPlayAllRunId || command.batchRunId !== uiPlayAllRunId)
+          throw new Error("Step bị skip không thuộc flow/lượt Play All.");
+        const runId = randomUUID();
+        const matchTo = step.payload.target?.ocr?.confirmed ? step.payload.target.matchTo ?? "current" : "current";
+        const label = `Step ${step.id} | v${step.version} | Match To ${matchTo}`;
+        logTestBoundary(runDir, "START", { runId, batchRunId: command.batchRunId, label });
+        logMainEvent(runDir, "play-all-step-skipped", { runId, batchRunId: command.batchRunId,
+          stepId: step.id, version: step.version, status: "SKIPPED", reason: "UI_MEMORY_BLOCK", matchTo });
+        logTestBoundary(runDir, "END", { runId, batchRunId: command.batchRunId, label, status: "SKIPPED", ocrPasses: 0, scrolls: 0 });
+        return;
+      }
       case "startPlayAllLog":
-        return runtime.startPlayAllLog();
+        uiPlayAllRunId = runtime.startPlayAllLog();
+        return uiPlayAllRunId;
       case "endPlayAllLog":
-        return runtime.endPlayAllLog(command.runId, command.failed);
+        runtime.endPlayAllLog(command.runId, command.failed);
+        if (uiPlayAllRunId === command.runId) uiPlayAllRunId = undefined;
+        return;
       case "test":
         try {
           return await runtime.test(command.stepId, command.version, command.overrideId, command.batchRunId);

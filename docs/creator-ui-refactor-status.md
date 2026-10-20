@@ -1,3 +1,14 @@
+> UI popup/Variables và Block Step (chưa test):
+> - Popup/menu và Variables được React portal vào about:blank cùng origin, qua createWindow
+>   tạo một WebContentsView trong suốt nằm trên Facebook. Khi đóng chỉ gỡ lớp UI này;
+>   không hide/reload/reparent hoặc resize Browser Facebook. Focus/Escape xử lý tại lớp UI.
+> - Variables trở lại bên phải, full-height, bảng scroll nội bộ và footer riêng.
+> - Nút Block/Unblock cạnh Play/Edit dùng Set trong React memory; không ghi DB/payload/version/group.
+>   Play All bỏ qua Step bị block, ghi SKIPPED + batchRunId; Play riêng vẫn chạy bình thường.
+>   Danh sách block reset khi mở app mới. Đây là flag riêng với BLOCKED do Runtime trả về.
+> - Không sửa OCR, Match To, Click Marker hoặc Runtime matching.
+> - Không chạy test/build/typecheck hay Electron theo yêu cầu; ghi chú bên dưới là lịch sử.
+
 > OCR candidates và phân cách Test (chưa test theo yêu cầu):
 > - Bỏ điều kiện bắt buộc kind runtime giống kind đã chọn. Expected text/kind vẫn lấy từ Step Version/Override được Runtime nạp.
 > - So khớp exact token sau NFKC, lowercase, bỏ zero-width, chuẩn hóa khoảng trắng/dấu câu hiển thị và @ đầu token.

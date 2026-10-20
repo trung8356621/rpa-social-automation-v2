@@ -1001,15 +1001,13 @@ body[data-panel="shell"] .step-play {
   padding-left: 4px;
 }
 
-/* Keep Variables beside the native browser. */
-.ui-backdrop:has(.variables-drawer) { right: auto; width: 320px; }
-.variables-drawer { left: 0; right: auto; width: 320px; padding: 10px; }
-.variables-drawer .variable-table { overflow: auto; }
+/* Native UI overlay is independent of Facebook bounds/visibility. */
+body[data-panel="ui-overlay"] .variables-drawer {
+  left: auto; right: 0; top: 0; bottom: 0; width: min(700px, 100vw); height: 100vh;
+}
+.variables-drawer .variable-table { overflow: hidden; }
 .ocr-confirmed > b, .ocr-confirmed > small { display: block; padding-right: 20px; }
 
-.variables-drawer .variable-columns, .variables-drawer .variable-row {
-  grid-template-columns: 70px 65px minmax(90px, 1fr) 24px;
-}
 
 .execution-summary, .editor-save-state {
   padding: 8px; background: #192c41; border-bottom: 1px solid #3c536e;
@@ -1020,3 +1018,11 @@ body[data-panel="shell"] .step-play {
 .editor-save-state { color: #ebd19b; margin-bottom: 10px; }
 
 .step-label > small { font-size: 9px; line-height: 10px; }
+
+.step-row { grid-template-columns: 42px minmax(0, 1fr) repeat(4, 24px); }
+.step-block-flag, .step-block[aria-pressed="true"] { color: #efc070; }
+.step-row.is-blocked-for-all { border-left: 3px solid #b88c49; }
+.step-status.skipped { color: #efc070; }
+body[data-panel="ui-overlay"] .ui-backdrop { background: rgb(6 13 23 / 14%); }
+
+.step-label > small { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }

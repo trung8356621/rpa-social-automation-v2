@@ -1,6 +1,6 @@
 import type { Result, Step } from "../shared/contracts";
 export type StepPlayback = {
-  status: "running" | "pass" | "fail" | "blocked";
+  status: "running" | "pass" | "fail" | "blocked" | "skipped";
   message: string;
   resultStatus?: Result["status"];
 };
@@ -19,8 +19,13 @@ export async function playSequential(
   steps: Step[],
   execute: (step: Step) => Promise<Result[]>,
   progress: (step: Step, state: StepPlayback) => void,
+  skip?: (step: Step) => Promise<boolean>,
 ) {
   for (const step of steps) {
+    if (skip && await skip(step)) {
+      progress(step, { status: "skipped", message: "SKIPPED · Blocked for Play All (memory only)" });
+      continue;
+    }
     progress(step, { status: "running", message: "Running" });
     let state: StepPlayback;
     try {

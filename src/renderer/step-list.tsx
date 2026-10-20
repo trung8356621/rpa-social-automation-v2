@@ -52,10 +52,14 @@ export function StepList({
   play,
   playback,
   activeStepId,
+  blockedSteps,
+  toggleBlocked,
 }: {
   play: (step: Step) => void;
   playback: Record<string, StepPlayback>;
   activeStepId: string;
+  blockedSteps: ReadonlySet<string>;
+  toggleBlocked: (stepId: string) => void;
   state: State;
   selected?: Step;
   locked: boolean;
@@ -135,7 +139,7 @@ export function StepList({
     )!;
     return (
       <div
-        className={`step-row${selected?.id === s.id ? " selected" : ""}${playback[s.id]?.status === "running" ? " is-running" : ""}`}
+        className={`step-row${selected?.id === s.id ? " selected" : ""}${blockedSteps.has(s.id) ? " is-blocked-for-all" : ""}${playback[s.id]?.status === "running" ? " is-running" : ""}`}
         data-step-id={s.id}
         data-play-status={playback[s.id]?.status ?? "idle"}
         key={s.id}
@@ -150,14 +154,14 @@ export function StepList({
           title={s.name}
         >
           <span className="step-label">
-            <b>{s.name}</b>
-            <small>v{s.version} · Base · {s.payload.target?.ocr?.confirmed ? s.payload.target.matchTo ?? "current" : "image"}</small>
+            <b>{blockedSteps.has(s.id) && <span className="step-block-flag" title="Blocked for Play All">⊘ </span>}{s.name}</b>
+            <small>v{s.version} · Base · {s.payload.target?.ocr?.confirmed ? s.payload.target.matchTo ?? "current" : "image"}{blockedSteps.has(s.id) && <span className="step-block-flag"> · BLOCKED (All)</span>}</small>
             {playback[s.id] && (
               <small
                 className={`step-status ${playback[s.id].status}`}
                 title={`${playback[s.id].resultStatus ?? ""} ${playback[s.id].message}`}
               >
-                {playback[s.id].status}
+                {playback[s.id].status === "skipped" ? "SKIPPED" : playback[s.id].status}
                 {playback[s.id].status === "pass" &&
                 playback[s.id].resultStatus === "ACTION_SENT"
                   ? " · sent"
@@ -192,6 +196,11 @@ export function StepList({
         >
           <EditIcon />
         </button>
+        <button className="icon-button step-block" disabled={locked}
+          aria-label={`${blockedSteps.has(s.id) ? "Unblock" : "Block"} ${s.name}`}
+          aria-pressed={blockedSteps.has(s.id)}
+          title={blockedSteps.has(s.id) ? "Unblock for Play All" : "Block for Play All (memory only)"}
+          onClick={() => toggleBlocked(s.id)}>{blockedSteps.has(s.id) ? "↺" : "⊘"}</button>
         <button
           className="icon-button"
           aria-label={`Menu ${s.name}`}

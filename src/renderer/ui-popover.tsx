@@ -1,15 +1,13 @@
 import React, { useEffect, useLayoutEffect, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import type { Command } from "../shared/contracts";
-export function usePopover(update: (c: Command) => Promise<void>) {
+export function usePopover(_update: (c: Command) => Promise<void>) {
   const [anchor, setAnchor] = useState<DOMRect>();
   const show = async (element: HTMLElement) => {
     const rect = element.getBoundingClientRect();
-    await update({ type: "browserVisible", visible: false });
     setAnchor(rect);
   };
   const close = async () => {
-    await update({ type: "browserVisible", visible: true });
     setAnchor(undefined);
   };
   return { anchor, show, close };
@@ -29,6 +27,7 @@ export function UiPopover({
   children: React.ReactNode;
   className?: string;
 }) {
+  const [host, setHost] = useState<Window>();
   const closeRef = useRef(close);
   closeRef.current = close;
   const returnFocus = useRef(document.activeElement as HTMLElement);
@@ -38,31 +37,56 @@ export function UiPopover({
       top: anchor.bottom + 6,
     });
   useLayoutEffect(() => {
+    const name = `creator-ui-overlay-${crypto.randomUUID()}`;
+    const overlay = window.open("about:blank", name, "popup=yes");
+    if (!overlay) { closeRef.current(); return; }
+    const doc = overlay.document;
+    doc.title = label;
+    const base = doc.createElement("base");
+    base.href = document.baseURI;
+    doc.head.append(base);
+    for (const node of document.querySelectorAll('link[rel="stylesheet"],style')) doc.head.append(node.cloneNode(true));
+    doc.body.dataset.panel = "ui-overlay";
+    doc.documentElement.style.background = "transparent";
+    doc.body.style.cssText = "margin:0;width:100vw;height:100vh;overflow:hidden;background:transparent";
+    const closed = () => closeRef.current();
+    overlay.addEventListener("beforeunload", closed);
+    setHost(overlay);
+    return () => {
+      overlay.removeEventListener("beforeunload", closed);
+      void window.creator.invoke({ type: "closeUiOverlay", name }).catch(console.error);
+      if (returnFocus.current?.isConnected) returnFocus.current.focus();
+    };
+  }, []);
+  useLayoutEffect(() => {
+    if (!host) return;
     const place = () => {
       if (variant === "drawer") return;
       const r = ref.current!.getBoundingClientRect();
       setPosition({
-        left: Math.max(8, Math.min(anchor.left, innerWidth - r.width - 8)),
+        left: Math.max(8, Math.min(anchor.left, host.innerWidth - r.width - 8)),
         top: Math.max(
           8,
-          Math.min(anchor.bottom + 6, innerHeight - r.height - 8),
+          Math.min(anchor.bottom + 6, host.innerHeight - r.height - 8),
         ),
       });
     };
     place();
     const observer = new ResizeObserver(place);
     observer.observe(ref.current!);
-    window.addEventListener("resize", place);
+    host.addEventListener("resize", place);
     const firstField =
       ref.current?.querySelector<HTMLElement>("input,textarea,select") ??
       ref.current?.querySelector<HTMLElement>("button:not(:disabled)");
     firstField?.focus();
     return () => {
       observer.disconnect();
-      window.removeEventListener("resize", place);
+      host.removeEventListener("resize", place);
     };
-  }, []);
+  }, [host]);
   useEffect(() => {
+    if (!host) return;
+    const doc = host.document;
     const before = returnFocus.current;
     const overflow = document.documentElement.style.overflow;
     document.documentElement.style.overflow = "hidden";
@@ -79,25 +103,26 @@ export function UiPopover({
         );
         const first = all[0],
           last = all.at(-1);
-        if (!ref.current?.contains(document.activeElement)) {
+        if (!ref.current?.contains(doc.activeElement)) {
           e.preventDefault();
           first?.focus();
-        } else if (e.shiftKey && document.activeElement === first) {
+        } else if (e.shiftKey && doc.activeElement === first) {
           e.preventDefault();
           last?.focus();
-        } else if (!e.shiftKey && document.activeElement === last) {
+        } else if (!e.shiftKey && doc.activeElement === last) {
           e.preventDefault();
           first?.focus();
         }
       }
     };
-    window.addEventListener("keydown", key);
+    host.addEventListener("keydown", key);
     return () => {
       document.documentElement.style.overflow = overflow;
-      window.removeEventListener("keydown", key);
+      host.removeEventListener("keydown", key);
       if (before?.isConnected) before.focus();
     };
-  }, []);
+  }, [host]);
+  if (!host || host.closed) return null;
   return createPortal(
     <div
       className="ui-backdrop"
@@ -127,6 +152,6 @@ export function UiPopover({
         {children}
       </div>
     </div>,
-    document.body,
+    host.document.body,
   );
 }

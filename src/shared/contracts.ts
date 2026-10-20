@@ -185,6 +185,7 @@ export type State = {
 export type Command =
   | { type: "state" }
   | { type: "workspaceScroll"; left: number; top: number }
+  | { type: "closeUiOverlay"; name: string }
   | { type: "organize"; groups: StepGroup[]; stepIds: string[] }
   | {
       type: "variables";
@@ -216,6 +217,7 @@ export type Command =
       segment: Payload[];
     }
   | { type: "test"; stepId: string; version: number; overrideId?: string; batchRunId?: string }
+  | { type: "playAllSkipped"; stepId: string; version: number; batchRunId: string }
   | { type: "startPlayAllLog" }
   | { type: "endPlayAllLog"; runId: string; failed?: boolean }
   | { type: "testPair"; firstId: string; secondId: string; delayMs: number }

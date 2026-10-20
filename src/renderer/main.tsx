@@ -74,6 +74,14 @@ function Creator() {
     Record<string, StepPlayback>
   >({});
   const [activeStepId, setActiveStepId] = useState("");
+  const [blockedSteps, setBlockedSteps] = useState<Set<string>>(() => new Set());
+  function toggleBlocked(stepId: string) {
+    setBlockedSteps(previous => {
+      const next = new Set(previous);
+      if (next.has(stepId)) next.delete(stepId); else next.add(stepId);
+      return next;
+    });
+  }
   const playLock = useRef(false);
   const listRunIds = useRef(new Set<string>());
   const [execution, setExecution] = useState<ExecutionStart>();
@@ -393,6 +401,11 @@ function Creator() {
           setStepPlayback((previous) => ({ ...previous, [step.id]: progress }));
           setMessage(`${step.name}: ${progress.message}`);
         },
+        all ? async (step) => {
+          if (!blockedSteps.has(step.id)) return false;
+          await invoke({ type: "playAllSkipped", stepId: step.id, version: step.version, batchRunId: batchRunId! });
+          return true;
+        } : undefined,
       );
     } catch (error) {
       failed = true;
@@ -878,6 +891,8 @@ function Creator() {
                 selected={selected}
                 playback={stepPlayback}
                 activeStepId={activeStepId}
+                blockedSteps={blockedSteps}
+                toggleBlocked={toggleBlocked}
                 play={(step) => void playSteps([step])}
                 locked={locked}
                 update={async (c) => {
