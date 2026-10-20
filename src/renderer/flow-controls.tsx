@@ -137,7 +137,6 @@ export function Variables({ state, update, locked }: Props) {
             Files: one local path per line. Values are used only by Default
             Pattern.
             Integer: số nguyên; QUICK_TAG dùng 1–10, không vượt số hàng ROI.
-            Number: SLEEP dùng milliseconds, từ 0–60000.
           </p>
           <div className="popover-footer">
             <button

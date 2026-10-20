@@ -2,7 +2,7 @@ import { effectiveMatchTo, matchToLabel } from "../shared/match-to";
 import type { StepPlayback } from "./playback";
 import React, { useEffect, useRef, useState } from "react";
 import { UiPopover, usePopover } from "./ui-popover";
-import { slugify } from "../shared/flow-model";
+import { slugify, sleepDuration } from "../shared/flow-model";
 import type { State, Step, Command, StepGroup } from "../shared/contracts";
 const EditIcon = () => (
   <svg
@@ -257,7 +257,12 @@ export function StepList({
     )!;
     const text = s.payload.target?.ocr?.text;
     const customName = s.name !== s.payload.action && s.name !== "WAIT / VERIFY";
-    const title = customName ? s.name : text || ({
+    let sleepText = "";
+    if (s.payload.action === "SLEEP") {
+      try { sleepText = `Chờ ${(sleepDuration(s.payload, f) / 1000).toLocaleString("vi-VN", { maximumFractionDigits: 6 })} giây`; }
+      catch { sleepText = "Chờ · thời gian chưa hợp lệ"; }
+    }
+    const title = customName ? s.name : sleepText || text || ({
       CLICK_TARGET: "Bấm target", CLICK_AND_TYPE: "Bấm và nhập chữ", UPLOAD_FILE: "Chọn ảnh upload",
       TYPE_ONLY: "Nhập nội dung", WAIT_VERIFY: "Chờ xác nhận", SCROLL: "Cuộn trang",
       QUICK_TAG: "Gắn thẻ theo vị trí",
@@ -284,6 +289,7 @@ export function StepList({
           <span className="step-label">
             <b>{blockedSteps.has(s.id) && <span className="step-block-flag" title="Blocked for Play All">⊘ </span>}{title}</b>
             {text && text !== title && <span className="step-target-text">{text}</span>}
+            {sleepText && customName && <span className="step-target-text">{sleepText}</span>}
             <small>{s.payload.action} · v{s.version} · {matchToLabel(effectiveMatchTo(s.payload))}{blockedSteps.has(s.id) && <span className="step-block-flag"> · BLOCKED (All)</span>}</small>
             {playback[s.id] && (
               <small

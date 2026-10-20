@@ -7,17 +7,26 @@ export const slugify = (s: string) =>
     .toLowerCase()
     .replace(/[^a-z0-9]+/g, "-")
     .replace(/^-|-$/g, "") || "group";
+/** Read-only compatibility for old SLEEP versions; never rewrites stored data. */
+export function sleepDuration(p: Payload, f?: Flow): number {
+  let value: unknown = p.sleepMs;
+  if (value === undefined) {
+    const variable = f?.variables?.find(v => v.id === p.variableId);
+    if (!variable || !["number", "integer"].includes(variable.type))
+      throw new Error("SLEEP: thiếu thời gian chờ hoặc Variable cũ không hợp lệ.");
+    value = f?.defaultPattern?.values[variable.id];
+  }
+  if (typeof value !== "number" || !Number.isFinite(value) || value < 0 || value > 60000)
+    throw new Error("SLEEP: thời gian chờ phải là số hữu hạn từ 0–60000ms.");
+  return value;
+}
 export function resolvePayload(p: Payload, f: Flow): Payload {
-  if (!["TYPE_ONLY", "CLICK_AND_TYPE", "UPLOAD_FILE", "QUICK_TAG", "SLEEP"].includes(p.action))
+  if (p.action === "SLEEP") return { ...p, sleepMs: sleepDuration(p, f) };
+  if (!["TYPE_ONLY", "CLICK_AND_TYPE", "UPLOAD_FILE", "QUICK_TAG"].includes(p.action))
     return p;
   const v = f.variables?.find((v) => v.id === p.variableId),
     value = v && f.defaultPattern?.values[v.id];
   if (!v) throw new Error("Missing variable for Action");
-  if (p.action === "SLEEP") {
-    if (!["number", "integer"].includes(v.type) || typeof value !== "number" || !Number.isFinite(value) || value < 0 || value > 60000)
-      throw new Error(`Variable ${v.key}: SLEEP cần Number Default Pattern từ 0–60000ms`);
-    return { ...p, sleepMs: value };
-  }
   if (p.action === "QUICK_TAG") {
     if (v.type !== "integer" || typeof value !== "number" || !Number.isInteger(value) || value < 1 || value > 10 || value > (p.quickTagRows ?? 0))
       throw new Error(`Variable ${v.key}: QUICK_TAG cần Integer Default Pattern 1–10, không vượt số hàng ROI`);

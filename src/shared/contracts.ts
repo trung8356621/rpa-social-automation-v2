@@ -37,7 +37,7 @@ export type Payload = {
   quickTagRows?: number;
   /** Runtime only: resolved from an Integer variable's Default Pattern. */
   quickTagCount?: number;
-  /** Runtime only: milliseconds resolved from the bound numeric variable. */
+  /** Fixed wait in milliseconds. Legacy SLEEP payloads may bind a variable instead. */
   sleepMs?: number;
   /** Legacy input, migrated by Store. */
   text?: string;
@@ -252,6 +252,7 @@ export const DRAFT_KEYS = [
   "text",
   "delta",
   "quickTagRows",
+  "sleepMs",
   "inputMethod",
   "pairDelay",
   "target",
