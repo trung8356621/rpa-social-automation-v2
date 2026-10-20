@@ -1025,4 +1025,63 @@ body[data-panel="ui-overlay"] .variables-drawer {
 .step-status.skipped { color: #efc070; }
 body[data-panel="ui-overlay"] .ui-backdrop { background: rgb(6 13 23 / 14%); }
 
+/* Target details live in a native overlay; the editor stays focused on the task. */
+.ui-modal {
+  position: fixed;
+  left: 50%;
+  top: 50%;
+  transform: translate(-50%, -50%);
+  width: min(980px, calc(100vw - 40px));
+  max-height: calc(100vh - 40px);
+  border: 1px solid #45617e;
+  border-radius: 14px;
+  background: #142238;
+  box-shadow: 0 24px 80px #0009;
+  z-index: 1001;
+}
+.target-modal { display: flex; flex-direction: column; overflow: hidden; }
+.target-modal-heading, .target-modal-footer { display: flex; justify-content: space-between; align-items: center; gap: 20px; padding: 16px 22px; }
+.target-modal-heading { border-bottom: 1px solid #304660; }
+.target-modal-heading, .target-modal-footer { flex-shrink: 0; }
+.target-modal-heading > div { min-width: 0; }
+.target-modal-heading small, .target-modal-footer { color: #a9bed6; }
+.target-modal-heading h2 { margin: 5px 0 0; font-size: 20px; overflow-wrap: anywhere; }
+.target-modal-heading h2 { display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 2; overflow: hidden; }
+.target-modal-body { overflow: auto; min-height: 0; padding: 22px; overscroll-behavior: contain; }
+.target-hero { margin: 0; padding: 20px; min-height: 150px; max-height: 42vh; overflow: auto; border-radius: 10px; border: 1px solid #3c536e; background: #0c1524; }
+.target-image-frame { position: relative; max-width: 100%; margin: auto; }
+.target-image-frame img { display: block; width: 100%; height: auto; border-radius: 5px; }
+.target-ocr-box { position: absolute; border: 2px solid #27ba95; background: #27ba951a; pointer-events: none; }
+.target-hero figcaption { margin-top: 12px; font-size: 12px; text-align: center; color: #a9bed6; }
+.target-empty { padding: 28px 12px; color: #a9bed6; text-align: center; }
+.target-confirmed .ocr-confirmed { margin: 16px 0 22px; }
+.target-confirmed .ocr-confirmed > b, .target-confirmed input { font-size: 20px; line-height: 1.5; overflow-wrap: anywhere; }
+.target-settings { display: grid; grid-template-columns: 150px minmax(0, 1fr); gap: 24px; margin-top: 18px; }
+.target-settings nav { display: flex; flex-direction: column; gap: 8px; }
+.target-settings nav button { text-align: left; background: transparent; border-color: transparent; color: #adc1d9; }
+.target-settings nav button[aria-pressed="true"] { background: #22445c; color: #e9f6ff; border-color: #4884a4; }
+.target-settings-content { min-width: 0; }
+.target-settings-content .ocr-panel { margin: 0; padding: 0; border: 0; }
+.target-settings-content .ocr-candidates { max-height: 220px; overflow: auto; }
+.target-settings-content details { margin-top: 14px; color: #a9bed6; }
+.target-modal-footer { border-top: 1px solid #304660; font-size: 12px; }
+.target-open { width: 100%; display: flex; align-items: center; justify-content: space-between; margin-top: 12px; }
+.editor-task-summary { margin-bottom: 16px; }
+.editor-task-summary h2 { font-size: 19px; line-height: 1.4; margin: 0 0 6px; overflow-wrap: anywhere; }
+.editor-task-summary p { font-size: 16px; color: #d6f3ec; margin: 4px 0 8px; overflow-wrap: anywhere; }
+.editor-task-summary small { color: #a9bed6; }
+.editor-save-state summary { cursor: pointer; }
+.step-row { height: auto; min-height: 52px; padding-top: 6px; padding-bottom: 6px; }
+.step-row .step { height: auto; min-height: 38px; }
+.step .step-label > b, .step .step-label .step-target-text { color: #e3eaf4; font-size: 13px; font-weight: 600; line-height: 1.45; white-space: normal; overflow-wrap: anywhere; }
+.step .step-label > b, .step .step-label .step-target-text { display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 2; overflow: hidden; }
+.step .step-label .step-target-text { color: #c3e9df; }
+.step .step-label > small { font-size: 10px; color: #92aac4; }
+@media (max-width: 620px) {
+  .target-settings { grid-template-columns: minmax(0, 1fr); gap: 12px; }
+  .target-settings nav { flex-direction: row; flex-wrap: wrap; }
+  .target-modal-body { padding: 14px; }
+  .target-modal-footer { gap: 12px; padding: 12px 14px; }
+}
+
 .step-label > small { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }

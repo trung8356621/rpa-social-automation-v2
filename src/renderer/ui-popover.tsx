@@ -20,8 +20,8 @@ export function UiPopover({
   className = "",
   variant = "popover",
 }: {
-  variant?: "popover" | "drawer";
-  anchor: DOMRect;
+  variant?: "popover" | "drawer" | "modal";
+  anchor?: DOMRect;
   label: string;
   close: () => void;
   children: React.ReactNode;
@@ -33,8 +33,8 @@ export function UiPopover({
   const returnFocus = useRef(document.activeElement as HTMLElement);
   const ref = useRef<HTMLDivElement>(null),
     [position, setPosition] = useState({
-      left: anchor.left,
-      top: anchor.bottom + 6,
+      left: anchor?.left ?? 8,
+      top: (anchor?.bottom ?? 2) + 6,
     });
   useLayoutEffect(() => {
     const name = `creator-ui-overlay-${crypto.randomUUID()}`;
@@ -61,7 +61,7 @@ export function UiPopover({
   useLayoutEffect(() => {
     if (!host) return;
     const place = () => {
-      if (variant === "drawer") return;
+      if (variant !== "popover" || !anchor) return;
       const r = ref.current!.getBoundingClientRect();
       setPosition({
         left: Math.max(8, Math.min(anchor.left, host.innerWidth - r.width - 8)),
@@ -145,8 +145,8 @@ export function UiPopover({
         role="dialog"
         aria-modal="true"
         aria-label={label}
-        className={`${variant === "drawer" ? "ui-drawer" : "ui-popover"} ${className}`}
-        style={variant === "drawer" ? undefined : position}
+        className={`${variant === "drawer" ? "ui-drawer" : variant === "modal" ? "ui-modal" : "ui-popover"} ${className}`}
+        style={variant === "popover" ? position : undefined}
         onPointerDown={(e) => e.stopPropagation()}
       >
         {children}

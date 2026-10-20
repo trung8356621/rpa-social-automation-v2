@@ -138,6 +138,12 @@ export function StepList({
     const s = state.steps.find(
       (s) => s.id === ref.id && s.version === ref.version,
     )!;
+    const text = s.payload.target?.ocr?.text;
+    const customName = s.name !== s.payload.action && s.name !== "WAIT / VERIFY";
+    const title = customName ? s.name : text || ({
+      CLICK_TARGET: "Bấm target", CLICK_AND_TYPE: "Bấm và nhập chữ", UPLOAD_FILE: "Chọn ảnh upload",
+      TYPE_ONLY: "Nhập nội dung", WAIT_VERIFY: "Chờ xác nhận", SCROLL: "Cuộn trang",
+    }[s.payload.action]);
     return (
       <div
         className={`step-row${selected?.id === s.id ? " selected" : ""}${blockedSteps.has(s.id) ? " is-blocked-for-all" : ""}${playback[s.id]?.status === "running" ? " is-running" : ""}`}
@@ -152,11 +158,12 @@ export function StepList({
           className={selected?.id === s.id ? "step active" : "step"}
           disabled={locked}
           onClick={() => select(s)}
-          title={s.name}
+          title={[title, text, s.payload.action].filter(Boolean).join(" · ")}
         >
           <span className="step-label">
-            <b>{blockedSteps.has(s.id) && <span className="step-block-flag" title="Blocked for Play All">⊘ </span>}{s.name}</b>
-            <small>v{s.version} · Base · {matchToLabel(effectiveMatchTo(s.payload))}{blockedSteps.has(s.id) && <span className="step-block-flag"> · BLOCKED (All)</span>}</small>
+            <b>{blockedSteps.has(s.id) && <span className="step-block-flag" title="Blocked for Play All">⊘ </span>}{title}</b>
+            {text && text !== title && <span className="step-target-text">{text}</span>}
+            <small>{s.payload.action} · v{s.version} · {matchToLabel(effectiveMatchTo(s.payload))}{blockedSteps.has(s.id) && <span className="step-block-flag"> · BLOCKED (All)</span>}</small>
             {playback[s.id] && (
               <small
                 className={`step-status ${playback[s.id].status}`}

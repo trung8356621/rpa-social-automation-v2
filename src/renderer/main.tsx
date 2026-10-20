@@ -1,6 +1,7 @@
 import { effectiveMatchTo, matchToLabel } from "../shared/match-to";
 import { playSequential, playbackResult, type StepPlayback } from "./playback";
 import { StepList } from "./step-list";
+import { TargetModal } from "./target-modal";
 import { Variables, Groups } from "./flow-controls";
 import React, { useEffect, useRef, useState } from "react";
 import { createRoot } from "react-dom/client";
@@ -55,6 +56,8 @@ function Creator() {
   const [ocrKind, setOcrKind] = useDraft<"line" | "word">("ocrKind", "line");
   const [selected, setSelected] = useDraft<Step>("selected");
   const [overrideId, setOverrideId] = useDraft("overrideId", "");
+  const [targetModal, setTargetModal] = useState(false);
+  useEffect(() => setTargetModal(false), [selected?.id, selected?.version, action, state?.flow?.id, overrideId]);
   useEffect(() => setOcrEdit(undefined), [target?.asset, target?.ocr?.text,
     selected?.id, selected?.version, overrideId]);
   const [shot, setShot] = useDraft<Capture>("shot");
@@ -70,6 +73,7 @@ function Creator() {
   const [context, setContext] = useDraft("context", "Ngữ cảnh sửa lỗi");
   const [editorRevision, setEditorRevision] = useDraft("editorRevision", 0);
   const [editorExpanded, setEditorExpanded] = useDraft("editorExpanded", false);
+  useEffect(() => { if (!editorExpanded) setTargetModal(false); }, [editorExpanded]);
   const [debugExpanded, setDebugExpanded] = useDraft("debugExpanded", true);
   const [stepPlayback, setStepPlayback] = useState<
     Record<string, StepPlayback>
@@ -463,6 +467,7 @@ function Creator() {
     setOcrError("");
     setTargetImage(t.dataUrl);
     await closeShot();
+    setTargetModal(true);
     await readOcr(t.asset);
     setMessage(
       "ROI đã lưu. Chọn và xác nhận một dòng/từ OCR, hoặc giữ image-only; sau đó lưu Base/Override.",
@@ -1029,14 +1034,19 @@ function Creator() {
           )}
           {expanded && (
             <div className="panel-body">
-              {shell && <div className="editor-save-state" role="note">
+              {shell && <div className="editor-task-summary">
+                <h2>{name && name !== action ? name : target?.ocr?.text || name || "Step mới"}</h2>
+                {target?.ocr?.text && name && name !== target.ocr.text && name !== action && <p>{target.ocr.text}</p>}
+                <small>{selected ? `Base v${selected.version}` : "Chưa lưu"} · {editorDirty ? "Có thay đổi chưa lưu · Play dùng bản đã lưu" : "Đã lưu"}</small>
+              </div>}
+              {shell && <details className="editor-save-state"><summary>Phiên bản & lượt chạy</summary>
                 {execution && <><b>Lượt chạy: {executionLabel(execution)}</b>
                   <p>{stepPlayback[execution.stepId]?.status} · {stepPlayback[execution.stepId]?.message}</p></>}
                 Editor: {selected ? `${selected.name} · Base v${selected.version}` : "Step mới"}
                 <br />{editorDirty ? "Có thay đổi chưa lưu — Play không dùng bản nháp này." : "Đã lưu."}
                 <br />Match To Editor: {matchToLabel(effectiveMatchTo({ target }))}
                 {selected && <><br />Ctrl+Shift+T: v{selected.version} · {overrideId ? "Override" : "Base"} · Match To {matchToLabel(effectiveMatchTo(activePayload))}</>}
-              </div>}
+              </details>}
               {shell ? (
                 <>
                   {field(
@@ -1070,44 +1080,168 @@ function Creator() {
                       onChange={(e) => setName(e.target.value)}
                     />,
                   )}
-                  {needsTarget && (
-                    <>
+                  {needsTarget && <>
+                    <button className="target-open" disabled={locked} aria-haspopup="dialog"
+                      onClick={() => setTargetModal(true)}>{target ? "Xem target" : "Thêm target"} <span>↗</span></button>
+                    <p className="hint">{target ? target.ocr?.confirmed ? `OCR · Match To ${matchToLabel(effectiveMatchTo({ target }))}` : "Target ảnh · Match To None" : "Chưa chọn ảnh target"}</p>
+                  </>}
+                  {needsTarget && targetModal && <TargetModal
+                    name={name} target={target} image={targetImage}
+                    locked={locked} canCapture={!!state?.flow}
+                    close={() => { setOcrEdit(undefined); setTargetModal(false); }}
+                    crop={() => { setTargetModal(false); void task(capture); }}
+                    confirmed={target && <>
+                      <div className="eyebrow">OCR LOCAL · VIỆT + ANH</div>
+                      {target.ocr ? (
+                        <div className="ocr-confirmed">
+                          <small>OCR đã xác nhận</small>
+                          {ocrEdit !== undefined ? (
+                            <input
+                              aria-label="Chỉnh sửa OCR đã xác nhận"
+                              autoFocus
+                              disabled={locked}
+                              maxLength={2000}
+                              value={ocrEdit}
+                              onFocus={(e) => e.currentTarget.select()}
+                              onChange={(e) => setOcrEdit(e.target.value)}
+                              onBlur={() => setOcrEdit(undefined)}
+                              onKeyDown={(e) => {
+                                if (e.nativeEvent.isComposing) return;
+                                if (e.key === "Escape") {
+                                  e.preventDefault();
+                                  e.stopPropagation();
+                                  setOcrEdit(undefined);
+                                } else if (e.key === "Enter") {
+                                  e.preventDefault();
+                                  e.stopPropagation();
+                                  const text = ocrEdit.trim();
+                                  if (!text) return;
+                                  setTarget((previous) => previous?.ocr
+                                    ? { ...previous, ocr: { ...previous.ocr, text } }
+                                    : previous);
+                                  setOcrEdit(undefined);
+                                }
+                              }}
+                            />
+                          ) : (
+                            <b title="Double-click để sửa · Enter lưu · Esc hủy"
+                              onDoubleClick={() => {
+                                if (!locked) setOcrEdit(target.ocr!.text);
+                              }}>{target.ocr.text}</b>
+                          )}
+                          <p className="hint">
+                            {Math.round(target.ocr.confidence)}% confidence
+                          </p>
+                          <button
+                            aria-label="Clear confirmed OCR"
+                            className="ocr-clear"
+                            disabled={locked}
+                            onClick={() => {
+                              setOcrEdit(undefined);
+                              setTarget((previous) => {
+                                if (!previous) return previous;
+                                const { ocr, matchTo, ...rest } = previous;
+                                return rest;
+                              });
+                            }}
+                          >
+                            ×
+                          </button>
+                        </div>
+                      ) : (
+                        <p className="hint">
+                          Chưa có chữ dự phòng được xác nhận; AUTO vẫn dùng ảnh.
+                        </p>
+                      )}
+
+                    </>}
+                    matchControls={target && <>
+                      {field("Match To",
+                        <select aria-label="Match To" disabled={locked || !target.ocr?.confirmed}
+                          title="None: không cuộn, AUTO Image Matching rồi OCR fallback trên viewport hiện tại. Top/Middle/Bottom: về đầu rồi quét xuống 1/3, 2/3 hoặc toàn vùng. OCR cần khớp ngữ cảnh ROI."
+                          value={effectiveMatchTo({ target })}
+                          onChange={(e) => setTarget({ ...target, matchTo: e.target.value as NonNullable<NonNullable<Payload["target"]>["matchTo"]> })}>
+                          <option value="none">None</option>
+                          <option value="top">Top</option>
+                          <option value="middle">Middle</option>
+                          <option value="bottom">Bottom</option>
+                        </select>)}
+
+                    </>}
+                    ocrControls={<>
+                  {needsTarget && target && (
+                    <section className="ocr-panel" aria-label="OCR ROI">
+                      {ocrLoading && <p role="note">Đang đọc OCR trên máy…</p>}
+                      {ocrError && (
+                        <p role="note" className="hint">
+                          {ocrError}
+                        </p>
+                      )}
+                      {ocrResult && !ocrResult.segments.length && (
+                        <p className="hint">
+                          ROI không có chữ đọc được. Có thể lưu image-only cho
+                          nút icon.
+                        </p>
+                      )}
+                      {!target.ocr && ocrResult && ocrResult.segments.length > 0 && (
+                        <>
+                          <p className="hint">
+                            {target.ocr
+                              ? "Bấm dòng/từ khác để đổi chữ đã xác nhận."
+                              : "Không tự chọn chữ. Bấm một dòng/từ bên dưới để xác nhận target."}
+                          </p>
+                          <label>
+                            Đơn vị chọn
+                            <select
+                              aria-label="Đơn vị OCR"
+                              value={ocrKind}
+                              disabled={locked}
+                              onChange={(e) =>
+                                setOcrKind(e.target.value as "line" | "word")
+                              }
+                            >
+                              <option value="line">Dòng chữ</option>
+                              <option value="word">Từ riêng lẻ</option>
+                            </select>
+                          </label>
+                          <div className="ocr-candidates">
+                            {ocrResult.segments
+                              .filter((s) => s.kind === ocrKind)
+                              .map((s) => (
+                                <button
+                                  key={s.id}
+                                  className="ocr-candidate"
+                                  disabled={locked}
+                                  aria-pressed={
+                                    target.ocr?.text === s.text &&
+                                    target.ocr.kind === s.kind &&
+                                    target.ocr.bbox.x === s.bbox.x &&
+                                    target.ocr.bbox.y === s.bbox.y
+                                  }
+                                  onClick={() => confirmOcr(s)}
+                                >
+                                  <b>{s.text}</b>
+                                  <small>
+                                    {s.confidence.toFixed(1)}% · bbox {s.bbox.x}
+                                    ,{s.bbox.y} · {s.bbox.width}×{s.bbox.height}
+                                  </small>
+                                </button>
+                              ))}
+                          </div>
+                        </>
+                      )}
                       <button
-                        disabled={locked || !state?.flow}
-                        aria-describedby="roi-flow-help"
-                        onClick={() => void task(capture)}
+                        disabled={locked}
+                        onClick={() => void task(() => readOcr(target.asset))}
                       >
-                        Chụp & crop ROI
+                        Đọc lại OCR
                       </button>
-                      <p id="roi-flow-help" className="hint">
-                        {!state?.flow
-                          ? "Chưa có flow: nhập tên và bấm Tạo flow ở Bước 1, hoặc chọn flow đã lưu để bật chụp ROI."
-                          : "Chụp trang web hiện tại và kéo ROI; Dùng ROI để xác nhận hoặc Esc để hủy."}
-                      </p>
-                      {!state?.flow && (
-                        <button
-                          className="link"
-                          disabled={locked}
-                          onClick={goToFlow}
-                        >
-                          Đi tới bước 1
-                        </button>
-                      )}
-                      {targetImage && (
-                        <img
-                          alt="Target ROI"
-                          className="target"
-                          src={targetImage}
-                        />
-                      )}
-                      <p className="hint">
-                        {target
-                          ? `${target.roi.width}×${target.roi.height} · x${target.roi.x}, y${target.roi.y}`
-                          : "Chưa có target. Crop nhãn/icon cùng biên."}{" "}
-                        AUTO tìm bằng ảnh hoặc chữ đã xác nhận.
-                      </p>
-                    </>
+
+                    </section>
                   )}
+
+                    </>}
+                  />}
                   {["TYPE_ONLY", "CLICK_AND_TYPE"].includes(action) && (
                     <>
                       <label>
@@ -1197,148 +1331,6 @@ function Creator() {
                         onChange={(e) => setDelta(Number(e.target.value))}
                       />,
                     )}
-                  {needsTarget && target && (
-                    <section className="ocr-panel" aria-label="OCR ROI">
-                      <div className="eyebrow">OCR LOCAL · VIỆT + ANH</div>
-                      {ocrLoading && <p role="note">Đang đọc OCR trên máy…</p>}
-                      {ocrError && (
-                        <p role="note" className="hint">
-                          {ocrError}
-                        </p>
-                      )}
-                      {ocrResult && !ocrResult.segments.length && (
-                        <p className="hint">
-                          ROI không có chữ đọc được. Có thể lưu image-only cho
-                          nút icon.
-                        </p>
-                      )}
-                      {!target.ocr && ocrResult && ocrResult.segments.length > 0 && (
-                        <>
-                          <p className="hint">
-                            {target.ocr
-                              ? "Bấm dòng/từ khác để đổi chữ đã xác nhận."
-                              : "Không tự chọn chữ. Bấm một dòng/từ bên dưới để xác nhận target."}
-                          </p>
-                          <label>
-                            Đơn vị chọn
-                            <select
-                              aria-label="Đơn vị OCR"
-                              value={ocrKind}
-                              disabled={locked}
-                              onChange={(e) =>
-                                setOcrKind(e.target.value as "line" | "word")
-                              }
-                            >
-                              <option value="line">Dòng chữ</option>
-                              <option value="word">Từ riêng lẻ</option>
-                            </select>
-                          </label>
-                          <div className="ocr-candidates">
-                            {ocrResult.segments
-                              .filter((s) => s.kind === ocrKind)
-                              .map((s) => (
-                                <button
-                                  key={s.id}
-                                  className="ocr-candidate"
-                                  disabled={locked}
-                                  aria-pressed={
-                                    target.ocr?.text === s.text &&
-                                    target.ocr.kind === s.kind &&
-                                    target.ocr.bbox.x === s.bbox.x &&
-                                    target.ocr.bbox.y === s.bbox.y
-                                  }
-                                  onClick={() => confirmOcr(s)}
-                                >
-                                  <b>{s.text}</b>
-                                  <small>
-                                    {s.confidence.toFixed(1)}% · bbox {s.bbox.x}
-                                    ,{s.bbox.y} · {s.bbox.width}×{s.bbox.height}
-                                  </small>
-                                </button>
-                              ))}
-                          </div>
-                        </>
-                      )}
-                      {target.ocr ? (
-                        <div className="ocr-confirmed">
-                          <small>OCR đã xác nhận</small>
-                          {ocrEdit !== undefined ? (
-                            <input
-                              aria-label="Chỉnh sửa OCR đã xác nhận"
-                              autoFocus
-                              disabled={locked}
-                              maxLength={2000}
-                              value={ocrEdit}
-                              onFocus={(e) => e.currentTarget.select()}
-                              onChange={(e) => setOcrEdit(e.target.value)}
-                              onBlur={() => setOcrEdit(undefined)}
-                              onKeyDown={(e) => {
-                                if (e.nativeEvent.isComposing) return;
-                                if (e.key === "Escape") {
-                                  e.preventDefault();
-                                  e.stopPropagation();
-                                  setOcrEdit(undefined);
-                                } else if (e.key === "Enter") {
-                                  e.preventDefault();
-                                  e.stopPropagation();
-                                  const text = ocrEdit.trim();
-                                  if (!text) return;
-                                  setTarget((previous) => previous?.ocr
-                                    ? { ...previous, ocr: { ...previous.ocr, text } }
-                                    : previous);
-                                  setOcrEdit(undefined);
-                                }
-                              }}
-                            />
-                          ) : (
-                            <b title="Double-click để sửa · Enter lưu · Esc hủy"
-                              onDoubleClick={() => {
-                                if (!locked) setOcrEdit(target.ocr!.text);
-                              }}>{target.ocr.text}</b>
-                          )}
-                          <p className="hint">
-                            {Math.round(target.ocr.confidence)}% confidence
-                          </p>
-                          <button
-                            aria-label="Clear confirmed OCR"
-                            className="ocr-clear"
-                            disabled={locked}
-                            onClick={() => {
-                              setOcrEdit(undefined);
-                              setTarget((previous) => {
-                                if (!previous) return previous;
-                                const { ocr, matchTo, ...rest } = previous;
-                                return rest;
-                              });
-                            }}
-                          >
-                            ×
-                          </button>
-                        </div>
-                      ) : (
-                        <p className="hint">
-                          Chưa có chữ dự phòng được xác nhận; AUTO vẫn dùng ảnh.
-                        </p>
-                      )}
-                      {field("Match To",
-                        <select aria-label="Match To" disabled={locked || !target.ocr?.confirmed}
-                          title="None: không cuộn, AUTO Image Matching rồi OCR fallback trên viewport hiện tại. Top/Middle/Bottom: về đầu rồi quét xuống 1/3, 2/3 hoặc toàn vùng. OCR cần khớp ngữ cảnh ROI."
-                          value={effectiveMatchTo({ target })}
-                          onChange={(e) => setTarget({ ...target, matchTo: e.target.value as NonNullable<NonNullable<Payload["target"]>["matchTo"]> })}>
-                          <option value="none">None</option>
-                          <option value="top">Top</option>
-                          <option value="middle">Middle</option>
-                          <option value="bottom">Bottom</option>
-                        </select>)}
-                      <button
-                        disabled={locked}
-                        onClick={() => void task(() => readOcr(target.asset))}
-                      >
-                        Đọc lại OCR
-                      </button>
-
-                    </section>
-                  )}
                   <button
                     className="primary"
                     disabled={
