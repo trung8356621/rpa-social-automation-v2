@@ -11,7 +11,7 @@ export const isStudioPage = (page: string) => pages.includes(page);
 const empty: StudioState = { definitions: [], releases: [], previews: [], runs: [], imports: [] };
 const kindFor = (page: string): Definition["kind"] => page === "variations" ? "variation" : page === "workflows" ? "workflow" : "widget";
 function valueText(value: Value | undefined) { return Array.isArray(value) ? value.join("\n") : value ?? ""; }
-function parseValue(type: ValueType, text: string): Value { return ["number", "integer"].includes(type) ? Number(text) : type === "files" ? text.split("\n").filter(Boolean) : text; }
+function parseValue(type: ValueType, text: string): Value { return ["number", "integer"].includes(type) ? (text === "" ? "" : Number(text)) : type === "files" ? text.split("\n").filter(Boolean) : text; }
 function FieldInput({ field, value, change, disabled }: { field: Field; value?: Value; change: (x: Value) => void; disabled?: boolean }) {
   return <label>{field.label}{field.required ? " *" : ""}<small>{field.description}</small>
     {field.type === "files" ? <textarea disabled={disabled} value={valueText(value)} required={field.required} placeholder="Local file paths, one per line"
@@ -40,6 +40,8 @@ export function AdminStudioPage({ page, state, selectedId, open, locked, report 
   const [media, setMedia] = useState<V3Response["media"]>();
   const [sessionId, setSessionId] = useState(state.activeBrowserSessionId ?? ""), [startUrl, setStartUrl] = useState("");
   const [values, setValues] = useState<Record<string, Value>>({}), [previewForm, setPreviewForm] = useState(false);
+  const [importValues, setImportValues] = useState<Record<string, Record<string, Value>>>({});
+  useEffect(() => setValues({}), [selectedId]);
   const [variationId, setVariationId] = useState("");
   const disabled = locked || working;
   async function request(request: V3Request) {
@@ -192,8 +194,8 @@ export function AdminStudioPage({ page, state, selectedId, open, locked, report 
       <h3>Imported packages</h3>{studio.imports.map(m => <div className="scenario-folder" key={m.releaseId}><b>{m.name} {m.version}</b><p>{m.releaseId}</p>
         <label>Local Session<select value={sessionId} onChange={e => setSessionId(e.target.value)}>{state.browserSessions?.map(s => <option key={s.id} value={s.id}>{s.name}</option>)}</select></label>
         <label>Start URL<input value={startUrl} onChange={e => setStartUrl(e.target.value)} /></label>
-        {(studio.contracts?.[m.releaseId]?.fields ?? []).filter(f => f.visibility === "exposed" || f.sensitive).map(f => <FieldInput key={f.key} field={f} value={values[f.key] ?? f.default} change={v => setValues(x => ({ ...x, [f.key]: v }))} />)}
-        <button disabled={disabled || !sessionId || !startUrl} onClick={() => void request({ action: "run", id: m.releaseId, sessionId, startUrl, values, imported: true }).catch(() => {})}>Run imported package</button>
+        {(studio.contracts?.[m.releaseId]?.fields ?? []).filter(f => f.visibility === "exposed" || f.sensitive).map(f => <FieldInput key={f.key} field={f} value={importValues[m.releaseId]?.[f.key] ?? f.default} change={v => setImportValues(x => ({ ...x, [m.releaseId]: { ...x[m.releaseId], [f.key]: v } }))} />)}
+        <button disabled={disabled || !sessionId || !startUrl} onClick={() => void request({ action: "run", id: m.releaseId, sessionId, startUrl, values: importValues[m.releaseId] ?? {}, imported: true }).catch(() => {})}>Run imported package</button>
       </div>)}</>}
     <h3>Select preview from Test Run</h3><p>Review the entire image/video first. Confirm it contains no cookies, credentials, private or sensitive content. Selection copies it outside Test Run retention.</p>
     {state.testLab?.cases.filter(c => c.lastResult?.runId && c.lastResult.status !== "RUNNING").map(c => <div key={c.id}>

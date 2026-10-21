@@ -38,7 +38,7 @@ No Electron, project build, test, fixture or typecheck has been run: the user ex
 | 3 | Widget Registry, bundled snapshots/assets, package validation, content manifest/digest/release ID, ZIP export | `48e2c96` |
 | 4 | Bounded ZIP import, checksum/schema/capability validation, reusable package execution adapter | `25831a6` |
 | 5 | Linear Start/Widget/End canvas, automatic connections/reordering, typed ports and output mapping, bundled Workflow build/execution | `33035a8` |
-| 6 | Builds & Releases, failed-build diagnostics, local publish/deprecate, stable product revisions, SEO-OPS boundary, final static-review fixes | PHASE_6_COMMIT |
+| 6 | Builds & Releases, failed-build diagnostics, local publish/deprecate, stable product revisions, SEO-OPS boundary, final static-review fixes | `e821e1b` |
 
 Later phases include integration and static-review corrections to earlier phases; a phase commit is an implementation milestone, not a claim that its code has passed execution checks. No new branch or merge was performed. The pre-existing untracked `rpa-social-automation-v2/` remains untouched.
 
@@ -103,3 +103,7 @@ Record actual outcomes, screenshots and logs without credentials. Use a backed-u
 16. Publish locally; verify saved package bytes/digest/release ID remain unchanged through export and deprecation. Direct edit must be refused. Create a revision and verify a new version/release ID with the same stable product ID; the old release stays exportable.
 17. Attempt deletion of a released definition, a referenced Scenario or a Widget release used by a Workflow. V1 must retain those dependencies. Confirm deprecation does not mutate already bundled Workflow bytes.
 18. Confirm Local Publish never contacts a server. Review `V3-SEO-OPS.md` with the SEO-OPS owner before implementing a real transport; validate receipt matching and rejection handling when that contract is supplied.
+
+## Final source review
+
+All seven phase commits were created on `feature/creator-ui-refactor`. A follow-up commit records the Phase 6 hash and final corrections for per-package local input state, blank numeric defaults and nested Workflow diagnostics. Static diff whitespace checks report no issues. No application/runtime validation commands were executed, and no acceptance outcome is asserted.

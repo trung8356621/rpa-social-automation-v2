@@ -114,7 +114,7 @@ export class AdminStudio {
     }
     return prepared;
   }
-  protected async executeNode(prepared: Prepared, node: CompositionNode, values: Record<string, Value>, execute: ExecuteSnapshot, assetRoot: string) {
+  protected async executeNode(prepared: Prepared, node: CompositionNode, values: Record<string, Value>, execute: ExecuteSnapshot, assetRoot: string): Promise<{ status: RunResult["status"]; outputs: Record<string, Value>; issues?: Issue[] }> {
     const snapshot = prepared.snapshots[node.id];
     if (!snapshot) throw new Error("SNAPSHOT_MISSING");
     validateVariables(snapshot.flow.variables ?? [], values);
@@ -131,6 +131,7 @@ export class AdminStudio {
       for (const node of prepared.definition.nodes) {
         const values = Object.fromEntries(Object.entries(node.mappings).map(([k, b]) => [k, readBinding(b, inputs, nodes)] as const).filter((entry): entry is readonly [string, Value] => entry[1] !== undefined));
         const run = await this.executeNode(prepared, node, values, execute, assetRoot);
+        if (run.issues) result.issues.push(...run.issues.map(issue => ({ ...issue, path: `${node.id}.${issue.path}` })));
         nodes[node.id] = run.outputs; result.nodes.push({ id: node.id, status: run.status, outputs: run.outputs });
         if (["BLOCKED", "ERROR"].includes(run.status)) { result.status = run.status; throw new Error(`NODE_FAILED: ${node.id}`); }
         if (run.status === "ACTION_SENT") result.status = "ACTION_SENT";

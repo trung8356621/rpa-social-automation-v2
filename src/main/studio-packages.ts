@@ -8,7 +8,7 @@ import { validateDefinition, safeKey } from "../shared/admin-v3-validation.js";
 import { validateVariables } from "../shared/flow-model.js";
 import { validatePayload } from "./storage.js";
 import { validateZoom } from "../shared/geometry.js";
-import { AdminStudio, StudioError, } from "./admin-v3.js";
+import { AdminStudio, StudioError } from "./admin-v3.js";
 import { canonical, sha256 } from "./admin-v3-store.js";
 import { encodeZip, decodeZip, safePackagePath } from "./package-zip.js";
 

@@ -38,6 +38,6 @@ export class WorkflowStudio extends PackageStudio {
     if (!node.releaseId || !prepared.manifests[node.releaseId]) throw new Error("WIDGET_PIN_MISSING");
     const dependency = await this.bundle(node.releaseId);
     const result = await runBundle(dependency, values, path.join(this.root, "bundles", node.releaseId), execute);
-    return { status: result.status, outputs: result.outputs };
+    return { status: result.status, outputs: result.outputs, issues: result.issues };
   }
 }

@@ -65,7 +65,8 @@ export function inputValues(fields: Fields, supplied: Record<string, unknown>): 
   if (!supplied || typeof supplied !== "object" || Array.isArray(supplied)) throw new Error("INPUT_OBJECT: Input values must be an object.");
   for (const key of Object.keys(supplied)) if (!fields.some(f => f.key === key && (f.visibility === "exposed" || f.sensitive))) throw new Error(`UNKNOWN_INPUT: ${key}`);
   for (const f of fields) {
-    const x = supplied[f.key] ?? f.default;
+    const raw = supplied[f.key];
+    const x = (raw === "" && f.type !== "text" || Array.isArray(raw) && !raw.length) ? f.default : raw ?? f.default;
     if (x === undefined || x === "" || Array.isArray(x) && !x.length) { if (f.required) throw new Error(`REQUIRED_INPUT: ${f.key}`); if (x === undefined) continue; }
     if (!isValue(f.type, x)) throw new Error(`INPUT_TYPE: ${f.key}`);
     const v = f.validation;
