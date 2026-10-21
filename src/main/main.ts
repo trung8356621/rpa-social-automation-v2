@@ -1,4 +1,4 @@
-import { AdminStudio } from "./admin-v3.js";
+import { PackageStudio } from "./studio-packages.js";
 import type { Definition, V3Response } from "../shared/admin-v3.js";
 import {
   app,
@@ -106,7 +106,7 @@ async function boot() {
   const browserSessions = new BrowserSessions(store);
   const scenarioGroups = new ScenarioGroups(store);
   const testLab = new TestLab(store, browserSessions);
-  const studio = new AdminStudio(path.join(dataPath, "admin-v3"), store, assetDir, path.join(dataPath, "test-runs"));
+  const studio = new PackageStudio(path.join(dataPath, "admin-v3"), store, assetDir, path.join(dataPath, "test-runs"));
   let runningStudio = false;
   const testEvidence = new TestRunEvidence(path.join(dataPath, "test-runs"));
   let runningTestCaseId: string | undefined;
@@ -585,6 +585,13 @@ async function boot() {
           case "save": await studio.save(request.definition); break;
           case "duplicate": await studio.duplicate(request.id); break;
           case "delete": await studio.delete(request.id, request.confirmed); break;
+          case "build": await studio.build(request.id); break;
+          case "export": {
+            const selected = await dialog.showSaveDialog(window, { title: "Export runnable package", defaultPath: `${request.releaseId}.zip`, filters: [{ name: "Widget / Workflow ZIP", extensions: ["zip"] }] });
+            if (selected.canceled || !selected.filePath) response.cancelled = true;
+            else await writeFile(selected.filePath, await studio.export(request.releaseId), { flag: "wx" });
+            break;
+          }
           case "validate": response.issues = (await studio.validate(request.id)).issues; break;
           case "selectPreview": {
             const result = testLab.get(request.caseId).lastResult;
