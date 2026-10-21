@@ -1206,6 +1206,12 @@ body[data-panel="shell"] .app-shell > aside.creator-steps {
 }
 .creator-steps .steps, .creator-steps .step-row, .creator-steps .step-label { min-width: 0; max-width: 100%; }
 .creator-steps .execution-summary { overflow-wrap: anywhere; }
+/* Only the Case Browser workspace fills the space beyond the shared 420px cap.
+   Keep the native viewport and the existing 320px small-window sidebar intact. */
+body[data-panel="shell"] .app-shell[data-case-browser="true"] > aside.creator-steps {
+  width: max(320px, calc(100% - var(--steps-left)));
+  max-width: none;
+}
 .case-editor-host[hidden] { display: none; }
 .case-editor-host .app-page { height: calc(100vh - 36px); }
 .case-form { max-width: 760px; padding: 20px; background: #162639; border: 1px solid #32475f; border-radius: 8px; }

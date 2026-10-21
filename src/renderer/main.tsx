@@ -1128,7 +1128,8 @@ function Creator() {
       }
     }} close={closeTab} scenarios={() => navigateApp(mainPage)} />;
   return (
-    <main className="app-shell" data-page={appPage} data-editor-overlay={creatorVisible && editorExpanded && !layout.editorBeside}
+    <main className="app-shell" data-page={appPage} data-case-browser={creatorVisible && !!activeCaseTab}
+      data-editor-overlay={creatorVisible && editorExpanded && !layout.editorBeside}
       style={{ "--app-nav-width": `${navigationWidth}px`, "--creator-min-width": `${layout.minWidth}px`,
         "--steps-left": `${layout.stepsLeft}px`, "--editor-left": `${layout.editorLeft}px`,
         "--steps-width": `${layout.editorBeside ? 320 : Math.max(320, Math.min(420, window.innerWidth - layout.stepsLeft))}px`,
