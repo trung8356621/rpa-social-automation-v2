@@ -1,3 +1,5 @@
+import { runBundle } from "./runner-package.js";
+import type { ExecuteSnapshot } from "./admin-v3.js";
 import { PackageStudio } from "./studio-packages.js";
 import type { Definition, V3Response } from "../shared/admin-v3.js";
 import {
@@ -585,6 +587,12 @@ async function boot() {
           case "save": await studio.save(request.definition); break;
           case "duplicate": await studio.duplicate(request.id); break;
           case "delete": await studio.delete(request.id, request.confirmed); break;
+          case "import": {
+            const selected = await dialog.showOpenDialog(window, { title: "Import runnable package", properties: ["openFile"], filters: [{ name: "Widget / Workflow ZIP", extensions: ["zip"] }] });
+            if (selected.canceled || !selected.filePaths[0]) response.cancelled = true;
+            else await studio.import(await readFile(selected.filePaths[0]));
+            break;
+          }
           case "build": await studio.build(request.id); break;
           case "export": {
             const selected = await dialog.showSaveDialog(window, { title: "Export runnable package", defaultPath: `${request.releaseId}.zip`, filters: [{ name: "Widget / Workflow ZIP", extensions: ["zip"] }] });
@@ -603,8 +611,8 @@ async function boot() {
             response.media = { kind: preview.kind, url: `data:${preview.kind === "video" ? "video/webm" : "image/png"};base64,${bytes.toString("base64")}` }; break;
           }
           case "run": {
-            if (request.imported) throw new Error("Package import adapter not installed.");
-            const prepared = await studio.prepare(await studio.data.get<Definition>("definitions", request.id));
+            const imported = request.imported ? await studio.bundle(request.id) : undefined;
+            const prepared = imported ? undefined : await studio.prepare(await studio.data.get<Definition>("definitions", request.id));
             browserSessions.get(request.sessionId);
             const url = new URL(request.startUrl);
             if (!["http:", "https:"].includes(url.protocol) || url.username || url.password) throw new Error("Use a local HTTP(S) test URL without credentials.");
@@ -612,12 +620,12 @@ async function boot() {
             runningStudio = true; armedTest = undefined;
             window.webContents.send("creator:case-state", state());
             try {
-              if (!prepared.issues.length) {
+              if (imported || prepared && !prepared.issues.length) {
                 await switchBrowserSession(request.sessionId, true, false);
                 overlays.setExpanded("editor", false); overlays.setPage("creator"); publishLayout();
                 await browser.navigate(url.href);
               }
-              response.result = await studio.execute(prepared, request.values, async (snapshot, values, assets) => {
+              const execute: ExecuteSnapshot = async (snapshot, values, assets) => {
                 browser.setZoom(snapshot.flow.zoom);
                 const shared = new Runtime(browser, store, assets, runDir);
                 snapshot.flow.defaultPattern = { values };
@@ -634,7 +642,10 @@ async function boot() {
                   }
                   return { status, message, runId: batch };
                 } finally { shared.endPlayAllLog(batch, ["BLOCKED", "ERROR"].includes(status)); }
-              });
+              };
+              response.result = imported ? await runBundle(imported, request.values, path.join(studio.root, "bundles", imported.manifest.releaseId), execute)
+                : await studio.execute(prepared!, request.values, execute);
+              if (imported) await studio.data.put("runs", response.result.id, { ...response.result, outputs: {}, nodes: response.result.nodes.map(n => ({ ...n, outputs: {} })) }, true);
             } finally {
               runningStudio = false; overlays.setPage(previousPage); publishLayout();
               window.webContents.send("creator:case-state", state());
