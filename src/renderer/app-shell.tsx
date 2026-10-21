@@ -6,6 +6,7 @@ const menus = [
   { page: "scenarios", label: "Scenarios", color: "#68d6a6", path: "M4 4h6v6H4zM14 14h6v6h-6zM7 10v7h7M10 7h7v7" },
   { page: "browser-sessions", label: "Browser Sessions", color: "#75b9ff", path: "M21 12a9 9 0 1 1-18 0 9 9 0 0 1 18 0ZM3 12h18M12 3c5 5 5 13 0 18-5-5-5-13 0-18Z" },
   { page: "test-lab", label: "Test Lab", color: "#f4ae67", path: "M9 3h6M10 3v7L4 19q-1 2 2 2h12q3 0 2-2l-6-9V3M7 15h10" },
+  ...([['variations', 'Variations'], ['widget-registry', 'Widget Registry'], ['workflows', 'Workflows'], ['builds-releases', 'Builds & Releases']] as const).map(([page, label]) => ({ page, label, color: "#b5a0ff", path: "M4 4h6v6H4zM14 14h6v6h-6zM7 10v7h7M10 7h7v7" })),
   { page: "settings", label: "Settings", color: "#a8b2c2", path: "m9 3-1 3-3 1 1 3-2 2 2 2-1 3 3 1 1 3h4l1-3 3-1-1-3 2-2-2-2 1-3-3-1-1-3ZM15 12a3 3 0 1 1-6 0 3 3 0 0 1 6 0Z" },
 ] as const;
 

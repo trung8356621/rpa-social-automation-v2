@@ -1281,3 +1281,16 @@ body[data-panel="shell"] .app-shell > header > .environment { flex-shrink: 0; }
   .scenario-item { gap: 5px; flex-wrap: wrap; }
   .scenario-title { flex-basis: 50%; }
 }
+
+/* V3 uses the existing shell, form controls and palette. */
+.v3-studio[hidden] { display: none; }
+.v3-editor { max-width: 1100px; }
+.v3-editor fieldset { border: 1px solid #34445b; padding: 16px; display: grid; gap: 12px; min-width: 0; }
+.v3-field { border: 1px solid #34445b; padding: 12px; }
+.v3-field[open] { display: grid; gap: 8px; }
+.v3-mapping { display: flex; gap: 8px; flex-wrap: wrap; }
+.v3-canvas { overflow: auto; padding: 20px; background: #101b2c; border-radius: 8px; }
+.v3-node { border: 1px solid #697baf; border-radius: 8px; padding: 14px; max-width: 850px; margin: auto; display: grid; gap: 8px; }
+.v3-node small, .v3-message, .v3-release-list p { overflow-wrap: anywhere; white-space: pre-wrap; }
+.v3-edge { text-align: center; padding: 10px; color: #a8b2c2; }
+.v3-message { padding: 16px; background: #101b2c; max-height: 500px; overflow: auto; }

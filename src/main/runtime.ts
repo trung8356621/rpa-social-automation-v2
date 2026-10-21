@@ -4,7 +4,7 @@ import { validatePayload } from "./storage.js";
 import path from "node:path";
 import { readFile, writeFile } from "node:fs/promises";
 import { randomUUID } from "node:crypto";
-import type { Flow, Payload, Result, ExecutionStart, ExecutionDetails, Rect } from "../shared/contracts.js";
+import type { Flow, Payload, Result, ExecutionStart, ExecutionDetails, Rect, Step } from "../shared/contracts.js";
 import { BrowserCore, InputNotReady } from "./browser-core.js";
 import { Store } from "./storage.js";
 import { localOcr, type OcrEngine } from "./ocr.js";
@@ -22,10 +22,18 @@ export class Runtime {
   private latestRuns = new Set<string>();
   private batch?: TestLogScope & { status: string };
   private batchFlow?: Flow;
-  startPlayAllLog(flow?: Flow) {
+  private batchSteps?: Step[];
+  private lookupStep(id: string, version: number) {
+    if (!this.batchSteps) return this.store.step(id, version);
+    const step = this.batchSteps.find(s => s.id === id && s.version === version);
+    if (!step) throw new Error("Snapshot Step/version not found.");
+    return step;
+  }
+  startPlayAllLog(flow?: Flow, snapshotSteps?: Step[]) {
     if (this.busy || this.batch) throw new Error("Đang có lượt chạy.");
     this.batch = { runId: randomUUID(), ocrPasses: 0, scrolls: 0, status: "COMPLETED",
       network: snapshotNetworkSettings(this.store.networkSettings()) };
+    this.batchSteps = snapshotSteps ? structuredClone(snapshotSteps) : undefined;
     this.batchFlow = flow ? structuredClone(flow) : undefined;
     logTestBoundary(this.runDir, "START", { ...this.batch, label: "Play All" });
     return this.batch.runId;
@@ -36,6 +44,7 @@ export class Runtime {
     const batch = this.batch;
     this.batch = undefined;
     this.batchFlow = undefined;
+    this.batchSteps = undefined;
     logTestBoundary(this.runDir, "END", { ...batch, label: "Play All", status: failed ? "FAILED" : batch.status });
   }
   playAllNetwork(runId: string): NetworkRunSettings {
@@ -111,7 +120,7 @@ export class Runtime {
       try {
         const payload = request.overrideId
           ? this.store.overrides().find(o => o.id === request.overrideId)?.segment[0]
-          : this.store.step(request.stepId,request.version).payload;
+          : this.lookupStep(request.stepId,request.version).payload;
         matchTo = effectiveMatchTo(payload);
       } catch { /* Invalid versions still receive a paired boundary and validation error. */ }
       return `Step ${request.stepId} | v${request.version} | Match To ${matchToLabel(matchTo)}`;
@@ -153,7 +162,7 @@ export class Runtime {
     if (flow.zoom !== this.browser.zoom)
       throw new Error("Zoom flow không khớp browser.");
     const plans = requests.map(({ stepId, version, overrideId }) => {
-      const step = this.store.step(stepId, version);
+      const step = this.lookupStep(stepId, version);
       const override = overrideId
         ? this.store.overrides().find((o) => o.id === overrideId)
         : undefined;
@@ -603,7 +612,7 @@ export class Runtime {
       source,
       stepId,
       version,
-      flowId: this.store.flow()!.id,
+      flowId: (this.batchFlow ?? this.store.flow())!.id,
       overrideId,
       targetAsset: payload.target?.asset,
       clickSent,

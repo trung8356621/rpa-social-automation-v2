@@ -35,7 +35,7 @@ export type Manifest = { schemaVersion: 1; packageId: string; name: string; kind
   files: Record<string, string>; checksum: string; releaseId: string };
 export type Release = { manifest: Manifest; status: "built" | "published" | "deprecated";
   createdAt: string; publishedAt?: string; validation: Issue[]; testedRunId: string };
-export type StudioState = { definitions: Definition[]; releases: Release[]; previews: Preview[]; runs: RunResult[]; imports: Manifest[] };
+export type StudioState = { contracts?: Record<string, { fields: Field[]; inputs: Port[]; outputs: Port[] }>; definitions: Definition[]; releases: Release[]; previews: Preview[]; runs: RunResult[]; imports: Manifest[] };
 export type V3Request =
   | { action: "state" }
   | { action: "save"; definition: Definition }

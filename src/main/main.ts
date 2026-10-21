@@ -1,3 +1,5 @@
+import { AdminStudio } from "./admin-v3.js";
+import type { Definition, V3Response } from "../shared/admin-v3.js";
 import {
   app,
   BrowserWindow,
@@ -104,6 +106,8 @@ async function boot() {
   const browserSessions = new BrowserSessions(store);
   const scenarioGroups = new ScenarioGroups(store);
   const testLab = new TestLab(store, browserSessions);
+  const studio = new AdminStudio(path.join(dataPath, "admin-v3"), store, assetDir, path.join(dataPath, "test-runs"));
+  let runningStudio = false;
   const testEvidence = new TestRunEvidence(path.join(dataPath, "test-runs"));
   let runningTestCaseId: string | undefined;
   let switchingWorkspace = false;
@@ -333,7 +337,7 @@ async function boot() {
   let armedTest:
     { stepId: string; version: number; overrideId?: string } | undefined;
   const state = (): State => ({
-    testLab: testLab.read(), runningTestCaseId,
+    runningStudio, testLab: testLab.read(), runningTestCaseId,
     scenarioOrganization: scenarioGroups.read(),
     browserSessions: browserSessions.list(),
     activeBrowserSessionId: activeSessionId,
@@ -362,6 +366,7 @@ async function boot() {
     { width: number; height: number; zoom: number }
   >();
   const isIdle = () => {
+    if (runningStudio) throw new Error("Studio execution in progress.");
     if (runningTestCaseId) throw new Error("Đang chạy Test Case; vui lòng đợi.");
     if (switchingWorkspace) throw new Error("Đang chuyển tab; vui lòng đợi.");
     if (runtime.busy) throw new Error("Đang test; đợi tác vụ kết thúc.");
@@ -569,6 +574,70 @@ async function boot() {
       sender: event.sender.id,
     });
     switch (command.type) {
+      case "studio": {
+        if (event.sender !== window.webContents) throw new Error("Invalid Studio sender.");
+        isIdle();
+        if (uiPlayAllRunId) throw new Error("Finish Play All before Studio actions.");
+        const request = command.request;
+        let response: Partial<V3Response> = {};
+        switch (request.action) {
+          case "state": break;
+          case "save": await studio.save(request.definition); break;
+          case "duplicate": await studio.duplicate(request.id); break;
+          case "delete": await studio.delete(request.id, request.confirmed); break;
+          case "validate": response.issues = (await studio.validate(request.id)).issues; break;
+          case "selectPreview": {
+            const result = testLab.get(request.caseId).lastResult;
+            if (!result || result.runId !== request.runId) throw new Error("Select the current completed Test Run.");
+            await studio.previews.select(result, request.kind, request.confirmed); break;
+          }
+          case "preview": {
+            const { preview, bytes } = await studio.previews.bytes(request.id);
+            response.media = { kind: preview.kind, url: `data:${preview.kind === "video" ? "video/webm" : "image/png"};base64,${bytes.toString("base64")}` }; break;
+          }
+          case "run": {
+            if (request.imported) throw new Error("Package import adapter not installed.");
+            const prepared = await studio.prepare(await studio.data.get<Definition>("definitions", request.id));
+            browserSessions.get(request.sessionId);
+            const url = new URL(request.startUrl);
+            if (!["http:", "https:"].includes(url.protocol) || url.username || url.password) throw new Error("Use a local HTTP(S) test URL without credentials.");
+            const previousPage = overlays.page;
+            runningStudio = true; armedTest = undefined;
+            window.webContents.send("creator:case-state", state());
+            try {
+              if (!prepared.issues.length) {
+                await switchBrowserSession(request.sessionId, true, false);
+                overlays.setExpanded("editor", false); overlays.setPage("creator"); publishLayout();
+                await browser.navigate(url.href);
+              }
+              response.result = await studio.execute(prepared, request.values, async (snapshot, values, assets) => {
+                browser.setZoom(snapshot.flow.zoom);
+                const shared = new Runtime(browser, store, assets, runDir);
+                snapshot.flow.defaultPattern = { values };
+                const batch = shared.startPlayAllLog(snapshot.flow, snapshot.steps);
+                let status: "VERIFIED" | "ACTION_SENT" | "BLOCKED" | "ERROR" = "VERIFIED", message = "";
+                try {
+                  for (const [i, step] of snapshot.steps.entries()) {
+                    if (i) await new Promise(resolve => setTimeout(resolve, shared.playAllNetwork(batch).stepDelayMs));
+                    const results = await shared.test(step.id, step.version, undefined, batch);
+                    const failed = results.find(x => !x.ok);
+                    message = (failed ?? results.at(-1))?.message ?? "No runtime results.";
+                    if (failed || !results.length) { status = failed?.status === "BLOCKED" ? "BLOCKED" : "ERROR"; break; }
+                    if (results.some(x => x.status !== "VERIFIED")) status = "ACTION_SENT";
+                  }
+                  return { status, message, runId: batch };
+                } finally { shared.endPlayAllLog(batch, ["BLOCKED", "ERROR"].includes(status)); }
+              });
+            } finally {
+              runningStudio = false; overlays.setPage(previousPage); publishLayout();
+              window.webContents.send("creator:case-state", state());
+            }
+            break;
+          }
+          default: throw new Error("Studio action is not available yet.");
+        }
+        return { ...response, state: await studio.state() } satisfies V3Response;
+      }
       case "recordingEvent":
         if (event.sender !== window.webContents) throw new Error("Invalid recording sender.");
         await recorder.receive(command.token, command.event, command.data); return;
@@ -690,7 +759,7 @@ async function boot() {
       case "appPage":
         isIdle();
         if (uiPlayAllRunId) throw new Error("Đợi Play All kết thúc trước khi chuyển màn hình.");
-        if (event.sender !== window.webContents || !["scenarios", "creator", "browser-sessions", "test-lab", "settings", "test-case"].includes(command.page))
+        if (event.sender !== window.webContents || !["scenarios", "creator", "browser-sessions", "test-lab", "settings", "test-case", "variations", "widget-registry", "workflows", "builds-releases"].includes(command.page))
           throw new Error("Invalid app page");
         overlays.setPage(command.page);
         if (command.page !== "creator") armedTest = undefined;

@@ -1,6 +1,7 @@
+import type { V3Request } from "./admin-v3.js";
 import type { NetworkSettings, NetworkRunSettings } from "./network-mode.js";
 export type Rect = { x: number; y: number; width: number; height: number };
-export type MainPage = "scenarios" | "browser-sessions" | "test-lab" | "settings";
+export type MainPage = "scenarios" | "browser-sessions" | "test-lab" | "settings" | "variations" | "widget-registry" | "workflows" | "builds-releases";
 export type AppPage = MainPage | "creator" | "test-case";
 export type VariableValues = Record<string, string | string[] | number>;
 export type CaseRunStatus = "RUNNING" | "PASS" | "BLOCKED" | "SKIPPED" | "ERROR" | "ACTION_SENT";
@@ -33,7 +34,8 @@ export type ScenarioOrganization = {
 };
 export type WorkspaceTab = {
   id: string;
-  kind: "creator" | "test-case";
+  kind: "creator" | "test-case" | "studio";
+  studioId?: string; studioPage?: MainPage;
   caseId?: string;
   flowId: string;
   sessionId?: string;
@@ -232,6 +234,7 @@ export type ResolutionTrace = {
   }[];
 };
 export type State = {
+  runningStudio?: boolean;
   testLab?: TestLabState;
   runningTestCaseId?: string;
   scenarioOrganization?: ScenarioOrganization;
@@ -253,6 +256,7 @@ export type State = {
   dataPath: string;
 };
 export type Command =
+  | { type: "studio"; request: V3Request }
   | { type: "recordingEvent"; token: string; event: "ready" | "chunk" | "done" | "error"; data?: string }
   | { type: "testCaseVideo"; caseId: string; runId: string }
   | { type: "testCaseScreenshot"; caseId: string; runId: string }

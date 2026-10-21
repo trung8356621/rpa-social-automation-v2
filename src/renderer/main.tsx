@@ -1,3 +1,4 @@
+import { AdminStudioPage, isStudioPage } from "./admin-studio";
 import { installBrowserRecording } from "./browser-recording";
 import { effectiveMatchTo, matchToLabel } from "../shared/match-to";
 import { playSequential, playbackResult, type StepPlayback } from "./playback";
@@ -82,7 +83,7 @@ function Creator() {
   const creatorVisible = appPage === "creator";
   const activeCaseTab = tabs.find(t => t.id === activeTabId && t.kind === "test-case");
   useEffect(() => {
-    if (["scenarios", "browser-sessions", "test-lab", "settings"].includes(appPage)) setMainPage(appPage as MainPage);
+    if (["scenarios", "browser-sessions", "test-lab", "settings", "variations", "widget-registry", "workflows", "builds-releases"].includes(appPage)) setMainPage(appPage as MainPage);
   }, [appPage]);
   const sidebarCollapsed = state?.sidebarCollapsed ?? false;
   const networkSettings = state?.networkSettings ?? defaultNetworkSettings();
@@ -665,7 +666,7 @@ function Creator() {
   async function changeAppPage(page: AppPage) {
     const next = await invoke<State>({ type: "appPage", page });
     setState(next);
-    if (["scenarios", "browser-sessions", "test-lab", "settings"].includes(page)) setMainPage(page as MainPage);
+    if (["scenarios", "browser-sessions", "test-lab", "settings", "variations", "widget-registry", "workflows", "builds-releases"].includes(page)) setMainPage(page as MainPage);
     setPageError("");
     window.scrollTo({ left: 0, top: 0 });
   }
@@ -687,6 +688,7 @@ function Creator() {
   }
   async function activateTab(tab: WorkspaceTab) {
     captureActiveTab();
+    if (tab.kind === "studio") { await changeAppPage(tab.studioPage ?? "variations"); setActiveTabId(tab.id); return; }
     workspaceRestoring.current = true;
     try {
       if (tab.kind === "test-case") {
@@ -931,7 +933,7 @@ function Creator() {
           s.payload.action === "CLICK_TARGET",
       )
     : undefined;
-  const navigationLocked = busy || !!shot || !!state?.runningTestCaseId;
+  const navigationLocked = busy || !!shot || !!state?.runningTestCaseId || !!state?.runningStudio;
   const locked = navigationLocked || !!activeCaseTab;
   const field = (label: string, child: React.ReactNode) => (
     <label>
@@ -1167,6 +1169,14 @@ function Creator() {
         <TestCaseEditor tabId={tab.id} item={state.testLab?.cases.find(c => c.id === tab.caseId)} state={state}
           locked={navigationLocked} report={reportCase} saved={caseSaved} saving={setBusy} run={runCase} />
       </div>)}
+      {shell && state && <AdminStudioPage page={appPage} state={state} locked={navigationLocked}
+        selectedId={tabs.find(t => t.id === activeTabId && t.kind === "studio")?.studioId}
+        open={(id, page, label) => {
+          captureActiveTab();
+          const tab: WorkspaceTab = { id: `studio:${id}`, kind: "studio", studioId: id, studioPage: page, flowId: label };
+          if (!tabsRef.current.some(t => t.id === tab.id)) updateTabs([...tabsRef.current, tab]);
+          setActiveTabId(tab.id); void task(() => changeAppPage(page));
+        }} />}
       {shell && appPage === "settings" && <section className="app-page" aria-label="Settings">
         <div className="page-heading"><h1>Settings</h1><p>Cấu hình local cho ứng dụng trên máy này.</p></div>
         <NetworkSettings state={state} locked={navigationLocked} update={async command => setState(await invoke<State>(command))} />
