@@ -14,6 +14,7 @@ export class TestLab {
       const result = item.lastResult;
       result.status = "ERROR"; result.finishedAt = new Date().toISOString();
       result.message = "Ứng dụng đã dừng trước khi Test Run kết thúc. Kiểm tra website trước khi chạy lại.";
+      if (item.recording && !result.recordingPath) result.recordingError = "Recording was interrupted before finalization.";
       if (!result.screenshotPath) result.screenshotError = "Lượt chạy bị gián đoạn trước khi lưu screenshot cuối.";
       for (const step of result.steps ?? []) {
         if (step.status === "RUNNING") { step.status = "ERROR"; step.message = result.message; }
@@ -38,6 +39,7 @@ export class TestLab {
   }
   validate(config: TestCaseConfig, checkValues = true) {
     this.name(config.name);
+    if (config.recording !== undefined && typeof config.recording !== "boolean") throw new Error("Recording must be boolean.");
     const flow = this.store.flows().find(f => f.id === config.flowId);
     if (!flow) throw new Error("Scenario không còn tồn tại.");
     this.sessions.get(config.sessionId);

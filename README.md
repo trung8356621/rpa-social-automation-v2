@@ -1,5 +1,7 @@
 # RPA Creator V2 — POC
 
+Admin Studio V3 implementation: [audit, contracts, phase commits, limits and acceptance checklist](docs/V3-IMPLEMENTATION.md). V3 code has not yet been compiled or exercised; the V2 notes below are retained as baseline history.
+
 Creator đầu tiên, theo [baseline V2 trên Drive](https://docs.google.com/document/d/141N81qBlAg9VlX1WF-iaX9CfAieTcmBokjbWp5rpqUY/edit), đọc ngày 19/10/2026; mục 24 Action-first ưu tiên hơn các ý tưởng cũ.
 
 **Creator layout/pointer:** đang xử lý báo cáo click không nhận trên Facebook. Editor chuyển thành cột cạnh Step List, mặc định ẩn; chỉ Test & Debug còn native overlay. Lỗi click vật lý chưa xác nhận đã sửa. Xem [bố cục, kiểm thử và hướng dẫn Facebook](docs/creator-ui-refactor-status.md).

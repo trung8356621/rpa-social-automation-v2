@@ -2,7 +2,7 @@ import type { V3Request } from "./admin-v3.js";
 import type { NetworkSettings, NetworkRunSettings } from "./network-mode.js";
 export type Rect = { x: number; y: number; width: number; height: number };
 export type MainPage = "scenarios" | "browser-sessions" | "test-lab" | "settings" | "variations" | "widget-registry" | "workflows" | "builds-releases";
-export type AppPage = MainPage | "creator" | "test-case";
+export type AppPage = MainPage | "creator" | "test-case" | "studio-run";
 export type VariableValues = Record<string, string | string[] | number>;
 export type CaseRunStatus = "RUNNING" | "PASS" | "BLOCKED" | "SKIPPED" | "ERROR" | "ACTION_SENT";
 export type CaseStepResult = {

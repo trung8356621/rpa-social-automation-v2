@@ -1,7 +1,7 @@
 import path from "node:path";
 import { randomUUID } from "node:crypto";
 import type { RunResult, Value } from "../shared/admin-v3.js";
-import { inputValues, isValue, resolveBinding, V3_CAPABILITIES } from "../shared/admin-v3.js";
+import { inputValues, isValue, readBinding, V3_CAPABILITIES } from "../shared/admin-v3.js";
 import { validateVariables, resolvePayload } from "../shared/flow-model.js";
 import type { ExecuteSnapshot } from "./admin-v3.js";
 import { readBundle, type Bundle } from "./studio-packages.js";
@@ -17,7 +17,7 @@ export async function runBundle(bundle: Bundle, supplied: Record<string, Value>,
     if (bundle.manifest.requiredCapabilities.some(c => !capabilities.includes(c))) throw new Error("RUNNER_CAPABILITY_MISSING");
     const inputs = inputValues(bundle.definition.fields, supplied), nodes: Record<string, Record<string, Value>> = Object.create(null);
     for (const node of bundle.definition.nodes) {
-      const values = Object.fromEntries(Object.entries(node.mappings).map(([key, binding]) => [key, resolveBinding(binding, inputs, nodes)]));
+      const values = Object.fromEntries(Object.entries(node.mappings).map(([key, binding]) => [key, readBinding(binding, inputs, nodes)] as const).filter((entry): entry is readonly [string, Value] => entry[1] !== undefined));
       let outputs: Record<string, Value>, status: RunResult["status"];
       if (bundle.manifest.kind === "workflow") {
         const dependency = node.releaseId && bundle.dependencies[node.releaseId]; if (!dependency) throw new Error("MISSING_WIDGET_DEPENDENCY");
@@ -36,7 +36,8 @@ export async function runBundle(bundle: Bundle, supplied: Record<string, Value>,
       if (status === "ACTION_SENT") result.status = "ACTION_SENT";
     }
     for (const output of bundle.definition.outputs) {
-      const value = resolveBinding(output.binding, inputs, nodes);
+      const value = readBinding(output.binding, inputs, nodes);
+      if (value === undefined && !output.required) continue;
       if (!isValue(output.type, value)) throw new Error(`OUTPUT_TYPE: ${output.key}`);
       result.outputs[output.key] = value;
     }

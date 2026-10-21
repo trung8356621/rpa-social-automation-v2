@@ -31,7 +31,9 @@ export function installBrowserRecording() {
     } else if (current?.token === message.token) {
       const run = current;
       if (message.type === "frame" && message.data) run.frames = run.frames.then(async () => {
-        const bitmap = await createImageBitmap(await (await fetch(`data:image/jpeg;base64,${message.data}`)).blob());
+        const binary = atob(message.data!);
+        const bytes = Uint8Array.from(binary, char => char.charCodeAt(0));
+        const bitmap = await createImageBitmap(new Blob([bytes], { type: "image/jpeg" }));
         const context = run.canvas.getContext("2d")!;
         context.fillStyle = "#000"; context.fillRect(0, 0, run.canvas.width, run.canvas.height);
         const scale = Math.min(run.canvas.width / bitmap.width, run.canvas.height / bitmap.height);

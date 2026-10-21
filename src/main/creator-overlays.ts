@@ -55,7 +55,7 @@ export class CreatorOverlays {
     bounds.browser.y -= this.scroll.top;
     Object.assign(this.browser.bounds, bounds.browser);
     this.browser.view.setBounds(bounds.browser);
-    this.browser.view.setVisible(this.page === "creator" && this.browser.visible);
+    this.browser.view.setVisible((this.page === "creator" || this.page === "studio-run") && this.browser.visible);
     // Legacy diagnostics can inspect bounds, but no Debug surface is attached.
     this.debug.setBounds(bounds.debug);
     this.debug.setVisible(false);

@@ -9,7 +9,7 @@ export type Fields = Field[];
 export type Field = { key: string; label: string; type: ValueType; required: boolean;
   visibility: "exposed" | "hidden"; description?: string; default?: Value; sensitive?: boolean;
   validation?: { min?: number; max?: number; minLength?: number; maxLength?: number; pattern?: string } };
-export type Port = { key: string; type: ValueType; required: boolean };
+export type Port = { key: string; type: ValueType; required: boolean; sensitive?: boolean };
 export type Binding = { source: "input"; key: string } | { source: "node"; nodeId: string; key: string }
   | { source: "literal"; type: ValueType; value: Value };
 export type Snapshot = { schemaVersion: 1; flow: Flow; steps: Step[] };
@@ -21,7 +21,7 @@ export type Preview = { id: string; kind: "screenshot" | "video"; filename: stri
   caseId: string; runId: string; reviewedAt: string; reviewed: true };
 export type Lifecycle = "draft" | "validated" | "tested" | "built" | "published" | "deprecated";
 export type Definition = { id: string; revision: number; name: string; kind: "variation" | "widget" | "workflow";
-  version: string; variationId?: string; fields: Fields; nodes: CompositionNode[]; outputs: Output[];
+  version: string; variationId?: string; packageId?: string; fields: Fields; nodes: CompositionNode[]; outputs: Output[];
   capabilities: string[]; previewIds: string[]; state: Lifecycle; updatedAt: string;
   testedDigest?: string; testedRunId?: string; testedAt?: string };
 export type Issue = { code: string; path: string; message: string };
@@ -33,9 +33,11 @@ export type Manifest = { schemaVersion: 1; packageId: string; name: string; kind
   dependencies: { releaseId: string; packageId: string; version: string; mode: "bundled" }[];
   previews: { path: string; kind: Preview["kind"]; sha256: string; reviewed: true }[];
   files: Record<string, string>; checksum: string; releaseId: string };
-export type Release = { manifest: Manifest; status: "built" | "published" | "deprecated";
+export type Release = { definitionId: string; manifest: Manifest; status: "built" | "published" | "deprecated";
   createdAt: string; publishedAt?: string; validation: Issue[]; testedRunId: string };
-export type StudioState = { contracts?: Record<string, { fields: Field[]; inputs: Port[]; outputs: Port[] }>; definitions: Definition[]; releases: Release[]; previews: Preview[]; runs: RunResult[]; imports: Manifest[] };
+export type BuildAttempt = { id: string; definitionId: string; name: string; kind: Definition["kind"]; version: string;
+  status: "built" | "failed"; createdAt: string; releaseId?: string; issues: Issue[] };
+export type StudioState = { builds?: BuildAttempt[]; contracts?: Record<string, { fields: Field[]; inputs: Port[]; outputs: Port[] }>; definitions: Definition[]; releases: Release[]; previews: Preview[]; runs: RunResult[]; imports: Manifest[] };
 export type V3Request =
   | { action: "state" }
   | { action: "save"; definition: Definition }
@@ -47,8 +49,11 @@ export type V3Request =
   | { action: "run"; id: string; sessionId: string; startUrl: string; values: VariableValues; imported?: boolean }
   | { action: "selectPreview"; caseId: string; runId: string; kind: Preview["kind"]; confirmed: boolean }
   | { action: "preview"; id: string };
-export type V3Response = { state: StudioState; issues?: Issue[]; result?: RunResult; media?: { kind: Preview["kind"]; url: string }; cancelled?: boolean };
-export const scenarioOutputs: Port[] = ["status", "message", "runId", "scenarioId"].map(key => ({ key, type: "text", required: true }));
+export type V3Response = { state: StudioState; issues?: Issue[]; result?: RunResult; media?: { kind: Preview["kind"]; url: string }; cancelled?: boolean; error?: { code: string; message: string } };
+export const scenarioOutputs: Port[] = ["status", "message", "runId", "scenarioId"].map(key => ({ key, type: "text" as const, required: true }));
+export const inputPorts = (fields: Field[]): Port[] => fields.filter(f => f.visibility === "exposed" || f.sensitive).map(f => ({
+  key: f.key, type: f.type, required: f.required && f.default === undefined, ...(f.sensitive ? { sensitive: true } : {})
+}));
 export function isValue(type: ValueType, value: unknown): value is Value {
   return type === "files" ? Array.isArray(value) && value.every(x => typeof x === "string")
     : type === "integer" ? typeof value === "number" && Number.isSafeInteger(value)
@@ -71,8 +76,11 @@ export function inputValues(fields: Fields, supplied: Record<string, unknown>): 
   }
   return values;
 }
+export function readBinding(binding: Binding, inputs: Record<string, Value>, nodes: Record<string, Record<string, Value>>): Value | undefined {
+  return binding.source === "literal" ? binding.value : binding.source === "input" ? inputs[binding.key] : nodes[binding.nodeId]?.[binding.key];
+}
 export function resolveBinding(binding: Binding, inputs: Record<string, Value>, nodes: Record<string, Record<string, Value>>): Value {
-  const value = binding.source === "literal" ? binding.value : binding.source === "input" ? inputs[binding.key] : nodes[binding.nodeId]?.[binding.key];
+  const value = readBinding(binding, inputs, nodes);
   if (value === undefined) throw new Error("MISSING_MAPPING_VALUE");
   return value;
 }

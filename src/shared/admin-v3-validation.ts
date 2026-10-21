@@ -1,6 +1,7 @@
-import type { Definition, Snapshot, Manifest, Issue, Port, Binding, ValueType, Field } from "./admin-v3.js";
-import { compatible, isValue, scenarioOutputs, V3_CAPABILITIES } from "./admin-v3.js";
+import type { Definition, Snapshot, Manifest, Issue, Port, Binding, Field } from "./admin-v3.js";
+import { compatible, isValue, inputValues, scenarioOutputs, V3_CAPABILITIES } from "./admin-v3.js";
 export const safeKey = (x: unknown): x is string => typeof x === "string" && /^[A-Za-z][A-Za-z0-9_-]{0,79}$/.test(x) && !["constructor", "prototype", "__proto__"].includes(x);
+export const sensitiveKey = (key: string) => /password|passwd|token|secret|cookie|credential|api.?key|authorization/i.test(key);
 export const valueTypes = ["text", "file", "files", "integer", "number"];
 export function validateFields(fields: Field[]): Issue[] {
   const issues: Issue[] = [], keys = new Set<string>();
@@ -11,20 +12,29 @@ export function validateFields(fields: Field[]): Issue[] {
     if (!f || !safeKey(f.key) || keys.has(f.key)) { add(at, "Invalid/duplicate key."); continue; }
     keys.add(f.key);
     if (!valueTypes.includes(f.type) || typeof f.label !== "string" || !f.label.trim() || typeof f.required !== "boolean" || !["hidden", "exposed"].includes(f.visibility)) add(at, "Invalid field type, label, visibility or required flag.");
+    if (sensitiveKey(f.key) && !f.sensitive) add(at, "Credential-like keys must be sensitive local inputs.");
     if (f.default !== undefined && !isValue(f.type, f.default)) add(at, "Default type does not match field.");
+    if (f.sensitive && f.visibility === "hidden") add(at, "Sensitive inputs must be exposed for local entry; a hidden-secret provider is not implemented.");
     if (f.sensitive && f.default !== undefined) add(at, "Sensitive inputs cannot have stored defaults.");
     if (f.visibility === "hidden" && !f.sensitive && f.default === undefined) add(at, "Hidden input requires an explicit default.");
     if (["file", "files"].includes(f.type) && f.default !== undefined) add(at, "File paths must be supplied locally at runtime.");
+    if (f.description !== undefined && (typeof f.description !== "string" || f.description.length > 2000) || f.sensitive !== undefined && typeof f.sensitive !== "boolean") add(at, "Invalid description or sensitive flag.");
     const v = f.validation;
+    if (v !== undefined && (!v || typeof v !== "object" || Array.isArray(v))) add(at, "Validation must be an object.");
     if (v) {
       if (typeof v !== "object" || Object.keys(v).some(k => !["min", "max", "minLength", "maxLength", "pattern"].includes(k))) add(at, "Unsupported validation rule.");
       for (const n of [v.min, v.max, v.minLength, v.maxLength]) if (n !== undefined && (typeof n !== "number" || !Number.isFinite(n))) add(at, "Validation bounds must be finite numbers.");
+      for (const n of [v.minLength, v.maxLength]) if (n !== undefined && (!Number.isSafeInteger(n) || n < 0)) add(at, "Length bounds must be nonnegative integers.");
       if (v.min !== undefined && v.max !== undefined && v.min > v.max || v.minLength !== undefined && v.maxLength !== undefined && v.minLength > v.maxLength) add(at, "Invalid bounds.");
       if (v.pattern !== undefined) {
         // Deliberately bounded regex subset: avoid nested quantifiers/backreferences in user schemas.
-        if (typeof v.pattern !== "string" || v.pattern.length > 120 || /[(){}]|\\[1-9]/.test(v.pattern)) add(at, "Pattern supports a bounded subset without groups, braces or backreferences.");
+        if (typeof v.pattern !== "string" || v.pattern.length > 120 || !v.pattern.startsWith("^") || !v.pattern.endsWith("$") || (v.pattern.match(/[+*?]/g)?.length ?? 0) > 1 || /[(){}]|\\[1-9]/.test(v.pattern)) add(at, "Pattern supports a bounded subset without groups, braces or backreferences.");
         else try { new RegExp(v.pattern); } catch { add(at, "Invalid pattern."); }
       }
+    }
+    if (f.default !== undefined && !issues.some(x => x.path === at)) {
+      try { inputValues([{ ...f, visibility: "exposed" }], { [f.key]: f.default }); }
+      catch { add(at, "Default does not satisfy the field validation."); }
     }
   }
   return issues;
@@ -35,18 +45,22 @@ export function validateDefinition(d: Definition, snapshots: Record<string, Snap
   if (!d || typeof d !== "object") return [{ code: "SCHEMA", path: "definition", message: "Definition required." }];
   if (!safeKey(d.id) || !["variation", "widget", "workflow"].includes(d.kind) || typeof d.name !== "string" || !d.name.trim() || d.name.length > 120 || !/^\d+\.\d+\.\d+$/.test(d.version)) add("SCHEMA", "definition", "Invalid ID, name, kind or semantic version.");
   issues.push(...validateFields(d.fields));
+  if (!Array.isArray(d.fields)) return issues;
   if (!Array.isArray(d.nodes) || !d.nodes.length || d.nodes.length > 100 || !Array.isArray(d.outputs) || !Array.isArray(d.capabilities) || !Array.isArray(d.previewIds)) {
     add("SCHEMA", "graph", "Expected 1–100 nodes, outputs, capabilities and preview IDs."); return issues;
   }
   for (const capability of d.capabilities) if (!(V3_CAPABILITIES as readonly string[]).includes(capability)) add("CAPABILITY_UNSUPPORTED", "capabilities", String(capability));
   const previous: Record<string, Port[]> = Object.create(null);
   function binding(b: Binding, port: Port, at: string) {
-    if (!b || typeof b !== "object") { add("MISSING_MAPPING", at, "Mapping required."); return; }
+    if (!b || typeof b !== "object") { if (port.required) add("MISSING_MAPPING", at, "Mapping required."); return; }
+    if (b.source === "literal" && ["file", "files"].includes(b.type)) add("LOCAL_FILE_BINDING", at, "File inputs must be supplied locally through the form.");
+    if (port.sensitive && (b.source !== "input" || !d.fields.find(f => f.key === b.key)?.sensitive)) add("SENSITIVE_MAPPING", at, "Sensitive targets require a sensitive local form input.");
     const source = b.source === "literal" ? (isValue(b.type, b.value) && valueTypes.includes(b.type) ? b.type : undefined)
       : b.source === "input" ? d.fields?.find(f => f.key === b.key)?.type
       : b.source === "node" ? previous[b.nodeId]?.find(f => f.key === b.key)?.type : undefined;
     if (!source) add("BROKEN_MAPPING", at, "Source must exist and precede its consumer; cycles and forward references are forbidden.");
     else if (!compatible(source, port.type)) add("TYPE_MISMATCH", at, `${source} cannot map to ${port.type}.`);
+    if (b.source === "node" && port.required && previous[b.nodeId]?.find(p => p.key === b.key)?.required === false) add("OPTIONAL_TO_REQUIRED", at, "Optional node outputs cannot satisfy required targets.");
     if (b.source === "input" && port.required) {
       const field = d.fields.find(f => f.key === b.key);
       if (field && !field.required && field.default === undefined) add("OPTIONAL_TO_REQUIRED", at, "Required target needs a required source or default.");
@@ -62,7 +76,7 @@ export function validateDefinition(d: Definition, snapshots: Record<string, Snap
       if (!release || release.kind !== "widget") add("MISSING_WIDGET", at, "Pin an existing Widget release ID.");
       // Dependency input/output contracts are resolved by the main-process package reader.
       const snapshot = snapshots[n.id];
-      if (snapshot) { ports = (snapshot.flow.variables ?? []).map(v => ({ key: v.id, type: v.type, required: true })); }
+      if (snapshot) { ports = (snapshot.flow.variables ?? []).map(v => ({ key: v.id, type: v.type, required: true, ...(sensitiveKey(v.key) ? { sensitive: true } : {}) })); }
       outputs = contracts[n.releaseId ?? ""]?.outputs ?? [];
       ports = contracts[n.releaseId ?? ""]?.inputs ?? ports;
     } else {
@@ -71,7 +85,7 @@ export function validateDefinition(d: Definition, snapshots: Record<string, Snap
       else {
         if (!Array.isArray(n.scenario.steps) || !n.scenario.steps.length || JSON.stringify(snapshot.flow.steps) !== JSON.stringify(n.scenario.steps)
           || snapshot.steps.length !== n.scenario.steps.length || n.scenario.steps.some(ref => !snapshot.steps.some(s => s.id === ref.id && s.version === ref.version))) add("MISSING_STEP_VERSION", at, "Pinned Step/version is missing or snapshot order differs.");
-        ports = (snapshot.flow.variables ?? []).map(v => ({ key: v.id, type: v.type, required: true }));
+        ports = (snapshot.flow.variables ?? []).map(v => ({ key: v.id, type: v.type, required: true, ...(sensitiveKey(v.key) ? { sensitive: true } : {}) }));
         outputs = scenarioOutputs;
       }
     }

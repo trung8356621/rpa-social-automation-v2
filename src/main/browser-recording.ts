@@ -5,6 +5,7 @@ import { randomUUID } from "node:crypto";
 
 /** CDP captures only the executing Browser. The trusted shell encodes silent WebM. */
 export class BrowserRecording {
+  private lastFrameAt = 0;
   private active?: { token: string; browser: WebContents; file: FileHandle; temp: string; final: string;
     bytes: number; error?: string; attached: boolean; queue: Promise<void>; ready: () => void; done: () => void;
     readyPromise: Promise<void>; donePromise: Promise<void> };
@@ -12,7 +13,10 @@ export class BrowserRecording {
   private frame = (_event: Electron.Event, method: string, params: Record<string, unknown>) => {
     const run = this.active;
     if (!run || method !== "Page.screencastFrame") return;
-    this.shell.send("creator:recording", { type: "frame", token: run.token, data: params.data });
+    if (Date.now() - this.lastFrameAt >= 80) {
+      this.lastFrameAt = Date.now();
+      this.shell.send("creator:recording", { type: "frame", token: run.token, data: params.data });
+    }
     void run.browser.debugger.sendCommand("Page.screencastFrameAck", { sessionId: params.sessionId }).catch(() => {});
   };
   async start(browser: WebContents, caseId: string, runId: string) {
@@ -24,14 +28,16 @@ export class BrowserRecording {
     const file = await open(temp, "wx");
     let ready!: () => void, done!: () => void;
     const readyPromise = new Promise<void>(resolve => { ready = resolve; }), donePromise = new Promise<void>(resolve => { done = resolve; });
-    const run = this.active = { token: randomUUID(), browser, file, temp, final, bytes: 0, attached: false,
+    const run: NonNullable<BrowserRecording["active"]> = { token: randomUUID(), browser, file, temp, final, bytes: 0, attached: false,
       queue: Promise.resolve(), ready, done, readyPromise, donePromise };
+    this.active = run;
     try {
       this.shell.send("creator:recording", { type: "start", token: run.token });
       await this.timeout(readyPromise, 5000);
       if (run.error) throw new Error(run.error);
       if (!browser.debugger.isAttached()) { browser.debugger.attach("1.3"); run.attached = true; }
       browser.debugger.on("message", this.frame);
+      await browser.debugger.sendCommand("Page.enable");
       await browser.debugger.sendCommand("Page.startScreencast", { format: "jpeg", quality: 75, everyNthFrame: 1, maxWidth: 1280, maxHeight: 720 });
     } catch (error) { run.error = String(error); await this.stop().catch(() => {}); throw error; }
   }

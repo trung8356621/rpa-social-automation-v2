@@ -1294,3 +1294,5 @@ body[data-panel="shell"] .app-shell > header > .environment { flex-shrink: 0; }
 .v3-node small, .v3-message, .v3-release-list p { overflow-wrap: anywhere; white-space: pre-wrap; }
 .v3-edge { text-align: center; padding: 10px; color: #a8b2c2; }
 .v3-message { padding: 16px; background: #101b2c; max-height: 500px; overflow: auto; }
+
+.studio-run-status { margin-left: var(--app-nav-width); padding: 16px; max-width: 360px; color: #a8b2c2; }

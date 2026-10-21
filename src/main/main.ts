@@ -1,5 +1,5 @@
 import { runBundle } from "./runner-package.js";
-import type { ExecuteSnapshot } from "./admin-v3.js";
+import { StudioError, type ExecuteSnapshot } from "./admin-v3.js";
 import { WorkflowStudio } from "./studio-workflows.js";
 import type { Definition, V3Response } from "../shared/admin-v3.js";
 import {
@@ -12,7 +12,7 @@ import {
   screen,
   clipboard,
 } from "electron";
-import { mkdir, writeFile, readFile } from "node:fs/promises";
+import { mkdir, writeFile, readFile, stat } from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import sharp from "sharp";
@@ -110,6 +110,7 @@ async function boot() {
   const testLab = new TestLab(store, browserSessions);
   const studio = new WorkflowStudio(path.join(dataPath, "admin-v3"), store, assetDir, path.join(dataPath, "test-runs"));
   let runningStudio = false;
+  let studioCommandBusy = false;
   const testEvidence = new TestRunEvidence(path.join(dataPath, "test-runs"));
   let runningTestCaseId: string | undefined;
   let switchingWorkspace = false;
@@ -355,7 +356,7 @@ async function boot() {
     zoom: browser.zoom,
     browserBounds: browser.bounds,
     focused: browser.view.webContents.isFocused(),
-    visible: browser.visible && overlays.page === "creator",
+    visible: browser.visible && (overlays.page === "creator" || overlays.page === "studio-run"),
     dataPath,
   });
   const publishLayout = () => {
@@ -368,7 +369,7 @@ async function boot() {
     { width: number; height: number; zoom: number }
   >();
   const isIdle = () => {
-    if (runningStudio) throw new Error("Studio execution in progress.");
+    if (runningStudio || studioCommandBusy) throw new Error("Studio execution in progress.");
     if (runningTestCaseId) throw new Error("Đang chạy Test Case; vui lòng đợi.");
     if (switchingWorkspace) throw new Error("Đang chuyển tab; vui lòng đợi.");
     if (runtime.busy) throw new Error("Đang test; đợi tác vụ kết thúc.");
@@ -580,6 +581,8 @@ async function boot() {
         if (event.sender !== window.webContents) throw new Error("Invalid Studio sender.");
         isIdle();
         if (uiPlayAllRunId) throw new Error("Finish Play All before Studio actions.");
+        studioCommandBusy = true;
+        try {
         const request = command.request;
         let response: Partial<V3Response> = {};
         switch (request.action) {
@@ -590,9 +593,14 @@ async function boot() {
           case "import": {
             const selected = await dialog.showOpenDialog(window, { title: "Import runnable package", properties: ["openFile"], filters: [{ name: "Widget / Workflow ZIP", extensions: ["zip"] }] });
             if (selected.canceled || !selected.filePaths[0]) response.cancelled = true;
-            else await studio.import(await readFile(selected.filePaths[0]));
+            else {
+              if ((await stat(selected.filePaths[0])).size > 386 * 1024 * 1024) throw new Error("ZIP_LIMIT: Package exceeds the import limit.");
+              await studio.import(await readFile(selected.filePaths[0]));
+            }
             break;
           }
+          case "publish": await studio.publish(request.releaseId); break;
+          case "deprecate": await studio.deprecate(request.releaseId); break;
           case "build": await studio.build(request.id); break;
           case "export": {
             const selected = await dialog.showSaveDialog(window, { title: "Export runnable package", defaultPath: `${request.releaseId}.zip`, filters: [{ name: "Widget / Workflow ZIP", extensions: ["zip"] }] });
@@ -622,7 +630,8 @@ async function boot() {
             try {
               if (imported || prepared && !prepared.issues.length) {
                 await switchBrowserSession(request.sessionId, true, false);
-                overlays.setExpanded("editor", false); overlays.setPage("creator"); publishLayout();
+                overlays.setExpanded("editor", false); overlays.setPage("studio-run"); publishLayout();
+                window.webContents.send("creator:case-state", state());
                 await browser.navigate(url.href);
               }
               const execute: ExecuteSnapshot = async (snapshot, values, assets) => {
@@ -655,6 +664,10 @@ async function boot() {
           default: throw new Error("Studio action is not available yet.");
         }
         return { ...response, state: await studio.state() } satisfies V3Response;
+        } catch (error) {
+          const issues = error instanceof StudioError ? error.issues : [{ code: "STUDIO_OPERATION", path: "request", message: String(error) }];
+          return { state: await studio.state(), issues, error: { code: issues[0]?.code ?? "STUDIO_OPERATION", message: issues.map(x => `${x.code} (${x.path}): ${x.message}`).join("\n") } } satisfies V3Response;
+        } finally { studioCommandBusy = false; }
       }
       case "recordingEvent":
         if (event.sender !== window.webContents) throw new Error("Invalid recording sender.");
@@ -692,6 +705,7 @@ async function boot() {
         isIdle();
         if (uiPlayAllRunId) throw new Error("Đợi Play All kết thúc trước khi xóa Scenario.");
         if (command.confirmed !== true) throw new Error("Cần xác nhận xóa Scenario.");
+        if ((await studio.data.definitions()).some(d => d.nodes.some(n => n.scenario?.id === command.id))) throw new Error("V3_REFERENCE: A Variation/Widget still references this Scenario. Existing data is retained.");
         store.deleteFlow(command.id); armedTest = undefined; return state();
       case "createScenarioGroup":
         isIdle();
@@ -1052,7 +1066,7 @@ async function boot() {
         armedTest = undefined;
         return;
       case "armTest":
-        if (runningTestCaseId || switchingWorkspace || !store.flow()?.steps.some(step => step.id === command.stepId)) {
+        if (runningStudio || runningTestCaseId || switchingWorkspace || !store.flow()?.steps.some(step => step.id === command.stepId)) {
           armedTest = undefined;
           return;
         }
@@ -1083,7 +1097,7 @@ async function boot() {
   browser.onViewCreated(wc => {
     let pendingShortcut = false;
     wc.on("before-input-event", (event, input) => {
-      if (runningTestCaseId || switchingWorkspace || switchingSession || uiPlayAllRunId || overlays.page !== "creator") return;
+      if (runningStudio || runningTestCaseId || switchingWorkspace || switchingSession || uiPlayAllRunId || overlays.page !== "creator") return;
       if (
         input.type === "keyDown" &&
         input.control &&
@@ -1115,7 +1129,7 @@ async function boot() {
         if (armedTest) {
           const test = armedTest;
           setImmediate(() => {
-            if (runningTestCaseId || switchingWorkspace || switchingSession || uiPlayAllRunId || test !== armedTest || wc !== browser.view.webContents || overlays.page !== "creator") return;
+            if (runningStudio || runningTestCaseId || switchingWorkspace || switchingSession || uiPlayAllRunId || test !== armedTest || wc !== browser.view.webContents || overlays.page !== "creator") return;
             void runtime
               .test(test.stepId, test.version, test.overrideId)
               .then((result) =>
@@ -1137,6 +1151,7 @@ async function boot() {
   window.on("close", (event) => {
     if (closing) return;
     event.preventDefault();
+    if (runningStudio || studioCommandBusy || runningTestCaseId) return;
     if (!closeApproved && !window.webContents.isDestroyed()) {
       window.webContents.send("creator:request-close");
       return;

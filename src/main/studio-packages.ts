@@ -1,13 +1,15 @@
+import { inputPorts } from "../shared/admin-v3.js";
+import { randomUUID } from "node:crypto";
 import path from "node:path";
-import { mkdir, readFile, writeFile, readdir, lstat } from "node:fs/promises";
-import type { Definition, Manifest, Snapshot, Release, Field, Output, Port, StudioState } from "../shared/admin-v3.js";
+import { mkdir, readFile, writeFile, readdir, lstat, rename, rm } from "node:fs/promises";
+import type { Definition, Manifest, Snapshot, Release, Field, Output, Port, StudioState, BuildAttempt } from "../shared/admin-v3.js";
 import { V3_RUNTIME, V3_CAPABILITIES } from "../shared/admin-v3.js";
 import { validateDefinition, safeKey } from "../shared/admin-v3-validation.js";
 import { validateVariables } from "../shared/flow-model.js";
 import { validatePayload } from "./storage.js";
 import { validateZoom } from "../shared/geometry.js";
-import { AdminStudio, StudioError, type Prepared } from "./admin-v3.js";
-import { canonical, executable, sha256 } from "./admin-v3-store.js";
+import { AdminStudio, StudioError, } from "./admin-v3.js";
+import { canonical, sha256 } from "./admin-v3-store.js";
 import { encodeZip, decodeZip, safePackagePath } from "./package-zip.js";
 
 export type Bundle = { manifest: Manifest; definition: Definition; snapshots: Record<string, Snapshot>; files: Record<string, Buffer>; dependencies: Record<string, Bundle> };
@@ -17,7 +19,7 @@ function keys(value: object, allowed: string[]) {
 }
 export function portableJson(value: unknown) {
   if (typeof value === "string") {
-    if (/(?:[A-Za-z]:[\\/]|\\\\[^\\]+\\|^\/(?:Users|home|tmp|var|mnt|etc|opt|private)\/|\bBearer\s+[A-Za-z0-9._-]+|persist:)/i.test(value)) throw new Error("PACKAGE_PRIVATE_DATA: Machine paths, session partitions and credentials cannot be exported.");
+    if (/(?:[A-Za-z]:[\\/]|\\\\[^\\]+\\|^\/[^/]|\bBearer\s+[A-Za-z0-9._-]+|persist:)/i.test(value)) throw new Error("PACKAGE_PRIVATE_DATA: Machine paths, session partitions and credentials cannot be exported.");
     if (/^https?:\/\//i.test(value)) {
       const url = new URL(value);
       if (url.username || url.password || [...url.searchParams.keys()].some(k => /token|secret|password|cookie|credential|api.?key/i.test(k))) throw new Error("PACKAGE_SECRET_URL");
@@ -92,7 +94,7 @@ export function readBundle(files: Record<string, Buffer>, ancestors: string[] = 
   }
   const fields = parse<Field[]>(files, "form.json"), inputs = parse<Port[]>(files, "inputs.json"), outputs = parse<Output[]>(files, "outputs.json");
   checkFieldShape(fields);
-  if (canonical(inputs) !== canonical(fields.map(f => ({ key: f.key, type: f.type, required: f.required })))) throw new Error("INPUT_CONTRACT_MISMATCH");
+  if (canonical(inputs) !== canonical(inputPorts(fields))) throw new Error("INPUT_CONTRACT_MISMATCH");
   if (!Array.isArray(outputs)) throw new Error("OUTPUT_SCHEMA");
   for (const output of outputs) { keys(output, ["key", "type", "required", "binding"]); checkBinding(output.binding); }
   const permissions = parse<{ capabilities: string[] }>(files, "permissions.json"); keys(permissions, ["capabilities"]);
@@ -110,7 +112,7 @@ export function readBundle(files: Record<string, Buffer>, ancestors: string[] = 
     const bundle = readBundle(nested, [...ancestors, manifest.releaseId]);
     if (bundle.manifest.kind !== "widget" || bundle.manifest.releaseId !== dep.releaseId || bundle.manifest.packageId !== dep.packageId || bundle.manifest.version !== dep.version) throw new Error("DEPENDENCY_PIN_MISMATCH");
     dependencies[dep.releaseId] = bundle; manifests[dep.releaseId] = bundle.manifest;
-    contracts[dep.releaseId] = { inputs: bundle.definition.fields.map(f => ({ key: f.key, type: f.type, required: f.required })), outputs: bundle.definition.outputs };
+    contracts[dep.releaseId] = { inputs: inputPorts(bundle.definition.fields), outputs: bundle.definition.outputs };
     if (bundle.manifest.requiredCapabilities.some(c => !manifest.requiredCapabilities.includes(c))) throw new Error("DEPENDENCY_CAPABILITY_MISSING");
   }
   for (const node of graph.nodes) {
@@ -135,6 +137,7 @@ export function readBundle(files: Record<string, Buffer>, ancestors: string[] = 
       || sha256(files[preview.path] ?? Buffer.alloc(0)) !== preview.sha256 || !files[preview.path]?.length) throw new Error("PREVIEW_REVIEW_MISSING");
     allowed.add(preview.path);
   }
+  if (manifest.dependencies.some(dep => !graph.nodes.some(n => n.releaseId === dep.releaseId))) throw new Error("UNUSED_DEPENDENCY");
   if (Object.keys(manifest.files).some(k => !allowed.has(k))) throw new Error("PACKAGE_UNEXPECTED_CONTENT");
   const definition: Definition = { id: manifest.packageId, name: manifest.name, kind: manifest.kind, version: manifest.version,
     fields, nodes: graph.nodes, outputs, capabilities: manifest.requiredCapabilities, previewIds: [], revision: 1, state: "built", updatedAt: "" };
@@ -159,14 +162,28 @@ export class PackageStudio extends AdminStudio {
     await walk(root); return readBundle(files);
   }
   async state(): Promise<StudioState> {
-    const state = await super.state(); state.contracts = {};
+    const state = await super.state(); state.contracts = {}; state.builds = await this.data.list<BuildAttempt>("builds");
     for (const manifest of [...state.releases.map(x => x.manifest), ...state.imports]) {
       const bundle = await this.bundle(manifest.releaseId);
-      state.contracts[manifest.releaseId] = { fields: bundle.definition.fields, inputs: bundle.definition.fields.map(f => ({ key: f.key, type: f.type, required: f.required })), outputs: bundle.definition.outputs };
+      state.contracts[manifest.releaseId] = { fields: bundle.definition.fields, inputs: inputPorts(bundle.definition.fields), outputs: bundle.definition.outputs };
     }
     return state;
   }
   async build(id: string) {
+    const definition = await this.data.get<Definition>("definitions", id);
+    const attempt: BuildAttempt = { id: `b${randomUUID()}`, definitionId: id, name: definition.name, kind: definition.kind,
+      version: definition.version, createdAt: new Date().toISOString(), status: "failed", issues: [] };
+    let release: Release;
+    try {
+      release = await this.buildPackage(id);
+    } catch (error) {
+      attempt.issues = error instanceof StudioError ? error.issues : [{ code: "BUILD_VALIDATION", path: "package", message: String(error) }];
+      await this.data.put("builds", attempt.id, attempt, true); throw error;
+    }
+    attempt.status = "built"; attempt.releaseId = release.manifest.releaseId;
+    await this.data.put("builds", attempt.id, attempt, true); return release;
+  }
+  private async buildPackage(id: string) {
     const d = await this.data.get<Definition>("definitions", id);
     if (d.kind === "variation") throw new Error("BUILD_WIDGET: Create a Widget from this Variation first.");
     const prepared = await this.prepare(d);
@@ -174,37 +191,39 @@ export class PackageStudio extends AdminStudio {
     if (d.testedDigest !== prepared.digest || !d.testedRunId) throw new Error("TEST_REQUIRED: Run the exact saved composition before build.");
     if (["published", "deprecated"].includes(d.state)) throw new Error("IMMUTABLE: Create a new version/revision.");
     const files: Record<string, Buffer> = { ...prepared.files,
-      "form.json": jsonBytes(d.fields), "inputs.json": jsonBytes(d.fields.map(f => ({ key: f.key, type: f.type, required: f.required }))),
+      "form.json": jsonBytes(d.fields), "inputs.json": jsonBytes(inputPorts(d.fields)),
       "outputs.json": jsonBytes(d.outputs), "permissions.json": jsonBytes({ capabilities: d.capabilities }),
       "graph.json": jsonBytes({ schemaVersion: 1, kind: d.kind, nodes: d.nodes }) };
     for (const [nodeId, snapshot] of Object.entries(prepared.snapshots)) files[`scenarios/${nodeId}.json`] = jsonBytes(snapshot);
     const previews: Manifest["previews"] = [];
     for (const id of d.previewIds) { const { preview } = await this.previews.bytes(id); previews.push({ path: `assets/${preview.filename}`, kind: preview.kind, sha256: preview.sha256, reviewed: true }); }
-    const manifest: Manifest = { schemaVersion: 1, packageId: d.id, name: d.name, kind: d.kind, version: d.version,
+    const manifest: Manifest = { schemaVersion: 1, packageId: d.packageId ?? d.id, name: d.name, kind: d.kind, version: d.version,
       runtimeMinVersion: V3_RUNTIME, entrypoint: "graph.json", requiredCapabilities: d.capabilities,
       dependencies: Object.values(prepared.manifests).map(m => ({ releaseId: m.releaseId, packageId: m.packageId, version: m.version, mode: "bundled" })),
       previews, files: Object.fromEntries(Object.entries(files).map(([name, buffer]) => [name, sha256(buffer)])), checksum: "", releaseId: "" };
     manifest.checksum = digestManifest(manifest); manifest.releaseId = `r${manifest.checksum}`;
     files["manifest.json"] = jsonBytes(manifest); readBundle(files);
     const all = await this.data.releases();
-    if (all.some(r => r.manifest.packageId === id && r.manifest.version === d.version && r.manifest.releaseId !== manifest.releaseId)) throw new Error("VERSION_ALREADY_BUILT: Increment version before changing bytes.");
+    if (all.some(r => r.manifest.packageId === (d.packageId ?? d.id) && r.manifest.version === d.version && r.manifest.releaseId !== manifest.releaseId)) throw new Error("VERSION_ALREADY_BUILT: Increment version before changing bytes.");
     const existing = all.find(r => r.manifest.releaseId === manifest.releaseId); if (existing) return existing;
     await this.persistBundle(files);
-    const release: Release = { manifest, status: "built", createdAt: new Date().toISOString(), validation: [], testedRunId: d.testedRunId };
+    const release: Release = { definitionId: d.id, manifest, status: "built", createdAt: new Date().toISOString(), validation: [], testedRunId: d.testedRunId };
     await this.data.put("releases", manifest.releaseId, release, true);
     d.state = "built"; await this.data.put("definitions", id, d); return release;
   }
   async persistBundle(files: Record<string, Buffer>) {
     const bundle = readBundle(files), root = path.join(this.root, "bundles", bundle.manifest.releaseId);
-    try { await mkdir(root, { recursive: false }); }
-    catch (error) {
-      if ((error as NodeJS.ErrnoException).code !== "ENOENT") {
-        if ((error as NodeJS.ErrnoException).code === "EEXIST") { await this.bundle(bundle.manifest.releaseId); return bundle; }
-        throw error;
+    await mkdir(path.dirname(root), { recursive: true });
+    const staging = path.join(this.root, "bundles", `.staging-${randomUUID()}`);
+    await mkdir(staging);
+    try {
+      for (const [name, bytes] of Object.entries(files)) { safePackagePath(name); const file = path.join(staging, name); await mkdir(path.dirname(file), { recursive: true }); await writeFile(file, bytes, { flag: "wx" }); }
+      try { await rename(staging, root); }
+      catch (error) {
+        if (!["EEXIST", "ENOTEMPTY", "EPERM"].includes((error as NodeJS.ErrnoException).code ?? "")) throw error;
+        await this.bundle(bundle.manifest.releaseId); // Existing bytes must verify; never overwrite them.
       }
-      await mkdir(path.dirname(root), { recursive: true }); await mkdir(root);
-    }
-    for (const [name, bytes] of Object.entries(files)) { safePackagePath(name); const file = path.join(root, name); await mkdir(path.dirname(file), { recursive: true }); await writeFile(file, bytes, { flag: "wx" }); }
+    } finally { await rm(staging, { recursive: true, force: true }); }
     return bundle;
   }
   async export(releaseId: string) { return encodeZip((await this.bundle(releaseId)).files); }
@@ -218,7 +237,7 @@ export class PackageStudio extends AdminStudio {
     const release = await this.data.get<Release>("releases", releaseId);
     if (release.status !== "built") throw new Error("LIFECYCLE: Only a built release can publish.");
     await this.bundle(releaseId); // Recheck all bytes, pins, capabilities and media before publishing.
-    const definition = await this.data.get<Definition>("definitions", release.manifest.packageId);
+    const definition = await this.data.get<Definition>("definitions", release.definitionId);
     const prepared = await this.prepare(definition);
     if (prepared.issues.length || definition.version !== release.manifest.version || definition.testedRunId !== release.testedRunId || definition.testedDigest !== prepared.digest) throw new Error("RELEASE_STALE: Build and test the current version before publishing.");
     release.status = "published"; release.publishedAt = new Date().toISOString(); await this.data.put("releases", releaseId, release);
@@ -228,7 +247,7 @@ export class PackageStudio extends AdminStudio {
     const release = await this.data.get<Release>("releases", releaseId);
     if (release.status !== "published") throw new Error("LIFECYCLE: Only a published release can deprecate.");
     release.status = "deprecated"; await this.data.put("releases", releaseId, release);
-    const definition = (await this.data.definitions()).find(d => d.id === release.manifest.packageId);
+    const definition = (await this.data.definitions()).find(d => d.id === release.definitionId);
     if (definition?.state === "published" && definition.version === release.manifest.version) { definition.state = "deprecated"; await this.data.put("definitions", definition.id, definition); }
   }
 }

@@ -2,9 +2,10 @@ import React, { useEffect, useState } from "react";
 import type { MainPage, State } from "../shared/contracts";
 import type { Binding, Definition, Field, Port, StudioState, V3Request, V3Response, Value, ValueType } from "../shared/admin-v3";
 import { V3_CAPABILITIES, inputValues, scenarioOutputs } from "../shared/admin-v3";
-import { safeKey } from "../shared/admin-v3-validation";
+import { safeKey, sensitiveKey } from "../shared/admin-v3-validation";
 import { UiPopover } from "./ui-popover";
 
+export type StudioEditorHandle = { dirty: boolean; name: string; save: () => Promise<void>; discard: () => void };
 const pages = ["variations", "widget-registry", "workflows", "builds-releases"];
 export const isStudioPage = (page: string) => pages.includes(page);
 const empty: StudioState = { definitions: [], releases: [], previews: [], runs: [], imports: [] };
@@ -13,10 +14,11 @@ function valueText(value: Value | undefined) { return Array.isArray(value) ? val
 function parseValue(type: ValueType, text: string): Value { return ["number", "integer"].includes(type) ? Number(text) : type === "files" ? text.split("\n").filter(Boolean) : text; }
 function FieldInput({ field, value, change, disabled }: { field: Field; value?: Value; change: (x: Value) => void; disabled?: boolean }) {
   return <label>{field.label}{field.required ? " *" : ""}<small>{field.description}</small>
-    <input disabled={disabled} type={field.sensitive ? "password" : ["number", "integer"].includes(field.type) ? "number" : "text"}
+    {field.type === "files" ? <textarea disabled={disabled} value={valueText(value)} required={field.required} placeholder="Local file paths, one per line"
+      onChange={e => change(parseValue(field.type, e.target.value))} /> : <input disabled={disabled} type={field.sensitive ? "password" : ["number", "integer"].includes(field.type) ? "number" : "text"}
       step={field.type === "integer" ? 1 : "any"} value={valueText(value)} required={field.required}
-      placeholder={field.type === "files" ? "Local file paths, one per line" : field.type === "file" ? "Local file path" : undefined}
-      onChange={e => change(parseValue(field.type, e.target.value))} /></label>;
+      placeholder={field.type === "file" ? "Local file path" : undefined}
+      onChange={e => change(parseValue(field.type, e.target.value))} />}</label>;
 }
 function Mapping({ value, ports, inputs, change }: { value?: Binding; ports: { id: string; outputs: Port[] }[]; inputs: Field[]; change: (binding: Binding) => void }) {
   const selected = value?.source === "input" ? `input:${value.key}` : value?.source === "node" ? `${value.nodeId}:${value.key}` : value?.source === "literal" ? "literal" : "";
@@ -29,11 +31,12 @@ function Mapping({ value, ports, inputs, change }: { value?: Binding; ports: { i
       {["text", "integer", "number"].map(t => <option key={t}>{t}</option>)}</select><input value={valueText(value.value)} onChange={e => change({ ...value, value: parseValue(value.type, e.target.value) })} /></>}
   </div>;
 }
-export function AdminStudioPage({ page, state, selectedId, open, locked }: {
-  page: MainPage | string; state: State; selectedId?: string; open: (id: string, page: MainPage, label: string) => void; locked: boolean;
+export function AdminStudioPage({ page, state, selectedId, open, locked, report }: {
+  page: MainPage | string; state: State; selectedId?: string; open: (id: string, page: MainPage, label: string) => void; locked: boolean; report: (id: string, handle: StudioEditorHandle) => void;
 }) {
   const [studio, setStudio] = useState<StudioState>(empty), [drafts, setDrafts] = useState<Record<string, Definition>>({});
   const [working, setWorking] = useState(false), [message, setMessage] = useState("");
+  const [reviewedMedia, setReviewedMedia] = useState("");
   const [media, setMedia] = useState<V3Response["media"]>();
   const [sessionId, setSessionId] = useState(state.activeBrowserSessionId ?? ""), [startUrl, setStartUrl] = useState("");
   const [values, setValues] = useState<Record<string, Value>>({}), [previewForm, setPreviewForm] = useState(false);
@@ -44,23 +47,34 @@ export function AdminStudioPage({ page, state, selectedId, open, locked }: {
     try {
       const next = await window.creator.invoke({ type: "studio", request }) as V3Response;
       setStudio(next.state);
+      if (next.error) throw new Error(next.error.message);
       if (next.issues) setMessage(next.issues.length ? next.issues.map(x => `${x.code} · ${x.path}: ${x.message}`).join("\n") : "Validation completed without reported issues. Execution acceptance is still required.");
       if (next.result) setMessage(JSON.stringify(next.result, null, 2));
       if (next.media) setMedia(next.media);
       return next;
     } catch (error) { setMessage(String(error)); throw error; } finally { setWorking(false); }
   }
-  useEffect(() => { if (isStudioPage(page)) void request({ action: "state" }).catch(() => {}); }, [page]);
+  useEffect(() => { if (isStudioPage(page) && !working) void request({ action: "state" }).catch(() => {}); }, [page]);
   const original = studio.definitions.find(x => x.id === selectedId), definition = selectedId ? drafts[selectedId] ?? original : undefined;
   const dirty = !!definition && JSON.stringify(definition) !== JSON.stringify(original);
   const immutable = !!definition && ["published", "deprecated"].includes(definition.state);
-  function edit(patch: Partial<Definition>) { if (definition) setDrafts(x => ({ ...x, [definition.id]: { ...definition, ...patch } })); }
-  async function save() {
-    if (!definition) return;
-    const next = await request({ action: "save", definition });
-    setDrafts(x => { const copy = { ...x }; delete copy[definition.id]; return copy; });
-    return next;
+  function discardItem(item: Definition) {
+    setDrafts(x => { const copy = { ...x }; delete copy[item.id]; return copy; });
+    if (!studio.definitions.some(d => d.id === item.id)) report(`studio:${item.id}`, { dirty: false, name: item.name, save: async () => {}, discard: () => {} });
   }
+  function edit(patch: Partial<Definition>) { if (definition) setDrafts(x => ({ ...x, [definition.id]: { ...definition, ...patch } })); }
+  async function saveItem(item: Definition) {
+    await request({ action: "save", definition: item });
+    setDrafts(x => { const copy = { ...x }; delete copy[item.id]; return copy; });
+  }
+  async function save() { if (definition) await saveItem(definition); }
+  useEffect(() => {
+    const items = { ...Object.fromEntries(studio.definitions.map(d => [d.id, d])), ...drafts };
+    for (const item of Object.values(items)) report(`studio:${item.id}`, {
+      dirty: JSON.stringify(item) !== JSON.stringify(studio.definitions.find(d => d.id === item.id)), name: item.name,
+      save: () => saveItem(item), discard: () => discardItem(item)
+    });
+  }, [drafts, studio, report]);
   function create() {
     const source = studio.definitions.find(d => d.id === variationId);
     const id = `d${crypto.randomUUID()}`, kind = kindFor(page);
@@ -80,7 +94,7 @@ export function AdminStudioPage({ page, state, selectedId, open, locked }: {
     for (const variable of flow.variables ?? []) {
       let key = safeKey(variable.key) ? variable.key : `input${fields.length + 1}`;
       while (fields.some(f => f.key === key)) key += "_";
-      fields.push({ key, label: variable.key, type: variable.type, required: true, visibility: "exposed", description: variable.description });
+      fields.push({ key, label: variable.key, type: variable.type, required: true, visibility: "exposed", description: variable.description, ...(sensitiveKey(key) ? { sensitive: true } : {}) });
       mappings[variable.id] = { source: "input", key };
     }
     edit({ fields, nodes: [...definition.nodes, { id: nodeId, scenario: { id, steps: structuredClone(flow.steps) }, mappings, failure: "stop" }] });
@@ -96,7 +110,10 @@ export function AdminStudioPage({ page, state, selectedId, open, locked }: {
     <div className="v3-list">{studio.definitions.filter(x => x.kind === kindFor(page) && page !== "builds-releases").map(item => <div className="scenario-item" key={item.id}>
       <button disabled={disabled} onClick={() => { setValues({}); open(item.id, page as MainPage, item.name); }}>{item.name} · {item.version}</button><small>{item.state}</small>
       <button disabled={disabled} onClick={() => void request({ action: "duplicate", id: item.id }).catch(() => {})}>Duplicate / Revision</button>
-      <button disabled={disabled} onClick={() => { if (window.confirm(`Delete draft ${item.name}? Released artifacts are retained.`)) void request({ action: "delete", id: item.id, confirmed: true }).catch(() => {}); }}>Delete</button>
+      <button disabled={disabled} onClick={() => { if (window.confirm(`Delete draft ${item.name}? Released artifacts are retained.`)) void request({ action: "delete", id: item.id, confirmed: true }).then(() => {
+        setDrafts(x => { const copy = { ...x }; delete copy[item.id]; return copy; });
+        report(`studio:${item.id}`, { dirty: false, name: item.name, save: async () => {}, discard: () => {} });
+      }).catch(() => {}); }}>Delete</button>
     </div>)}</div>
     {definition && page !== "builds-releases" && definition.kind === kindFor(page) && <div className="case-form v3-editor">
       <h2>{definition.name}{dirty ? " ●" : ""} <small>{definition.state}</small></h2>
@@ -104,7 +121,7 @@ export function AdminStudioPage({ page, state, selectedId, open, locked }: {
         <label>Name<input value={definition.name} maxLength={120} onChange={e => edit({ name: e.target.value })} /></label>
         <label>Version<input value={definition.version} onChange={e => edit({ version: e.target.value })} /></label>
         <h3>End-user form</h3>
-        {definition.fields.map((field, i) => <details key={i} className="v3-field" open><summary>{field.label} · {field.type}</summary>
+        {definition.fields.map((field, i) => <details key={`${definition.id}:${i}`} className="v3-field" open><summary>{field.label} · {field.type}</summary>
           <label>Key<input value={field.key} onChange={e => edit({ fields: definition.fields.map((f, j) => j === i ? { ...f, key: e.target.value } : f) })} /></label>
           <label>Label<input value={field.label} onChange={e => edit({ fields: definition.fields.map((f, j) => j === i ? { ...f, label: e.target.value } : f) })} /></label>
           <select aria-label="Field type" value={field.type} onChange={e => edit({ fields: definition.fields.map((f, j) => j === i ? { ...f, type: e.target.value as ValueType, default: undefined } : f) })}>{["text", "file", "files", "integer", "number"].map(x => <option key={x}>{x}</option>)}</select>
@@ -128,6 +145,11 @@ export function AdminStudioPage({ page, state, selectedId, open, locked }: {
             return <React.Fragment key={node.id}><div className="v3-edge">↓ success</div><div className="v3-node">
               <b>{index + 1}. {flow?.name ?? studio.releases.find(r => r.manifest.releaseId === node.releaseId)?.manifest.name ?? "Missing dependency"}</b>
               <small>{node.id} · {node.releaseId ?? node.scenario?.steps.map(s => `${s.id}:v${s.version}`).join(", ")}</small>
+              {node.scenario?.steps.map((ref, stepIndex) => <label key={ref.id}>Step {stepIndex + 1} version
+                <select value={ref.version} onChange={e => edit({ nodes: definition.nodes.map(n => n.id === node.id && n.scenario ? {
+                  ...n, scenario: { ...n.scenario, steps: n.scenario.steps.map(s => s.id === ref.id ? { ...s, version: Number(e.target.value) } : s) }
+                } : n) })}>{state.steps.filter(s => s.id === ref.id).map(s => <option key={s.version} value={s.version}>{s.name} · v{s.version}</option>)}</select>
+              </label>)}
               <p>Failure → End with error</p>
               <button disabled={index === 0} onClick={() => { const nodes = [...definition.nodes]; [nodes[index - 1], nodes[index]] = [nodes[index], nodes[index - 1]]; edit({ nodes }); }}>↑</button>
               <button disabled={index === definition.nodes.length - 1} onClick={() => { const nodes = [...definition.nodes]; [nodes[index], nodes[index + 1]] = [nodes[index + 1], nodes[index]]; edit({ nodes }); }}>↓</button>
@@ -146,7 +168,7 @@ export function AdminStudioPage({ page, state, selectedId, open, locked }: {
         <h3>Capabilities</h3>{V3_CAPABILITIES.map(c => <label key={c}><input type="checkbox" checked={definition.capabilities.includes(c)} onChange={e => edit({ capabilities: e.target.checked ? [...definition.capabilities, c] : definition.capabilities.filter(x => x !== c) })} />{c}</label>)}
         <h3>Reviewed previews</h3>{studio.previews.map(p => <label key={p.id}><input type="checkbox" checked={definition.previewIds.includes(p.id)} onChange={e => edit({ previewIds: e.target.checked ? [...definition.previewIds, p.id] : definition.previewIds.filter(id => id !== p.id) })} />{p.kind} · {p.runId}<button onClick={() => void request({ action: "preview", id: p.id }).catch(() => {})}>View</button></label>)}
         <button disabled={!dirty} onClick={() => void save().catch(() => {})}>Save</button>
-        <button disabled={!dirty} onClick={() => setDrafts(x => { const copy = { ...x }; delete copy[definition.id]; return copy; })}>Discard draft</button>
+        <button disabled={!dirty} onClick={() => discardItem(definition)}>Discard draft</button>
       </fieldset>
       <div className="case-actions"><button disabled={disabled || dirty} onClick={() => void request({ action: "validate", id: definition.id }).catch(() => {})}>Validate saved</button>
         {definition.kind !== "variation" && <button disabled={disabled || dirty || immutable} onClick={() => void request({ action: "build", id: definition.id }).catch(() => {})}>Build package</button>}</div>
@@ -157,6 +179,9 @@ export function AdminStudioPage({ page, state, selectedId, open, locked }: {
       <button disabled={disabled || dirty || !startUrl || !sessionId} onClick={() => { try { inputValues(definition.fields, values); void request({ action: "run", id: definition.id, sessionId, startUrl, values }).catch(() => {}); } catch (e) { setMessage(String(e)); } }}>Run through V2 Runtime</button>
     </div>}
     {page === "builds-releases" && <><div className="scenario-toolbar"><button disabled={disabled} onClick={() => void request({ action: "import" }).catch(() => {})}>Import ZIP</button></div>
+      {studio.builds?.filter(b => b.status === "failed").map(b => <article className="scenario-folder" key={b.id}>
+        <h3>{b.name} · {b.kind} · {b.version} · Build failed</h3><p>{b.createdAt}</p>
+        <pre className="v3-message">{b.issues.map(i => `${i.code} · ${i.path}: ${i.message}`).join("\n")}</pre></article>)}
       <div className="v3-release-list">{studio.releases.map(r => <article className="scenario-folder" key={r.manifest.releaseId}>
         <h3>{r.manifest.name} · {r.manifest.kind} · {r.manifest.version}</h3><p>{r.status} · Created {r.createdAt} · Published {r.publishedAt ?? "—"}</p>
         <p>Release: {r.manifest.releaseId}<br />SHA-256: {r.manifest.checksum}<br />Validation issues: {r.validation.length} · Test: {r.testedRunId}</p>
@@ -174,8 +199,8 @@ export function AdminStudioPage({ page, state, selectedId, open, locked }: {
     {state.testLab?.cases.filter(c => c.lastResult?.runId && c.lastResult.status !== "RUNNING").map(c => <div key={c.id}>
       {c.name} · {c.lastResult!.status} · {c.lastResult!.runId}
       {(["screenshot", "video"] as const).filter(kind => kind === "screenshot" ? c.lastResult!.screenshotPath : c.lastResult!.recordingPath).map(kind => <React.Fragment key={kind}>
-        <button disabled={disabled} onClick={() => void window.creator.invoke({ type: kind === "screenshot" ? "testCaseScreenshot" : "testCaseVideo", caseId: c.id, runId: c.lastResult!.runId! }).then(x => setMedia({ kind, url: x as string })).catch(e => setMessage(String(e)))}>Review {kind}</button>
-        <button disabled={disabled || !media} onClick={() => { if (window.confirm(`I reviewed this ${kind}, including all video frames. It contains no credentials or sensitive information and may be used in public packages.`)) void request({ action: "selectPreview", caseId: c.id, runId: c.lastResult!.runId!, kind, confirmed: true }).catch(() => {}); }}>Confirm & protect {kind}</button>
+        <button disabled={disabled} onClick={() => void window.creator.invoke({ type: kind === "screenshot" ? "testCaseScreenshot" : "testCaseVideo", caseId: c.id, runId: c.lastResult!.runId! }).then(x => { setMedia({ kind, url: x as string }); setReviewedMedia(`${c.id}:${c.lastResult!.runId}:${kind}`); }).catch(e => setMessage(String(e)))}>Review {kind}</button>
+        <button disabled={disabled || reviewedMedia !== `${c.id}:${c.lastResult!.runId}:${kind}`} onClick={() => { if (window.confirm(`I reviewed this ${kind}, including all video frames. It contains no credentials or sensitive information and may be used in public packages.`)) void request({ action: "selectPreview", caseId: c.id, runId: c.lastResult!.runId!, kind, confirmed: true }).catch(() => {}); }}>Confirm & protect {kind}</button>
       </React.Fragment>)}
     </div>)}
     {message && <pre role="status" className="v3-message">{message}</pre>}

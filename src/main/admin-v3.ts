@@ -5,7 +5,7 @@ import type { Store } from "./storage.js";
 import { validatePayload } from "./storage.js";
 import { validateVariables, resolvePayload } from "../shared/flow-model.js";
 import type { Definition, Snapshot, Issue, Manifest, Port, RunResult, Value, StudioState, CompositionNode } from "../shared/admin-v3.js";
-import { inputValues, resolveBinding, isValue } from "../shared/admin-v3.js";
+import { inputValues, readBinding, isValue } from "../shared/admin-v3.js";
 import { validateDefinition } from "../shared/admin-v3-validation.js";
 import { AdminV3Store, canonical, executable, sha256 } from "./admin-v3-store.js";
 import { PreviewAssets } from "./preview-assets.js";
@@ -29,7 +29,7 @@ export class AdminStudio {
   }
   async save(definition: Definition) {
     // Drafts may have incomplete mappings. Validate outer schema before touching disk.
-    if (!definition || !Array.isArray(definition.nodes) || !Array.isArray(definition.fields) || !Array.isArray(definition.outputs)
+    if (!definition || !Array.isArray(definition.nodes) || !Array.isArray(definition.fields) || !Array.isArray(definition.outputs) || !Array.isArray(definition.capabilities) || !Array.isArray(definition.previewIds)
       || !["variation", "widget", "workflow"].includes(definition.kind)) throw new Error("DEFINITION_SCHEMA");
     const all = await this.data.definitions(), previous = all.find(x => x.id === definition.id);
     if (previous && ["published", "deprecated"].includes(previous.state)) throw new Error("IMMUTABLE: Duplicate as a new revision/version.");
@@ -37,6 +37,7 @@ export class AdminStudio {
     // Persist only the authoring contract; client cannot submit lifecycle/test evidence.
     const value: Definition = { ...structuredClone(executable(definition)), variationId: definition.variationId,
       revision: (previous?.revision ?? 0) + 1, updatedAt: new Date().toISOString(), state: "draft" };
+    if (value.packageId) this.data.location("definitions", value.packageId);
     // Validate identity even for incomplete drafts; no path is derived from a display name.
     this.data.location("definitions", value.id);
     if (!value.name?.trim() || value.name.length > 120 || !/^\d+\.\d+\.\d+$/.test(value.version)) throw new Error("NAME_VERSION_SCHEMA");
@@ -45,12 +46,15 @@ export class AdminStudio {
   }
   async duplicate(id: string) {
     const original = await this.data.get<Definition>("definitions", id);
-    return this.save({ ...original, id: `d${randomUUID()}`, name: `${original.name} copy`.slice(0, 120), revision: 0, state: "draft" });
+    const revision = ["published", "deprecated"].includes(original.state);
+    const [major, minor, patch] = original.version.split(".").map(Number);
+    return this.save({ ...original, id: `d${randomUUID()}`, packageId: revision ? original.packageId ?? original.id : undefined,
+      name: revision ? original.name : `${original.name} copy`.slice(0, 120), version: revision ? `${major}.${minor}.${patch + 1}` : original.version, revision: 0, state: "draft" });
   }
   async delete(id: string, confirmed: boolean) {
     if (confirmed !== true) throw new Error("DELETE_CONFIRMATION_REQUIRED");
     const original = await this.data.get<Definition>("definitions", id);
-    if (["published", "deprecated"].includes(original.state) || (await this.data.releases()).some(x => x.manifest.packageId === id)) throw new Error("RELEASE_REFERENCE: Released definitions are retained. Deprecate the release.");
+    if (["published", "deprecated"].includes(original.state) || (await this.data.releases()).some(x => (x.definitionId === id || x.manifest.packageId === id))) throw new Error("RELEASE_REFERENCE: Released definitions are retained. Deprecate the release.");
     if ((await this.data.definitions()).some(x => x.variationId === id)) throw new Error("VARIATION_IN_USE");
     await this.data.removeDefinition(id);
   }
@@ -80,7 +84,11 @@ export class AdminStudio {
         snapshots[node.id] = snapshot;
         for (const step of steps) {
           const p = step.payload;
-          if (["TYPE_ONLY", "CLICK_AND_TYPE", "UPLOAD_FILE", "QUICK_TAG"].includes(p.action) && !flow.variables?.some(v => v.id === p.variableId)) add("MISSING_VARIABLE", node.id, "Action variable does not exist.");
+          if (["TYPE_ONLY", "CLICK_AND_TYPE", "UPLOAD_FILE", "QUICK_TAG"].includes(p.action)) {
+            const variable = flow.variables?.find(v => v.id === p.variableId);
+            const types = p.action === "QUICK_TAG" ? ["integer"] : p.action === "UPLOAD_FILE" ? ["file", "files"] : ["text"];
+            if (!variable || !types.includes(variable.type)) add("ACTION_VARIABLE_TYPE", node.id, "Action requires a compatible declared Scenario Variable.");
+          }
           const required = ["browser.input", ...(p.target ? ["browser.visual"] : []), ...(p.target?.ocr || p.method === "ocr" ? ["browser.ocr"] : []),
             ...(p.action === "UPLOAD_FILE" ? ["browser.upload"] : []), ...(p.inputMethod === "clipboard" ? ["browser.clipboard"] : [])];
           for (const capability of required) if (!definition.capabilities.includes(capability)) add("CAPABILITY_REQUIRED", node.id, capability);
@@ -121,14 +129,15 @@ export class AdminStudio {
       if (result.issues.length) throw new StudioError(result.issues);
       const inputs = inputValues(prepared.definition.fields, supplied), nodes: Record<string, Record<string, Value>> = Object.create(null);
       for (const node of prepared.definition.nodes) {
-        const values = Object.fromEntries(Object.entries(node.mappings).map(([k, b]) => [k, resolveBinding(b, inputs, nodes)]));
+        const values = Object.fromEntries(Object.entries(node.mappings).map(([k, b]) => [k, readBinding(b, inputs, nodes)] as const).filter((entry): entry is readonly [string, Value] => entry[1] !== undefined));
         const run = await this.executeNode(prepared, node, values, execute, assetRoot);
         nodes[node.id] = run.outputs; result.nodes.push({ id: node.id, status: run.status, outputs: run.outputs });
         if (["BLOCKED", "ERROR"].includes(run.status)) { result.status = run.status; throw new Error(`NODE_FAILED: ${node.id}`); }
         if (run.status === "ACTION_SENT") result.status = "ACTION_SENT";
       }
       for (const output of prepared.definition.outputs) {
-        const value = resolveBinding(output.binding, inputs, nodes);
+        const value = readBinding(output.binding, inputs, nodes);
+        if (value === undefined && !output.required) continue;
         if (!isValue(output.type, value)) throw new Error(`OUTPUT_TYPE: ${output.key}`);
         result.outputs[output.key] = value;
       }

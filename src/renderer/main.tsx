@@ -1,4 +1,4 @@
-import { AdminStudioPage, isStudioPage } from "./admin-studio";
+import { AdminStudioPage, type StudioEditorHandle } from "./admin-studio";
 import { installBrowserRecording } from "./browser-recording";
 import { effectiveMatchTo, matchToLabel } from "../shared/match-to";
 import { playSequential, playbackResult, type StepPlayback } from "./playback";
@@ -57,6 +57,13 @@ type TabDraft = {
 function Creator() {
   useEffect(() => shell ? installBrowserRecording() : undefined, []);
   const [mainPage, setMainPage] = useState<MainPage>("scenarios");
+  const studioEditors = useRef(new Map<string, StudioEditorHandle>());
+  const [, setStudioRevision] = useState(0);
+  const reportStudio = useCallback((id: string, handle: StudioEditorHandle) => {
+    const previous = studioEditors.current.get(id);
+    studioEditors.current.set(id, handle);
+    if (!previous || previous.dirty !== handle.dirty || previous.name !== handle.name) setStudioRevision(x => x + 1);
+  }, []);
   const caseEditors = useRef(new Map<string, CaseEditorHandle>());
   const [, setCaseRevision] = useState(0);
   const reportCase = useCallback((id: string, handle: CaseEditorHandle) => {
@@ -119,7 +126,7 @@ function Creator() {
   const [selected, setSelected] = useDraft<Step>("selected");
   const [overrideId, setOverrideId] = useDraft("overrideId", "");
   const [targetModal, setTargetModal] = useState(false);
-  const [pendingNavigation, setPendingNavigation] = useState<{ proceed: () => void | Promise<void>; closing?: boolean; caseTabId?: string }>();
+  const [pendingNavigation, setPendingNavigation] = useState<{ proceed: () => void | Promise<void>; closing?: boolean; caseTabId?: string; studioTabId?: string }>();
   const pendingNavigationRef = useRef(false);
   const [confirmWorking, setConfirmWorking] = useState(false);
   const [confirmError, setConfirmError] = useState("");
@@ -802,7 +809,7 @@ function Creator() {
   }
   function tabDirty(id: string) {
     const tab = tabsRef.current.find(t => t.id === id);
-    return tab?.kind === "test-case" ? caseEditors.current.get(id)?.dirty ?? false
+    return tab?.kind === "studio" ? studioEditors.current.get(id)?.dirty ?? false : tab?.kind === "test-case" ? caseEditors.current.get(id)?.dirty ?? false
       : id === activeTabId ? editorDirty : tabDrafts.current.get(id)?.dirty ?? false;
   }
   function createScenario() {
@@ -853,7 +860,7 @@ function Creator() {
       const tab = tabsRef.current.find(t => t.id === id);
       if (!tab) return;
       pendingCloseTab.current = id;
-      if (tab.kind === "test-case") {
+      if (tab.kind === "test-case" || tab.kind === "studio") {
         workspaceLock.current = true;
         void task(async () => { try { await activateTab(tab); } finally { workspaceLock.current = false; } });
       } else openScenario(tab.flowId);
@@ -993,7 +1000,7 @@ function Creator() {
     if (!(activeTabId ? tabDirty(activeTabId) : editorDirty)) { void task(async () => { await proceed(); }); return; }
     pendingNavigationRef.current = true;
     setConfirmError("");
-    setPendingNavigation({ proceed, closing, caseTabId: activeCaseTab?.id });
+    setPendingNavigation({ proceed, closing, caseTabId: activeCaseTab?.id, studioTabId: tabs.find(t => t.id === activeTabId && t.kind === "studio")?.id });
   }
   function stayInEditor() {
     if (confirmWorking) return;
@@ -1008,7 +1015,11 @@ function Creator() {
     setConfirmWorking(true);
     setBusy(true);
     try {
-      if (pendingNavigation.caseTabId) {
+      if (pendingNavigation.studioTabId) {
+        const handle = studioEditors.current.get(pendingNavigation.studioTabId);
+        if (!handle) throw new Error("Studio draft is unavailable.");
+        if (save) await handle.save(); else handle.discard();
+      } else if (pendingNavigation.caseTabId) {
         const handle = caseEditors.current.get(pendingNavigation.caseTabId);
         if (!handle) throw new Error("Không tìm thấy draft Test Case.");
         if (save) await handle.save(); else handle.discard();
@@ -1028,12 +1039,12 @@ function Creator() {
     }
   }
   leaveHandler.current = () => {
-    if (busy) { setMessage("Đợi tác vụ hiện tại kết thúc trước khi đóng Creator."); return; }
+    if (busy || state?.runningStudio || state?.runningTestCaseId) { setMessage("Đợi tác vụ hiện tại kết thúc trước khi đóng Creator."); return; }
     exitReviewed.current.clear();
     setExitIntent("close");
   };
   reloadHandler.current = () => {
-    if (busy) { setMessage("Đợi tác vụ hiện tại kết thúc trước khi reload Creator."); return; }
+    if (busy || state?.runningStudio || state?.runningTestCaseId) { setMessage("Đợi tác vụ hiện tại kết thúc trước khi reload Creator."); return; }
     exitReviewed.current.clear();
     setExitIntent("reload");
   };
@@ -1123,7 +1134,7 @@ function Creator() {
   }
   const workspaceTabs = <WorkspaceTabs tabs={tabs} activeId={activeTabId} state={state}
     mainPage={mainPage} locked={navigationLocked || ocrLoading || !!pendingNavigation || stepPlayback[activeStepId]?.status === "running"}
-    dirty={tabDirty} caseName={id => caseEditors.current.get(id)?.name}
+    dirty={tabDirty} caseName={id => studioEditors.current.get(id)?.name ?? caseEditors.current.get(id)?.name}
     open={tab => {
       if (tab.kind === "creator") openScenario(tab.flowId);
       else if (!navigationLocked && !workspaceLock.current && !pendingNavigationRef.current) {
@@ -1151,11 +1162,12 @@ function Creator() {
           <button disabled={confirmWorking} onClick={stayInEditor}>Ở lại</button>
         </div>
       </UiPopover>}
-      {shell && navigationWidth > 0 && <AppNavigation page={creatorVisible || appPage === "test-case" ? mainPage : appPage} collapsed={navigationWidth === APP_NAV_COLLAPSED}
+      {shell && navigationWidth > 0 && <AppNavigation page={creatorVisible || appPage === "test-case" || appPage === "studio-run" ? mainPage : appPage} collapsed={navigationWidth === APP_NAV_COLLAPSED}
         locked={navigationLocked || !state} navigate={navigateApp} toggle={() => void task(async () => {
           setState(await invoke<State>({ type: "appSidebar", collapsed: !sidebarCollapsed }));
         })} />}
       {shell && !creatorVisible && <div className="workspace-page-strip">{workspaceTabs}</div>}
+      {shell && appPage === "studio-run" && <div className="studio-run-status" role="status">Studio execution · local Browser Session · shared V2 Runtime. Wait for the structured result.</div>}
       {shell && appPage === "scenarios" && <ScenariosPage state={state} name={flowName} setName={setFlowName}
         locked={navigationLocked || ocrLoading} open={openScenario} create={createScenario}
         update={updateWorkspace}
@@ -1169,7 +1181,7 @@ function Creator() {
         <TestCaseEditor tabId={tab.id} item={state.testLab?.cases.find(c => c.id === tab.caseId)} state={state}
           locked={navigationLocked} report={reportCase} saved={caseSaved} saving={setBusy} run={runCase} />
       </div>)}
-      {shell && state && <AdminStudioPage page={appPage} state={state} locked={navigationLocked}
+      {shell && state && <AdminStudioPage report={reportStudio} page={appPage} state={state} locked={navigationLocked}
         selectedId={tabs.find(t => t.id === activeTabId && t.kind === "studio")?.studioId}
         open={(id, page, label) => {
           captureActiveTab();

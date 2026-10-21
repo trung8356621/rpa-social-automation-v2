@@ -1,3 +1,4 @@
+import { inputPorts } from "../shared/admin-v3.js";
 import path from "node:path";
 import type { Definition, CompositionNode, Value } from "../shared/admin-v3.js";
 import { validateDefinition } from "../shared/admin-v3-validation.js";
@@ -19,7 +20,7 @@ export class WorkflowStudio extends PackageStudio {
         if (!release || release.status === "deprecated" || release.manifest.kind !== "widget") throw new Error("Widget must pin an available built/published release.");
         const dependency = await this.bundle(release.manifest.releaseId);
         prepared.manifests[dependency.manifest.releaseId] = dependency.manifest;
-        prepared.contracts[dependency.manifest.releaseId] = { inputs: dependency.definition.fields.map(f => ({ key: f.key, type: f.type, required: f.required })), outputs: dependency.definition.outputs };
+        prepared.contracts[dependency.manifest.releaseId] = { inputs: inputPorts(dependency.definition.fields), outputs: dependency.definition.outputs };
         for (const capability of dependency.manifest.requiredCapabilities) if (!definition.capabilities.includes(capability)) prepared.issues.push({ code: "CAPABILITY_REQUIRED", path: node.id, message: capability });
         for (const [name, bytes] of Object.entries(dependency.files)) prepared.files[`dependencies/${dependency.manifest.releaseId}/${name}`] = bytes;
       } catch (error) { prepared.issues.push({ code: "WIDGET_DEPENDENCY", path: node.id, message: String(error) }); }
