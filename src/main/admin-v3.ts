@@ -4,7 +4,7 @@ import { randomUUID } from "node:crypto";
 import type { Store } from "./storage.js";
 import { validatePayload } from "./storage.js";
 import { validateVariables, resolvePayload } from "../shared/flow-model.js";
-import type { Definition, Snapshot, Issue, Manifest, Port, RunResult, Value, StudioState, Release } from "../shared/admin-v3.js";
+import type { Definition, Snapshot, Issue, Manifest, Port, RunResult, Value, StudioState, CompositionNode } from "../shared/admin-v3.js";
 import { inputValues, resolveBinding, isValue } from "../shared/admin-v3.js";
 import { validateDefinition } from "../shared/admin-v3-validation.js";
 import { AdminV3Store, canonical, executable, sha256 } from "./admin-v3-store.js";
@@ -106,21 +106,24 @@ export class AdminStudio {
     }
     return prepared;
   }
+  protected async executeNode(prepared: Prepared, node: CompositionNode, values: Record<string, Value>, execute: ExecuteSnapshot, assetRoot: string) {
+    const snapshot = prepared.snapshots[node.id];
+    if (!snapshot) throw new Error("SNAPSHOT_MISSING");
+    validateVariables(snapshot.flow.variables ?? [], values);
+    const clone = structuredClone(snapshot); clone.flow.defaultPattern = { values };
+    for (const step of clone.steps) resolvePayload(step.payload, clone.flow);
+    const run = await execute(clone, values, assetRoot);
+    return { status: run.status, outputs: { status: run.status, message: run.message, runId: run.runId, scenarioId: clone.flow.id } as Record<string, Value> };
+  }
   async execute(prepared: Prepared, supplied: Record<string, Value>, execute: ExecuteSnapshot, assetRoot = this.targetRoot): Promise<RunResult> {
     const result: RunResult = { id: `r${randomUUID()}`, status: "VERIFIED", startedAt: new Date().toISOString(), finishedAt: "", outputs: {}, nodes: [], issues: [...prepared.issues], digest: prepared.digest };
     try {
       if (result.issues.length) throw new StudioError(result.issues);
       const inputs = inputValues(prepared.definition.fields, supplied), nodes: Record<string, Record<string, Value>> = Object.create(null);
       for (const node of prepared.definition.nodes) {
-        const snapshot = prepared.snapshots[node.id];
-        if (!snapshot) throw new Error("SNAPSHOT_MISSING");
         const values = Object.fromEntries(Object.entries(node.mappings).map(([k, b]) => [k, resolveBinding(b, inputs, nodes)]));
-        validateVariables(snapshot.flow.variables ?? [], values);
-        const clone = structuredClone(snapshot); clone.flow.defaultPattern = { values };
-        for (const step of clone.steps) resolvePayload(step.payload, clone.flow);
-        const run = await execute(clone, values, assetRoot);
-        const outputs = { status: run.status, message: run.message, runId: run.runId, scenarioId: clone.flow.id };
-        nodes[node.id] = outputs; result.nodes.push({ id: node.id, status: run.status, outputs });
+        const run = await this.executeNode(prepared, node, values, execute, assetRoot);
+        nodes[node.id] = run.outputs; result.nodes.push({ id: node.id, status: run.status, outputs: run.outputs });
         if (["BLOCKED", "ERROR"].includes(run.status)) { result.status = run.status; throw new Error(`NODE_FAILED: ${node.id}`); }
         if (run.status === "ACTION_SENT") result.status = "ACTION_SENT";
       }

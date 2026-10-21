@@ -1,6 +1,6 @@
 import { runBundle } from "./runner-package.js";
 import type { ExecuteSnapshot } from "./admin-v3.js";
-import { PackageStudio } from "./studio-packages.js";
+import { WorkflowStudio } from "./studio-workflows.js";
 import type { Definition, V3Response } from "../shared/admin-v3.js";
 import {
   app,
@@ -108,7 +108,7 @@ async function boot() {
   const browserSessions = new BrowserSessions(store);
   const scenarioGroups = new ScenarioGroups(store);
   const testLab = new TestLab(store, browserSessions);
-  const studio = new PackageStudio(path.join(dataPath, "admin-v3"), store, assetDir, path.join(dataPath, "test-runs"));
+  const studio = new WorkflowStudio(path.join(dataPath, "admin-v3"), store, assetDir, path.join(dataPath, "test-runs"));
   let runningStudio = false;
   const testEvidence = new TestRunEvidence(path.join(dataPath, "test-runs"));
   let runningTestCaseId: string | undefined;
