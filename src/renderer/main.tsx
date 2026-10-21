@@ -1,3 +1,4 @@
+import { installBrowserRecording } from "./browser-recording";
 import { effectiveMatchTo, matchToLabel } from "../shared/match-to";
 import { playSequential, playbackResult, type StepPlayback } from "./playback";
 import { StepList } from "./step-list";
@@ -53,6 +54,7 @@ type TabDraft = {
 };
 
 function Creator() {
+  useEffect(() => shell ? installBrowserRecording() : undefined, []);
   const [mainPage, setMainPage] = useState<MainPage>("scenarios");
   const caseEditors = useRef(new Map<string, CaseEditorHandle>());
   const [, setCaseRevision] = useState(0);

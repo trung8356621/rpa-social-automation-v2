@@ -53,7 +53,7 @@ export class TestLab {
     const value = this.read(), old = id ? this.get(id) : undefined;
     const item = { id: old?.id ?? randomUUID(), groupId: old?.groupId, lastResult: old?.lastResult,
       name: this.name(config.name), flowId: config.flowId, sessionId: config.sessionId,
-      startUrl: new URL(config.startUrl).href, values: structuredClone(config.values) };
+      startUrl: new URL(config.startUrl).href, recording: config.recording === true, values: structuredClone(config.values) };
     value.cases = old ? value.cases.map(c => c.id === id ? item : c) : [...value.cases, item];
     this.write(value);
     return item;

@@ -18,8 +18,9 @@ export type CaseResult = {
   steps?: CaseStepResult[];
   screenshotPath?: string; screenshotAt?: string; screenshotError?: string;
   evidenceError?: string;
+  recordingPath?: string; recordingError?: string;
 };
-export type TestCaseConfig = { name: string; flowId: string; sessionId: string; startUrl: string; values: VariableValues };
+export type TestCaseConfig = { recording?: boolean; name: string; flowId: string; sessionId: string; startUrl: string; values: VariableValues };
 export type TestCase = TestCaseConfig & { id: string; groupId?: string; lastResult?: CaseResult };
 export type TestLabState = {
   groups: { id: string; name: string; collapsed: boolean }[];
@@ -252,6 +253,8 @@ export type State = {
   dataPath: string;
 };
 export type Command =
+  | { type: "recordingEvent"; token: string; event: "ready" | "chunk" | "done" | "error"; data?: string }
+  | { type: "testCaseVideo"; caseId: string; runId: string }
   | { type: "testCaseScreenshot"; caseId: string; runId: string }
   | { type: "deleteScenario"; id: string; confirmed: boolean }
   | { type: "testGroup"; operation: "create" | "update" | "delete"; id?: string; name?: string; collapsed?: boolean; confirmed?: boolean }
@@ -358,6 +361,7 @@ export const DRAFT_KEYS = [
 export type DraftKey = (typeof DRAFT_KEYS)[number];
 export type DraftEntry = { revision: number; value: unknown };
 export interface CreatorApi {
+  onRecording(callback: (message: { type: "start" | "frame" | "stop"; token: string; data?: string }) => void): () => void;
   onCaseState(callback: (state: State) => void): () => void;
   readDraft(key: DraftKey, initial: unknown): DraftEntry;
   writeDraft(key: DraftKey, value: unknown): DraftEntry;

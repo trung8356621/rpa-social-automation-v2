@@ -19,6 +19,7 @@ import { ClickMarker } from "./click-marker.js";
 import { CreatorOverlays } from "./creator-overlays.js";
 import { BrowserCore } from "./browser-core.js";
 import { BrowserSessions } from "./browser-sessions.js";
+import { BrowserRecording } from "./browser-recording.js";
 import { TestRunEvidence } from "./test-run-evidence.js";
 import { TestLab } from "./test-lab.js";
 import { playSequential } from "../shared/playback.js";
@@ -327,6 +328,7 @@ async function boot() {
   const runtime = new Runtime(browser, store, assetDir, runDir, undefined,
     (x, y) => marker.show(x, y),
     (execution) => window.webContents.send("creator:execution-start", execution));
+  const recorder = new BrowserRecording(window.webContents, path.join(dataPath, "test-runs"));
   let uiPlayAllRunId: string | undefined;
   let armedTest:
     { stepId: string; version: number; overrideId?: string } | undefined;
@@ -461,6 +463,10 @@ async function boot() {
       overlays.setPage("creator");
       contextReady = true;
       publishLayout(); publish();
+      if (item.recording) {
+        try { await recorder.start(browser.view.webContents, id, runId); }
+        catch { outcome.recordingError = "Could not start Browser recording; screenshots remain enabled."; }
+      }
       // loadURL awaits main-frame load completion. No DOM/login inspection or retries.
       let failedLoad = false;
       const wc = browser.view.webContents;
@@ -530,6 +536,10 @@ async function boot() {
         for (const entry of outcome.steps ?? []) if (entry.status === "PENDING") {
           entry.status = "SKIPPED"; entry.message = "Không chạy vì lượt test đã dừng trước Step này.";
         }
+        if (item.recording) {
+          try { if (await recorder.stop()) outcome.recordingPath = `${id}/${runId}/recording.webm`; }
+          catch { outcome.recordingError = "Could not finalize Browser recording."; }
+        }
         outcome.finishedAt = new Date().toISOString();
         try { await testEvidence.metadata(id, outcome); }
         catch (error) { outcome.evidenceError = `Không lưu được metadata ảnh: ${String(error)}`; }
@@ -559,6 +569,14 @@ async function boot() {
       sender: event.sender.id,
     });
     switch (command.type) {
+      case "recordingEvent":
+        if (event.sender !== window.webContents) throw new Error("Invalid recording sender.");
+        await recorder.receive(command.token, command.event, command.data); return;
+      case "testCaseVideo": {
+        const result = testLab.get(command.caseId).lastResult;
+        if (!result || result.runId !== command.runId) throw new Error("Run is no longer current.");
+        return testEvidence.video(command.caseId, result);
+      }
       case "testCaseScreenshot": {
         const result = testLab.get(command.caseId).lastResult;
         if (!result || result.runId !== command.runId) throw new Error("Screenshot không thuộc Last Result hiện tại.");

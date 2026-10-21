@@ -1,6 +1,11 @@
 import { contextBridge, ipcRenderer } from "electron";
 import type { Command, Result, ExecutionStart, BrowserSessionsState, State } from "../shared/contracts.js";
 contextBridge.exposeInMainWorld("creator", {
+  onRecording: (callback: (message: unknown) => void) => {
+    const handler = (_event: Electron.IpcRendererEvent, message: unknown) => callback(message);
+    ipcRenderer.on("creator:recording", handler);
+    return () => ipcRenderer.removeListener("creator:recording", handler);
+  },
   onCaseState: (callback: (state: State) => void) => {
     const handler = (_event: Electron.IpcRendererEvent, state: State) => callback(state);
     ipcRenderer.on("creator:case-state", handler);

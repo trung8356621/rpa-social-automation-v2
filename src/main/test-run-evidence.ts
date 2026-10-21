@@ -4,7 +4,7 @@ import type { BrowserCore } from "./browser-core.js";
 import type { CaseResult } from "../shared/contracts.js";
 
 const uuid = /^[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}$/i;
-const ownedFiles = new Set(["final.png", "final.png.tmp", "metadata.json", "metadata.json.tmp"]);
+const ownedFiles = new Set(["recording.webm", "recording.webm.tmp", "final.png", "final.png.tmp", "metadata.json", "metadata.json.tmp"]);
 /** Browser content only. No desktop capture, uploads, data URLs in metadata or Runtime changes. */
 export class TestRunEvidence {
   constructor(private readonly root: string) {}
@@ -49,6 +49,11 @@ export class TestRunEvidence {
     if (!result.runId || result.screenshotPath !== `${caseId}/${result.runId}/final.png`) throw new Error("Lượt chạy này chưa có screenshot.");
     const buffer = await readFile(path.join(directory, "final.png"));
     return `data:image/png;base64,${buffer.toString("base64")}`;
+  }
+  async video(caseId: string, result: CaseResult) {
+    const directory = this.directory(caseId, result.runId);
+    if (!result.runId || result.recordingPath !== `${caseId}/${result.runId}/recording.webm`) throw new Error("No recording for this run.");
+    return `data:video/webm;base64,${(await readFile(path.join(directory, "recording.webm"))).toString("base64")}`;
   }
   /** Keep latest + one previous run per Case. Delete only known files under our UUID directories. */
   async prune(caseId: string, latestRunId?: string, deletingCase = false) {
