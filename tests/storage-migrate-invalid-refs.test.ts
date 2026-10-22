@@ -93,7 +93,10 @@ test("missing Variable ref: startup keeps data, no fake Variable, invalid not ex
       store.invalidSteps().some((r) => r.stepId === stepId && r.version === 3),
       false,
     );
-    assert.throws(() => store.assertStepExecutable(stepId, 1), /Invalid Step/);
+    assert.throws(
+      () => store.assertStepExecutable(stepId, 1),
+      /orphan Variable|→ Step .* → v1/,
+    );
     assert.doesNotThrow(() => store.assertStepExecutable(stepId, 3));
     // No fabricated Variable for the missing UUID.
     assert.equal(
