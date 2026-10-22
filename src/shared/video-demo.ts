@@ -10,6 +10,11 @@ export type VideoDemoAttachment = {
   mime: "video/webm";
   sha256?: string;
   reviewed: boolean;
+  /** Digest of Script execution (steps/vars/assets) at attach time. */
+  executionDigest: string;
+  /** Relative path to JPEG from last valid browser frame. */
+  thumbnailRef?: string;
+  thumbnailSha256?: string;
 };
 
 /** Promote a Test Lab browser recording into a Script video demo reference. */
@@ -18,12 +23,18 @@ export function attachVideoDemo(input: {
   scriptVersion: string;
   caseId: string;
   testRunId: string;
+  executionDigest: string;
   sha256?: string;
   reviewed?: boolean;
+  thumbnailRef?: string;
+  thumbnailSha256?: string;
 }): VideoDemoAttachment {
-  const { scriptId, scriptVersion, caseId, testRunId } = input;
+  const { scriptId, scriptVersion, caseId, testRunId, executionDigest } = input;
   if (!scriptId || !scriptVersion || !caseId || !testRunId) {
     throw new Error("VIDEO_DEMO: scriptId, scriptVersion, caseId, testRunId required");
+  }
+  if (!executionDigest || !/^[a-f0-9]{64}$/i.test(executionDigest)) {
+    throw new Error("VIDEO_DEMO: executionDigest required (64-hex)");
   }
   // Screenshots are not video demos.
   const artifactRef = `${caseId}/${testRunId}/recording.webm`;
@@ -34,7 +45,10 @@ export function attachVideoDemo(input: {
     caseId,
     artifactRef,
     mime: "video/webm",
+    executionDigest: executionDigest.toLowerCase(),
     ...(input.sha256 ? { sha256: input.sha256 } : {}),
+    ...(input.thumbnailRef ? { thumbnailRef: input.thumbnailRef } : {}),
+    ...(input.thumbnailSha256 ? { thumbnailSha256: input.thumbnailSha256 } : {}),
     reviewed: input.reviewed === true,
   };
 }
@@ -42,6 +56,9 @@ export function attachVideoDemo(input: {
 export function toScriptVideoDemo(attachment: VideoDemoAttachment): ScriptVideoDemo {
   if (!attachment.reviewed) {
     throw new Error("VIDEO_DEMO: must be human-reviewed before Script release metadata");
+  }
+  if (!attachment.thumbnailRef) {
+    throw new Error("VIDEO_DEMO: thumbnail required — last browser frame missing");
   }
   return {
     artifact_ref: attachment.artifactRef,
@@ -52,6 +69,9 @@ export function toScriptVideoDemo(attachment: VideoDemoAttachment): ScriptVideoD
     reviewed: true,
     audio: false,
     desktop_capture: false,
+    execution_digest: attachment.executionDigest,
+    thumbnail_ref: attachment.thumbnailRef,
+    ...(attachment.thumbnailSha256 ? { thumbnail_sha256: attachment.thumbnailSha256 } : {}),
   };
 }
 

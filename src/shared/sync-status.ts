@@ -6,6 +6,7 @@ export type SyncStatusCode =
   | "remote_changes"
   | "conflict"
   | "incomplete_assets"
+  | "missing_demo"
   | "sync_error"
   | "pending"
   | "unknown";
@@ -19,6 +20,7 @@ export const SYNC_STATUS_LABEL: Record<SyncStatusCode, string> = {
   remote_only: "Pending",
   remote_changes: "Pending",
   incomplete_assets: "Incomplete",
+  missing_demo: "Missing demo",
   conflict: "Conflict",
   sync_error: "Error",
   unknown: "—",
@@ -53,10 +55,12 @@ export function statusFromPlanSides(input: {
   localAhead: boolean;
   remoteAhead: boolean;
   incomplete: boolean;
+  missingDemo?: boolean;
   error?: string;
   offlinePending?: boolean;
 }): SyncStatusCode {
   if (input.error) return "sync_error";
+  if (input.missingDemo) return "missing_demo";
   if (input.incomplete) return "incomplete_assets";
   if (input.conflict) return "conflict";
   if (input.offlinePending) return "pending";

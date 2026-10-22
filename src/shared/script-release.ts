@@ -1,5 +1,6 @@
 import type { Flow, Step, Variable } from "./contracts.js";
 import { computeExecutionDigest, computeScriptContentDigest } from "./script-digest.js";
+import { MISSING_DEMO_REASON } from "./video-demo-policy.js";
 
 /** SEO-OPS Social Automation Script Registry publish body (kind=script). */
 export type ScriptVariable = {
@@ -17,6 +18,9 @@ export type ScriptVideoDemo = {
   reviewed: boolean;
   audio: false;
   desktop_capture: false;
+  execution_digest?: string;
+  thumbnail_ref?: string;
+  thumbnail_sha256?: string;
 };
 
 export type ScriptReleaseManifest = {
@@ -177,6 +181,7 @@ export function buildScriptCatalogSnapshot(input: ScriptExportInput): ScriptCata
   const { stepPayloads, missing } = mapStepPayloads(input.flow, input.steps);
   for (const m of missing) reasons.push(`missing_step:${m}`);
   if (stepPayloads.length === 0) reasons.push("steps_required");
+  if (!input.videoDemo) reasons.push(MISSING_DEMO_REASON);
 
   const version = SEMVER.test(input.version) ? input.version : "0.0.0";
   const softInput = { ...input, version };
@@ -244,12 +249,13 @@ export function assertScriptPublishBody(body: ScriptPublishBody) {
   if (!Array.isArray(body.manifest.steps) || body.manifest.steps.length === 0) {
     throw new Error("SCRIPT_EXPORT: steps required");
   }
-  if (body.manifest.video_demo) {
-    const v = body.manifest.video_demo;
-    if (v.audio !== false || v.desktop_capture !== false) {
-      throw new Error("SCRIPT_EXPORT: video demo must be browser-only silent capture");
-    }
-    if (!v.test_run_id || !v.artifact_ref) throw new Error("SCRIPT_EXPORT: video demo incomplete");
+  const v = body.manifest.video_demo;
+  if (!v) throw new Error("SCRIPT_EXPORT: missing_demo — attach a Test Lab Script Demo first");
+  if (v.audio !== false || v.desktop_capture !== false) {
+    throw new Error("SCRIPT_EXPORT: video demo must be browser-only silent capture");
   }
+  if (!v.test_run_id || !v.artifact_ref) throw new Error("SCRIPT_EXPORT: video demo incomplete");
+  if (!v.reviewed) throw new Error("SCRIPT_EXPORT: video demo must be reviewed");
+  if (!v.thumbnail_ref) throw new Error("SCRIPT_EXPORT: video demo thumbnail required");
   return body;
 }

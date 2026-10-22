@@ -4,6 +4,8 @@ import { createSeoOpsAutoSync } from "../src/main/seo-ops-auto-sync.js";
 import { buildScriptCatalogSnapshot, buildScriptPublishBody, assertScriptPublishBody } from "../src/shared/script-release.js";
 import { planScriptSync } from "../src/shared/script-sync.js";
 import { labelForStatus, statusFromPlanSides } from "../src/shared/sync-status.js";
+import { attachVideoDemo, toScriptVideoDemo } from "../src/shared/video-demo.js";
+import { MISSING_DEMO_REASON } from "../src/shared/video-demo-policy.js";
 import type { Flow, Step } from "../src/shared/contracts.js";
 
 const blankFlow: Flow = {
@@ -34,10 +36,26 @@ const readyStep: Step = {
   payload: { action: "SLEEP", timeoutMs: 50 },
 };
 
+function reviewedDemo(flowId: string, digest: string) {
+  const caseId = "11111111-1111-1111-1111-111111111111";
+  const runId = "22222222-2222-2222-2222-222222222222";
+  return toScriptVideoDemo(attachVideoDemo({
+    scriptId: flowId,
+    scriptVersion: "1.0.0",
+    caseId,
+    testRunId: runId,
+    executionDigest: digest,
+    sha256: "b".repeat(64),
+    thumbnailRef: `${caseId}/${runId}/recording-thumb.jpg`,
+    reviewed: true,
+  }));
+}
+
 test("Script 0 Step does not crash catalog inspection", () => {
   const snap = buildScriptCatalogSnapshot({ flow: blankFlow, steps: [], version: "1.0.0", assets: [] });
   assert.equal(snap.incomplete, true);
   assert.ok(snap.incomplete_reasons.includes("steps_required"));
+  assert.ok(snap.incomplete_reasons.includes(MISSING_DEMO_REASON));
   assert.equal(snap.publish_body, null);
   assert.equal(snap.content_digest.length, 64);
 });
@@ -50,7 +68,13 @@ test("catalog inspection does not throw; publish still requires steps", () => {
     () => buildScriptPublishBody({ flow: blankFlow, steps: [], version: "1.0.0" }),
     /steps required/,
   );
-  const ready = buildScriptPublishBody({ flow: readyFlow, steps: [readyStep], version: "1.0.0" });
+  const probe = buildScriptCatalogSnapshot({ flow: readyFlow, steps: [readyStep], version: "1.0.0" });
+  const ready = buildScriptPublishBody({
+    flow: readyFlow,
+    steps: [readyStep],
+    version: "1.0.0",
+    videoDemo: reviewedDemo(readyFlow.id, probe.execution_digest),
+  });
   assert.throws(
     () => assertScriptPublishBody({ ...ready, manifest: { ...ready.manifest, steps: [] } }),
     /steps required/,
@@ -58,10 +82,16 @@ test("catalog inspection does not throw; publish still requires steps", () => {
 });
 
 test("incomplete Script does not block other Scripts in plan", () => {
+  const probe = buildScriptCatalogSnapshot({
+    flow: readyFlow,
+    steps: [readyStep],
+    version: "1.0.0",
+  });
   const ready = buildScriptCatalogSnapshot({
     flow: readyFlow,
     steps: [readyStep],
     version: "1.0.0",
+    videoDemo: reviewedDemo(readyFlow.id, probe.execution_digest),
   });
   assert.equal(ready.incomplete, false);
   assert.ok(ready.publish_body);
@@ -80,8 +110,43 @@ test("incomplete Script does not block other Scripts in plan", () => {
   assert.equal(plan.conflicts.length, 0);
 });
 
+test("missing_demo Script is skipped without blocking peers", () => {
+  const missing = buildScriptCatalogSnapshot({
+    flow: readyFlow,
+    steps: [readyStep],
+    version: "1.0.0",
+  });
+  assert.ok(missing.incomplete_reasons.includes(MISSING_DEMO_REASON));
+  assert.equal(missing.publish_body, null);
+  const peerFlow = { ...readyFlow, id: "peer-scenario", name: "Peer" };
+  const peerProbe = buildScriptCatalogSnapshot({ flow: peerFlow, steps: [readyStep], version: "1.0.0" });
+  const peer = buildScriptCatalogSnapshot({
+    flow: peerFlow,
+    steps: [readyStep],
+    version: "1.0.0",
+    videoDemo: reviewedDemo(peerFlow.id, peerProbe.execution_digest),
+  });
+  const plan = planScriptSync(
+    [{
+      script_id: peerFlow.id,
+      package_key: peer.package_key,
+      version: peer.version,
+      content_digest: peer.content_digest,
+    }],
+    [],
+  );
+  assert.equal(plan.push_to_remote.length, 1);
+  assert.equal(labelForStatus("missing_demo"), "Missing demo");
+});
+
 test("same digest skips — no release churn", () => {
-  const body = buildScriptPublishBody({ flow: readyFlow, steps: [readyStep], version: "1.0.0" });
+  const probe = buildScriptCatalogSnapshot({ flow: readyFlow, steps: [readyStep], version: "1.0.0" });
+  const body = buildScriptPublishBody({
+    flow: readyFlow,
+    steps: [readyStep],
+    version: "1.0.0",
+    videoDemo: reviewedDemo(readyFlow.id, probe.execution_digest),
+  });
   const row = {
     script_id: readyFlow.id,
     package_key: body.package_key,

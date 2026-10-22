@@ -15,10 +15,12 @@ test("sync status labels cover required UI states", () => {
     "remote_changes",
     "conflict",
     "incomplete_assets",
+    "missing_demo",
     "sync_error",
   ] as const) {
     assert.ok(labelForStatus(code).length > 0);
   }
+  assert.equal(labelForStatus("missing_demo"), "Missing demo");
   assert.equal(
     statusFromPlanSides({
       hasLocal: true,

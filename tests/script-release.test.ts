@@ -33,13 +33,28 @@ const steps: Step[] = [
   },
 ];
 
+const caseId = "11111111-1111-1111-1111-111111111111";
+const runId = "22222222-2222-2222-2222-222222222222";
+
 describe("script-release", () => {
   it("builds SEO-OPS script publish body from scenario", () => {
+    const attachment = attachVideoDemo({
+      scriptId: flow.id,
+      scriptVersion: "1.0.0",
+      caseId,
+      testRunId: runId,
+      executionDigest: "a".repeat(64),
+      sha256: "b".repeat(64),
+      thumbnailRef: `${caseId}/${runId}/recording-thumb.jpg`,
+      thumbnailSha256: "c".repeat(64),
+      reviewed: true,
+    });
     const body = buildScriptPublishBody({
       flow,
       steps,
       version: "1.0.0",
       packageKey: "facebook.group.post.script",
+      videoDemo: toScriptVideoDemo(attachment),
     });
     assert.equal(body.kind, "script");
     assert.equal(body.manifest.script_id, "facebook-group-post");
@@ -52,9 +67,11 @@ describe("script-release", () => {
     const attachment = attachVideoDemo({
       scriptId: flow.id,
       scriptVersion: "1.0.0",
-      caseId: "11111111-1111-1111-1111-111111111111",
-      testRunId: "22222222-2222-2222-2222-222222222222",
+      caseId,
+      testRunId: runId,
+      executionDigest: "a".repeat(64),
       sha256: "b".repeat(64),
+      thumbnailRef: `${caseId}/${runId}/recording-thumb.jpg`,
       reviewed: true,
     });
     const demo = toScriptVideoDemo(attachment);
@@ -80,8 +97,10 @@ describe("script-release", () => {
     const attachment = attachVideoDemo({
       scriptId: flow.id,
       scriptVersion: "1.0.0",
-      caseId: "11111111-1111-1111-1111-111111111111",
-      testRunId: "22222222-2222-2222-2222-222222222222",
+      caseId,
+      testRunId: runId,
+      executionDigest: "a".repeat(64),
+      thumbnailRef: `${caseId}/${runId}/recording-thumb.jpg`,
       reviewed: false,
     });
     assert.throws(() => toScriptVideoDemo(attachment));

@@ -14,7 +14,9 @@ export class TestLab {
       const result = item.lastResult;
       result.status = "ERROR"; result.finishedAt = new Date().toISOString();
       result.message = "Ứng dụng đã dừng trước khi Test Run kết thúc. Kiểm tra website trước khi chạy lại.";
-      if (item.recording && !result.recordingPath) result.recordingError = "Recording was interrupted before finalization.";
+      if (!result.recordingPath && !result.recordingError) {
+        result.recordingError = "Recording was interrupted before finalization.";
+      }
       if (!result.screenshotPath) result.screenshotError = "Lượt chạy bị gián đoạn trước khi lưu screenshot cuối.";
       for (const step of result.steps ?? []) {
         if (step.status === "RUNNING") { step.status = "ERROR"; step.message = result.message; }

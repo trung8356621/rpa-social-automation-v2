@@ -4,7 +4,10 @@ import type { BrowserCore } from "./browser-core.js";
 import type { CaseResult } from "../shared/contracts.js";
 
 const uuid = /^[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}$/i;
-const ownedFiles = new Set(["recording.webm", "recording.webm.tmp", "final.png", "final.png.tmp", "metadata.json", "metadata.json.tmp"]);
+const ownedFiles = new Set([
+  "recording.webm", "recording.webm.tmp", "recording-thumb.jpg",
+  "final.png", "final.png.tmp", "metadata.json", "metadata.json.tmp",
+]);
 /** Browser content only. No desktop capture, uploads, data URLs in metadata or Runtime changes. */
 export class TestRunEvidence {
   constructor(private readonly root: string) {}

@@ -2,7 +2,7 @@ import { createHash } from "node:crypto";
 import { access, readFile } from "node:fs/promises";
 import path from "node:path";
 import type { Flow, Step, Variable } from "../shared/contracts.js";
-import { buildScriptCatalogSnapshot } from "../shared/script-release.js";
+import { buildScriptCatalogSnapshot, type ScriptVideoDemo } from "../shared/script-release.js";
 import {
   createHttpSeoOpsAuthClient,
   assertRpaAdminRole,
@@ -23,6 +23,16 @@ import {
   type ScriptSyncRow,
   type SyncStatusCode,
 } from "../shared/sync-status.js";
+import {
+  toScriptVideoDemo,
+  type VideoDemoAttachment,
+} from "../shared/video-demo.js";
+import {
+  assertDemoBelongsToScript,
+  assertExecutionDigestMatches,
+  hasMissingDemoReason,
+  MISSING_DEMO_REASON,
+} from "../shared/video-demo-policy.js";
 import type { Store } from "./storage.js";
 
 export type SeoOpsConfig = {
@@ -33,6 +43,14 @@ type SyncMeta = {
   rows: Record<string, ScriptSyncRow>;
   last_sync_at?: string;
   last_result?: string;
+};
+
+type LocalCatalogRow = LocalScriptRow & {
+  name: string;
+  incomplete: boolean;
+  incomplete_reasons: string[];
+  flow_id: string;
+  video_attachment?: VideoDemoAttachment;
 };
 
 function toPlanRow(row: LocalScriptRow): LocalScriptRow {
@@ -51,8 +69,11 @@ export function createSeoOpsSyncService(options: {
   store: Store;
   assetDir: string;
   tokenStore: TokenStore;
+  /** Root of Test Lab evidence (`…/test-runs`). */
+  testRunsDir?: string;
 }) {
   const { store, assetDir, tokenStore } = options;
+  const testRunsDir = options.testRunsDir;
 
   function config(): SeoOpsConfig {
     const raw = store.setting("seoOpsBaseUrl");
@@ -117,17 +138,63 @@ export function createSeoOpsSyncService(options: {
     return { assets, complete: missing.length === 0, missing };
   }
 
-  async function localRow(
+  async function resolveVideoDemo(
     flow: Flow,
-    version = "1.0.0",
-  ): Promise<
-    LocalScriptRow & {
-      name: string;
-      incomplete: boolean;
-      incomplete_reasons: string[];
-      flow_id: string;
+    version: string,
+    executionDigest: string,
+  ): Promise<{ demo?: ScriptVideoDemo; attachment?: VideoDemoAttachment; errors: string[] }> {
+    const errors: string[] = [];
+    const raw = store.setting(`videoDemo:${flow.id}:${version}`);
+    if (!raw) return { errors: [MISSING_DEMO_REASON] };
+    let attachment: VideoDemoAttachment;
+    try {
+      attachment = JSON.parse(raw) as VideoDemoAttachment;
+    } catch {
+      return { errors: [MISSING_DEMO_REASON] };
     }
-  > {
+    try {
+      assertDemoBelongsToScript(attachment, flow.id);
+      assertExecutionDigestMatches(attachment, executionDigest);
+    } catch (e) {
+      return { errors: [String((e as Error).message || e)] };
+    }
+    if (!testRunsDir) {
+      errors.push("VIDEO_DEMO: test-runs directory unavailable");
+      return { errors };
+    }
+    const videoAbs = path.join(testRunsDir, attachment.artifactRef);
+    try {
+      await access(videoAbs);
+      const buf = await readFile(videoAbs);
+      if (!buf.length) return { errors: ["VIDEO_DEMO: video file empty"] };
+      if (!attachment.sha256) {
+        attachment.sha256 = createHash("sha256").update(buf).digest("hex");
+      }
+    } catch {
+      return { errors: ["VIDEO_DEMO: video file missing or unreadable"] };
+    }
+    if (attachment.thumbnailRef) {
+      try {
+        const thumb = await readFile(path.join(testRunsDir, attachment.thumbnailRef));
+        if (!thumb.length) return { errors: ["VIDEO_DEMO: thumbnail empty"] };
+      } catch {
+        return { errors: ["VIDEO_DEMO: thumbnail missing"] };
+      }
+    } else {
+      return { errors: ["VIDEO_DEMO: thumbnail required"] };
+    }
+    if (!attachment.reviewed) {
+      return { errors: ["VIDEO_DEMO: demo must be reviewed via Use as Script Demo"] };
+    }
+    try {
+      const demo = toScriptVideoDemo(attachment);
+      return { demo, attachment, errors: [] };
+    } catch (e) {
+      return { errors: [String((e as Error).message || e)] };
+    }
+  }
+
+  async function localRow(flow: Flow, version = "1.0.0"): Promise<LocalCatalogRow> {
     const steps = flow.steps
       .map((ref) => {
         try {
@@ -138,13 +205,27 @@ export function createSeoOpsSyncService(options: {
       })
       .filter((s): s is Step => Boolean(s));
     const { assets, complete, missing } = await collectLocalAssets(flow, steps);
-    // Catalog inspection only — never publish; 0-step Scripts stay listable.
-    const snap = buildScriptCatalogSnapshot({ flow, steps, version, assets });
+    // Probe execution digest first (video metadata must not affect it).
+    const probe = buildScriptCatalogSnapshot({ flow, steps, version, assets });
+    const resolved = await resolveVideoDemo(flow, version, probe.execution_digest);
+    const snap = buildScriptCatalogSnapshot({
+      flow,
+      steps,
+      version,
+      assets,
+      videoDemo: resolved.demo,
+    });
     const reasons = [...snap.incomplete_reasons];
     if (!complete) {
       reasons.push(...missing.map((m) => `missing_asset:${m}`));
     }
-    const incomplete = snap.incomplete || !complete;
+    for (const e of resolved.errors) {
+      if (!reasons.includes(e)) reasons.push(e.startsWith("VIDEO_DEMO") ? e : e);
+      if (e === MISSING_DEMO_REASON || e.startsWith("VIDEO_DEMO")) {
+        if (!reasons.includes(MISSING_DEMO_REASON)) reasons.push(MISSING_DEMO_REASON);
+      }
+    }
+    const incomplete = reasons.length > 0 || snap.incomplete || !complete || !snap.publish_body;
     const lineageRaw = store.setting(`seoOpsLineage:${flow.id}`);
     const lineage = lineageRaw ? (JSON.parse(lineageRaw) as string[]) : [];
     return {
@@ -160,20 +241,12 @@ export function createSeoOpsSyncService(options: {
       name: flow.name,
       incomplete,
       incomplete_reasons: [...new Set(reasons)],
+      video_attachment: resolved.attachment,
     };
   }
 
-  async function buildLocalCatalog(): Promise<
-    Array<
-      LocalScriptRow & {
-        name: string;
-        incomplete: boolean;
-        incomplete_reasons: string[];
-        flow_id: string;
-      }
-    >
-  > {
-    const out = [];
+  async function buildLocalCatalog(): Promise<LocalCatalogRow[]> {
+    const out: LocalCatalogRow[] = [];
     for (const flow of store.flows()) {
       try {
         const version = store.setting(`seoOpsVersion:${flow.id}`) || "1.0.0";
@@ -274,6 +347,7 @@ export function createSeoOpsSyncService(options: {
     const rows: ScriptSyncRow[] = ids.map((id) => {
       const l = localBy[id];
       const r = remoteBy[id];
+      const missingDemo = Boolean(l && hasMissingDemoReason(l.incomplete_reasons || []));
       const incomplete = Boolean(l?.incomplete || (r && r.assets_complete === false));
       const status = statusFromPlanSides({
         hasLocal: !!l,
@@ -282,16 +356,19 @@ export function createSeoOpsSyncService(options: {
         conflict: conflictIds.has(id),
         localAhead: pushIds.has(id) && !!r,
         remoteAhead: pullIds.has(id) && !!l,
-        incomplete,
+        incomplete: incomplete && !missingDemo,
+        missingDemo,
         error: error && (l || r) && !incomplete ? error : undefined,
         offlinePending: Boolean(options?.offlinePending && l && !incomplete && !skipIds.has(id)),
       });
       const prev = meta.rows[id];
-      const message = incomplete
-        ? (l?.incomplete_reasons || []).slice(0, 3).join(", ") || "incomplete"
-        : error && (l || r)
-          ? error
-          : prev?.message;
+      const message = missingDemo
+        ? "Missing demo — mở Test Lab, Run, rồi Use as Script Demo"
+        : incomplete
+          ? (l?.incomplete_reasons || []).slice(0, 3).join(", ") || "incomplete"
+          : error && (l || r)
+            ? error
+            : prev?.message;
       return {
         script_id: id,
         flow_id: l?.flow_id,
@@ -474,23 +551,29 @@ export function createSeoOpsSyncService(options: {
     // Incomplete Scripts are skipped individually — never block others / never publish.
     const publishable = refreshedLocal.filter((r) => !r.incomplete && r.publish_body);
     for (const row of refreshedLocal.filter((r) => r.incomplete)) {
+      const missingDemo = hasMissingDemoReason(row.incomplete_reasons || []);
+      // Missing-demo Scripts are skipped once — never thrown as sync errors (no auto-retry storm).
       results.push({
         script_id: row.script_id,
         action: "skip",
         ok: true,
-        message: (row.incomplete_reasons || ["incomplete"]).join(", "),
+        message: missingDemo
+          ? "missing_demo — open Test Lab to create demo"
+          : (row.incomplete_reasons || ["incomplete"]).join(", "),
       });
       meta.rows[row.script_id] = {
         ...(meta.rows[row.script_id] ?? {
           script_id: row.script_id,
           package_key: row.package_key,
           name: row.name,
-          status: "incomplete_assets" as SyncStatusCode,
+          status: (missingDemo ? "missing_demo" : "incomplete_assets") as SyncStatusCode,
         }),
-        status: "incomplete_assets",
+        status: missingDemo ? "missing_demo" : "incomplete_assets",
         last_sync_at: now,
-        last_result: "incomplete",
-        message: (row.incomplete_reasons || []).slice(0, 3).join(", "),
+        last_result: missingDemo ? "missing_demo" : "incomplete",
+        message: missingDemo
+          ? "Missing demo — mở Test Lab, Run, rồi Use as Script Demo"
+          : (row.incomplete_reasons || []).slice(0, 3).join(", "),
         incomplete: true,
       };
     }
@@ -504,12 +587,34 @@ export function createSeoOpsSyncService(options: {
         continue;
       }
       const published = await client.publish(full.publish_body);
-      const ok = published.httpStatus < 300 && (published as { ok?: boolean }).ok !== false;
+      let ok = published.httpStatus < 300 && (published as { ok?: boolean }).ok !== false;
+      let message = ok ? "pushed" : JSON.stringify((published as { errors?: string[] }).errors ?? published);
+      if (ok && full.video_attachment && testRunsDir) {
+        try {
+          const binary = await readFile(path.join(testRunsDir, full.video_attachment.artifactRef));
+          const uploaded = await client.uploadVideoDemo({
+            packageKey: full.package_key,
+            version: full.version,
+            binary,
+            mime: "video/webm",
+            sha256: full.video_attachment.sha256,
+          });
+          if (!uploaded.ok) {
+            ok = false;
+            message = `pushed metadata but video upload failed: ${(uploaded.errors || []).join(",")}`;
+          } else {
+            message = "pushed+video";
+          }
+        } catch (e) {
+          ok = false;
+          message = `pushed metadata but video unreadable: ${String((e as Error).message || e)}`;
+        }
+      }
       results.push({
         script_id: row.script_id,
         action: "push",
         ok,
-        message: ok ? "pushed" : JSON.stringify((published as { errors?: string[] }).errors ?? published),
+        message,
       });
       if (ok) {
         const lineage = JSON.parse(store.setting(`seoOpsLineage:${full.flow_id}`) || "[]") as string[];

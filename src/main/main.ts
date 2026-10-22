@@ -47,8 +47,17 @@ import {
 import { effectiveMatchTo, matchToLabel } from "../shared/match-to.js";
 import { DRAFT_KEYS } from "../shared/contracts.js";
 import type { Command, State, CaseResult, Step } from "../shared/contracts.js";
-import { buildScriptPublishBody, assertScriptPublishBody } from "../shared/script-release.js";
+import {
+  buildScriptPublishBody,
+  assertScriptPublishBody,
+  buildScriptCatalogSnapshot,
+} from "../shared/script-release.js";
 import { attachVideoDemo, toScriptVideoDemo, assertNotScreenshot } from "../shared/video-demo.js";
+import {
+  canUseAsScriptDemo,
+  assertDemoBelongsToScript,
+  assertExecutionDigestMatches,
+} from "../shared/video-demo-policy.js";
 import { createSeoOpsTokenStore } from "./seo-ops-token-store.js";
 import { createSeoOpsSyncService } from "./seo-ops-sync.js";
 import { createSeoOpsAutoSync } from "./seo-ops-auto-sync.js";
@@ -124,6 +133,7 @@ async function boot() {
     store,
     assetDir,
     tokenStore: seoOpsTokenStore,
+    testRunsDir: path.join(dataPath, "test-runs"),
   });
   const seoOpsAutoSync = createSeoOpsAutoSync({
     isAuthenticated: () => Boolean(seoOpsTokenStore.getToken()),
@@ -513,9 +523,10 @@ async function boot() {
       overlays.setPage("creator");
       contextReady = true;
       publishLayout(); publish();
-      if (item.recording) {
-        try { await recorder.start(browser.view.webContents, id, runId); }
-        catch { outcome.recordingError = "Could not start Browser recording; screenshots remain enabled."; }
+      // Every Test Run records browser content automatically (no desktop / no audio).
+      try { await recorder.start(browser.view.webContents, id, runId); }
+      catch (error) {
+        outcome.recordingError = `Recording failed to start: ${error instanceof Error ? error.message : String(error)}`;
       }
       // loadURL awaits main-frame load completion. No DOM/login inspection or retries.
       let failedLoad = false;
@@ -586,9 +597,12 @@ async function boot() {
         for (const entry of outcome.steps ?? []) if (entry.status === "PENDING") {
           entry.status = "SKIPPED"; entry.message = "Không chạy vì lượt test đã dừng trước Step này.";
         }
-        if (item.recording) {
-          try { if (await recorder.stop()) outcome.recordingPath = `${id}/${runId}/recording.webm`; }
-          catch { outcome.recordingError = "Could not finalize Browser recording."; }
+        try {
+          const stopped = await recorder.stop();
+          if (stopped?.videoPath) outcome.recordingPath = `${id}/${runId}/recording.webm`;
+          else if (!outcome.recordingError) outcome.recordingError = "Recording produced no file.";
+        } catch (error) {
+          outcome.recordingError = `Recording failed to finalize: ${error instanceof Error ? error.message : String(error)}`;
         }
         outcome.finishedAt = new Date().toISOString();
         try { await testEvidence.metadata(id, outcome); }
@@ -728,23 +742,51 @@ async function boot() {
         isIdle();
         const item = testLab.get(command.caseId);
         const result = item.lastResult;
-        if (!result || result.runId !== command.runId || !result.recordingPath) {
+        if (!result || result.runId !== command.runId) {
           throw new Error("VIDEO_DEMO: current Test Run must have a browser recording.");
         }
-        assertNotScreenshot(result.recordingPath);
+        const eligibility = canUseAsScriptDemo(result);
+        if (!eligibility.ok) throw new Error(eligibility.reason);
+        assertNotScreenshot(result.recordingPath!);
+        const flow = store.flows().find((f) => f.id === item.flowId);
+        if (!flow) throw new Error("VIDEO_DEMO: Scenario/Script not found");
+        const steps = flow.steps.map((ref) => store.step(ref.id, ref.version));
+        const snap = buildScriptCatalogSnapshot({
+          flow,
+          steps,
+          version: command.scriptVersion,
+          assets: [],
+          videoDemo: undefined,
+        });
+        // Probe digest without demo requirement side-effects: recompute execution from assembled steps.
+        const executionDigest = snap.execution_digest;
+        const recordingAbs = path.join(dataPath, "test-runs", command.caseId, command.runId, "recording.webm");
+        const thumbAbs = path.join(dataPath, "test-runs", command.caseId, command.runId, "recording-thumb.jpg");
+        let videoBuf: Buffer;
+        try {
+          videoBuf = await readFile(recordingAbs);
+        } catch {
+          throw new Error("VIDEO_DEMO: video file missing or unreadable — re-run Test Case");
+        }
+        if (!videoBuf.length) throw new Error("VIDEO_DEMO: video file empty");
+        let thumbBuf: Buffer;
+        try {
+          thumbBuf = await readFile(thumbAbs);
+        } catch {
+          throw new Error("VIDEO_DEMO: thumbnail missing — re-run Test Case to capture last browser frame");
+        }
+        if (!thumbBuf.length) throw new Error("VIDEO_DEMO: thumbnail empty — refusing placeholder");
         const attachment = attachVideoDemo({
           scriptId: item.flowId,
           scriptVersion: command.scriptVersion,
           caseId: command.caseId,
           testRunId: command.runId,
+          executionDigest,
+          sha256: createHash("sha256").update(videoBuf).digest("hex"),
+          thumbnailRef: `${command.caseId}/${command.runId}/recording-thumb.jpg`,
+          thumbnailSha256: createHash("sha256").update(thumbBuf).digest("hex"),
           reviewed: command.reviewed === true,
         });
-        const recordingAbs = path.join(dataPath, "test-runs", command.caseId, command.runId, "recording.webm");
-        try {
-          attachment.sha256 = createHash("sha256").update(await readFile(recordingAbs)).digest("hex");
-        } catch {
-          /* digest optional until file is readable */
-        }
         store.setSetting(`videoDemo:${item.flowId}:${command.scriptVersion}`, JSON.stringify(attachment));
         return attachment;
       }
@@ -753,13 +795,21 @@ async function boot() {
         const flow = store.flows().find((f) => f.id === command.flowId);
         if (!flow) throw new Error("SCRIPT_EXPORT: scenario not found");
         const steps = flow.steps.map((ref) => store.step(ref.id, ref.version));
-        let videoDemo;
-        if (command.includeVideoDemo) {
-          const raw = store.setting(`videoDemo:${flow.id}:${command.version}`);
-          if (!raw) throw new Error("VIDEO_DEMO: attach a reviewed Test Lab recording first.");
-          const attachment = JSON.parse(raw) as ReturnType<typeof attachVideoDemo>;
-          videoDemo = toScriptVideoDemo(attachment);
+        const raw = store.setting(`videoDemo:${flow.id}:${command.version}`);
+        if (!raw) {
+          throw new Error("VIDEO_DEMO: missing_demo — open Test Lab, Run, then Use as Script Demo");
         }
+        const attachment = JSON.parse(raw) as ReturnType<typeof attachVideoDemo>;
+        assertDemoBelongsToScript(attachment, flow.id);
+        const probe = buildScriptCatalogSnapshot({ flow, steps, version: command.version, assets: [] });
+        assertExecutionDigestMatches(attachment, probe.execution_digest);
+        const recordingAbs = path.join(dataPath, "test-runs", attachment.artifactRef);
+        try {
+          await stat(recordingAbs);
+        } catch {
+          throw new Error("VIDEO_DEMO: attached video file missing — re-attach from Test Lab");
+        }
+        const videoDemo = toScriptVideoDemo(attachment);
         const body = assertScriptPublishBody(buildScriptPublishBody({
           flow,
           steps,

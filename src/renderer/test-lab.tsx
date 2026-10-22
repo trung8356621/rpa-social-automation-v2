@@ -1,6 +1,7 @@
 import React, { useEffect, useRef, useState } from "react";
 import type { Command, State, TestCase, TestCaseConfig, VariableValues } from "../shared/contracts";
 import { validateVariables } from "../shared/flow-model";
+import { canUseAsScriptDemo } from "../shared/video-demo-policy";
 import { UiPopover } from "./ui-popover";
 
 export type CaseEditorHandle = {
@@ -10,7 +11,7 @@ export type CaseEditorHandle = {
 function initial(state: State): TestCaseConfig {
   const flow = state.flows[0], session = state.browserSessions?.find(s => s.id === state.activeBrowserSessionId);
   return { name: "", flowId: flow?.id ?? "", sessionId: session?.id ?? "", startUrl: session?.lastUrl ?? "",
-    values: structuredClone(flow?.defaultPattern?.values ?? {}) };
+    values: structuredClone(flow?.defaultPattern?.values ?? {}), recording: true };
 }
 export function TestCaseEditor({ tabId, item, state, locked, report, saved, saving, run }: {
   tabId: string; item?: TestCase; state: State; locked: boolean;
@@ -19,12 +20,12 @@ export function TestCaseEditor({ tabId, item, state, locked, report, saved, savi
   saving: (value: boolean) => void;
 }) {
   const [config, setConfig] = useState<TestCaseConfig>(() => item ? structuredClone({ name: item.name,
-    flowId: item.flowId, sessionId: item.sessionId, startUrl: item.startUrl, recording: item.recording, values: item.values }) : initial(state));
+    flowId: item.flowId, sessionId: item.sessionId, startUrl: item.startUrl, recording: true, values: item.values }) : initial(state));
   const [baseline, setBaseline] = useState(config);
   const [error, setError] = useState("");
   const [working, setWorking] = useState(false);
   const saveLock = useRef(false);
-  const dirty = !item || JSON.stringify(config) !== JSON.stringify(baseline);
+  const dirty = !item || JSON.stringify({ ...config, recording: true }) !== JSON.stringify({ ...baseline, recording: true });
   const flow = state.flows.find(f => f.id === config.flowId);
   async function save() {
     if (saveLock.current) throw new Error("Đang lưu Case; vui lòng đợi.");
@@ -32,12 +33,13 @@ export function TestCaseEditor({ tabId, item, state, locked, report, saved, savi
     setWorking(true); saving(true); setError("");
     try {
       validateVariables(flow?.variables ?? [], config.values);
-      const next = await window.creator.invoke({ type: "saveTestCase", id: item?.id, config }) as State;
+      const next = await window.creator.invoke({ type: "saveTestCase", id: item?.id, config: { ...config, recording: true } }) as State;
       const previousIds = new Set(state.testLab?.cases.map(c => c.id));
       const result = next.testLab!.cases.find(c => item ? c.id === item.id : !previousIds.has(c.id))!;
       if (!result) throw new Error("Không tìm thấy Case vừa lưu.");
-      setConfig({ name: result.name, flowId: result.flowId, sessionId: result.sessionId, startUrl: result.startUrl, recording: result.recording, values: result.values });
-      setBaseline({ name: result.name, flowId: result.flowId, sessionId: result.sessionId, startUrl: result.startUrl, recording: result.recording, values: result.values });
+      const nextConfig = { name: result.name, flowId: result.flowId, sessionId: result.sessionId, startUrl: result.startUrl, recording: true, values: result.values };
+      setConfig(nextConfig);
+      setBaseline(nextConfig);
       saved(tabId, result, next);
     } catch (e) { setError(String(e)); throw e; }
     finally { saveLock.current = false; setWorking(false); saving(false); }
@@ -49,48 +51,113 @@ export function TestCaseEditor({ tabId, item, state, locked, report, saved, savi
   function values(next: VariableValues) { setConfig(previous => ({ ...previous, values: next })); }
   return <section className="app-page test-case-editor" aria-label="Test Case Editor">
     <div className="page-heading"><h1>{config.name || "Test Case mới"}{dirty ? " ●" : ""}</h1>
-      <p>Cấu hình riêng cho Case. Chạy chỉ dùng Step Version đã lưu; không dùng draft Creator.</p></div>
-    <div className="case-form">
-      <label>Name<input disabled={disabled} maxLength={120} value={config.name} onChange={e => setConfig({ ...config, name: e.target.value })} /></label>
-      <label>Scenario<select disabled={disabled} value={config.flowId} onChange={e => {
-        const chosen = state.flows.find(f => f.id === e.target.value);
-        setConfig({ ...config, flowId: e.target.value, values: structuredClone(chosen?.defaultPattern?.values ?? {}) });
-      }}><option value="" disabled>Chọn Scenario</option>{state.flows.map(f => <option key={f.id} value={f.id}>{f.name}</option>)}</select></label>
-      <label>Browser Session<select disabled={disabled} value={config.sessionId} onChange={e => setConfig({ ...config, sessionId: e.target.value })}>
-        <option value="" disabled>Chọn Session</option>{state.browserSessions?.map(s => <option key={s.id} value={s.id}>{s.name}</option>)}</select></label>
-      <label>Start URL<input disabled={disabled} type="url" value={config.startUrl} placeholder="https://..." onChange={e => setConfig({ ...config, startUrl: e.target.value })} /></label>
-      <label><input type="checkbox" disabled={disabled} checked={config.recording === true} onChange={e => setConfig({ ...config, recording: e.target.checked })} />Record Browser video (no audio)</label>
-      <h2>Variables</h2><p className="hint">Lần đầu lấy từ Default Pattern. Các giá trị bên dưới chỉ lưu vào Case này.</p>
-      {(flow?.variables ?? []).map(v => <label key={v.id}>{v.key} <small>({v.type})</small>
-        {v.type === "number" || v.type === "integer" ? <input disabled={disabled} type="number" step={v.type === "integer" ? 1 : "any"}
-          value={typeof config.values[v.id] === "number" ? config.values[v.id] as number : ""}
-          onChange={e => values({ ...config.values, [v.id]: e.target.value === "" ? "" : Number(e.target.value) })} />
-          : <textarea disabled={disabled} value={Array.isArray(config.values[v.id]) ? (config.values[v.id] as string[]).join("\n") : config.values[v.id] ?? ""}
-            placeholder={v.type === "files" ? "Mỗi dòng một đường dẫn file" : undefined}
-            onChange={e => values({ ...config.values, [v.id]: v.type === "files" ? e.target.value.split("\n").filter(Boolean) : e.target.value })} />}
-      </label>)}
-      {flow && <button disabled={disabled} onClick={() => values(Object.fromEntries((flow.variables ?? []).map(v => [v.id,
-        config.values[v.id] ?? flow.defaultPattern?.values[v.id] ?? (v.type === "files" ? [] : "")])))}>Đồng bộ với template hiện tại</button>}
-      {error && <p role="alert">{error}</p>}
-      <div className="case-actions"><button className="primary" disabled={disabled || !dirty} onClick={() => void save().catch(() => {})}>Lưu Case</button>
-        <button disabled={disabled || dirty || !item} onClick={() => item && run(item.id)}>Run Test Case</button>
-        {dirty && <small>Lưu cấu hình trước khi chạy.</small>}</div>
-      {item?.lastResult && <CaseResultView item={item} state={state} locked={disabled || dirty} runAgain={() => run(item.id)} />}
+      <p>Cấu hình riêng cho Case. Mỗi lần Run tự quay Browser video (không audio). Chỉ dùng Step Version đã lưu.</p></div>
+    <div className="case-layout">
+      <div className="case-form case-layout-main">
+        <label>Name<input disabled={disabled} maxLength={120} value={config.name} onChange={e => setConfig({ ...config, name: e.target.value })} /></label>
+        <label>Scenario<select disabled={disabled} value={config.flowId} onChange={e => {
+          const chosen = state.flows.find(f => f.id === e.target.value);
+          setConfig({ ...config, flowId: e.target.value, values: structuredClone(chosen?.defaultPattern?.values ?? {}) });
+        }}><option value="" disabled>Chọn Scenario</option>{state.flows.map(f => <option key={f.id} value={f.id}>{f.name}</option>)}</select></label>
+        <label>Browser Session<select disabled={disabled} value={config.sessionId} onChange={e => setConfig({ ...config, sessionId: e.target.value })}>
+          <option value="" disabled>Chọn Session</option>{state.browserSessions?.map(s => <option key={s.id} value={s.id}>{s.name}</option>)}</select></label>
+        <label>Start URL<input disabled={disabled} type="url" value={config.startUrl} placeholder="https://..." onChange={e => setConfig({ ...config, startUrl: e.target.value })} /></label>
+        <p className="hint">Browser video được quay tự động mỗi lần Run (không desktop, không audio).</p>
+        <h2>Variables</h2><p className="hint">Lần đầu lấy từ Default Pattern. Các giá trị bên dưới chỉ lưu vào Case này.</p>
+        {(flow?.variables ?? []).map(v => <label key={v.id}>{v.key} <small>({v.type})</small>
+          {v.type === "number" || v.type === "integer" ? <input disabled={disabled} type="number" step={v.type === "integer" ? 1 : "any"}
+            value={typeof config.values[v.id] === "number" ? config.values[v.id] as number : ""}
+            onChange={e => values({ ...config.values, [v.id]: e.target.value === "" ? "" : Number(e.target.value) })} />
+            : <textarea disabled={disabled} value={Array.isArray(config.values[v.id]) ? (config.values[v.id] as string[]).join("\n") : config.values[v.id] ?? ""}
+              placeholder={v.type === "files" ? "Mỗi dòng một đường dẫn file" : undefined}
+              onChange={e => values({ ...config.values, [v.id]: v.type === "files" ? e.target.value.split("\n").filter(Boolean) : e.target.value })} />}
+        </label>)}
+        {flow && <button disabled={disabled} onClick={() => values(Object.fromEntries((flow.variables ?? []).map(v => [v.id,
+          config.values[v.id] ?? flow.defaultPattern?.values[v.id] ?? (v.type === "files" ? [] : "")])))}>Đồng bộ với template hiện tại</button>}
+        {error && <p role="alert">{error}</p>}
+        <div className="case-actions"><button className="primary" disabled={disabled || !dirty} onClick={() => void save().catch(() => {})}>Lưu Case</button>
+          <button disabled={disabled || dirty || !item} onClick={() => item && run(item.id)}>Run Test Case</button>
+          {dirty && <small>Lưu cấu hình trước khi chạy.</small>}</div>
+        {item?.lastResult && <CaseResultView item={item} state={state} locked={disabled || dirty} runAgain={() => run(item.id)} compact />}
+      </div>
+      <aside className="case-video-preview" aria-label="Video Preview">
+        {item?.lastResult
+          ? <VideoPreviewPanel item={item} locked={disabled || dirty} />
+          : <div className="case-video-empty"><b>Video Preview</b><p>Chạy Test Case để xem recording WebM của lần Run.</p></div>}
+      </aside>
     </div>
   </section>;
 }
 const resultStatus = (status?: string) => status === "FAILED" ? "ERROR" : status ?? "Chưa chạy";
-export function CaseResultView({ item, state, locked = false, runAgain }: {
-  item: TestCase; state?: State; locked?: boolean; runAgain?: () => void;
+
+function VideoPreviewPanel({ item, locked }: { item: TestCase; locked: boolean }) {
+  const result = item.lastResult!;
+  const [video, setVideo] = useState<string>();
+  const [loadError, setLoadError] = useState("");
+  const [attachMsg, setAttachMsg] = useState("");
+  const [attaching, setAttaching] = useState(false);
+  const demoOk = canUseAsScriptDemo(result).ok;
+  useEffect(() => {
+    let cancelled = false;
+    setVideo(undefined); setLoadError(""); setAttachMsg("");
+    if (!result.runId || !result.recordingPath) {
+      setLoadError(result.recordingError || "Chưa có recording cho lần Run này.");
+      return () => { cancelled = true; };
+    }
+    void window.creator.invoke({ type: "testCaseVideo", caseId: item.id, runId: result.runId })
+      .then(value => { if (!cancelled) setVideo(value as string); })
+      .catch(error => { if (!cancelled) setLoadError(String(error)); });
+    return () => { cancelled = true; };
+  }, [item.id, result.runId, result.recordingPath, result.recordingError]);
+  const status = resultStatus(result.status);
+  const recordingStatus = result.recordingError
+    ? "FAILED"
+    : result.recordingPath
+      ? "READY"
+      : result.status === "RUNNING" ? "RECORDING" : "NONE";
+  return <div className="case-video-panel">
+    <div className="case-video-heading"><b>Video Preview</b>
+      <span className="case-run-status" data-status={status}>{status}</span></div>
+    <dl className="case-result-fields">
+      <dt>Run</dt><dd>{result.runId ?? "—"}</dd>
+      <dt>Recording</dt><dd><span className="case-run-status" data-status={recordingStatus === "FAILED" ? "ERROR" : recordingStatus === "READY" ? "PASS" : "RUNNING"}>{recordingStatus}</span></dd>
+      <dt>Thời điểm</dt><dd>{result.finishedAt ? new Date(result.finishedAt).toLocaleString() : "—"}</dd>
+    </dl>
+    {video ? <video className="case-video-player" controls src={video} /> : <p className="hint" role={loadError || result.recordingError ? "alert" : undefined}>
+      {loadError || result.recordingError || (result.status === "RUNNING" ? "Đang quay…" : "Chưa có video.")}</p>}
+    {result.recordingError && <p role="alert">{result.recordingError}</p>}
+    <button className="primary" disabled={locked || attaching || !demoOk || !video}
+      title={demoOk ? "Gắn recording này làm Script Demo" : "Chỉ Run thành công + recording hoàn chỉnh mới làm được Script Demo"}
+      onClick={() => {
+        const version = window.prompt("Script version for video demo (semver)", "1.0.0");
+        if (!version || !result.runId) return;
+        if (!window.confirm("Confirm you reviewed this browser recording (no desktop/audio). Use as Script Demo?")) return;
+        setAttaching(true); setAttachMsg("");
+        void window.creator.invoke({
+          type: "attachScriptVideoDemo",
+          caseId: item.id,
+          runId: result.runId,
+          scriptVersion: version.trim(),
+          reviewed: true,
+        }).then(() => setAttachMsg("Đã gắn Script Demo cho version " + version.trim()))
+          .catch(e => setAttachMsg(String((e as Error).message || e)))
+          .finally(() => setAttaching(false));
+      }}>Use as Script Demo</button>
+    {!demoOk && result.recordingPath && <p className="hint">Run thất bại vẫn xem được video nhưng không dùng làm demo chính.</p>}
+    {attachMsg && <p role={attachMsg.startsWith("Đã gắn") ? "status" : "alert"}>{attachMsg}</p>}
+  </div>;
+}
+
+export function CaseResultView({ item, state, locked = false, runAgain, compact = false }: {
+  item: TestCase; state?: State; locked?: boolean; runAgain?: () => void; compact?: boolean;
 }) {
   const result = item.lastResult;
   const [image, setImage] = useState<{ runId: string; src: string }>();
   const [imageError, setImageError] = useState("");
-  const [video, setVideo] = useState<string>();
   const [large, setLarge] = useState(false);
   useEffect(() => {
     let cancelled = false;
-    setVideo(undefined); setImage(undefined); setImageError(""); setLarge(false);
+    setImage(undefined); setImageError(""); setLarge(false);
     if (result?.runId && result.screenshotPath) void window.creator.invoke({ type: "testCaseScreenshot", caseId: item.id, runId: result.runId })
       .then(value => { if (!cancelled) setImage({ runId: result.runId!, src: value as string }); })
       .catch(error => { if (!cancelled) setImageError(String(error)); });
@@ -118,24 +185,13 @@ export function CaseResultView({ item, state, locked = false, runAgain }: {
       <ol>{result.steps.map(step => <li key={step.stepId}>
         <div><b>{step.name} · v{step.version}</b><span className="case-run-status" data-status={step.status}>{step.status}</span></div>
         <p>{step.message}</p></li>)}</ol></details>}
-    {screenshot ? <button className="case-screenshot" onClick={() => setLarge(true)} title="Xem ảnh lớn">
+    {!compact && screenshot ? <button className="case-screenshot" onClick={() => setLarge(true)} title="Xem ảnh lớn">
       <img src={screenshot} alt={`Screenshot cuối của ${result.caseName ?? item.name}`} /><span>Xem ảnh lớn · {result.screenshotAt && new Date(result.screenshotAt).toLocaleString()}</span>
-    </button> : <p className="hint" role={result.screenshotError || imageError ? "alert" : undefined}>{result.screenshotPath ? imageError || "Đang mở screenshot…" : result.screenshotError ? `Không có screenshot: ${result.screenshotError}` : (result.status === "RUNNING" ? "Ảnh sẽ được chụp trước khi kết thúc." : "Lượt chạy cũ chưa có screenshot.")}</p>}
+    </button> : !compact ? <p className="hint" role={result.screenshotError || imageError ? "alert" : undefined}>{result.screenshotPath ? imageError || "Đang mở screenshot…" : result.screenshotError ? `Không có screenshot: ${result.screenshotError}` : (result.status === "RUNNING" ? "Ảnh sẽ được chụp trước khi kết thúc." : "Lượt chạy cũ chưa có screenshot.")}</p> : null}
+    {compact && screenshot && <button className="case-screenshot" onClick={() => setLarge(true)} title="Xem ảnh lớn">
+      <img src={screenshot} alt={`Screenshot cuối của ${result.caseName ?? item.name}`} /><span>Screenshot · {result.screenshotAt && new Date(result.screenshotAt).toLocaleString()}</span>
+    </button>}
     {result.screenshotError && screenshot && <p role="alert">Lỗi chụp ảnh: {result.screenshotError}</p>}
-    {result.recordingPath && <button onClick={() => void window.creator.invoke({ type: "testCaseVideo", caseId: item.id, runId: result.runId! }).then(x => setVideo(x as string)).catch(e => setImageError(String(e)))}>Open recording</button>}
-    {result.recordingPath && result.runId && <button onClick={() => {
-      const version = window.prompt("Script version for video demo (semver)", "1.0.0");
-      if (!version) return;
-      void window.creator.invoke({
-        type: "attachScriptVideoDemo",
-        caseId: item.id,
-        runId: result.runId!,
-        scriptVersion: version,
-        reviewed: window.confirm("Confirm you reviewed this browser recording (no desktop/audio). Attach as Script video demo?"),
-      }).then(() => setImageError("")).catch(e => setImageError(String(e)));
-    }}>Attach as Script video demo</button>}
-    {video && <video controls src={video} style={{ maxWidth: "100%" }} />}
-    {result.recordingError && <p role="alert">{result.recordingError}</p>}
     {result.evidenceError && <p role="alert">{result.evidenceError}</p>}
     {large && screenshot && <UiPopover variant="modal" label="Screenshot Test Run" className="case-screenshot-modal" close={() => setLarge(false)}>
       <div className="popover-heading"><b>{result.caseName ?? item.name} · {status}</b><button onClick={() => setLarge(false)} aria-label="Đóng screenshot">×</button></div>
@@ -170,7 +226,7 @@ export function TestLabPage({ state, locked, update, open, run, canRun, create, 
         id: dialog.id, name: value, confirmed: true }, true);
   }
   return <section className="app-page" aria-label="Test Lab"><div className="page-heading"><h1>Test Lab</h1>
-    <p>Mỗi Case dùng Scenario, Session, URL và bộ Values riêng. Chạy từng Case bằng Runtime hiện có.</p></div>
+    <p>Mỗi Case dùng Scenario, Session, URL và bộ Values riêng. Mỗi lần Run tự quay Browser video.</p></div>
     <div className="scenario-toolbar"><button disabled={disabled} onClick={() => show("create")}>+ Test Group</button>
       <button className="primary" disabled={disabled || !state?.flows.length} onClick={create}>+ Test Case</button></div>
     {!dialog && error && <p role="alert">{error}</p>}

@@ -201,6 +201,38 @@ export function createHttpScriptSyncClient(options: {
       });
       return { httpStatus: response.status, ...json };
     },
+    async uploadVideoDemo(input: {
+      packageKey: string;
+      version: string;
+      binary: Buffer | Uint8Array;
+      mime?: string;
+      sha256?: string;
+    }): Promise<{ ok: boolean; errors?: string[] }> {
+      const token = options.getToken();
+      if (!token) throw new Error("SEO_OPS_SYNC: unauthenticated");
+      const { response, json } = await (async () => {
+        const res = await fetchImpl(`${root}/scripts/video-demo`, {
+          method: "POST",
+          headers: {
+            Authorization: `Bearer ${token}`,
+            "Content-Type": "application/json",
+          },
+          body: JSON.stringify({
+            package_key: input.packageKey,
+            version: input.version,
+            mime: input.mime ?? "video/webm",
+            sha256: input.sha256,
+            video_base64: Buffer.from(input.binary).toString("base64"),
+          }),
+        });
+        const body = (await res.json().catch(() => ({}))) as Record<string, unknown>;
+        return { response: res, json: body };
+      })();
+      return {
+        ok: response.ok && json.ok === true,
+        errors: Array.isArray(json.errors) ? (json.errors as string[]) : undefined,
+      };
+    },
     async pull(packageKey: string, version: string): Promise<PullResult> {
       const { response, json } = await authed("/scripts/pull", {
         method: "POST",
