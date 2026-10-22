@@ -2,7 +2,11 @@ import { createHash } from "node:crypto";
 import { access, readFile } from "node:fs/promises";
 import path from "node:path";
 import type { Flow, Step, Variable } from "../shared/contracts.js";
-import { buildScriptCatalogSnapshot, type ScriptVideoDemo } from "../shared/script-release.js";
+import {
+  buildScriptCatalogSnapshot,
+  normalizeImportedVisualTarget,
+  type ScriptVideoDemo,
+} from "../shared/script-release.js";
 import {
   createHttpSeoOpsAuthClient,
   assertRpaAdminRole,
@@ -33,7 +37,7 @@ import {
   hasMissingDemoReason,
   MISSING_DEMO_REASON,
 } from "../shared/video-demo-policy.js";
-import type { Store } from "./storage.js";
+import { validatePayload, type Store } from "./storage.js";
 
 export type SeoOpsConfig = {
   baseUrl: string;
@@ -395,36 +399,24 @@ export function createSeoOpsSyncService(options: {
     flowId: string;
     incomplete: boolean;
     ready_to_execute: boolean;
+    reason?: string;
   }> {
     const imported = importScriptRelease(release);
     if (!imported.flowPayload) {
-      return { flowId: imported.script_id, incomplete: true, ready_to_execute: false };
+      const reason = imported.incomplete_reasons.includes("invalid_payload")
+        ? "invalid_payload"
+        : imported.incomplete_reasons[0] || "incomplete";
+      return {
+        flowId: imported.script_id,
+        incomplete: true,
+        ready_to_execute: false,
+        reason,
+      };
     }
     const payload = imported.flowPayload;
     const scriptId = String(payload.id);
-    const existing = store.flows().find((f) => f.id === scriptId);
-    let flow: Flow = existing ?? {
-      id: scriptId,
-      name: String(payload.name || scriptId),
-      zoom: 1,
-      steps: [],
-      groups: [],
-      variables: [],
-      defaultPattern: { values: {} },
-    };
-    flow.name = String(payload.name || flow.name);
-    const vars = Array.isArray(payload.variables) ? payload.variables : [];
-    flow.variables = vars.map((v, i) => {
-      const row = v as Record<string, unknown>;
-      return {
-        id: String(row.id ?? `var-${i}-${row.key}`),
-        key: String(row.key ?? `var_${i}`),
-        type: (String(row.type ?? "text") as Variable["type"]),
-        ...(row.description ? { description: String(row.description) } : {}),
-      };
-    });
 
-    // Persist ROI assets when bytes were not transferred — mark incomplete if files missing.
+    // Validate assets on disk before any local mutation.
     const assets = Array.isArray(payload.assets) ? payload.assets : [];
     const missing: string[] = [];
     for (const asset of assets) {
@@ -437,12 +429,30 @@ export function createSeoOpsSyncService(options: {
         missing.push(rel);
       }
     }
+    if (missing.length) {
+      return {
+        flowId: scriptId,
+        incomplete: true,
+        ready_to_execute: false,
+        reason: "incomplete_assets",
+      };
+    }
+
+    const existing = store.flows().find((f) => f.id === scriptId);
+    const variables: Variable[] = (Array.isArray(payload.variables) ? payload.variables : []).map(
+      (v, i) => {
+        const row = v as Record<string, unknown>;
+        return {
+          id: String(row.id ?? `var-${i}-${row.key}`),
+          key: String(row.key ?? `var_${i}`),
+          type: String(row.type ?? "text") as Variable["type"],
+          ...(row.description ? { description: String(row.description) } : {}),
+        };
+      },
+    );
 
     const stepRows = Array.isArray(payload.steps) ? payload.steps : [];
-    const stepRefs: Flow["steps"] = [];
-    store.saveFlow(flow);
-    store.setSetting("currentFlow", flow.id);
-
+    const prepared: Step[] = [];
     for (const raw of stepRows) {
       const s = raw as Record<string, unknown>;
       const actionRaw = String(s.action ?? "SLEEP");
@@ -462,65 +472,116 @@ export function createSeoOpsSyncService(options: {
       ) as Step["payload"]["action"];
       const variableKey = s.variable_key ? String(s.variable_key) : undefined;
       const variableId = variableKey
-        ? flow.variables?.find((v) => v.key === variableKey)?.id
+        ? variables.find((v) => v.key === variableKey)?.id
         : undefined;
-      const targetRaw = s.target && typeof s.target === "object"
-        ? (s.target as Record<string, unknown>)
-        : undefined;
-      const assetName = targetRaw ? String(targetRaw.asset ?? "") : "";
-      const assetMissing = assetName !== "" && missing.includes(assetName);
-      const roi = targetRaw?.roi && typeof targetRaw.roi === "object"
-        ? (targetRaw.roi as { x: number; y: number; width: number; height: number })
-        : undefined;
+      const targetRaw =
+        s.target && typeof s.target === "object"
+          ? (s.target as Record<string, unknown>)
+          : undefined;
 
       let payloadStep: Step["payload"];
-      if (assetMissing || !targetRaw || !roi) {
-        payloadStep = { action: "SLEEP", timeoutMs: 100 };
+      if (targetRaw) {
+        const normalized = normalizeImportedVisualTarget(targetRaw);
+        if (!normalized.ok) {
+          return {
+            flowId: scriptId,
+            incomplete: true,
+            ready_to_execute: false,
+            reason: normalized.code,
+          };
+        }
+        payloadStep = {
+          action,
+          ...(variableId ? { variableId } : {}),
+          ...(typeof s.method === "string" ? { method: s.method as Step["payload"]["method"] } : {}),
+          ...(typeof s.threshold === "number" ? { threshold: s.threshold } : {}),
+          ...(typeof s.timeoutMs === "number" ? { timeoutMs: s.timeoutMs } : {}),
+          ...(typeof s.inputMethod === "string"
+            ? { inputMethod: s.inputMethod as Step["payload"]["inputMethod"] }
+            : {}),
+          ...(typeof s.deltaY === "number" ? { deltaY: s.deltaY } : {}),
+          ...(typeof s.quickTagRows === "number" ? { quickTagRows: s.quickTagRows } : {}),
+          target: normalized.target,
+        };
       } else {
         payloadStep = {
           action,
           ...(variableId ? { variableId } : {}),
-          target: {
-            asset: assetName,
-            roi,
-            matchTo: targetRaw.matchTo as "none" | "current" | "top" | "middle" | "bottom" | undefined,
-            environment: targetRaw.environment as { width: number; height: number; zoom: number } | undefined,
-          },
+          ...(typeof s.timeoutMs === "number" ? { timeoutMs: s.timeoutMs } : {}),
+          ...(typeof s.deltaY === "number" ? { deltaY: s.deltaY } : {}),
+        };
+      }
+
+      try {
+        validatePayload(payloadStep);
+      } catch {
+        return {
+          flowId: scriptId,
+          incomplete: true,
+          ready_to_execute: false,
+          reason: "invalid_payload",
         };
       }
 
       const stepId = String(s.id ?? cryptoRandom());
       const version = Number(s.version ?? 1) || 1;
-      const step: Step = {
+      prepared.push({
         id: stepId,
         version,
         name: String(s.name ?? action),
         payload: payloadStep,
         createdAt: new Date().toISOString(),
-      };
-      store.db.prepare("DELETE FROM steps WHERE id=? AND version=?").run(step.id, step.version);
-      store.db.prepare("INSERT INTO steps VALUES(?,?,?)").run(step.id, step.version, JSON.stringify(step));
-      stepRefs.push({ id: step.id, version: step.version });
+      });
     }
 
-    flow = store.flows().find((f) => f.id === scriptId)!;
-    flow.steps = stepRefs;
-    store.saveFlow(flow);
-    store.setSetting(`seoOpsVersion:${flow.id}`, imported.version);
-    const digest = String(release.content_digest ?? "");
-    if (digest) {
-      const lineage = JSON.parse(store.setting(`seoOpsLineage:${flow.id}`) || "[]") as string[];
-      if (!lineage.includes(digest)) {
-        lineage.push(digest);
-        store.setSetting(`seoOpsLineage:${flow.id}`, JSON.stringify(lineage.slice(-20)));
+    // Refuse to overwrite a locally valid step/version with anything that failed above.
+    // All steps already validated — persist atomically after checks.
+    let flow: Flow = existing
+      ? {
+          ...existing,
+          name: String(payload.name || existing.name),
+          variables,
+        }
+      : {
+          id: scriptId,
+          name: String(payload.name || scriptId),
+          zoom: 1,
+          steps: [],
+          groups: [],
+          variables,
+          defaultPattern: { values: {} },
+        };
+
+    store.db.exec("BEGIN");
+    try {
+      for (const step of prepared) {
+        store.db.prepare("DELETE FROM steps WHERE id=? AND version=?").run(step.id, step.version);
+        store.db
+          .prepare("INSERT INTO steps VALUES(?,?,?)")
+          .run(step.id, step.version, JSON.stringify(step));
       }
+      flow.steps = prepared.map((s) => ({ id: s.id, version: s.version }));
+      store.saveFlow(flow);
+      store.setSetting("currentFlow", flow.id);
+      store.setSetting(`seoOpsVersion:${flow.id}`, imported.version);
+      const digest = String(release.content_digest ?? "");
+      if (digest) {
+        const lineage = JSON.parse(store.setting(`seoOpsLineage:${flow.id}`) || "[]") as string[];
+        if (!lineage.includes(digest)) {
+          lineage.push(digest);
+          store.setSetting(`seoOpsLineage:${flow.id}`, JSON.stringify(lineage.slice(-20)));
+        }
+      }
+      store.db.exec("COMMIT");
+    } catch (e) {
+      store.db.exec("ROLLBACK");
+      throw e;
     }
 
-    const incomplete = missing.length > 0 || imported.incomplete;
     return {
       flowId: flow.id,
-      incomplete,
-      ready_to_execute: !incomplete && imported.ready_to_execute,
+      incomplete: false,
+      ready_to_execute: true,
     };
   }
 
@@ -581,68 +642,131 @@ export function createSeoOpsSyncService(options: {
     const plan = await client.plan(publishable.map(toPlanRow));
 
     for (const row of plan.push_to_remote) {
-      const full = publishable.find((r) => r.script_id === row.script_id);
-      if (!full?.publish_body) {
-        results.push({ script_id: row.script_id, action: "skip", ok: true, message: "incomplete — no publish body" });
-        continue;
-      }
-      const published = await client.publish(full.publish_body);
-      let ok = published.httpStatus < 300 && (published as { ok?: boolean }).ok !== false;
-      let message = ok ? "pushed" : JSON.stringify((published as { errors?: string[] }).errors ?? published);
-      if (ok && full.video_attachment && testRunsDir) {
-        try {
-          const binary = await readFile(path.join(testRunsDir, full.video_attachment.artifactRef));
-          const uploaded = await client.uploadVideoDemo({
-            packageKey: full.package_key,
-            version: full.version,
-            binary,
-            mime: "video/webm",
-            sha256: full.video_attachment.sha256,
-          });
-          if (!uploaded.ok) {
-            ok = false;
-            message = `pushed metadata but video upload failed: ${(uploaded.errors || []).join(",")}`;
-          } else {
-            message = "pushed+video";
-          }
-        } catch (e) {
-          ok = false;
-          message = `pushed metadata but video unreadable: ${String((e as Error).message || e)}`;
+      try {
+        const full = publishable.find((r) => r.script_id === row.script_id);
+        if (!full?.publish_body) {
+          results.push({ script_id: row.script_id, action: "skip", ok: true, message: "incomplete — no publish body" });
+          continue;
         }
-      }
-      results.push({
-        script_id: row.script_id,
-        action: "push",
-        ok,
-        message,
-      });
-      if (ok) {
-        const lineage = JSON.parse(store.setting(`seoOpsLineage:${full.flow_id}`) || "[]") as string[];
-        lineage.push(full.content_digest);
-        store.setSetting(`seoOpsLineage:${full.flow_id}`, JSON.stringify(lineage.slice(-20)));
+        const published = await client.publish(full.publish_body);
+        let ok = published.httpStatus < 300 && (published as { ok?: boolean }).ok !== false;
+        let message = ok ? "pushed" : JSON.stringify((published as { errors?: string[] }).errors ?? published);
+        if (ok && full.video_attachment && testRunsDir) {
+          try {
+            const binary = await readFile(path.join(testRunsDir, full.video_attachment.artifactRef));
+            const uploaded = await client.uploadVideoDemo({
+              packageKey: full.package_key,
+              version: full.version,
+              binary,
+              mime: "video/webm",
+              sha256: full.video_attachment.sha256,
+            });
+            if (!uploaded.ok) {
+              ok = false;
+              message = `pushed metadata but video upload failed: ${(uploaded.errors || []).join(",")}`;
+            } else {
+              message = "pushed+video";
+            }
+          } catch (e) {
+            ok = false;
+            message = `pushed metadata but video unreadable: ${String((e as Error).message || e)}`;
+          }
+        }
+        results.push({
+          script_id: row.script_id,
+          action: "push",
+          ok,
+          message,
+        });
+        if (ok) {
+          const lineage = JSON.parse(store.setting(`seoOpsLineage:${full.flow_id}`) || "[]") as string[];
+          lineage.push(full.content_digest);
+          store.setSetting(`seoOpsLineage:${full.flow_id}`, JSON.stringify(lineage.slice(-20)));
+        }
+      } catch (e) {
+        results.push({
+          script_id: row.script_id,
+          action: "push",
+          ok: false,
+          message: String((e as Error).message || e),
+        });
+        meta.rows[row.script_id] = {
+          ...(meta.rows[row.script_id] ?? {
+            script_id: row.script_id,
+            package_key: row.package_key,
+            name: row.package_key,
+            status: "sync_error",
+          }),
+          status: "sync_error",
+          last_sync_at: now,
+          last_result: "push_error",
+          message: String((e as Error).message || e),
+        };
       }
     }
 
     for (const row of plan.pull_to_local) {
-      const pulled = await client.pull(row.package_key, row.version);
-      if (!pulled.ok || !pulled.release) {
+      try {
+        const pulled = await client.pull(row.package_key, row.version);
+        if (!pulled.ok || !pulled.release) {
+          results.push({
+            script_id: row.script_id,
+            action: "pull",
+            ok: false,
+            message: (pulled.errors || []).join(","),
+          });
+          continue;
+        }
+        const materialized = await materializeImport(pulled.release);
+        const invalid = materialized.reason === "invalid_payload";
+        const message = !materialized.incomplete
+          ? "imported"
+          : invalid
+            ? "invalid_payload — remote release thiếu OCR/Match To; chờ publish lại từ RPA Admin"
+            : materialized.reason === "incomplete_assets"
+              ? "incomplete_assets — missing ROI files; local steps not overwritten"
+              : `incomplete — ${materialized.reason || "rejected"}`;
+        results.push({
+          script_id: row.script_id,
+          action: "pull",
+          ok: !materialized.incomplete,
+          message,
+        });
+        if (materialized.incomplete) {
+          meta.rows[row.script_id] = {
+            ...(meta.rows[row.script_id] ?? {
+              script_id: row.script_id,
+              package_key: row.package_key,
+              name: row.package_key,
+              status: invalid ? "sync_error" : "incomplete_assets",
+            }),
+            status: invalid ? "sync_error" : "incomplete_assets",
+            last_sync_at: now,
+            last_result: materialized.reason || "incomplete",
+            message,
+            incomplete: true,
+          };
+        }
+      } catch (e) {
         results.push({
           script_id: row.script_id,
           action: "pull",
           ok: false,
-          message: (pulled.errors || []).join(","),
+          message: String((e as Error).message || e),
         });
-        continue;
+        meta.rows[row.script_id] = {
+          ...(meta.rows[row.script_id] ?? {
+            script_id: row.script_id,
+            package_key: row.package_key,
+            name: row.package_key,
+            status: "sync_error",
+          }),
+          status: "sync_error",
+          last_sync_at: now,
+          last_result: "pull_error",
+          message: String((e as Error).message || e),
+        };
       }
-      const materialized = await materializeImport(pulled.release);
-      results.push({
-        script_id: row.script_id,
-        action: "pull",
-        ok: !materialized.incomplete,
-        message: materialized.incomplete
-          ? "imported incomplete (missing ROI assets)"
-          : "imported",
-      });
     }
 
     for (const skip of plan.skip) {

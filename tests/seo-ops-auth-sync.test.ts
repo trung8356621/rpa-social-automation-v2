@@ -113,6 +113,7 @@ test("import marks incomplete when assets missing; usable when complete", () => 
   });
   assert.equal(incomplete.ready_to_execute, false);
   assert.equal(incomplete.incomplete, true);
+  assert.ok(incomplete.incomplete_reasons.includes("incomplete_assets"));
   assert.equal(incomplete.flowPayload, null);
 
   const complete = importScriptRelease({
@@ -128,6 +129,42 @@ test("import marks incomplete when assets missing; usable when complete", () => 
     },
   });
   assert.equal(complete.ready_to_execute, true);
+  assert.deepEqual(complete.incomplete_reasons, []);
   assert.ok(complete.flowPayload);
   assert.equal(complete.flowPayload?.id, "s1");
+});
+
+test("Match To without OCR marks invalid_payload and is not executable", () => {
+  const result = importScriptRelease({
+    package_key: "bad.matchto",
+    name: "Bad",
+    version: "1.0.0",
+    content_digest: "e".repeat(64),
+    manifest: {
+      script_id: "bad-matchto",
+      variables: [],
+      steps: [
+        {
+          id: "1",
+          action: "CLICK_TARGET",
+          target: {
+            asset: "17ddecd0-1e09-4198-a20a-171b8ff0d080.png",
+            roi: { x: 0, y: 0, width: 40, height: 40 },
+            matchTo: "middle",
+          },
+        },
+      ],
+      assets: [
+        {
+          path: "17ddecd0-1e09-4198-a20a-171b8ff0d080.png",
+          sha256: "a".repeat(64),
+          kind: "roi",
+        },
+      ],
+    },
+  });
+  assert.equal(result.incomplete, true);
+  assert.equal(result.ready_to_execute, false);
+  assert.ok(result.incomplete_reasons.includes("invalid_payload"));
+  assert.equal(result.flowPayload, null);
 });

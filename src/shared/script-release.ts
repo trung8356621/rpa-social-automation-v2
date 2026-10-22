@@ -1,4 +1,4 @@
-import type { Flow, Step, Variable } from "./contracts.js";
+import type { Flow, Step, Variable, VisualTarget } from "./contracts.js";
 import { computeExecutionDigest, computeScriptContentDigest } from "./script-digest.js";
 import { MISSING_DEMO_REASON } from "./video-demo-policy.js";
 
@@ -96,25 +96,146 @@ function mapStepPayloads(
       continue;
     }
     const variable = flow.variables?.find((v) => v.id === step.payload.variableId);
+    const p = step.payload;
     stepPayloads.push({
       id: step.id,
       version: step.version,
       name: step.name,
-      action: step.payload.action,
+      action: p.action,
       ...(variable ? { variable_key: variable.key } : {}),
-      ...(step.payload.target
+      ...(p.method !== undefined ? { method: p.method } : {}),
+      ...(p.threshold !== undefined ? { threshold: p.threshold } : {}),
+      ...(p.timeoutMs !== undefined ? { timeoutMs: p.timeoutMs } : {}),
+      ...(p.inputMethod !== undefined ? { inputMethod: p.inputMethod } : {}),
+      ...(p.deltaY !== undefined ? { deltaY: p.deltaY } : {}),
+      ...(p.quickTagRows !== undefined ? { quickTagRows: p.quickTagRows } : {}),
+      ...(p.target
         ? {
             target: {
-              matchTo: step.payload.target.matchTo,
-              environment: step.payload.target.environment,
-              asset: step.payload.target.asset,
-              roi: step.payload.target.roi,
+              matchTo: p.target.matchTo,
+              environment: p.target.environment,
+              asset: p.target.asset,
+              roi: p.target.roi,
+              ...(p.target.ocr ? { ocr: p.target.ocr } : {}),
             },
           }
         : {}),
     });
   }
   return { stepPayloads, missing };
+}
+
+export type NormalizeImportedTargetResult =
+  | { ok: true; target: VisualTarget }
+  | { ok: false; code: "invalid_target" | "invalid_payload"; message: string };
+
+/** True when Match To scroll mode is set without confirmed OCR (never coerce Match To). */
+export function matchToRequiresMissingOcr(targetRaw: Record<string, unknown>): boolean {
+  const matchTo = targetRaw.matchTo;
+  if (matchTo !== "top" && matchTo !== "middle" && matchTo !== "bottom") return false;
+  const ocr = targetRaw.ocr;
+  if (!ocr || typeof ocr !== "object") return true;
+  return (ocr as { confirmed?: unknown }).confirmed !== true;
+}
+
+/**
+ * Rebuild a VisualTarget from a Script release target.
+ * Preserves Match To exactly — never downgrades top/middle/bottom to none.
+ * Returns invalid_payload when Match To requires OCR that the release omitted.
+ */
+export function normalizeImportedVisualTarget(
+  targetRaw: Record<string, unknown>,
+): NormalizeImportedTargetResult {
+  const asset = String(targetRaw.asset ?? "");
+  const roiRaw = targetRaw.roi;
+  if (!asset || !roiRaw || typeof roiRaw !== "object") {
+    return { ok: false, code: "invalid_target", message: "target asset/roi missing" };
+  }
+  const r = roiRaw as Record<string, unknown>;
+  const roi = {
+    x: Number(r.x),
+    y: Number(r.y),
+    width: Number(r.width),
+    height: Number(r.height),
+  };
+  if (![roi.x, roi.y, roi.width, roi.height].every(Number.isFinite)) {
+    return { ok: false, code: "invalid_target", message: "target roi invalid" };
+  }
+
+  if (matchToRequiresMissingOcr(targetRaw)) {
+    return {
+      ok: false,
+      code: "invalid_payload",
+      message:
+        "Match To top/middle/bottom requires confirmed OCR; release invalid until republish",
+    };
+  }
+
+  const ocrRaw =
+    targetRaw.ocr && typeof targetRaw.ocr === "object"
+      ? (targetRaw.ocr as Record<string, unknown>)
+      : undefined;
+  const bboxRaw =
+    ocrRaw?.bbox && typeof ocrRaw.bbox === "object"
+      ? (ocrRaw.bbox as Record<string, unknown>)
+      : undefined;
+  const ocr =
+    ocrRaw?.confirmed === true &&
+    ocrRaw.language === "vie+eng" &&
+    (ocrRaw.kind === "line" || ocrRaw.kind === "word") &&
+    typeof ocrRaw.text === "string" &&
+    bboxRaw
+      ? ({
+          confirmed: true as const,
+          language: "vie+eng" as const,
+          kind: ocrRaw.kind,
+          text: ocrRaw.text,
+          confidence: Number(ocrRaw.confidence),
+          bbox: {
+            x: Number(bboxRaw.x),
+            y: Number(bboxRaw.y),
+            width: Number(bboxRaw.width),
+            height: Number(bboxRaw.height),
+          },
+        } satisfies NonNullable<VisualTarget["ocr"]>)
+      : undefined;
+
+  const matchRaw = targetRaw.matchTo;
+  const matchTo =
+    matchRaw === "none" ||
+    matchRaw === "current" ||
+    matchRaw === "top" ||
+    matchRaw === "middle" ||
+    matchRaw === "bottom"
+      ? matchRaw
+      : undefined;
+
+  const envRaw =
+    targetRaw.environment && typeof targetRaw.environment === "object"
+      ? (targetRaw.environment as Record<string, unknown>)
+      : undefined;
+  const environment =
+    envRaw &&
+    [envRaw.width, envRaw.height, envRaw.zoom].every((n) =>
+      Number.isFinite(Number(n)),
+    )
+      ? {
+          width: Number(envRaw.width),
+          height: Number(envRaw.height),
+          zoom: Number(envRaw.zoom),
+        }
+      : undefined;
+
+  return {
+    ok: true,
+    target: {
+      asset,
+      roi,
+      ...(matchTo !== undefined ? { matchTo } : {}),
+      ...(environment ? { environment } : {}),
+      ...(ocr ? { ocr } : {}),
+    },
+  };
 }
 
 function assembleBody(

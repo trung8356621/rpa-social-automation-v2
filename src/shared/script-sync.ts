@@ -1,5 +1,8 @@
 import type { ScriptPublishBody } from "./script-release.js";
-import { assertScriptPublishBody } from "./script-release.js";
+import {
+  assertScriptPublishBody,
+  matchToRequiresMissingOcr,
+} from "./script-release.js";
 
 export type LocalScriptRow = {
   script_id: string;
@@ -38,6 +41,7 @@ export type ImportScriptResult = {
   package_key: string;
   version: string;
   incomplete: boolean;
+  incomplete_reasons: string[];
   ready_to_execute: boolean;
   flowPayload: Record<string, unknown> | null;
 };
@@ -128,7 +132,19 @@ export function importScriptRelease(release: Record<string, unknown>): ImportScr
 
   const steps = Array.isArray(manifest.steps) ? manifest.steps : [];
   const variables = Array.isArray(manifest.variables) ? manifest.variables : [];
-  const incomplete = !assetsComplete || steps.length === 0 || !scriptId;
+  const incomplete_reasons: string[] = [];
+  if (!scriptId) incomplete_reasons.push("missing_script_id");
+  if (steps.length === 0) incomplete_reasons.push("steps_required");
+  if (!assetsComplete) incomplete_reasons.push("incomplete_assets");
+  for (const raw of steps) {
+    if (!raw || typeof raw !== "object") continue;
+    const target = (raw as { target?: unknown }).target;
+    if (target && typeof target === "object" && matchToRequiresMissingOcr(target as Record<string, unknown>)) {
+      incomplete_reasons.push("invalid_payload");
+      break;
+    }
+  }
+  const incomplete = incomplete_reasons.length > 0;
 
   const flowPayload = incomplete
     ? null
@@ -151,6 +167,7 @@ export function importScriptRelease(release: Record<string, unknown>): ImportScr
     package_key: packageKey,
     version,
     incomplete,
+    incomplete_reasons: [...new Set(incomplete_reasons)],
     ready_to_execute: !incomplete && assetsComplete,
     flowPayload,
   };
