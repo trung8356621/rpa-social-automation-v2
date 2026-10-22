@@ -25,6 +25,10 @@ export function computeExecutionDigest(manifest: ScriptPublishBody["manifest"]):
     steps: manifest.steps ?? [],
     runtime_requirements: manifest.runtime_requirements ?? {},
     assets: manifest.assets ?? [],
+    // Keep aligned with SEO-OPS ScriptExecutionDigest (Default Pattern / layout bindings).
+    default_pattern: manifest.default_pattern ?? null,
+    zoom: manifest.zoom ?? null,
+    groups: manifest.groups ?? null,
   };
   return createHash("sha256").update(JSON.stringify(payload)).digest("hex");
 }
