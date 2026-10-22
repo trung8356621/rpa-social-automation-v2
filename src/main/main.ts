@@ -49,6 +49,7 @@ import type { Command, State, CaseResult, Step } from "../shared/contracts.js";
 import { buildScriptPublishBody, assertScriptPublishBody } from "../shared/script-release.js";
 import { attachVideoDemo, toScriptVideoDemo, assertNotScreenshot } from "../shared/video-demo.js";
 import { createSeoOpsTokenStore } from "./seo-ops-token-store.js";
+import { createSeoOpsSyncService } from "./seo-ops-sync.js";
 import { createHash } from "node:crypto";
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
@@ -117,6 +118,11 @@ async function boot() {
     return true;
   });
   const store = new Store(path.join(dataPath, "creator.sqlite"));
+  const seoOpsSync = createSeoOpsSyncService({
+    store,
+    assetDir,
+    tokenStore: seoOpsTokenStore,
+  });
   const browserSessions = new BrowserSessions(store);
   const scenarioGroups = new ScenarioGroups(store);
   const testLab = new TestLab(store, browserSessions);
@@ -746,6 +752,26 @@ async function boot() {
         await writeFile(selected.filePath, JSON.stringify(body, null, 2), { flag: "wx" });
         return { cancelled: false, package_key: body.package_key, version: body.version, path: selected.filePath };
       }
+      case "seoOpsGetSession":
+        return seoOpsSync.sessionState();
+      case "seoOpsSetEndpoint":
+        isIdle();
+        seoOpsSync.setConfig(command.baseUrl);
+        return seoOpsSync.sessionState();
+      case "seoOpsLogin":
+        isIdle();
+        return seoOpsSync.login(command.email, command.password);
+      case "seoOpsLogout":
+        isIdle();
+        return seoOpsSync.logout();
+      case "seoOpsSyncStatus":
+        return { rows: await seoOpsSync.refreshStatusRows(), meta: seoOpsSync.loadMeta() };
+      case "seoOpsSyncAll":
+        isIdle();
+        return seoOpsSync.syncAll({ version: command.version });
+      case "seoOpsSyncFlow":
+        isIdle();
+        return seoOpsSync.syncAll({ flowId: command.flowId, version: command.version });
       case "runTestCase":
         if (event.sender !== window.webContents) throw new Error("Invalid Test Case sender");
         return runTestCase(command.id);

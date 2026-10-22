@@ -10,6 +10,7 @@ import { AppNavigation, ScenariosPage } from "./app-shell";
 import { BrowserSessionsPage, SessionSelector } from "./browser-sessions";
 import { TestLabPage, TestCaseEditor, CaseResultView, type CaseEditorHandle } from "./test-lab";
 import { Variables, Groups } from "./flow-controls";
+import { SeoOpsAuthPanel } from "./seo-ops-panel";
 import React, { useCallback, useEffect, useRef, useState } from "react";
 import { createRoot } from "react-dom/client";
 import { unstable_batchedUpdates } from "react-dom";
@@ -86,11 +87,19 @@ function Creator() {
   function updateTabs(next: WorkspaceTab[]) { tabsRef.current = next; setTabs(next); }
 
   const [state, setState] = useDraft<State>("state");
+  const [seoOpsAuthenticated, setSeoOpsAuthenticated] = useState(false);
   const appPage = state?.appPage ?? "scenarios";
   const creatorVisible = appPage === "creator";
   const activeCaseTab = tabs.find(t => t.id === activeTabId && t.kind === "test-case");
   useEffect(() => {
     if (["scenarios", "browser-sessions", "test-lab", "settings", "variations", "widget-registry", "workflows", "builds-releases"].includes(appPage)) setMainPage(appPage as MainPage);
+  }, [appPage]);
+  useEffect(() => {
+    if (!shell) return;
+    void window.creator.invoke({ type: "seoOpsGetSession" }).then((session) => {
+      const s = session as { authenticated?: boolean };
+      setSeoOpsAuthenticated(Boolean(s.authenticated));
+    }).catch(() => setSeoOpsAuthenticated(false));
   }, [appPage]);
   const sidebarCollapsed = state?.sidebarCollapsed ?? false;
   const networkSettings = state?.networkSettings ?? defaultNetworkSettings();
@@ -1171,6 +1180,8 @@ function Creator() {
       {shell && appPage === "scenarios" && <ScenariosPage state={state} name={flowName} setName={setFlowName}
         locked={navigationLocked || ocrLoading} open={openScenario} create={createScenario}
         update={updateWorkspace}
+        invoke={invoke}
+        authenticated={seoOpsAuthenticated}
         sessionControl={<SessionSelector state={state} locked={navigationLocked || stepPlayback[activeStepId]?.status === "running"} select={selectSession} />} />}
       {shell && appPage === "browser-sessions" && <BrowserSessionsPage state={state} locked={navigationLocked}
         update={updateBrowserSessions} open={openSession} />}
@@ -1191,6 +1202,19 @@ function Creator() {
         }} />}
       {shell && appPage === "settings" && <section className="app-page" aria-label="Settings">
         <div className="page-heading"><h1>Settings</h1><p>Cấu hình local cho ứng dụng trên máy này.</p></div>
+        <SeoOpsAuthPanel
+          locked={navigationLocked}
+          invoke={async (command) => {
+            const result = await invoke(command);
+            if (command.type === "seoOpsLogin" || command.type === "seoOpsLogout" || command.type === "seoOpsGetSession" || command.type === "seoOpsSetEndpoint") {
+              const session = command.type === "seoOpsGetSession" || command.type === "seoOpsSetEndpoint"
+                ? result as { authenticated?: boolean }
+                : await invoke<{ authenticated?: boolean }>({ type: "seoOpsGetSession" });
+              setSeoOpsAuthenticated(Boolean(session.authenticated));
+            }
+            return result;
+          }}
+        />
         <NetworkSettings state={state} locked={navigationLocked} update={async command => setState(await invoke<State>(command))} />
       </section>}
       {shell && !creatorVisible && pageError && <p className="app-page-error" role="alert">{pageError}</p>}

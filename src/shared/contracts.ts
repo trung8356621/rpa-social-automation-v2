@@ -274,6 +274,13 @@ export type Command =
       packageKey?: string;
       includeVideoDemo?: boolean;
     }
+  | { type: "seoOpsGetSession" }
+  | { type: "seoOpsSetEndpoint"; baseUrl: string }
+  | { type: "seoOpsLogin"; email: string; password: string }
+  | { type: "seoOpsLogout" }
+  | { type: "seoOpsSyncStatus" }
+  | { type: "seoOpsSyncAll"; version?: string }
+  | { type: "seoOpsSyncFlow"; flowId: string; version?: string }
   | { type: "deleteScenario"; id: string; confirmed: boolean }
   | { type: "testGroup"; operation: "create" | "update" | "delete"; id?: string; name?: string; collapsed?: boolean; confirmed?: boolean }
   | { type: "collapseUngroupedCases"; collapsed: boolean }

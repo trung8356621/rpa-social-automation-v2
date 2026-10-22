@@ -1,6 +1,12 @@
 # SEO-OPS Script Registry — RPA Admin contract
 
-Status: **UNIT VERIFIED** (local). E2E / production integration **NOT RUN**.
+Status: **UI + UNIT VERIFIED** (local). E2E / production integration / RPA Client **NOT RUN**.
+
+Electron UI:
+
+- Settings → SEO-OPS login (endpoint + email/password + session restore via safeStorage).
+- Scenarios → Sync SEO-OPS (all / per-scenario) + status badges.
+- Local create/edit/test Script không yêu cầu login; chỉ sync yêu cầu phiên `admin`|`owner`.
 
 ## Auth (RPA Admin user)
 

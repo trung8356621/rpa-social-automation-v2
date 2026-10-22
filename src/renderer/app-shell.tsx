@@ -1,6 +1,8 @@
 import React, { useState } from "react";
 import { UiPopover } from "./ui-popover";
 import type { AppPage, Command, ScenarioOrganization, State } from "../shared/contracts";
+import type { ScriptSyncRow } from "../shared/sync-status";
+import { SeoOpsSyncControls, syncBadge } from "./seo-ops-panel";
 
 const menus = [
   { page: "scenarios", label: "Scenarios", color: "#68d6a6", path: "M4 4h6v6H4zM14 14h6v6h-6zM7 10v7h7M10 7h7v7" },
@@ -32,16 +34,19 @@ export function AppNavigation({ page, collapsed, locked, navigate, toggle }: {
   </div>;
 }
 
-export function ScenariosPage({ state, name, setName, locked, open, create, sessionControl, update }: {
+export function ScenariosPage({ state, name, setName, locked, open, create, sessionControl, update, invoke, authenticated }: {
   state?: State; name: string; setName: (name: string) => void; locked: boolean;
   open: (id: string) => void; create: () => void;
   sessionControl?: React.ReactNode; update: (command: Command) => Promise<void>;
+  invoke?: <T>(command: Command) => Promise<T>;
+  authenticated?: boolean;
 }) {
   const [creating, setCreating] = useState(false);
   const [dialog, setDialog] = useState<{ kind: "create" | "rename" | "delete" | "move" | "scenario-delete"; id?: string }>();
   const [value, setValue] = useState("");
   const [working, setWorking] = useState(false);
   const [error, setError] = useState("");
+  const [syncRows, setSyncRows] = useState<ScriptSyncRow[]>([]);
   const organization: ScenarioOrganization = state?.scenarioOrganization ?? { groups: [], membership: {}, ungroupedCollapsed: false };
   const disabled = locked || working;
   function show(kind: "create" | "rename" | "delete" | "move" | "scenario-delete", id?: string, initial = "") {
@@ -82,6 +87,14 @@ export function ScenariosPage({ state, name, setName, locked, open, create, sess
         });
       }}>Export Script JSON</button>
       {sessionControl}
+      {invoke && (
+        <SeoOpsSyncControls
+          locked={disabled}
+          authenticated={Boolean(authenticated)}
+          invoke={invoke}
+          onRows={setSyncRows}
+        />
+      )}
     </div>
     {creating && <form className="scenario-create" onSubmit={event => { event.preventDefault(); create(); }}>
       <label>Tên Scenario mới<input aria-label="Tên flow mới" value={name} disabled={disabled}
@@ -111,9 +124,27 @@ export function ScenariosPage({ state, name, setName, locked, open, create, sess
             {flows.map(flow => <div className="scenario-item" key={flow.id}>
               <button className="scenario-title" disabled={disabled} onClick={() => open(flow.id)}>{flow.name}</button>
               <small>{flow.steps.length} Step</small>
+              <small className="sync-badge" title={syncRows.find(r => r.flow_id === flow.id || r.script_id === flow.id)?.message}>
+                {syncBadge(syncRows, flow.id)}
+              </small>
               <button disabled={disabled} onClick={() => open(flow.id)}>Mở Creator</button>
               <details><summary aria-label={`Menu Scenario ${flow.name}`}>...</summary><div className="scenario-menu">
                 <button disabled={disabled} onClick={() => show("move", flow.id, organization.membership[flow.id] ?? "")}>Move to Group</button>
+                {invoke && (
+                  <button
+                    disabled={disabled || !authenticated}
+                    onClick={() => {
+                      const version = window.prompt("Script version (semver)", "1.0.0");
+                      if (!version) return;
+                      void invoke({ type: "seoOpsSyncFlow", flowId: flow.id, version })
+                        .then(() => invoke<{ rows: ScriptSyncRow[] }>({ type: "seoOpsSyncStatus" }))
+                        .then((r) => setSyncRows(r.rows))
+                        .catch((e) => setError(String(e)));
+                    }}
+                  >
+                    Sync SEO-OPS
+                  </button>
+                )}
                 <button disabled={disabled} onClick={() => show("scenario-delete", flow.id)}>Delete Scenario</button>
               </div></details>
             </div>)}

@@ -1296,3 +1296,13 @@ body[data-panel="shell"] .app-shell > header > .environment { flex-shrink: 0; }
 .v3-message { padding: 16px; background: #101b2c; max-height: 500px; overflow: auto; }
 
 .studio-run-status { margin-left: var(--app-nav-width); padding: 16px; max-width: 360px; color: #a8b2c2; }
+
+.seo-ops-auth { margin-bottom: 28px; padding: 16px; border: 1px solid #2d3a45; border-radius: 8px; background: #151b22; max-width: 560px; }
+.seo-ops-auth h2 { margin: 0 0 8px; font-size: 16px; }
+.seo-ops-auth label { display: block; margin: 10px 0 6px; font-size: 13px; }
+.seo-ops-auth input { width: 100%; margin-top: 4px; }
+.seo-ops-login-form { display: grid; gap: 8px; margin-top: 10px; }
+.seo-ops-user { display: flex; flex-wrap: wrap; gap: 10px; align-items: center; margin-top: 12px; }
+.seo-ops-sync-controls { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
+.seo-ops-sync-summary { width: 100%; font-size: 12px; }
+.sync-badge { color: #9ec9ff; min-width: 5.5rem; }
