@@ -46,6 +46,9 @@ import {
 import { effectiveMatchTo, matchToLabel } from "../shared/match-to.js";
 import { DRAFT_KEYS } from "../shared/contracts.js";
 import type { Command, State, CaseResult, Step } from "../shared/contracts.js";
+import { buildScriptPublishBody, assertScriptPublishBody } from "../shared/script-release.js";
+import { attachVideoDemo, toScriptVideoDemo, assertNotScreenshot } from "../shared/video-demo.js";
+import { createHash } from "node:crypto";
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const project = path.resolve(root, "..");
@@ -681,6 +684,58 @@ async function boot() {
         const result = testLab.get(command.caseId).lastResult;
         if (!result || result.runId !== command.runId) throw new Error("Screenshot không thuộc Last Result hiện tại.");
         return testEvidence.read(command.caseId, result);
+      }
+      case "attachScriptVideoDemo": {
+        isIdle();
+        const item = testLab.get(command.caseId);
+        const result = item.lastResult;
+        if (!result || result.runId !== command.runId || !result.recordingPath) {
+          throw new Error("VIDEO_DEMO: current Test Run must have a browser recording.");
+        }
+        assertNotScreenshot(result.recordingPath);
+        const attachment = attachVideoDemo({
+          scriptId: item.flowId,
+          scriptVersion: command.scriptVersion,
+          caseId: command.caseId,
+          testRunId: command.runId,
+          reviewed: command.reviewed === true,
+        });
+        const recordingAbs = path.join(dataPath, "test-runs", command.caseId, command.runId, "recording.webm");
+        try {
+          attachment.sha256 = createHash("sha256").update(await readFile(recordingAbs)).digest("hex");
+        } catch {
+          /* digest optional until file is readable */
+        }
+        store.setSetting(`videoDemo:${item.flowId}:${command.scriptVersion}`, JSON.stringify(attachment));
+        return attachment;
+      }
+      case "exportScriptRelease": {
+        isIdle();
+        const flow = store.flows().find((f) => f.id === command.flowId);
+        if (!flow) throw new Error("SCRIPT_EXPORT: scenario not found");
+        const steps = flow.steps.map((ref) => store.step(ref.id, ref.version));
+        let videoDemo;
+        if (command.includeVideoDemo) {
+          const raw = store.setting(`videoDemo:${flow.id}:${command.version}`);
+          if (!raw) throw new Error("VIDEO_DEMO: attach a reviewed Test Lab recording first.");
+          const attachment = JSON.parse(raw) as ReturnType<typeof attachVideoDemo>;
+          videoDemo = toScriptVideoDemo(attachment);
+        }
+        const body = assertScriptPublishBody(buildScriptPublishBody({
+          flow,
+          steps,
+          version: command.version,
+          packageKey: command.packageKey,
+          videoDemo,
+        }));
+        const selected = await dialog.showSaveDialog(window, {
+          title: "Export Script release (SEO-OPS)",
+          defaultPath: `${body.package_key}-${body.version}.script.json`,
+          filters: [{ name: "Script release JSON", extensions: ["json"] }],
+        });
+        if (selected.canceled || !selected.filePath) return { cancelled: true };
+        await writeFile(selected.filePath, JSON.stringify(body, null, 2), { flag: "wx" });
+        return { cancelled: false, package_key: body.package_key, version: body.version, path: selected.filePath };
       }
       case "runTestCase":
         if (event.sender !== window.webContents) throw new Error("Invalid Test Case sender");

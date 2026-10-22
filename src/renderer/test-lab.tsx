@@ -123,6 +123,17 @@ export function CaseResultView({ item, state, locked = false, runAgain }: {
     </button> : <p className="hint" role={result.screenshotError || imageError ? "alert" : undefined}>{result.screenshotPath ? imageError || "Đang mở screenshot…" : result.screenshotError ? `Không có screenshot: ${result.screenshotError}` : (result.status === "RUNNING" ? "Ảnh sẽ được chụp trước khi kết thúc." : "Lượt chạy cũ chưa có screenshot.")}</p>}
     {result.screenshotError && screenshot && <p role="alert">Lỗi chụp ảnh: {result.screenshotError}</p>}
     {result.recordingPath && <button onClick={() => void window.creator.invoke({ type: "testCaseVideo", caseId: item.id, runId: result.runId! }).then(x => setVideo(x as string)).catch(e => setImageError(String(e)))}>Open recording</button>}
+    {result.recordingPath && result.runId && <button onClick={() => {
+      const version = window.prompt("Script version for video demo (semver)", "1.0.0");
+      if (!version) return;
+      void window.creator.invoke({
+        type: "attachScriptVideoDemo",
+        caseId: item.id,
+        runId: result.runId!,
+        scriptVersion: version,
+        reviewed: window.confirm("Confirm you reviewed this browser recording (no desktop/audio). Attach as Script video demo?"),
+      }).then(() => setImageError("")).catch(e => setImageError(String(e)));
+    }}>Attach as Script video demo</button>}
     {video && <video controls src={video} style={{ maxWidth: "100%" }} />}
     {result.recordingError && <p role="alert">{result.recordingError}</p>}
     {result.evidenceError && <p role="alert">{result.evidenceError}</p>}

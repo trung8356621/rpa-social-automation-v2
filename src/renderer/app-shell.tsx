@@ -70,6 +70,17 @@ export function ScenariosPage({ state, name, setName, locked, open, create, sess
     <div className="scenario-toolbar">
       <button disabled={disabled} onClick={() => show("create")}>+ Group</button>
       <button className="primary" disabled={disabled} onClick={() => setCreating(v => !v)}>+ Scenario</button>
+      <button disabled={disabled || !state?.flow} onClick={() => {
+        const version = window.prompt("Script version (semver)", "1.0.0");
+        if (!version || !state?.flow) return;
+        const includeVideo = window.confirm("Include reviewed Test Lab video demo if attached?");
+        void apply({
+          type: "exportScriptRelease",
+          flowId: state.flow.id,
+          version,
+          includeVideoDemo: includeVideo,
+        });
+      }}>Export Script JSON</button>
       {sessionControl}
     </div>
     {creating && <form className="scenario-create" onSubmit={event => { event.preventDefault(); create(); }}>

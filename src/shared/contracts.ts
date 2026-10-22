@@ -260,6 +260,20 @@ export type Command =
   | { type: "recordingEvent"; token: string; event: "ready" | "chunk" | "done" | "error"; data?: string }
   | { type: "testCaseVideo"; caseId: string; runId: string }
   | { type: "testCaseScreenshot"; caseId: string; runId: string }
+  | {
+      type: "attachScriptVideoDemo";
+      caseId: string;
+      runId: string;
+      scriptVersion: string;
+      reviewed: boolean;
+    }
+  | {
+      type: "exportScriptRelease";
+      flowId: string;
+      version: string;
+      packageKey?: string;
+      includeVideoDemo?: boolean;
+    }
   | { type: "deleteScenario"; id: string; confirmed: boolean }
   | { type: "testGroup"; operation: "create" | "update" | "delete"; id?: string; name?: string; collapsed?: boolean; confirmed?: boolean }
   | { type: "collapseUngroupedCases"; collapsed: boolean }
