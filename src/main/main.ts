@@ -11,6 +11,7 @@ import {
   dialog,
   screen,
   clipboard,
+  net,
 } from "electron";
 import { mkdir, writeFile, readFile, stat } from "node:fs/promises";
 import path from "node:path";
@@ -50,6 +51,7 @@ import { buildScriptPublishBody, assertScriptPublishBody } from "../shared/scrip
 import { attachVideoDemo, toScriptVideoDemo, assertNotScreenshot } from "../shared/video-demo.js";
 import { createSeoOpsTokenStore } from "./seo-ops-token-store.js";
 import { createSeoOpsSyncService } from "./seo-ops-sync.js";
+import { createSeoOpsAutoSync } from "./seo-ops-auto-sync.js";
 import { createHash } from "node:crypto";
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
@@ -123,6 +125,28 @@ async function boot() {
     assetDir,
     tokenStore: seoOpsTokenStore,
   });
+  const seoOpsAutoSync = createSeoOpsAutoSync({
+    isAuthenticated: () => Boolean(seoOpsTokenStore.getToken()),
+    sync: (opts) => seoOpsSync.syncAll(opts),
+    log: (level, message) => {
+      if (level === "error" || level === "warn") logMainError(runDir, "seo-ops-auto-sync", new Error(message));
+      else logMainEvent(runDir, "seo-ops-auto-sync", { message });
+    },
+  });
+  seoOpsAutoSync.start();
+  // Session restore: if token exists, verify then sync once (no keystroke spam).
+  void seoOpsSync.sessionState().then((session) => {
+    if (session.authenticated) {
+      seoOpsAutoSync.request({ reason: "session_restore", immediate: true });
+    }
+  }).catch(() => undefined);
+  // Online recovery via net.isOnline() polling (Electron has no net 'online' event).
+  let wasOnline = net.isOnline();
+  setInterval(() => {
+    const online = net.isOnline();
+    if (online && !wasOnline) seoOpsAutoSync.notifyOnline();
+    wasOnline = online;
+  }, 15_000);
   const browserSessions = new BrowserSessions(store);
   const scenarioGroups = new ScenarioGroups(store);
   const testLab = new TestLab(store, browserSessions);
@@ -758,14 +782,24 @@ async function boot() {
         isIdle();
         seoOpsSync.setConfig(command.baseUrl);
         return seoOpsSync.sessionState();
-      case "seoOpsLogin":
+      case "seoOpsLogin": {
         isIdle();
-        return seoOpsSync.login(command.email, command.password);
+        const loginResult = await seoOpsSync.login(command.email, command.password);
+        if (loginResult.ok) {
+          seoOpsAutoSync.request({ reason: "login", immediate: true });
+        }
+        return loginResult;
+      }
       case "seoOpsLogout":
         isIdle();
         return seoOpsSync.logout();
       case "seoOpsSyncStatus":
-        return { rows: await seoOpsSync.refreshStatusRows(), meta: seoOpsSync.loadMeta() };
+        return {
+          rows: await seoOpsSync.refreshStatusRows({
+            offlinePending: seoOpsAutoSync.getState().offlinePending,
+          }),
+          meta: seoOpsSync.loadMeta(),
+        };
       case "seoOpsSyncAll":
         isIdle();
         return seoOpsSync.syncAll({ version: command.version });
@@ -987,12 +1021,15 @@ async function boot() {
         }
         return state();
       }
-      case "newFlow":
+      case "newFlow": {
         isIdle();
         if (uiPlayAllRunId) throw new Error("Đợi Play All kết thúc trước khi tạo Scenario.");
         armedTest = undefined;
         store.newFlow(command.name, browser.zoom);
+        const created = store.flow();
+        if (created) seoOpsAutoSync.request({ reason: "save", flowId: created.id });
         return state();
+      }
       case "openFlow": {
         isIdle();
         if (uiPlayAllRunId) throw new Error("Đợi Play All kết thúc trước khi chuyển Scenario.");
@@ -1069,23 +1106,35 @@ async function boot() {
           dataUrl: `data:image/png;base64,${cropped.toString("base64")}`,
         };
       }
-      case "variables":
+      case "variables": {
         isIdle();
         store.updateVariables(command.variables, command.values);
+        const flowAfterVars = store.flow();
+        if (flowAfterVars) seoOpsAutoSync.request({ reason: "save", flowId: flowAfterVars.id });
         return state();
-      case "organize":
+      }
+      case "organize": {
         isIdle();
         store.organize(command.groups, command.stepIds);
+        const flowAfterOrg = store.flow();
+        if (flowAfterOrg) seoOpsAutoSync.request({ reason: "save", flowId: flowAfterOrg.id });
         return state();
-      case "saveStep":
+      }
+      case "saveStep": {
         isIdle();
         store.saveStep(command.name, command.payload, command.id);
+        const flowAfterSave = store.flow();
+        if (flowAfterSave) seoOpsAutoSync.request({ reason: "save", flowId: flowAfterSave.id });
         return state();
-      case "selectVersion":
+      }
+      case "selectVersion": {
         isIdle();
         store.selectVersion(command.id, command.version);
+        const flowAfterVersion = store.flow();
+        if (flowAfterVersion) seoOpsAutoSync.request({ reason: "save", flowId: flowAfterVersion.id });
         return state();
-      case "saveOverride":
+      }
+      case "saveOverride": {
         isIdle();
         store.saveOverride(
           command.stepId,
@@ -1093,7 +1142,10 @@ async function boot() {
           command.name,
           command.segment,
         );
+        const flowAfterOverride = store.flow();
+        if (flowAfterOverride) seoOpsAutoSync.request({ reason: "save", flowId: flowAfterOverride.id });
         return state();
+      }
       case "reviewTest":
         isIdle();
         return runtime.review(

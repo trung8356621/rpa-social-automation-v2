@@ -2,11 +2,11 @@ import { createHash } from "node:crypto";
 import { access, readFile } from "node:fs/promises";
 import path from "node:path";
 import type { Flow, Step, Variable } from "../shared/contracts.js";
-import { buildScriptPublishBody, assertScriptPublishBody } from "../shared/script-release.js";
-import { computeExecutionDigest, computeScriptContentDigest } from "../shared/script-digest.js";
+import { buildScriptCatalogSnapshot } from "../shared/script-release.js";
 import {
   createHttpSeoOpsAuthClient,
   assertRpaAdminRole,
+  mapSeoOpsAuthErrors,
   type RpaAdminUser,
   type TokenStore,
 } from "../shared/seo-ops-auth.js";
@@ -34,6 +34,18 @@ type SyncMeta = {
   last_sync_at?: string;
   last_result?: string;
 };
+
+function toPlanRow(row: LocalScriptRow): LocalScriptRow {
+  return {
+    script_id: row.script_id,
+    package_key: row.package_key,
+    version: row.version,
+    content_digest: row.content_digest,
+    execution_digest: row.execution_digest,
+    lineage: row.lineage,
+    assets_complete: row.assets_complete,
+  };
+}
 
 export function createSeoOpsSyncService(options: {
   store: Store;
@@ -105,35 +117,82 @@ export function createSeoOpsSyncService(options: {
     return { assets, complete: missing.length === 0, missing };
   }
 
-  async function localRow(flow: Flow, version = "1.0.0"): Promise<LocalScriptRow & { name: string; incomplete: boolean }> {
-    const steps = flow.steps.map((ref) => store.step(ref.id, ref.version));
-    const { assets, complete } = await collectLocalAssets(flow, steps);
-    const body = assertScriptPublishBody(
-      buildScriptPublishBody({ flow, steps, version, assets }),
-    );
-    const content_digest = computeScriptContentDigest(body);
+  async function localRow(
+    flow: Flow,
+    version = "1.0.0",
+  ): Promise<
+    LocalScriptRow & {
+      name: string;
+      incomplete: boolean;
+      incomplete_reasons: string[];
+      flow_id: string;
+    }
+  > {
+    const steps = flow.steps
+      .map((ref) => {
+        try {
+          return store.step(ref.id, ref.version);
+        } catch {
+          return undefined;
+        }
+      })
+      .filter((s): s is Step => Boolean(s));
+    const { assets, complete, missing } = await collectLocalAssets(flow, steps);
+    // Catalog inspection only — never publish; 0-step Scripts stay listable.
+    const snap = buildScriptCatalogSnapshot({ flow, steps, version, assets });
+    const reasons = [...snap.incomplete_reasons];
+    if (!complete) {
+      reasons.push(...missing.map((m) => `missing_asset:${m}`));
+    }
+    const incomplete = snap.incomplete || !complete;
     const lineageRaw = store.setting(`seoOpsLineage:${flow.id}`);
     const lineage = lineageRaw ? (JSON.parse(lineageRaw) as string[]) : [];
     return {
       script_id: flow.id,
-      package_key: body.package_key,
-      version: body.version,
-      content_digest,
-      execution_digest: computeExecutionDigest(body.manifest),
+      flow_id: flow.id,
+      package_key: snap.package_key,
+      version: snap.version,
+      content_digest: snap.content_digest,
+      execution_digest: snap.execution_digest,
       lineage,
-      assets_complete: complete,
-      publish_body: body,
+      assets_complete: complete && !incomplete,
+      publish_body: incomplete ? undefined : snap.publish_body ?? undefined,
       name: flow.name,
-      incomplete: !complete,
+      incomplete,
+      incomplete_reasons: [...new Set(reasons)],
     };
   }
 
-  async function buildLocalCatalog(): Promise<Array<LocalScriptRow & { name: string; incomplete: boolean; flow_id: string }>> {
+  async function buildLocalCatalog(): Promise<
+    Array<
+      LocalScriptRow & {
+        name: string;
+        incomplete: boolean;
+        incomplete_reasons: string[];
+        flow_id: string;
+      }
+    >
+  > {
     const out = [];
     for (const flow of store.flows()) {
-      const version = store.setting(`seoOpsVersion:${flow.id}`) || "1.0.0";
-      const row = await localRow(flow, version);
-      out.push({ ...row, flow_id: flow.id });
+      try {
+        const version = store.setting(`seoOpsVersion:${flow.id}`) || "1.0.0";
+        out.push(await localRow(flow, version));
+      } catch (e) {
+        // Never let one broken Scenario crash the whole catalog.
+        out.push({
+          script_id: flow.id,
+          flow_id: flow.id,
+          package_key: flow.id,
+          version: "0.0.0",
+          content_digest: "0".repeat(64),
+          lineage: [],
+          assets_complete: false,
+          name: flow.name,
+          incomplete: true,
+          incomplete_reasons: [String((e as Error).message || e)],
+        });
+      }
     }
     return out;
   }
@@ -155,7 +214,7 @@ export function createSeoOpsSyncService(options: {
         configured: true,
         baseUrl,
         authenticated: false,
-        error: result.errors.join(", "),
+        error: mapSeoOpsAuthErrors(result.errors),
       };
     }
     if (!assertRpaAdminRole(result.user.role)) {
@@ -164,7 +223,7 @@ export function createSeoOpsSyncService(options: {
         configured: true,
         baseUrl,
         authenticated: false,
-        error: "role_staff_forbidden",
+        error: mapSeoOpsAuthErrors(["role_staff_forbidden"]),
       };
     }
     return { configured: true, baseUrl, authenticated: true, user: result.user };
@@ -184,22 +243,24 @@ export function createSeoOpsSyncService(options: {
     return authClient().logout();
   }
 
-  async function refreshStatusRows(): Promise<ScriptSyncRow[]> {
+  async function refreshStatusRows(options?: { offlinePending?: boolean }): Promise<ScriptSyncRow[]> {
     const meta = loadMeta();
     const local = await buildLocalCatalog();
     let remote: LocalScriptRow[] = [];
     let plan: SyncPlan | null = null;
     let error: string | undefined;
+    // Plan/catalog use publishable rows only so incomplete Scripts never hit publish validation.
+    const planLocal = local.filter((r) => !r.incomplete && r.publish_body);
     if (tokenStore.getToken()) {
       try {
         remote = await syncClient().catalog();
-        plan = await syncClient().plan(local);
+        plan = await syncClient().plan(planLocal.map(toPlanRow));
       } catch (e) {
         error = String((e as Error).message || e);
-        plan = planScriptSync(local, remote);
+        plan = planScriptSync(planLocal, remote);
       }
     } else {
-      plan = planScriptSync(local, []);
+      plan = planScriptSync(planLocal, []);
     }
 
     const conflictIds = new Set(plan.conflicts.map((c) => c.script_id));
@@ -213,6 +274,7 @@ export function createSeoOpsSyncService(options: {
     const rows: ScriptSyncRow[] = ids.map((id) => {
       const l = localBy[id];
       const r = remoteBy[id];
+      const incomplete = Boolean(l?.incomplete || (r && r.assets_complete === false));
       const status = statusFromPlanSides({
         hasLocal: !!l,
         hasRemote: !!r,
@@ -220,10 +282,16 @@ export function createSeoOpsSyncService(options: {
         conflict: conflictIds.has(id),
         localAhead: pushIds.has(id) && !!r,
         remoteAhead: pullIds.has(id) && !!l,
-        incomplete: Boolean(l?.incomplete || (r && r.assets_complete === false)),
-        error: error && (l || r) ? error : undefined,
+        incomplete,
+        error: error && (l || r) && !incomplete ? error : undefined,
+        offlinePending: Boolean(options?.offlinePending && l && !incomplete && !skipIds.has(id)),
       });
       const prev = meta.rows[id];
+      const message = incomplete
+        ? (l?.incomplete_reasons || []).slice(0, 3).join(", ") || "incomplete"
+        : error && (l || r)
+          ? error
+          : prev?.message;
       return {
         script_id: id,
         flow_id: l?.flow_id,
@@ -236,8 +304,8 @@ export function createSeoOpsSyncService(options: {
         status,
         last_sync_at: prev?.last_sync_at,
         last_result: prev?.last_result,
-        message: error,
-        incomplete: Boolean(l?.incomplete),
+        message,
+        incomplete,
       };
     });
 
@@ -399,36 +467,40 @@ export function createSeoOpsSyncService(options: {
       : await buildLocalCatalog();
 
     const client = syncClient();
-    const plan = await client.plan(refreshedLocal);
     const now = new Date().toISOString();
     const meta = loadMeta();
     const results: Array<{ script_id: string; action: string; ok: boolean; message?: string }> = [];
 
-    for (const row of plan.push_to_remote) {
-      const full = refreshedLocal.find((r) => r.script_id === row.script_id);
-      if (!full?.publish_body) {
-        results.push({ script_id: row.script_id, action: "push", ok: false, message: "missing publish body" });
-        continue;
-      }
-      if (full.incomplete) {
-        results.push({
+    // Incomplete Scripts are skipped individually — never block others / never publish.
+    const publishable = refreshedLocal.filter((r) => !r.incomplete && r.publish_body);
+    for (const row of refreshedLocal.filter((r) => r.incomplete)) {
+      results.push({
+        script_id: row.script_id,
+        action: "skip",
+        ok: true,
+        message: (row.incomplete_reasons || ["incomplete"]).join(", "),
+      });
+      meta.rows[row.script_id] = {
+        ...(meta.rows[row.script_id] ?? {
           script_id: row.script_id,
-          action: "push",
-          ok: false,
-          message: "incomplete assets — không tuyên bố sync thành công",
-        });
-        meta.rows[row.script_id] = {
-          ...(meta.rows[row.script_id] ?? {
-            script_id: row.script_id,
-            package_key: row.package_key,
-            name: full.name,
-            status: "incomplete_assets" as SyncStatusCode,
-          }),
-          status: "incomplete_assets",
-          last_sync_at: now,
-          last_result: "incomplete_assets",
-          message: "Thiếu ROI asset trên đĩa local",
-        };
+          package_key: row.package_key,
+          name: row.name,
+          status: "incomplete_assets" as SyncStatusCode,
+        }),
+        status: "incomplete_assets",
+        last_sync_at: now,
+        last_result: "incomplete",
+        message: (row.incomplete_reasons || []).slice(0, 3).join(", "),
+        incomplete: true,
+      };
+    }
+
+    const plan = await client.plan(publishable.map(toPlanRow));
+
+    for (const row of plan.push_to_remote) {
+      const full = publishable.find((r) => r.script_id === row.script_id);
+      if (!full?.publish_body) {
+        results.push({ script_id: row.script_id, action: "skip", ok: true, message: "incomplete — no publish body" });
         continue;
       }
       const published = await client.publish(full.publish_body);

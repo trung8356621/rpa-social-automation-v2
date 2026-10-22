@@ -7,17 +7,20 @@ export type SyncStatusCode =
   | "conflict"
   | "incomplete_assets"
   | "sync_error"
+  | "pending"
   | "unknown";
 
+/** Compact UI labels required by Scenario list. */
 export const SYNC_STATUS_LABEL: Record<SyncStatusCode, string> = {
-  local_only: "Local only",
   synced: "Synced",
-  remote_only: "Remote only",
-  local_changes: "Local changes",
-  remote_changes: "Remote changes",
+  pending: "Pending",
+  local_only: "Pending",
+  local_changes: "Pending",
+  remote_only: "Pending",
+  remote_changes: "Pending",
+  incomplete_assets: "Incomplete",
   conflict: "Conflict",
-  incomplete_assets: "Incomplete assets",
-  sync_error: "Sync error",
+  sync_error: "Error",
   unknown: "—",
 };
 
@@ -51,10 +54,12 @@ export function statusFromPlanSides(input: {
   remoteAhead: boolean;
   incomplete: boolean;
   error?: string;
+  offlinePending?: boolean;
 }): SyncStatusCode {
   if (input.error) return "sync_error";
   if (input.incomplete) return "incomplete_assets";
   if (input.conflict) return "conflict";
+  if (input.offlinePending) return "pending";
   if (input.hasLocal && !input.hasRemote) return "local_only";
   if (!input.hasLocal && input.hasRemote) return "remote_only";
   if (input.sameDigest) return "synced";

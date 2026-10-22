@@ -1,6 +1,8 @@
 import React, { useCallback, useEffect, useState } from "react";
 import type { Command } from "../shared/contracts";
+import { mapSeoOpsAuthError, mapSeoOpsAuthErrors } from "../shared/seo-ops-auth";
 import { labelForStatus, type ScriptSyncRow } from "../shared/sync-status";
+import { UiPopover } from "./ui-popover";
 
 type SessionState = {
   configured: boolean;
@@ -9,6 +11,55 @@ type SessionState = {
   user?: { id: number; email: string; name: string; role: string };
   error?: string;
 };
+
+function VersionDialog({
+  open,
+  defaultVersion,
+  busy,
+  onCancel,
+  onConfirm,
+}: {
+  open: boolean;
+  defaultVersion: string;
+  busy: boolean;
+  onCancel: () => void;
+  onConfirm: (version: string) => void;
+}) {
+  const [version, setVersion] = useState(defaultVersion);
+  useEffect(() => {
+    if (open) setVersion(defaultVersion);
+  }, [open, defaultVersion]);
+  if (!open) return null;
+  return (
+    <UiPopover variant="modal" label="Script version" className="unsaved-confirm" close={() => { if (!busy) onCancel(); }}>
+      <div className="popover-heading">
+        <b>Phiên bản Script (semver)</b>
+        <button disabled={busy} onClick={onCancel}>×</button>
+      </div>
+      <p>Dùng khi push Script lên SEO-OPS. Để trống sẽ giữ phiên bản hiện tại.</p>
+      <label>
+        Version
+        <input
+          value={version}
+          disabled={busy}
+          onChange={(e) => setVersion(e.target.value)}
+          placeholder="1.0.0"
+          autoFocus
+        />
+      </label>
+      <div className="popover-actions">
+        <button disabled={busy} onClick={onCancel}>Hủy</button>
+        <button
+          className="primary"
+          disabled={busy}
+          onClick={() => onConfirm(version.trim() || defaultVersion)}
+        >
+          Sync now
+        </button>
+      </div>
+    </UiPopover>
+  );
+}
 
 export function SeoOpsAuthPanel({
   locked,
@@ -32,7 +83,7 @@ export function SeoOpsAuthPanel({
   }, [invoke]);
 
   useEffect(() => {
-    void refresh().catch((e) => setError(String(e)));
+    void refresh().catch((e) => setError(mapSeoOpsAuthError(String((e as Error).message || e))));
   }, [refresh]);
 
   async function run(work: () => Promise<unknown>) {
@@ -44,7 +95,7 @@ export function SeoOpsAuthPanel({
       await refresh();
       setPassword("");
     } catch (e) {
-      setError(String((e as Error).message || e));
+      setError(mapSeoOpsAuthError(String((e as Error).message || e)));
     } finally {
       setBusy(false);
     }
@@ -53,7 +104,7 @@ export function SeoOpsAuthPanel({
   return (
     <section className="seo-ops-auth" aria-label="SEO-OPS Login">
       <h2>SEO-OPS Account</h2>
-      <p>Đăng nhập bằng tài khoản SEO-OPS (`admin` / `owner`). Sync Script yêu cầu phiên hợp lệ; tạo/sửa/test Scenario local vẫn dùng được khi chưa login.</p>
+      <p>Đăng nhập bằng tài khoản SEO-OPS (`admin` / `owner`). Sync Script tự chạy sau login; tạo/sửa/test Scenario local vẫn dùng được khi chưa login.</p>
       <label>
         Endpoint
         <input
@@ -90,7 +141,7 @@ export function SeoOpsAuthPanel({
                 email,
                 password,
               });
-              if (!result.ok) throw new Error((result.errors || ["login_failed"]).join(", "));
+              if (!result.ok) throw new Error(mapSeoOpsAuthErrors(result.errors));
             });
           }}
         >
@@ -142,18 +193,31 @@ export function SeoOpsSyncControls({
   const [busy, setBusy] = useState(false);
   const [message, setMessage] = useState("");
   const [rows, setRows] = useState<ScriptSyncRow[]>([]);
+  const [versionDialog, setVersionDialog] = useState<"all" | "one" | null>(null);
 
-  const refresh = useCallback(async () => {
+  const applyRows = useCallback(
+    (next: ScriptSyncRow[]) => {
+      setRows(next);
+      onRows?.(next);
+    },
+    [onRows],
+  );
+
+  const pullStatus = useCallback(async () => {
     const result = await invoke<{ rows: ScriptSyncRow[] }>({ type: "seoOpsSyncStatus" });
-    setRows(result.rows);
-    onRows?.(result.rows);
-  }, [invoke, onRows]);
+    applyRows(result.rows);
+  }, [invoke, applyRows]);
 
   useEffect(() => {
-    void refresh().catch(() => undefined);
-  }, [refresh, authenticated]);
+    if (!authenticated) return;
+    void pullStatus().catch(() => undefined);
+    const timer = setInterval(() => {
+      void pullStatus().catch(() => undefined);
+    }, 30_000);
+    return () => clearInterval(timer);
+  }, [authenticated, pullStatus]);
 
-  async function sync(all: boolean) {
+  async function runSync(all: boolean, version?: string) {
     if (!authenticated) {
       setMessage("Cần đăng nhập SEO-OPS trước khi sync.");
       return;
@@ -162,7 +226,6 @@ export function SeoOpsSyncControls({
     setBusy(true);
     setMessage("");
     try {
-      const version = window.prompt("Script version (semver) cho push", "1.0.0") || undefined;
       const result = await invoke<{
         results: Array<{ script_id: string; action: string; ok: boolean; message?: string }>;
         rows: ScriptSyncRow[];
@@ -171,54 +234,53 @@ export function SeoOpsSyncControls({
           ? { type: "seoOpsSyncAll", version }
           : { type: "seoOpsSyncFlow", flowId: flowId!, version },
       );
-      setRows(result.rows);
-      onRows?.(result.rows);
+      applyRows(result.rows);
       const conflicts = result.results.filter((r) => r.action === "conflict").length;
       const failed = result.results.filter((r) => !r.ok && r.action !== "conflict").length;
       setMessage(
         `Sync xong: ${result.results.length} mục` +
           (conflicts ? `, ${conflicts} conflict (không overwrite)` : "") +
-          (failed ? `, ${failed} lỗi/incomplete` : ""),
+          (failed ? `, ${failed} lỗi` : ""),
       );
     } catch (e) {
-      setMessage(String((e as Error).message || e));
+      setMessage(mapSeoOpsAuthError(String((e as Error).message || e)));
     } finally {
       setBusy(false);
+      setVersionDialog(null);
     }
   }
 
   return (
     <div className="seo-ops-sync-controls">
-      <button disabled={locked || busy || !authenticated} onClick={() => void sync(true)}>
-        Sync SEO-OPS
+      <button disabled={locked || busy || !authenticated} onClick={() => setVersionDialog("all")}>
+        Sync now
       </button>
       {flowId && (
-        <button disabled={locked || busy || !authenticated} onClick={() => void sync(false)}>
+        <button disabled={locked || busy || !authenticated} onClick={() => setVersionDialog("one")}>
           Sync Scenario này
         </button>
       )}
-      <button disabled={locked || busy} onClick={() => void refresh()}>
-        Refresh status
-      </button>
       {message && <small>{message}</small>}
       {rows.length > 0 && (
         <details className="seo-ops-sync-summary">
-          <summary>Trạng thái sync ({rows.length})</summary>
+          <summary>Diagnostics sync ({rows.length})</summary>
           <ul>
             {rows.map((row) => (
               <li key={row.script_id}>
                 <b>{row.name}</b> — {labelForStatus(row.status)}
-                {row.local_version || row.remote_version
-                  ? ` · v${row.local_version ?? "—"} / remote ${row.remote_version ?? "—"}`
-                  : ""}
-                {row.local_digest ? ` · digest ${row.local_digest.slice(0, 8)}…` : ""}
-                {row.last_sync_at ? ` · last ${row.last_sync_at}` : ""}
                 {row.message ? ` · ${row.message}` : ""}
               </li>
             ))}
           </ul>
         </details>
       )}
+      <VersionDialog
+        open={versionDialog !== null}
+        defaultVersion="1.0.0"
+        busy={busy}
+        onCancel={() => setVersionDialog(null)}
+        onConfirm={(version) => void runSync(versionDialog === "all", version)}
+      />
     </div>
   );
 }

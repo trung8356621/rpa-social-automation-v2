@@ -1,4 +1,4 @@
-import React, { useState } from "react";
+import React, { useEffect, useState } from "react";
 import { UiPopover } from "./ui-popover";
 import type { AppPage, Command, ScenarioOrganization, State } from "../shared/contracts";
 import type { ScriptSyncRow } from "../shared/sync-status";
@@ -47,8 +47,17 @@ export function ScenariosPage({ state, name, setName, locked, open, create, sess
   const [working, setWorking] = useState(false);
   const [error, setError] = useState("");
   const [syncRows, setSyncRows] = useState<ScriptSyncRow[]>([]);
+  const [syncFlowId, setSyncFlowId] = useState<string>();
+  const [syncVersion, setSyncVersion] = useState("1.0.0");
   const organization: ScenarioOrganization = state?.scenarioOrganization ?? { groups: [], membership: {}, ungroupedCollapsed: false };
   const disabled = locked || working;
+
+  useEffect(() => {
+    if (!invoke || !authenticated) return;
+    void invoke<{ rows: ScriptSyncRow[] }>({ type: "seoOpsSyncStatus" })
+      .then((r) => setSyncRows(r.rows))
+      .catch(() => undefined);
+  }, [invoke, authenticated, state?.flows?.length]);
   function show(kind: "create" | "rename" | "delete" | "move" | "scenario-delete", id?: string, initial = "") {
     setValue(initial); setError(""); setDialog({ kind, id });
   }
@@ -134,12 +143,8 @@ export function ScenariosPage({ state, name, setName, locked, open, create, sess
                   <button
                     disabled={disabled || !authenticated}
                     onClick={() => {
-                      const version = window.prompt("Script version (semver)", "1.0.0");
-                      if (!version) return;
-                      void invoke({ type: "seoOpsSyncFlow", flowId: flow.id, version })
-                        .then(() => invoke<{ rows: ScriptSyncRow[] }>({ type: "seoOpsSyncStatus" }))
-                        .then((r) => setSyncRows(r.rows))
-                        .catch((e) => setError(String(e)));
+                      setSyncVersion("1.0.0");
+                      setSyncFlowId(flow.id);
                     }}
                   >
                     Sync SEO-OPS
@@ -153,6 +158,41 @@ export function ScenariosPage({ state, name, setName, locked, open, create, sess
         </section>;
       })}
     </div>
+    {syncFlowId && invoke && (
+      <UiPopover variant="modal" label="Sync SEO-OPS" className="unsaved-confirm" close={() => { if (!working) setSyncFlowId(undefined); }}>
+        <div className="popover-heading">
+          <b>Sync Scenario lên SEO-OPS</b>
+          <button disabled={working} onClick={() => setSyncFlowId(undefined)}>×</button>
+        </div>
+        <label>
+          Version (semver)
+          <input value={syncVersion} disabled={working} onChange={(e) => setSyncVersion(e.target.value)} />
+        </label>
+        <div className="popover-actions">
+          <button disabled={working} onClick={() => setSyncFlowId(undefined)}>Hủy</button>
+          <button
+            className="primary"
+            disabled={working || !syncVersion.trim()}
+            onClick={() => {
+              const flowId = syncFlowId;
+              const version = syncVersion.trim();
+              setWorking(true);
+              setError("");
+              void invoke({ type: "seoOpsSyncFlow", flowId, version })
+                .then(() => invoke<{ rows: ScriptSyncRow[] }>({ type: "seoOpsSyncStatus" }))
+                .then((r) => {
+                  setSyncRows(r.rows);
+                  setSyncFlowId(undefined);
+                })
+                .catch((e) => setError(String((e as Error).message || e)))
+                .finally(() => setWorking(false));
+            }}
+          >
+            Sync now
+          </button>
+        </div>
+      </UiPopover>
+    )}
     {dialog && <UiPopover variant="modal" label={dialog.kind === "scenario-delete" ? "Delete Scenario" : "Scenario Group"} className="unsaved-confirm"
       close={() => { if (!working) setDialog(undefined); }}>
       <div className="popover-heading"><b>{dialog.kind === "scenario-delete" ? "Delete Scenario" : dialog.kind === "create" ? "Tạo Group" : dialog.kind === "rename" ? "Đổi tên Group" : dialog.kind === "delete" ? "Xóa Group" : "Move to Group"}</b>

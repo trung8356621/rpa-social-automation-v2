@@ -7,6 +7,44 @@ export type RpaAdminUser = {
   role: "admin" | "owner" | string;
 };
 
+/** Map API/network error codes to safe Vietnamese UI copy (never tokens/SQL/exceptions). */
+export function mapSeoOpsAuthError(codeOrMessage: string): string {
+  const raw = String(codeOrMessage || "").trim();
+  const code = raw.split(/[,\s]+/)[0]?.toLowerCase() || "";
+  switch (code) {
+    case "schema_unavailable":
+    case "package_registry_unavailable":
+      return "SEO-OPS chưa hoàn tất thiết lập database Social Automation.";
+    case "invalid_credentials":
+    case "credentials_required":
+      return "Email hoặc mật khẩu không đúng.";
+    case "forbidden":
+    case "role_staff_forbidden":
+    case "role_forbidden":
+    case "system_user_forbidden":
+    case "user_blocked":
+      return "Tài khoản không có quyền sử dụng RPA Admin.";
+    case "network_error":
+    case "fetch_failed":
+      return "Không kết nối được SEO-OPS.";
+    default:
+      if (/failed to fetch|networkerror|econnrefused|enotfound|timed?\s*out/i.test(raw)) {
+        return "Không kết nối được SEO-OPS.";
+      }
+      if (!raw || raw === "login_failed") return "Đăng nhập SEO-OPS thất bại.";
+      // Strip anything that looks like a token/SQL before surfacing.
+      if (/bearer\s+[a-z0-9_-]{20,}|select\s+.+\s+from|sqlstate/i.test(raw)) {
+        return "Đăng nhập SEO-OPS thất bại.";
+      }
+      return raw;
+  }
+}
+
+export function mapSeoOpsAuthErrors(errors: string[] | undefined): string {
+  if (!errors?.length) return mapSeoOpsAuthError("login_failed");
+  return mapSeoOpsAuthError(errors[0]);
+}
+
 export type LoginResult =
   | { ok: true; token: string; expiresAt: string; user: RpaAdminUser }
   | { ok: false; errors: string[] };
@@ -38,15 +76,20 @@ export function createHttpSeoOpsAuthClient(options: {
   return {
     async login(email, password, clientLabel) {
       // Never send or persist client-side user_id — server derives identity.
-      const response = await fetchImpl(`${root}/login`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          email,
-          password,
-          ...(clientLabel ? { client_label: clientLabel } : {}),
-        }),
-      });
+      let response: Response;
+      try {
+        response = await fetchImpl(`${root}/login`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            email,
+            password,
+            ...(clientLabel ? { client_label: clientLabel } : {}),
+          }),
+        });
+      } catch {
+        return { ok: false, errors: ["network_error"] };
+      }
       const json = (await response.json().catch(() => ({}))) as Record<string, unknown>;
       if (!response.ok || !json.ok) {
         return {
@@ -68,9 +111,14 @@ export function createHttpSeoOpsAuthClient(options: {
     async session() {
       const token = options.tokenStore.getToken();
       if (!token) return { ok: false, errors: ["unauthenticated"] };
-      const response = await fetchImpl(`${root}/session`, {
-        headers: { Authorization: `Bearer ${token}` },
-      });
+      let response: Response;
+      try {
+        response = await fetchImpl(`${root}/session`, {
+          headers: { Authorization: `Bearer ${token}` },
+        });
+      } catch {
+        return { ok: false, errors: ["network_error"] };
+      }
       const json = (await response.json().catch(() => ({}))) as Record<string, unknown>;
       if (!response.ok || !json.ok) {
         return {
@@ -91,10 +139,16 @@ export function createHttpSeoOpsAuthClient(options: {
         options.tokenStore.setToken(null);
         return { ok: true };
       }
-      const response = await fetchImpl(`${root}/logout`, {
-        method: "POST",
-        headers: { Authorization: `Bearer ${token}` },
-      });
+      let response: Response;
+      try {
+        response = await fetchImpl(`${root}/logout`, {
+          method: "POST",
+          headers: { Authorization: `Bearer ${token}` },
+        });
+      } catch {
+        options.tokenStore.setToken(null);
+        return { ok: false, errors: ["network_error"] };
+      }
       options.tokenStore.setToken(null);
       const json = (await response.json().catch(() => ({}))) as Record<string, unknown>;
       return {

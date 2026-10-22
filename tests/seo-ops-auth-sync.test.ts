@@ -1,6 +1,11 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { assertRpaAdminRole, createHttpSeoOpsAuthClient } from "../src/shared/seo-ops-auth.js";
+import {
+  assertRpaAdminRole,
+  createHttpSeoOpsAuthClient,
+  mapSeoOpsAuthError,
+  mapSeoOpsAuthErrors,
+} from "../src/shared/seo-ops-auth.js";
 import {
   importScriptRelease,
   planScriptSync,
@@ -10,6 +15,32 @@ test("admin and owner roles allowed; staff rejected", () => {
   assert.equal(assertRpaAdminRole("admin"), true);
   assert.equal(assertRpaAdminRole("owner"), true);
   assert.equal(assertRpaAdminRole("staff"), false);
+});
+
+test("maps SEO-OPS auth errors to safe Vietnamese copy", () => {
+  assert.equal(
+    mapSeoOpsAuthError("schema_unavailable"),
+    "SEO-OPS chưa hoàn tất thiết lập database Social Automation.",
+  );
+  assert.equal(mapSeoOpsAuthError("invalid_credentials"), "Email hoặc mật khẩu không đúng.");
+  assert.equal(mapSeoOpsAuthError("forbidden"), "Tài khoản không có quyền sử dụng RPA Admin.");
+  assert.equal(mapSeoOpsAuthError("role_staff_forbidden"), "Tài khoản không có quyền sử dụng RPA Admin.");
+  assert.equal(mapSeoOpsAuthError("network_error"), "Không kết nối được SEO-OPS.");
+  assert.equal(mapSeoOpsAuthError("Failed to fetch"), "Không kết nối được SEO-OPS.");
+  assert.equal(mapSeoOpsAuthErrors(["schema_unavailable", "other"]), mapSeoOpsAuthError("schema_unavailable"));
+});
+
+test("login network failure returns network_error without throwing", async () => {
+  const client = createHttpSeoOpsAuthClient({
+    baseUrl: "http://seo-ops.test",
+    tokenStore: { getToken: () => null, setToken: () => undefined },
+    fetchImpl: (async () => {
+      throw new TypeError("Failed to fetch");
+    }) as typeof fetch,
+  });
+  const result = await client.login("a@b.c", "x");
+  assert.equal(result.ok, false);
+  if (!result.ok) assert.deepEqual(result.errors, ["network_error"]);
 });
 
 test("login ignores user_id and stores token only via TokenStore", async () => {
