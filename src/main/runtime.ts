@@ -11,7 +11,7 @@ import { localOcr, type OcrEngine } from "./ocr.js";
 import { advanceOcrSearch, clearOcrSearch } from "./ocr-match-scroll.js";
 import { normalizeTargetText, resolveVisualTarget, TargetNotConfident, OcrNotFound, OcrTechnicalError } from "./target-resolver.js";
 import { inspectUploadFiles, UploadError } from "./upload-files.js";
-import { effectiveMatchTo, matchToLabel } from "../shared/match-to.js";
+import { effectiveMatchTo, matchToLabel, matchToLogLabel } from "../shared/match-to.js";
 import { WEB_HEIGHT } from "../shared/geometry.js";
 import { quickTag, QuickTagBlocked } from "./quick-tag.js";
 import { assertVisualEnvironment } from "../shared/visual-environment.js";
@@ -31,11 +31,15 @@ export class Runtime {
   }
   startPlayAllLog(flow?: Flow, snapshotSteps?: Step[]) {
     if (this.busy || this.batch) throw new Error("Đang có lượt chạy.");
-    this.batch = { runId: randomUUID(), ocrPasses: 0, scrolls: 0, status: "COMPLETED",
+    this.batch = { runId: randomUUID(), ocrPasses: 0, scrolls: 0, status: "STARTED",
       network: snapshotNetworkSettings(this.store.networkSettings()) };
     this.batchSteps = snapshotSteps ? structuredClone(snapshotSteps) : undefined;
     this.batchFlow = flow ? structuredClone(flow) : undefined;
-    logTestBoundary(this.runDir, "START", { ...this.batch, label: "Play All" });
+    logTestBoundary(this.runDir, "START", {
+      runId: this.batch.runId,
+      label: "Play All",
+      status: "STARTED",
+    });
     return this.batch.runId;
   }
   endPlayAllLog(runId: string, failed = false) {
@@ -45,7 +49,12 @@ export class Runtime {
     this.batch = undefined;
     this.batchFlow = undefined;
     this.batchSteps = undefined;
-    logTestBoundary(this.runDir, "END", { ...batch, label: "Play All", status: failed ? "FAILED" : batch.status });
+    const status = failed
+      ? "FAILED"
+      : batch.status === "STARTED"
+        ? "COMPLETED"
+        : batch.status;
+    logTestBoundary(this.runDir, "END", { ...batch, label: "Play All", status });
   }
   playAllNetwork(runId: string): NetworkRunSettings {
     if (!this.batch || this.batch.runId !== runId) throw new Error("Play All log runId không khớp.");
@@ -116,17 +125,17 @@ export class Runtime {
     const network = batchRunId ? this.playAllNetwork(batchRunId) : snapshotNetworkSettings(this.store.networkSettings());
     const scope: TestLogScope = { runId: randomUUID(), batchRunId, ocrPasses: 0, scrolls: 0, network };
     const label = requests.map(request => {
-      let matchTo = "unknown";
+      let matchLabel = "unknown";
       try {
         const payload = request.overrideId
           ? this.store.overrides().find(o => o.id === request.overrideId)?.segment[0]
           : this.lookupStep(request.stepId,request.version).payload;
-        matchTo = effectiveMatchTo(payload);
+        matchLabel = matchToLogLabel(payload);
       } catch { /* Invalid versions still receive a paired boundary and validation error. */ }
-      return `Step ${request.stepId} | v${request.version} | Match To ${matchToLabel(matchTo)}`;
+      return `Step ${request.stepId} | v${request.version} | Match To ${matchLabel}`;
     }).join(" → ");
     let status = "FAILED";
-    logTestBoundary(this.runDir, "START", { ...scope, label });
+    logTestBoundary(this.runDir, "START", { runId: scope.runId, batchRunId: scope.batchRunId, label, status: "STARTED" });
     try {
       if ((batchRunId && this.batch?.runId !== batchRunId) || (this.batch && !batchRunId))
         throw new Error("Play All log runId không khớp.");
@@ -134,10 +143,10 @@ export class Runtime {
       status = results.find(result => !result.ok)?.status ?? results.at(-1)?.status ?? "FAILED";
       return results;
     } catch (error) {
-      status = /Viewport|Zoom|variable|không thuộc flow/i.test(error instanceof Error ? error.message : String(error)) ? "BLOCKED" : "FAILED";
+      status = /Viewport|Zoom|variable|không thuộc flow|không hợp lệ|Invalid Step|Match To/i.test(error instanceof Error ? error.message : String(error)) ? "BLOCKED" : "FAILED";
       throw error;
     } finally {
-      logTestBoundary(this.runDir, "END", { ...scope, label, status });
+      logTestBoundary(this.runDir, "END", { runId: scope.runId, batchRunId: scope.batchRunId, label, status, ocrPasses: scope.ocrPasses, scrolls: scope.scrolls });
       if (this.batch && this.batch.runId === batchRunId) {
         this.batch.ocrPasses += scope.ocrPasses;
         this.batch.scrolls += scope.scrolls;

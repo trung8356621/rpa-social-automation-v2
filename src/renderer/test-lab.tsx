@@ -63,6 +63,23 @@ export function TestCaseEditor({ tabId, item, state, locked, report, saved, savi
           <option value="" disabled>Chọn Session</option>{state.browserSessions?.map(s => <option key={s.id} value={s.id}>{s.name}</option>)}</select></label>
         <label>Start URL<input disabled={disabled} type="url" value={config.startUrl} placeholder="https://..." onChange={e => setConfig({ ...config, startUrl: e.target.value })} /></label>
         <p className="hint">Browser video được quay tự động mỗi lần Run (không desktop, không audio).</p>
+        {flow && <>
+          <h2>Steps sẽ chạy</h2>
+          <p className="hint">Test Lab dùng Base version đã ghim trên Scenario. Xem version trong Creator Editor không đổi version chạy — cần bấm “Ghim version”.</p>
+          <ol className="case-pinned-steps">
+            {flow.steps.map(ref => {
+              const step = state.steps.find(s => s.id === ref.id && s.version === ref.version);
+              const invalid = (state.invalidSteps ?? []).find(r => r.stepId === ref.id && r.version === ref.version);
+              return <li key={`${ref.id}@${ref.version}`}>
+                <b>{step?.name ?? ref.id.slice(0, 8)} · v{ref.version}</b>
+                {invalid
+                  ? <span className="case-run-status" data-status="BLOCKED" title={invalid.detail}>Invalid</span>
+                  : <small> · {step?.payload.action ?? "?"}</small>}
+              </li>;
+            })}
+          </ol>
+          {!flow.steps.length && <p className="hint">Scenario chưa có Step đã ghim.</p>}
+        </>}
         <h2>Variables</h2><p className="hint">Lần đầu lấy từ Default Pattern. Các giá trị bên dưới chỉ lưu vào Case này.</p>
         {(flow?.variables ?? []).map(v => <label key={v.id}>{v.key} <small>({v.type})</small>
           {v.type === "number" || v.type === "integer" ? <input disabled={disabled} type="number" step={v.type === "integer" ? 1 : "any"}

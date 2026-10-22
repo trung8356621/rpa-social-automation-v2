@@ -242,7 +242,8 @@ export type InvalidStepRef = {
     | "missing_variable"
     | "legacy_incomplete"
     | "inline_conflict"
-    | "override_invalid";
+    | "override_invalid"
+    | "invalid_payload";
   variableId?: string;
   detail: string;
 };

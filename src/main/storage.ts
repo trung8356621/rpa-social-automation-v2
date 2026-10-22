@@ -175,13 +175,25 @@ export class Store {
     );
     if (hit)
       throw new Error(
-        `Invalid Step/Variable reference (${hit.reason}): ${hit.detail}`,
+        hit.reason === "invalid_payload"
+          ? `Step không hợp lệ (v${version}): ${hit.detail}`
+          : `Invalid Step/Variable reference (${hit.reason}): ${hit.detail}`,
       );
     const f = flow ?? this.flowOwningStep(stepId);
     const step = this.step(stepId, version);
-    const reason = this.variableRefIssue(step.payload, f);
+    const reason =
+      this.variableRefIssue(step.payload, f) ??
+      this.payloadIssue(step.payload);
     if (reason)
-      throw new Error(`Invalid Step/Variable reference: ${reason.detail}`);
+      throw new Error(
+        reason.reason === "invalid_payload"
+          ? `Step không hợp lệ (v${version}): ${reason.detail}`
+          : `Invalid Step/Variable reference: ${reason.detail}`,
+      );
+  }
+  /** Preflight every pinned Base version on a flow before browser/Play All. */
+  assertFlowExecutable(flow: Flow) {
+    for (const ref of flow.steps) this.assertStepExecutable(ref.id, ref.version, flow);
   }
   private flowOwningStep(stepId: string): Flow | null {
     return (
@@ -218,12 +230,26 @@ export class Store {
       };
     return null;
   }
+  private payloadIssue(
+    payload: Payload,
+  ): Omit<InvalidStepRef, "flowId" | "stepId" | "version"> | null {
+    try {
+      validatePayload(payload);
+      return null;
+    } catch (e) {
+      return {
+        reason: "invalid_payload",
+        detail: e instanceof Error ? e.message : String(e),
+      };
+    }
+  }
   private refreshInvalidStepRefs() {
     const found: InvalidStepRef[] = [];
     for (const f of this.flows()) {
       const ids = new Set(f.steps.map((r) => r.id));
       for (const s of this.steps().filter((s) => ids.has(s.id))) {
-        const issue = this.variableRefIssue(s.payload, f);
+        const issue =
+          this.variableRefIssue(s.payload, f) ?? this.payloadIssue(s.payload);
         if (issue)
           found.push({
             flowId: f.id,
@@ -234,7 +260,8 @@ export class Store {
       }
       for (const o of this.overrides().filter((o) => ids.has(o.stepId))) {
         for (const [i, p] of o.segment.entries()) {
-          const issue = this.variableRefIssue(p, f);
+          const issue =
+            this.variableRefIssue(p, f) ?? this.payloadIssue(p);
           if (issue)
             found.push({
               flowId: f.id,

@@ -44,7 +44,7 @@ import {
   validateRect,
   validateZoom,
 } from "../shared/geometry.js";
-import { effectiveMatchTo, matchToLabel } from "../shared/match-to.js";
+import { effectiveMatchTo, matchToLabel, matchToLogLabel } from "../shared/match-to.js";
 import { DRAFT_KEYS } from "../shared/contracts.js";
 import type { Command, State, CaseResult, Step } from "../shared/contracts.js";
 import {
@@ -516,6 +516,18 @@ async function boot() {
       const steps = flow.steps.map(ref => store.step(ref.id, ref.version));
       outcome.steps = steps.map(step => ({ stepId: step.id, name: step.name, version: step.version,
         status: "PENDING", message: "Chưa chạy." }));
+      // Block before Session/browser/recording — pinned Base versions only.
+      for (const step of steps) {
+        try {
+          store.assertStepExecutable(step.id, step.version, flow);
+        } catch (error) {
+          currentStep = step;
+          const message = error instanceof Error ? error.message : String(error);
+          throw new Error(
+            `${message} Đổi version trong Creator (Ghim version). Xem trong editor không đổi version Test Lab chạy.`,
+          );
+        }
+      }
       batchId = runtime.startPlayAllLog(flow);
       await switchBrowserSession(item.sessionId, true, false);
       store.setSetting("currentFlow", flow.id);
@@ -583,7 +595,7 @@ async function boot() {
           : "Đã gửi thao tác; cần kiểm tra website. Chưa xác nhận hoàn tất nghiệp vụ." });
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
-      Object.assign(outcome, { status: /variable|Default Pattern|type mismatch|Viewport|Zoom|không thuộc flow/i.test(message) || !contextReady ? "BLOCKED" : "ERROR",
+      Object.assign(outcome, { status: /variable|Default Pattern|type mismatch|Viewport|Zoom|không thuộc flow|không hợp lệ|Invalid Step|Match To|Ghim version/i.test(message) || !contextReady ? "BLOCKED" : "ERROR",
         message, stepId: currentStep?.id, stepName: currentStep?.name, version: currentStep?.version });
       if (currentStep) {
         const entry = outcome.steps?.find(entry => entry.stepId === currentStep!.id);
@@ -695,6 +707,7 @@ async function boot() {
                 browser.setZoom(snapshot.flow.zoom);
                 const shared = new Runtime(browser, store, assets, runDir);
                 snapshot.flow.defaultPattern = { values };
+                store.assertFlowExecutable(snapshot.flow);
                 const batch = shared.startPlayAllLog(snapshot.flow, snapshot.steps);
                 let status: "VERIFIED" | "ACTION_SENT" | "BLOCKED" | "ERROR" = "VERIFIED", message = "";
                 try {
@@ -1216,8 +1229,8 @@ async function boot() {
           throw new Error("Step bị skip không thuộc flow/lượt Play All.");
         const runId = randomUUID();
         const matchTo = effectiveMatchTo(step.payload);
-        const label = `Step ${step.id} | v${step.version} | Match To ${matchToLabel(matchTo)}`;
-        logTestBoundary(runDir, "START", { runId, batchRunId: command.batchRunId, label });
+        const label = `Step ${step.id} | v${step.version} | Match To ${matchToLogLabel(step.payload)}`;
+        logTestBoundary(runDir, "START", { runId, batchRunId: command.batchRunId, label, status: "STARTED" });
         logMainEvent(runDir, "play-all-step-skipped", { runId, batchRunId: command.batchRunId,
           stepId: step.id, version: step.version, status: "SKIPPED", reason: "UI_MEMORY_BLOCK", matchTo });
         logTestBoundary(runDir, "END", { runId, batchRunId: command.batchRunId, label, status: "SKIPPED", ocrPasses: 0, scrolls: 0 });
@@ -1231,10 +1244,13 @@ async function boot() {
           store.step(command.previousStepId, command.previousVersion), store.step(command.nextStepId, command.nextVersion));
         return;
       }
-      case "startPlayAllLog":
+      case "startPlayAllLog": {
         isIdle();
+        const flow = store.flow();
+        if (flow) store.assertFlowExecutable(flow);
         uiPlayAllRunId = runtime.startPlayAllLog();
         return uiPlayAllRunId;
+      }
       case "endPlayAllLog":
         runtime.endPlayAllLog(command.runId, command.failed);
         if (uiPlayAllRunId === command.runId) uiPlayAllRunId = undefined;

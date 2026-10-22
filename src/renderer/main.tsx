@@ -1893,6 +1893,7 @@ function Creator() {
                         )}
                         <button
                           disabled={locked}
+                          title="Ghim version này cho Play All / Test Lab. Chỉ xem trong dropdown không đổi version chạy."
                           onClick={() =>
                             void task(async () => {
                               setState(
@@ -1903,13 +1904,26 @@ function Creator() {
                                 }),
                               );
                               setMessage(
-                                `Flow ghim Base v${selected.version}.`,
+                                `Flow ghim Base v${selected.version} cho Play All / Test Lab.`,
                               );
                             })
                           }
                         >
                           Ghim version
                         </button>
+                        {state?.flow?.steps.find((r) => r.id === selected.id)?.version ===
+                          selected.version && (
+                          <small className="hint">Đang ghim cho Play All / Test Lab</small>
+                        )}
+                        {(state?.invalidSteps ?? []).some(
+                          (r) =>
+                            r.stepId === selected.id &&
+                            r.version === selected.version,
+                        ) && (
+                          <small className="hint" role="alert">
+                            Version này không hợp lệ — không chạy được cho đến khi sửa hoặc ghim version khác.
+                          </small>
+                        )}
                       </div>
                       {field(
                         "Implementation",
