@@ -291,7 +291,7 @@ export function StepList({
             <b>{blockedSteps.has(s.id) && <span className="step-block-flag" title="Blocked for Play All">⊘ </span>}{title}</b>
             {text && text !== title && <span className="step-target-text">{text}</span>}
             {sleepText && customName && <span className="step-target-text">{sleepText}</span>}
-            <small>{s.payload.action} · v{s.version} · {matchToLabel(effectiveMatchTo(s.payload))}{blockedSteps.has(s.id) && <span className="step-block-flag"> · BLOCKED (All)</span>}</small>
+            <small>{s.payload.action} · v{s.version} · {matchToLabel(effectiveMatchTo(s.payload))}{(state.invalidSteps ?? []).some(r => r.stepId === s.id && r.version === s.version) && <span className="step-block-flag" title={(state.invalidSteps ?? []).find(r => r.stepId === s.id && r.version === s.version)?.detail}> · Invalid Step/Variable reference</span>}{blockedSteps.has(s.id) && <span className="step-block-flag"> · BLOCKED (All)</span>}</small>
             {playback[s.id] && (
               <small
                 className={`step-status ${playback[s.id].status}`}

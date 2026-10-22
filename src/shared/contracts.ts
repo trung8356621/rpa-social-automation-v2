@@ -233,6 +233,19 @@ export type ResolutionTrace = {
     y?: number;
   }[];
 };
+/** Non-executable Step/version with a broken Variable binding (payload preserved). */
+export type InvalidStepRef = {
+  flowId: string;
+  stepId: string;
+  version: number;
+  reason:
+    | "missing_variable"
+    | "legacy_incomplete"
+    | "inline_conflict"
+    | "override_invalid";
+  variableId?: string;
+  detail: string;
+};
 export type State = {
   runningStudio?: boolean;
   testLab?: TestLabState;
@@ -248,6 +261,7 @@ export type State = {
   flows: Flow[];
   steps: Step[];
   overrides: Override[];
+  invalidSteps?: InvalidStepRef[];
   url: string;
   zoom: number;
   browserBounds: Rect;

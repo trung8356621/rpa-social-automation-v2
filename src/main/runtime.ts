@@ -162,6 +162,7 @@ export class Runtime {
     if (flow.zoom !== this.browser.zoom)
       throw new Error("Zoom flow không khớp browser.");
     const plans = requests.map(({ stepId, version, overrideId }) => {
+      this.store.assertStepExecutable(stepId, version, flow);
       const step = this.lookupStep(stepId, version);
       const override = overrideId
         ? this.store.overrides().find((o) => o.id === overrideId)

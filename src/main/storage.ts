@@ -7,7 +7,13 @@ import type { Variable, StepGroup } from "../shared/contracts.js";
 import { DatabaseSync } from "node:sqlite";
 import { randomUUID } from "node:crypto";
 import { validateUploadFileList } from "./upload-files.js";
-import type { Flow, Step, Override, Payload } from "../shared/contracts.js";
+import type {
+  Flow,
+  Step,
+  Override,
+  Payload,
+  InvalidStepRef,
+} from "../shared/contracts.js";
 import {
   validateZoom,
   validateRect,
@@ -125,6 +131,7 @@ export function validatePayload(p: Payload) {
 }
 export class Store {
   readonly db: DatabaseSync;
+  private invalidStepRefs: InvalidStepRef[] = [];
   constructor(file: string) {
     this.db = new DatabaseSync(file);
     const schema = this.db.prepare("PRAGMA user_version").get() as {
@@ -144,11 +151,103 @@ export class Store {
       CREATE TABLE IF NOT EXISTS runs(id TEXT PRIMARY KEY,payload TEXT NOT NULL);
       `);
     try {
-      this.migrate();
+      // Schema migration runs once. Business-data defects must not block reopen.
+      if (schema.user_version < 2) this.migrateSchemaToV2();
+      // Safe inline→Variable conversion may still be needed on v2 DBs that received
+      // legacy rows out-of-band; never invent Variables for broken references.
+      this.convertSafeLegacyPayloads();
+      this.refreshInvalidStepRefs();
     } catch (e) {
       this.db.close();
       throw e;
     }
+  }
+  invalidSteps(): InvalidStepRef[] {
+    return this.invalidStepRefs.slice();
+  }
+  reindexInvalidSteps() {
+    this.refreshInvalidStepRefs();
+  }
+  /** Runtime/publish gate — never invents Variables or rewrites payloads. */
+  assertStepExecutable(stepId: string, version: number, flow?: Flow | null) {
+    const hit = this.invalidStepRefs.find(
+      (r) => r.stepId === stepId && r.version === version,
+    );
+    if (hit)
+      throw new Error(
+        `Invalid Step/Variable reference (${hit.reason}): ${hit.detail}`,
+      );
+    const f = flow ?? this.flowOwningStep(stepId);
+    const step = this.step(stepId, version);
+    const reason = this.variableRefIssue(step.payload, f);
+    if (reason)
+      throw new Error(`Invalid Step/Variable reference: ${reason.detail}`);
+  }
+  private flowOwningStep(stepId: string): Flow | null {
+    return (
+      this.flows().find((f) => f.steps.some((r) => r.id === stepId)) ?? null
+    );
+  }
+  private variableRefIssue(
+    payload: Payload,
+    flow: Flow | null,
+  ): Omit<InvalidStepRef, "flowId" | "stepId" | "version"> | null {
+    if (
+      !["TYPE_ONLY", "CLICK_AND_TYPE", "UPLOAD_FILE", "QUICK_TAG"].includes(
+        payload.action,
+      )
+    )
+      return null;
+    if (!payload.variableId) {
+      if (
+        ["TYPE_ONLY", "CLICK_AND_TYPE", "UPLOAD_FILE"].includes(payload.action) &&
+        (payload.action === "UPLOAD_FILE" ? payload.files : payload.text) ===
+          undefined
+      )
+        return {
+          reason: "legacy_incomplete",
+          detail: "Action thiếu Variable và không còn giá trị inline.",
+        };
+      return null;
+    }
+    if (!flow?.variables?.some((v) => v.id === payload.variableId))
+      return {
+        reason: "missing_variable",
+        variableId: payload.variableId,
+        detail: `Referenced variable is missing (${payload.variableId}).`,
+      };
+    return null;
+  }
+  private refreshInvalidStepRefs() {
+    const found: InvalidStepRef[] = [];
+    for (const f of this.flows()) {
+      const ids = new Set(f.steps.map((r) => r.id));
+      for (const s of this.steps().filter((s) => ids.has(s.id))) {
+        const issue = this.variableRefIssue(s.payload, f);
+        if (issue)
+          found.push({
+            flowId: f.id,
+            stepId: s.id,
+            version: s.version,
+            ...issue,
+          });
+      }
+      for (const o of this.overrides().filter((o) => ids.has(o.stepId))) {
+        for (const [i, p] of o.segment.entries()) {
+          const issue = this.variableRefIssue(p, f);
+          if (issue)
+            found.push({
+              flowId: f.id,
+              stepId: o.stepId,
+              version: o.baseVersion,
+              reason: "override_invalid",
+              variableId: issue.variableId,
+              detail: `Override ${o.id} segment[${i}]: ${issue.detail}`,
+            });
+        }
+      }
+    }
+    this.invalidStepRefs = found;
   }
   private importLegacy(payload: Payload, f: Flow): Payload {
     const p = { ...payload };
@@ -186,38 +285,90 @@ export class Store {
     delete p.files;
     return p;
   }
-  private migrate() {
+  /** One-time schema/legacy conversion. Skips defective rows without rewriting them. */
+  private migrateSchemaToV2() {
     this.db.exec("BEGIN IMMEDIATE");
     try {
-      for (const f of this.flows()) {
-        f.variables ??= [];
-        f.defaultPattern ??= { values: {} };
-        f.groups ??= [];
-        for (const s of this.steps().filter((s) =>
-          f.steps.some((r) => r.id === s.id),
-        )) {
-          s.payload = this.importLegacy(s.payload, f);
-          this.db
-            .prepare("UPDATE steps SET payload=? WHERE id=? AND version=?")
-            .run(JSON.stringify(s), s.id, s.version);
-        }
-        for (const o of this.overrides().filter((o) =>
-          f.steps.some((r) => r.id === o.stepId),
-        )) {
-          o.segment = o.segment.map((p) => this.importLegacy(p, f));
-          this.db
-            .prepare("UPDATE overrides SET payload=? WHERE id=?")
-            .run(JSON.stringify(o), o.id);
-        }
-        this.db
-          .prepare("UPDATE flows SET payload=? WHERE id=?")
-          .run(JSON.stringify(f), f.id);
-      }
+      this.applyLegacyConversion(true);
       this.db.exec("PRAGMA user_version=2; COMMIT");
     } catch (e) {
       this.db.exec("ROLLBACK");
       throw new Error(`Migration aborted; data preserved: ${String(e)}`);
     }
+  }
+  /** Convert only classic inline payloads (no variableId + has text/files). */
+  private convertSafeLegacyPayloads() {
+    this.db.exec("BEGIN IMMEDIATE");
+    try {
+      const changed = this.applyLegacyConversion(false);
+      if (changed) this.db.exec("COMMIT");
+      else this.db.exec("ROLLBACK");
+    } catch (e) {
+      this.db.exec("ROLLBACK");
+      throw new Error(`Legacy conversion aborted; data preserved: ${String(e)}`);
+    }
+  }
+  private applyLegacyConversion(forceAll: boolean): boolean {
+    let changed = false;
+    for (const f of this.flows()) {
+      f.variables ??= [];
+      f.defaultPattern ??= { values: {} };
+      f.groups ??= [];
+      let flowChanged = false;
+      for (const s of this.steps().filter((s) =>
+        f.steps.some((r) => r.id === s.id),
+      )) {
+        if (!forceAll && !this.isSafeInlineLegacy(s.payload)) continue;
+        try {
+          const next = this.importLegacy(s.payload, f);
+          if (JSON.stringify(next) === JSON.stringify(s.payload)) continue;
+          s.payload = next;
+          this.db
+            .prepare("UPDATE steps SET payload=? WHERE id=? AND version=?")
+            .run(JSON.stringify(s), s.id, s.version);
+          changed = true;
+          flowChanged = true;
+        } catch {
+          // Keep original payload for Creator repair; do not invent Variables.
+        }
+      }
+      for (const o of this.overrides().filter((o) =>
+        f.steps.some((r) => r.id === o.stepId),
+      )) {
+        if (!forceAll && !o.segment.some((p) => this.isSafeInlineLegacy(p)))
+          continue;
+        try {
+          const next = o.segment.map((p) =>
+            forceAll || this.isSafeInlineLegacy(p) ? this.importLegacy(p, f) : p,
+          );
+          if (JSON.stringify(next) === JSON.stringify(o.segment)) continue;
+          o.segment = next;
+          this.db
+            .prepare("UPDATE overrides SET payload=? WHERE id=?")
+            .run(JSON.stringify(o), o.id);
+          changed = true;
+          flowChanged = true;
+        } catch {
+          // Preserve override segment as stored.
+        }
+      }
+      if (flowChanged || forceAll) {
+        this.db
+          .prepare("UPDATE flows SET payload=? WHERE id=?")
+          .run(JSON.stringify(f), f.id);
+        changed = true;
+      }
+    }
+    return changed;
+  }
+  private isSafeInlineLegacy(payload: Payload): boolean {
+    if (!["TYPE_ONLY", "CLICK_AND_TYPE", "UPLOAD_FILE"].includes(payload.action))
+      return false;
+    if (payload.variableId) return false;
+    return (
+      (payload.action === "UPLOAD_FILE" ? payload.files : payload.text) !==
+      undefined
+    );
   }
   updateVariables(
     variables: Variable[],
@@ -250,6 +401,7 @@ export class Store {
     f.variables = variables;
     f.defaultPattern = { values };
     this.saveFlow(f);
+    this.refreshInvalidStepRefs();
   }
   organize(groups: StepGroup[], stepIds: string[]) {
     const f = this.flow();
@@ -346,6 +498,7 @@ export class Store {
         delete value.membership[id]; this.setSetting("scenarioOrganization", JSON.stringify(value));
       }
       this.db.exec("COMMIT");
+      this.refreshInvalidStepRefs();
     } catch (error) { this.db.exec("ROLLBACK"); throw error; }
   }
   steps(): Step[] {
@@ -398,6 +551,7 @@ export class Store {
       this.db.exec("ROLLBACK");
       throw e;
     }
+    this.refreshInvalidStepRefs();
     return s;
   }
   selectVersion(id: string, version: number) {
@@ -448,9 +602,15 @@ export class Store {
       this.db.exec("ROLLBACK");
       throw e;
     }
+    this.refreshInvalidStepRefs();
     return o;
   }
   close() {
+    try {
+      this.db.exec("PRAGMA wal_checkpoint(TRUNCATE)");
+    } catch {
+      /* best-effort unlock for Windows temp DB cleanup */
+    }
     this.db.close();
   }
 }

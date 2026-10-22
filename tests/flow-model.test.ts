@@ -180,11 +180,15 @@ test("legacy SQLite migration preserves every version, override, ROI, flow selec
     assert.equal(JSON.stringify(s.flow()), snapshot);
     s.close();
   } finally {
-    rmSync(dir, { recursive: true, force: true });
+    try {
+      rmSync(dir, { recursive: true, force: true });
+    } catch {
+      /* Windows may keep SQLite WAL handles briefly after close */
+    }
   }
 });
 
-test("unsafe migration rolls back all payload rewrites", () => {
+test("defective Step does not abort schema migration; good rows convert; bad payload preserved", () => {
   const dir = mkdtempSync(path.join(tmpdir(), "creator-rollback-")),
     file = path.join(dir, "creator.sqlite");
   try {
@@ -216,20 +220,20 @@ test("unsafe migration rolls back all payload rewrites", () => {
       }),
       f.id,
     );
+    // Force schema migration path again.
+    db.exec("PRAGMA user_version=0");
     db.close();
-    assert.throws(() => new Store(file), /Migration aborted/);
-    const check = new DatabaseSync(file);
-    assert.deepEqual(
-      JSON.parse(
-        (
-          check.prepare("SELECT payload FROM steps WHERE id='good'").get() as {
-            payload: string;
-          }
-        ).payload,
-      ),
-      good,
+    const opened = new Store(file);
+    const migratedGood = opened.step("good", 1);
+    assert.equal(migratedGood.payload.text, undefined);
+    assert.ok(migratedGood.payload.variableId);
+    assert.deepEqual(opened.step("bad", 1).payload, bad.payload);
+    assert.ok(
+      opened.invalidSteps().some((r) => r.stepId === "bad" && r.version === 1),
     );
-    check.close();
+    assert.throws(() => opened.assertStepExecutable("bad", 1), /Invalid Step/);
+    assert.doesNotThrow(() => opened.assertStepExecutable("good", 1));
+    opened.close();
   } finally {
     rmSync(dir, { recursive: true, force: true });
   }

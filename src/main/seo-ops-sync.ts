@@ -220,6 +220,17 @@ export function createSeoOpsSyncService(options: {
       videoDemo: resolved.demo,
     });
     const reasons = [...snap.incomplete_reasons];
+    if (
+      store
+        .invalidSteps()
+        .some(
+          (r) =>
+            r.flowId === flow.id &&
+            flow.steps.some((ref) => ref.id === r.stepId && ref.version === r.version),
+        )
+    ) {
+      reasons.push("invalid_variable_ref");
+    }
     if (!complete) {
       reasons.push(...missing.map((m) => `missing_asset:${m}`));
     }
@@ -439,14 +450,22 @@ export function createSeoOpsSyncService(options: {
     }
 
     const existing = store.flows().find((f) => f.id === scriptId);
+    // Preserve local Variable ids by key so historical Step versions stay bound.
+    const existingByKey = new Map(
+      (existing?.variables ?? []).map((v) => [v.key, v] as const),
+    );
     const variables: Variable[] = (Array.isArray(payload.variables) ? payload.variables : []).map(
       (v, i) => {
         const row = v as Record<string, unknown>;
+        const key = String(row.key ?? `var_${i}`);
+        const prior = existingByKey.get(key);
         return {
-          id: String(row.id ?? `var-${i}-${row.key}`),
-          key: String(row.key ?? `var_${i}`),
-          type: String(row.type ?? "text") as Variable["type"],
-          ...(row.description ? { description: String(row.description) } : {}),
+          id: String(row.id ?? prior?.id ?? `var-${i}-${key}`),
+          key,
+          type: String(row.type ?? prior?.type ?? "text") as Variable["type"],
+          ...(row.description || prior?.description
+            ? { description: String(row.description ?? prior?.description) }
+            : {}),
         };
       },
     );
@@ -577,6 +596,7 @@ export function createSeoOpsSyncService(options: {
       store.db.exec("ROLLBACK");
       throw e;
     }
+    store.reindexInvalidSteps();
 
     return {
       flowId: flow.id,

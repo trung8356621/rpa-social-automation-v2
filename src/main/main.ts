@@ -404,6 +404,7 @@ async function boot() {
     flows: store.flows(),
     steps: store.steps(),
     overrides: store.overrides(),
+    invalidSteps: store.invalidSteps(),
     url: browser.view.webContents.getURL(),
     zoom: browser.zoom,
     browserBounds: browser.bounds,

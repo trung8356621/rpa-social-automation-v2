@@ -129,9 +129,16 @@ export function ScenariosPage({ state, name, setName, locked, open, create, sess
             </div></details>}
           </div>
           {!group.collapsed && <div className="scenario-items">
-            {flows.map(flow => <div className="scenario-item" key={flow.id}>
+            {flows.map(flow => {
+              const invalid = (state?.invalidSteps ?? []).filter(r => r.flowId === flow.id);
+              return <div className="scenario-item" key={flow.id}>
               <button className="scenario-title" disabled={disabled} onClick={() => open(flow.id)}>{flow.name}</button>
               <small>{flow.steps.length} Step</small>
+              {invalid.length > 0 && (
+                <small className="hint" title={invalid.map(r => `${r.stepId.slice(0, 8)}@v${r.version}: ${r.detail}`).join("\n")}>
+                  Invalid Step/Variable reference
+                </small>
+              )}
               <small className="sync-badge" title={syncRows.find(r => r.flow_id === flow.id || r.script_id === flow.id)?.message}>
                 {syncBadge(syncRows, flow.id)}
               </small>
@@ -151,7 +158,8 @@ export function ScenariosPage({ state, name, setName, locked, open, create, sess
                 )}
                 <button disabled={disabled} onClick={() => show("scenario-delete", flow.id)}>Delete Scenario</button>
               </div></details>
-            </div>)}
+            </div>;
+            })}
             {!flows.length && <p className="page-empty">Chưa có Scenario trong nhóm.</p>}
           </div>}
         </section>;
