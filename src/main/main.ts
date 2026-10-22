@@ -48,6 +48,7 @@ import { DRAFT_KEYS } from "../shared/contracts.js";
 import type { Command, State, CaseResult, Step } from "../shared/contracts.js";
 import { buildScriptPublishBody, assertScriptPublishBody } from "../shared/script-release.js";
 import { attachVideoDemo, toScriptVideoDemo, assertNotScreenshot } from "../shared/video-demo.js";
+import { createSeoOpsTokenStore } from "./seo-ops-token-store.js";
 import { createHash } from "node:crypto";
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
@@ -107,6 +108,14 @@ async function boot() {
     runDir = path.join(dataPath, "runs");
   for (const dir of [assetDir, evidenceDir, runDir])
     await mkdir(dir, { recursive: true });
+  // RPA Admin session token — Electron safeStorage only; never SQLite plaintext.
+  const seoOpsTokenStore = createSeoOpsTokenStore(dataPath);
+  await seoOpsTokenStore.hydrate();
+  ipcMain.handle("seo-ops:token-get", () => seoOpsTokenStore.getToken());
+  ipcMain.handle("seo-ops:token-set", (_e, token: string | null) => {
+    seoOpsTokenStore.setToken(token ?? null);
+    return true;
+  });
   const store = new Store(path.join(dataPath, "creator.sqlite"));
   const browserSessions = new BrowserSessions(store);
   const scenarioGroups = new ScenarioGroups(store);
