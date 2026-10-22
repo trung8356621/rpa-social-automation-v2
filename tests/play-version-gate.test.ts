@@ -61,14 +61,17 @@ test("pinned invalid Match To version blocks Play; valid pin still executable", 
     assert.doesNotThrow(() => store.assertStepExecutable(good.id, 1, flow));
     assert.throws(
       () => store.assertStepExecutable(good.id, 2, flow),
-      /Match To cần OCR đã xác nhận/,
+      /Match To Top yêu cầu OCR confirmed|Match To cần OCR/,
     );
 
     // Pin broken version → flow-level Play All / Test Lab blocked.
     store.selectVersion(good.id, 2);
     const pinned = store.flow()!;
     assert.equal(pinned.steps.find((r) => r.id === good.id)?.version, 2);
-    assert.throws(() => store.assertFlowExecutable(pinned), /Match To cần OCR/);
+    assert.throws(
+      () => store.assertFlowExecutable(pinned),
+      /→ Step .* → v2|OCR confirmed/,
+    );
 
     // Pin valid version → flow executable again.
     store.selectVersion(good.id, 1);

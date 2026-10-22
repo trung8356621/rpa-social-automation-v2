@@ -755,15 +755,22 @@ function Creator() {
       throw error;
     }
   }
-  function openScenario(id: string) {
+  function openScenario(id: string, focus?: { stepId: string; version: number }) {
     if (workspaceLock.current || pendingNavigationRef.current || busy || shot || ocrLoading) return;
     const existing = tabsRef.current.find(tab => tab.kind === "creator" && tab.flowId === id);
-    if (existing?.id === activeTabId && creatorVisible) return;
+    if (existing?.id === activeTabId && creatorVisible && !focus) return;
     const tab = existing ?? { id: crypto.randomUUID(), kind: "creator" as const, flowId: id,
       sessionId: state?.activeBrowserSessionId, url: browserUrl.current || undefined };
     workspaceLock.current = true;
     void task(async () => {
-      try { await activateTab(tab); }
+      try {
+        await activateTab(tab);
+        if (focus) {
+          const snap = window.creator.readDraft("state", state).value as State;
+          const step = snap.steps.find(s => s.id === focus.stepId && s.version === focus.version);
+          if (step) await loadStep(step);
+        }
+      }
       finally { workspaceLock.current = false; }
     });
   }
@@ -1182,6 +1189,7 @@ function Creator() {
         update={updateWorkspace}
         invoke={invoke}
         authenticated={seoOpsAuthenticated}
+        onState={setState}
         sessionControl={<SessionSelector state={state} locked={navigationLocked || stepPlayback[activeStepId]?.status === "running"} select={selectSession} />} />}
       {shell && appPage === "browser-sessions" && <BrowserSessionsPage state={state} locked={navigationLocked}
         update={updateBrowserSessions} open={openSession} />}
@@ -1872,9 +1880,9 @@ function Creator() {
                       <summary>Version & Override</summary>
                       <div className="row">
                         {field(
-                          "Base version",
+                          "Viewing version",
                           <select
-                            aria-label="Base version"
+                            aria-label="Viewing version"
                             disabled={locked}
                             value={selected.version}
                             onChange={(e) => {
@@ -1884,16 +1892,41 @@ function Creator() {
                           >
                             {state?.steps
                               .filter((s) => s.id === selected.id)
-                              .map((s) => (
-                                <option key={s.version} value={s.version}>
-                                  v{s.version}
-                                </option>
-                              ))}
+                              .map((s) => {
+                                const pinned =
+                                  state.flow?.steps.find((r) => r.id === s.id)?.version ===
+                                  s.version;
+                                const invalid = (state.invalidSteps ?? []).some(
+                                  (r) => r.stepId === s.id && r.version === s.version,
+                                );
+                                return (
+                                  <option key={s.version} value={s.version}>
+                                    v{s.version}
+                                    {pinned ? " · pinned" : ""}
+                                    {invalid ? " · invalid" : ""}
+                                  </option>
+                                );
+                              })}
                           </select>,
+                        )}
+                        <p className="hint">
+                          Pinned version:{" "}
+                          <b>
+                            v
+                            {state?.flow?.steps.find((r) => r.id === selected.id)?.version ??
+                              "?"}
+                          </b>{" "}
+                          (Play All / Test Lab)
+                        </p>
+                        {state?.flow?.steps.find((r) => r.id === selected.id)?.version !==
+                          selected.version && (
+                          <small className="hint" role="status">
+                            Đang xem v{selected.version}; chưa phải version đã ghim — chọn version không tự pin.
+                          </small>
                         )}
                         <button
                           disabled={locked}
-                          title="Ghim version này cho Play All / Test Lab. Chỉ xem trong dropdown không đổi version chạy."
+                          title="Ghim version đang xem cho Play All / Test Lab."
                           onClick={() =>
                             void task(async () => {
                               setState(
@@ -1904,16 +1937,16 @@ function Creator() {
                                 }),
                               );
                               setMessage(
-                                `Flow ghim Base v${selected.version} cho Play All / Test Lab.`,
+                                `Đã pin v${selected.version} cho Play All / Test Lab.`,
                               );
                             })
                           }
                         >
-                          Ghim version
+                          Pin this version
                         </button>
                         {state?.flow?.steps.find((r) => r.id === selected.id)?.version ===
                           selected.version && (
-                          <small className="hint">Đang ghim cho Play All / Test Lab</small>
+                          <small className="hint">Viewing = Pinned</small>
                         )}
                         {(state?.invalidSteps ?? []).some(
                           (r) =>
@@ -1921,7 +1954,7 @@ function Creator() {
                             r.version === selected.version,
                         ) && (
                           <small className="hint" role="alert">
-                            Version này không hợp lệ — không chạy được cho đến khi sửa hoặc ghim version khác.
+                            Version đang xem không hợp lệ — pin version khác hoặc sửa trước khi chạy.
                           </small>
                         )}
                       </div>

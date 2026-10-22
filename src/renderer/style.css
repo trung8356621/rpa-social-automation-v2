@@ -1,6 +1,51 @@
 * {
   box-sizing: border-box;
 }
+.script-health {
+  margin: 16px 0 24px;
+  padding: 12px 14px;
+  border: 1px solid #334860;
+  border-radius: 8px;
+  background: #121c2c;
+}
+.script-health-heading {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 6px;
+}
+.script-health-scenario {
+  margin-top: 10px;
+  padding: 8px 0;
+  border-top: 1px solid #2a3a52;
+}
+.script-health-list {
+  list-style: none;
+  margin: 8px 0 0;
+  padding: 0;
+  display: grid;
+  gap: 10px;
+}
+.script-health-list li {
+  padding: 10px;
+  border: 1px solid #3a4c68;
+  border-radius: 6px;
+  background: #0c1524;
+}
+.script-health-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin: 8px 0;
+}
+.case-pinned-steps {
+  margin: 0 0 12px;
+  padding-left: 18px;
+}
+.case-pinned-steps li {
+  margin: 4px 0;
+}
 body {
   margin: 0;
   background: #101a2b;

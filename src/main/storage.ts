@@ -15,6 +15,12 @@ import type {
   InvalidStepRef,
 } from "../shared/contracts.js";
 import {
+  formatHumanStepError,
+  scanScriptHealth,
+  type ScriptHealthIssue,
+  type ScriptHealthReport,
+} from "../shared/script-health.js";
+import {
   validateZoom,
   validateRect,
   WEB_WIDTH,
@@ -168,28 +174,52 @@ export class Store {
   reindexInvalidSteps() {
     this.refreshInvalidStepRefs();
   }
+  /** Read-only audit of every Scenario Step version. Never writes SQLite. */
+  scanScriptHealth(): ScriptHealthReport {
+    return scanScriptHealth({
+      flows: this.flows(),
+      steps: this.steps(),
+      probe: (flow, step) => this.stepIssue(step.payload, flow),
+    });
+  }
+  private stepIssue(
+    payload: Payload,
+    flow: Flow | null,
+  ): ScriptHealthIssue | null {
+    const issue =
+      this.variableRefIssue(payload, flow) ?? this.payloadIssue(payload);
+    return issue
+      ? {
+          reasonCode: issue.reason,
+          detail: issue.detail,
+          variableId: issue.variableId,
+        }
+      : null;
+  }
   /** Runtime/publish gate — never invents Variables or rewrites payloads. */
   assertStepExecutable(stepId: string, version: number, flow?: Flow | null) {
-    const hit = this.invalidStepRefs.find(
-      (r) => r.stepId === stepId && r.version === version,
-    );
-    if (hit)
-      throw new Error(
-        hit.reason === "invalid_payload"
-          ? `Step không hợp lệ (v${version}): ${hit.detail}`
-          : `Invalid Step/Variable reference (${hit.reason}): ${hit.detail}`,
-      );
     const f = flow ?? this.flowOwningStep(stepId);
     const step = this.step(stepId, version);
-    const reason =
-      this.variableRefIssue(step.payload, f) ??
-      this.payloadIssue(step.payload);
-    if (reason)
-      throw new Error(
-        reason.reason === "invalid_payload"
-          ? `Step không hợp lệ (v${version}): ${reason.detail}`
-          : `Invalid Step/Variable reference: ${reason.detail}`,
-      );
+    const issue = this.stepIssue(step.payload, f);
+    if (!issue) return;
+    const order = (f?.steps.findIndex((r) => r.id === stepId) ?? -1) + 1;
+    const formatted = formatHumanStepError({
+      scenarioName: f?.name ?? "Scenario",
+      flowId: f?.id,
+      stepId,
+      order: order > 0 ? order : 0,
+      stepName: step.name,
+      version,
+      issue,
+      payload: step.payload,
+    });
+    const error = new Error(
+      `${formatted.headline}\n${formatted.reason}\nGhim version hợp lệ trong Creator trước khi chạy.`,
+    );
+    (error as Error & { technical?: string; healthPath?: string }).technical =
+      formatted.technical;
+    (error as Error & { healthPath?: string }).healthPath = formatted.headline;
+    throw error;
   }
   /** Preflight every pinned Base version on a flow before browser/Play All. */
   assertFlowExecutable(flow: Flow) {
@@ -583,11 +613,12 @@ export class Store {
   }
   selectVersion(id: string, version: number) {
     this.step(id, version);
-    const f = this.flow();
+    const f = this.flows().find((flow) => flow.steps.some((s) => s.id === id));
     const ref = f?.steps.find((s) => s.id === id);
     if (!f || !ref) throw new Error("Step không thuộc flow.");
     ref.version = version;
     this.saveFlow(f);
+    this.refreshInvalidStepRefs();
   }
   overrides(): Override[] {
     return (

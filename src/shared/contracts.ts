@@ -344,6 +344,7 @@ export type Command =
   | { type: "crop"; captureId: string; roi: Rect }
   | { type: "saveStep"; id?: string; name: string; payload: Payload }
   | { type: "selectVersion"; id: string; version: number }
+  | { type: "scriptHealthScan" }
   | {
       type: "saveOverride";
       stepId: string;

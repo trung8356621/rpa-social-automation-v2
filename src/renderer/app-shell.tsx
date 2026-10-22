@@ -3,6 +3,7 @@ import { UiPopover } from "./ui-popover";
 import type { AppPage, Command, ScenarioOrganization, State } from "../shared/contracts";
 import type { ScriptSyncRow } from "../shared/sync-status";
 import { SeoOpsSyncControls, syncBadge } from "./seo-ops-panel";
+import { ScriptHealthPanel } from "./script-health-panel";
 
 /** Primary Admin nav only — Variations / Widget / Workflow / Builds remain routable legacy, not listed. */
 const menus = [
@@ -34,12 +35,13 @@ export function AppNavigation({ page, collapsed, locked, navigate, toggle }: {
   </div>;
 }
 
-export function ScenariosPage({ state, name, setName, locked, open, create, sessionControl, update, invoke, authenticated }: {
+export function ScenariosPage({ state, name, setName, locked, open, create, sessionControl, update, invoke, authenticated, onState }: {
   state?: State; name: string; setName: (name: string) => void; locked: boolean;
-  open: (id: string) => void; create: () => void;
+  open: (id: string, focus?: { stepId: string; version: number }) => void; create: () => void;
   sessionControl?: React.ReactNode; update: (command: Command) => Promise<void>;
   invoke?: <T>(command: Command) => Promise<T>;
   authenticated?: boolean;
+  onState?: (state: State) => void;
 }) {
   const [creating, setCreating] = useState(false);
   const [dialog, setDialog] = useState<{ kind: "create" | "rename" | "delete" | "move" | "scenario-delete"; id?: string }>();
@@ -130,13 +132,14 @@ export function ScenariosPage({ state, name, setName, locked, open, create, sess
           </div>
           {!group.collapsed && <div className="scenario-items">
             {flows.map(flow => {
-              const invalid = (state?.invalidSteps ?? []).filter(r => r.flowId === flow.id);
+              const invalidPinned = flow.steps.filter(ref =>
+                (state?.invalidSteps ?? []).some(r => r.stepId === ref.id && r.version === ref.version));
               return <div className="scenario-item" key={flow.id}>
               <button className="scenario-title" disabled={disabled} onClick={() => open(flow.id)}>{flow.name}</button>
               <small>{flow.steps.length} Step</small>
-              {invalid.length > 0 && (
-                <small className="hint" title={invalid.map(r => `${r.stepId.slice(0, 8)}@v${r.version}: ${r.detail}`).join("\n")}>
-                  Invalid Step/Variable reference
+              {invalidPinned.length > 0 && (
+                <small className="hint" title={`${invalidPinned.length} pinned version lỗi — mở Script Health Check`}>
+                  {invalidPinned.length} Step cần sửa
                 </small>
               )}
               <small className="sync-badge" title={syncRows.find(r => r.flow_id === flow.id || r.script_id === flow.id)?.message}>
@@ -165,6 +168,15 @@ export function ScenariosPage({ state, name, setName, locked, open, create, sess
         </section>;
       })}
     </div>
+    {invoke && (
+      <ScriptHealthPanel
+        state={state}
+        locked={disabled}
+        invoke={invoke}
+        open={open}
+        onPinned={(next) => onState?.(next)}
+      />
+    )}
     {syncFlowId && invoke && (
       <UiPopover variant="modal" label="Sync SEO-OPS" className="unsaved-confirm" close={() => { if (!working) setSyncFlowId(undefined); }}>
         <div className="popover-heading">

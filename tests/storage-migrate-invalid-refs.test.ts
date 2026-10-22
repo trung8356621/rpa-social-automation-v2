@@ -112,7 +112,11 @@ test("missing Variable ref: startup keeps data, no fake Variable, invalid not ex
     );
     store.close();
   } finally {
-    rmSync(dir, { recursive: true, force: true });
+    try {
+      rmSync(dir, { recursive: true, force: true });
+    } catch {
+      /* Windows WAL */
+    }
   }
 });
 

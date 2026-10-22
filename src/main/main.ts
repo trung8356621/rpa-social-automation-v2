@@ -523,9 +523,9 @@ async function boot() {
         } catch (error) {
           currentStep = step;
           const message = error instanceof Error ? error.message : String(error);
-          throw new Error(
-            `${message} Đổi version trong Creator (Ghim version). Xem trong editor không đổi version Test Lab chạy.`,
-          );
+          throw error instanceof Error
+            ? error
+            : new Error(String(error));
         }
       }
       batchId = runtime.startPlayAllLog(flow);
@@ -595,7 +595,7 @@ async function boot() {
           : "Đã gửi thao tác; cần kiểm tra website. Chưa xác nhận hoàn tất nghiệp vụ." });
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
-      Object.assign(outcome, { status: /variable|Default Pattern|type mismatch|Viewport|Zoom|không thuộc flow|không hợp lệ|Invalid Step|Match To|Ghim version/i.test(message) || !contextReady ? "BLOCKED" : "ERROR",
+      Object.assign(outcome, { status: /variable|Default Pattern|type mismatch|Viewport|Zoom|không thuộc flow|không hợp lệ|Invalid Step|Match To|Ghim version|orphan Variable|thiếu OCR|→ Step /i.test(message) || !contextReady ? "BLOCKED" : "ERROR",
         message, stepId: currentStep?.id, stepName: currentStep?.name, version: currentStep?.version });
       if (currentStep) {
         const entry = outcome.steps?.find(entry => entry.stepId === currentStep!.id);
@@ -1191,6 +1191,8 @@ async function boot() {
         if (flowAfterSave) seoOpsAutoSync.request({ reason: "save", flowId: flowAfterSave.id });
         return state();
       }
+      case "scriptHealthScan":
+        return store.scanScriptHealth();
       case "selectVersion": {
         isIdle();
         store.selectVersion(command.id, command.version);

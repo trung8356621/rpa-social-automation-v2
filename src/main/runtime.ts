@@ -143,7 +143,7 @@ export class Runtime {
       status = results.find(result => !result.ok)?.status ?? results.at(-1)?.status ?? "FAILED";
       return results;
     } catch (error) {
-      status = /Viewport|Zoom|variable|không thuộc flow|không hợp lệ|Invalid Step|Match To/i.test(error instanceof Error ? error.message : String(error)) ? "BLOCKED" : "FAILED";
+      status = /Viewport|Zoom|variable|không thuộc flow|không hợp lệ|Invalid Step|Match To|orphan Variable|thiếu OCR|Ghim version|→ Step /i.test(error instanceof Error ? error.message : String(error)) ? "BLOCKED" : "FAILED";
       throw error;
     } finally {
       logTestBoundary(this.runDir, "END", { runId: scope.runId, batchRunId: scope.batchRunId, label, status, ocrPasses: scope.ocrPasses, scrolls: scope.scrolls });
