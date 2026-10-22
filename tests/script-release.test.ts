@@ -63,7 +63,9 @@ describe("script-release", () => {
     assert.equal(body.kind, "script");
     assert.equal(body.manifest.script_id, "facebook-group-post");
     assert.equal(body.manifest.variables.length, 2);
+    assert.equal(body.manifest.variables[0].id, "v1");
     assert.equal(body.manifest.steps[0].variable_key, "text");
+    assert.equal(body.manifest.steps[0].variableId, "v1");
     assertScriptPublishBody(body);
   });
 

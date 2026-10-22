@@ -1,12 +1,12 @@
 import { createHash } from "node:crypto";
 import { access, readFile } from "node:fs/promises";
 import path from "node:path";
-import type { Flow, Step, Variable } from "../shared/contracts.js";
+import type { Flow, Step } from "../shared/contracts.js";
 import {
   buildScriptCatalogSnapshot,
-  normalizeImportedVisualTarget,
   type ScriptVideoDemo,
 } from "../shared/script-release.js";
+import { materializeScriptRelease } from "../shared/script-materialize.js";
 import {
   createHttpSeoOpsAuthClient,
   assertRpaAdminRole,
@@ -449,137 +449,55 @@ export function createSeoOpsSyncService(options: {
       };
     }
 
-    const existing = store.flows().find((f) => f.id === scriptId);
-    // Preserve local Variable ids by key so historical Step versions stay bound.
-    const existingByKey = new Map(
-      (existing?.variables ?? []).map((v) => [v.key, v] as const),
-    );
-    const variables: Variable[] = (Array.isArray(payload.variables) ? payload.variables : []).map(
-      (v, i) => {
-        const row = v as Record<string, unknown>;
-        const key = String(row.key ?? `var_${i}`);
-        const prior = existingByKey.get(key);
-        return {
-          id: String(row.id ?? prior?.id ?? `var-${i}-${key}`),
-          key,
-          type: String(row.type ?? prior?.type ?? "text") as Variable["type"],
-          ...(row.description || prior?.description
-            ? { description: String(row.description ?? prior?.description) }
-            : {}),
-        };
+    const existing = store.flows().find((f) => f.id === scriptId) ?? null;
+    const existingSteps = store
+      .steps()
+      .filter((s) => (existing?.steps ?? []).some((ref) => ref.id === s.id) ||
+        // Also load any prior versions of packaged step ids for conflict checks.
+        (Array.isArray(payload.steps) &&
+          payload.steps.some(
+            (raw) =>
+              raw &&
+              typeof raw === "object" &&
+              String((raw as { id?: unknown }).id ?? "") === s.id,
+          )));
+
+    const materialized = materializeScriptRelease({
+      release: {
+        ...release,
+        name: payload.name,
+        manifest: {
+          ...((release.manifest as object) ?? {}),
+          script_id: scriptId,
+          variables: payload.variables,
+          steps: payload.steps,
+          default_pattern: payload.default_pattern,
+          groups: payload.groups,
+          zoom: payload.zoom,
+        },
       },
-    );
-
-    const stepRows = Array.isArray(payload.steps) ? payload.steps : [];
-    const prepared: Step[] = [];
-    for (const raw of stepRows) {
-      const s = raw as Record<string, unknown>;
-      const actionRaw = String(s.action ?? "SLEEP");
-      const action = (
-        [
-          "CLICK_TARGET",
-          "CLICK_AND_TYPE",
-          "UPLOAD_FILE",
-          "QUICK_TAG",
-          "TYPE_ONLY",
-          "WAIT_VERIFY",
-          "SCROLL",
-          "SLEEP",
-        ].includes(actionRaw)
-          ? actionRaw
-          : "SLEEP"
-      ) as Step["payload"]["action"];
-      const variableKey = s.variable_key ? String(s.variable_key) : undefined;
-      const variableId = variableKey
-        ? variables.find((v) => v.key === variableKey)?.id
-        : undefined;
-      const targetRaw =
-        s.target && typeof s.target === "object"
-          ? (s.target as Record<string, unknown>)
-          : undefined;
-
-      let payloadStep: Step["payload"];
-      if (targetRaw) {
-        const normalized = normalizeImportedVisualTarget(targetRaw);
-        if (!normalized.ok) {
-          return {
-            flowId: scriptId,
-            incomplete: true,
-            ready_to_execute: false,
-            reason: normalized.code,
-          };
-        }
-        payloadStep = {
-          action,
-          ...(variableId ? { variableId } : {}),
-          ...(typeof s.method === "string" ? { method: s.method as Step["payload"]["method"] } : {}),
-          ...(typeof s.threshold === "number" ? { threshold: s.threshold } : {}),
-          ...(typeof s.timeoutMs === "number" ? { timeoutMs: s.timeoutMs } : {}),
-          ...(typeof s.inputMethod === "string"
-            ? { inputMethod: s.inputMethod as Step["payload"]["inputMethod"] }
-            : {}),
-          ...(typeof s.deltaY === "number" ? { deltaY: s.deltaY } : {}),
-          ...(typeof s.quickTagRows === "number" ? { quickTagRows: s.quickTagRows } : {}),
-          target: normalized.target,
-        };
-      } else {
-        payloadStep = {
-          action,
-          ...(variableId ? { variableId } : {}),
-          ...(typeof s.timeoutMs === "number" ? { timeoutMs: s.timeoutMs } : {}),
-          ...(typeof s.deltaY === "number" ? { deltaY: s.deltaY } : {}),
-        };
-      }
-
-      try {
-        validatePayload(payloadStep);
-      } catch {
-        return {
-          flowId: scriptId,
-          incomplete: true,
-          ready_to_execute: false,
-          reason: "invalid_payload",
-        };
-      }
-
-      const stepId = String(s.id ?? cryptoRandom());
-      const version = Number(s.version ?? 1) || 1;
-      prepared.push({
-        id: stepId,
-        version,
-        name: String(s.name ?? action),
-        payload: payloadStep,
-        createdAt: new Date().toISOString(),
-      });
+      existing,
+      existingSteps,
+      validatePayload,
+    });
+    if (!materialized.ok) {
+      return {
+        flowId: scriptId,
+        incomplete: true,
+        ready_to_execute: false,
+        reason: materialized.reason,
+      };
     }
-
-    // Refuse to overwrite a locally valid step/version with anything that failed above.
-    // All steps already validated — persist atomically after checks.
-    let flow: Flow = existing
-      ? {
-          ...existing,
-          name: String(payload.name || existing.name),
-          variables,
-        }
-      : {
-          id: scriptId,
-          name: String(payload.name || scriptId),
-          zoom: 1,
-          steps: [],
-          groups: [],
-          variables,
-          defaultPattern: { values: {} },
-        };
 
     store.db.exec("BEGIN");
     try {
-      for (const step of prepared) {
-        store.db.prepare("DELETE FROM steps WHERE id=? AND version=?").run(step.id, step.version);
+      // Never DELETE/overwrite an existing step@version — only insert missing ones.
+      for (const step of materialized.inserts) {
         store.db
           .prepare("INSERT INTO steps VALUES(?,?,?)")
           .run(step.id, step.version, JSON.stringify(step));
       }
-      flow.steps = prepared.map((s) => ({ id: s.id, version: s.version }));
+      const flow: Flow = materialized.flow;
       store.saveFlow(flow);
       store.setSetting("currentFlow", flow.id);
       store.setSetting(`seoOpsVersion:${flow.id}`, imported.version);
@@ -599,14 +517,10 @@ export function createSeoOpsSyncService(options: {
     store.reindexInvalidSteps();
 
     return {
-      flowId: flow.id,
+      flowId: materialized.flow.id,
       incomplete: false,
       ready_to_execute: true,
     };
-  }
-
-  function cryptoRandom(): string {
-    return createHash("sha1").update(String(Date.now()) + Math.random()).digest("hex").slice(0, 32);
   }
 
   async function syncAll(options?: { flowId?: string; version?: string }) {
@@ -739,12 +653,17 @@ export function createSeoOpsSyncService(options: {
         }
         const materialized = await materializeImport(pulled.release);
         const invalid = materialized.reason === "invalid_payload";
+        const conflict = materialized.reason === "version_conflict";
         const message = !materialized.incomplete
           ? "imported"
           : invalid
             ? "invalid_payload — remote release thiếu OCR/Match To; chờ publish lại từ RPA Admin"
-            : materialized.reason === "incomplete_assets"
+            : conflict
+              ? "version_conflict — local step version differs; refuse overwrite"
+              : materialized.reason === "incomplete_assets"
               ? "incomplete_assets — missing ROI files; local steps not overwritten"
+              : materialized.reason === "missing_variable_id"
+                ? "missing_variable_id — remote release thiếu Variable id; chờ republish"
               : `incomplete — ${materialized.reason || "rejected"}`;
         results.push({
           script_id: row.script_id,

@@ -136,6 +136,17 @@ export function importScriptRelease(release: Record<string, unknown>): ImportScr
   if (!scriptId) incomplete_reasons.push("missing_script_id");
   if (steps.length === 0) incomplete_reasons.push("steps_required");
   if (!assetsComplete) incomplete_reasons.push("incomplete_assets");
+  for (const raw of variables) {
+    if (!raw || typeof raw !== "object") {
+      incomplete_reasons.push("invalid_payload");
+      break;
+    }
+    const v = raw as Record<string, unknown>;
+    if (typeof v.id !== "string" || !v.id.trim() || typeof v.key !== "string" || !v.key.trim()) {
+      incomplete_reasons.push("missing_variable_id");
+      break;
+    }
+  }
   for (const raw of steps) {
     if (!raw || typeof raw !== "object") continue;
     const target = (raw as { target?: unknown }).target;
@@ -160,6 +171,9 @@ export function importScriptRelease(release: Record<string, unknown>): ImportScr
         runtime_requirements: manifest.runtime_requirements ?? {},
         content_digest: String(release.content_digest ?? ""),
         source: "seo_ops_pull",
+        zoom: manifest.zoom,
+        default_pattern: manifest.default_pattern ?? manifest.defaultPattern,
+        groups: manifest.groups,
       };
 
   return {

@@ -123,7 +123,7 @@ test("import marks incomplete when assets missing; usable when complete", () => 
     content_digest: "d".repeat(64),
     manifest: {
       script_id: "s1",
-      variables: [{ key: "t", type: "text" }],
+      variables: [{ id: "v-t", key: "t", type: "text" }],
       steps: [{ id: "1", action: "CLICK_TARGET" }],
       assets: [{ path: "a.png", sha256: "a".repeat(64), kind: "roi" }],
     },

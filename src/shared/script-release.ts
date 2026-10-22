@@ -4,6 +4,8 @@ import { MISSING_DEMO_REASON } from "./video-demo-policy.js";
 
 /** SEO-OPS Social Automation Script Registry publish body (kind=script). */
 export type ScriptVariable = {
+  /** Stable Creator Variable id — required for Default Pattern + Step bindings. */
+  id: string;
   key: string;
   type: Variable["type"];
   description?: string;
@@ -31,6 +33,10 @@ export type ScriptReleaseManifest = {
   runtime_requirements: { runner_min: string };
   assets: Array<{ path: string; sha256: string; kind: string }>;
   video_demo?: ScriptVideoDemo;
+  /** Default Pattern values keyed by Variable id (not key). */
+  default_pattern?: { values: Record<string, string | string[] | number> };
+  zoom?: number;
+  groups?: Array<Record<string, unknown>>;
 };
 
 export type ScriptPublishBody = {
@@ -86,8 +92,9 @@ function packageKeyFor(flow: Flow, explicit?: string): string {
 function mapStepPayloads(
   flow: Flow,
   steps: Step[],
-): { stepPayloads: Array<Record<string, unknown>>; missing: string[] } {
+): { stepPayloads: Array<Record<string, unknown>>; missing: string[]; invalid: string[] } {
   const missing: string[] = [];
+  const invalid: string[] = [];
   const stepPayloads: Array<Record<string, unknown>> = [];
   for (const ref of flow.steps) {
     const step = steps.find((s) => s.id === ref.id && s.version === ref.version);
@@ -97,11 +104,25 @@ function mapStepPayloads(
     }
     const variable = flow.variables?.find((v) => v.id === step.payload.variableId);
     const p = step.payload;
+    if (p.target && matchToRequiresMissingOcr(p.target as unknown as Record<string, unknown>)) {
+      invalid.push(`${step.id}@${step.version}:matchTo_without_ocr`);
+    }
+    const target = p.target
+      ? {
+          asset: p.target.asset,
+          roi: p.target.roi,
+          ...(p.target.matchTo !== undefined ? { matchTo: p.target.matchTo } : {}),
+          ...(p.target.environment ? { environment: p.target.environment } : {}),
+          ...(p.target.ocr ? { ocr: p.target.ocr } : {}),
+        }
+      : undefined;
     stepPayloads.push({
       id: step.id,
       version: step.version,
       name: step.name,
       action: p.action,
+      // Prefer stable id; keep variable_key for older SEO-OPS readers.
+      ...(p.variableId ? { variableId: p.variableId } : {}),
       ...(variable ? { variable_key: variable.key } : {}),
       ...(p.method !== undefined ? { method: p.method } : {}),
       ...(p.threshold !== undefined ? { threshold: p.threshold } : {}),
@@ -109,20 +130,12 @@ function mapStepPayloads(
       ...(p.inputMethod !== undefined ? { inputMethod: p.inputMethod } : {}),
       ...(p.deltaY !== undefined ? { deltaY: p.deltaY } : {}),
       ...(p.quickTagRows !== undefined ? { quickTagRows: p.quickTagRows } : {}),
-      ...(p.target
-        ? {
-            target: {
-              matchTo: p.target.matchTo,
-              environment: p.target.environment,
-              asset: p.target.asset,
-              roi: p.target.roi,
-              ...(p.target.ocr ? { ocr: p.target.ocr } : {}),
-            },
-          }
-        : {}),
+      ...(p.text !== undefined ? { text: p.text } : {}),
+      ...(p.files !== undefined ? { files: p.files } : {}),
+      ...(target ? { target } : {}),
     });
   }
-  return { stepPayloads, missing };
+  return { stepPayloads, missing, invalid };
 }
 
 export type NormalizeImportedTargetResult =
@@ -171,6 +184,7 @@ export function normalizeImportedVisualTarget(
     };
   }
 
+  const hasOcrField = Object.prototype.hasOwnProperty.call(targetRaw, "ocr");
   const ocrRaw =
     targetRaw.ocr && typeof targetRaw.ocr === "object"
       ? (targetRaw.ocr as Record<string, unknown>)
@@ -179,26 +193,39 @@ export function normalizeImportedVisualTarget(
     ocrRaw?.bbox && typeof ocrRaw.bbox === "object"
       ? (ocrRaw.bbox as Record<string, unknown>)
       : undefined;
-  const ocr =
-    ocrRaw?.confirmed === true &&
+  const ocrValid =
+    !!ocrRaw &&
+    ocrRaw.confirmed === true &&
     ocrRaw.language === "vie+eng" &&
     (ocrRaw.kind === "line" || ocrRaw.kind === "word") &&
     typeof ocrRaw.text === "string" &&
-    bboxRaw
-      ? ({
-          confirmed: true as const,
-          language: "vie+eng" as const,
-          kind: ocrRaw.kind,
-          text: ocrRaw.text,
-          confidence: Number(ocrRaw.confidence),
-          bbox: {
-            x: Number(bboxRaw.x),
-            y: Number(bboxRaw.y),
-            width: Number(bboxRaw.width),
-            height: Number(bboxRaw.height),
-          },
-        } satisfies NonNullable<VisualTarget["ocr"]>)
-      : undefined;
+    !!bboxRaw &&
+    [bboxRaw.x, bboxRaw.y, bboxRaw.width, bboxRaw.height, ocrRaw.confidence].every((n) =>
+      Number.isFinite(Number(n)),
+    );
+  // Present-but-invalid OCR must reject — never silently drop execution fields.
+  if (hasOcrField && targetRaw.ocr != null && !ocrValid) {
+    return {
+      ok: false,
+      code: "invalid_payload",
+      message: "OCR present but invalid; refuse partial target",
+    };
+  }
+  const ocr = ocrValid
+    ? ({
+        confirmed: true as const,
+        language: "vie+eng" as const,
+        kind: ocrRaw!.kind as "line" | "word",
+        text: String(ocrRaw!.text),
+        confidence: Number(ocrRaw!.confidence),
+        bbox: {
+          x: Number(bboxRaw!.x),
+          y: Number(bboxRaw!.y),
+          width: Number(bboxRaw!.width),
+          height: Number(bboxRaw!.height),
+        },
+      } satisfies NonNullable<VisualTarget["ocr"]>)
+    : undefined;
 
   const matchRaw = targetRaw.matchTo;
   const matchTo =
@@ -244,11 +271,18 @@ function assembleBody(
 ): ScriptPublishBody {
   const runnerMin = input.runnerMin ?? "2.0.0";
   const packageKey = packageKeyFor(input.flow, input.packageKey);
-  const variables: ScriptVariable[] = (input.flow.variables ?? []).map((v) => ({
-    key: v.key,
-    type: v.type,
-    ...(v.description ? { description: v.description } : {}),
-  }));
+  const variables: ScriptVariable[] = (input.flow.variables ?? []).map((v) => {
+    if (!v.id || !v.key) throw new Error("SCRIPT_EXPORT: variable id/key required");
+    return {
+      id: v.id,
+      key: v.key,
+      type: v.type,
+      ...(v.description ? { description: v.description } : {}),
+    };
+  });
+  const defaultPattern = input.flow.defaultPattern?.values
+    ? { values: { ...input.flow.defaultPattern.values } }
+    : undefined;
   const manifest: ScriptReleaseManifest = {
     script_id: input.flow.id,
     variables,
@@ -261,6 +295,11 @@ function assembleBody(
     steps: stepPayloads,
     runtime_requirements: { runner_min: runnerMin },
     assets: input.assets ?? [],
+    zoom: input.flow.zoom,
+    ...(defaultPattern ? { default_pattern: defaultPattern } : {}),
+    ...(input.flow.groups?.length
+      ? { groups: input.flow.groups.map((g) => structuredClone(g)) }
+      : {}),
     ...(input.videoDemo ? { video_demo: input.videoDemo } : {}),
   };
   if ("script" in manifest || "code" in manifest) {
@@ -299,8 +338,9 @@ export function buildScriptCatalogSnapshot(input: ScriptExportInput): ScriptCata
       .replace(/^\.+|\.+$/g, "") || "invalid.script";
   }
 
-  const { stepPayloads, missing } = mapStepPayloads(input.flow, input.steps);
+  const { stepPayloads, missing, invalid } = mapStepPayloads(input.flow, input.steps);
   for (const m of missing) reasons.push(`missing_step:${m}`);
+  for (const inv of invalid) reasons.push(`invalid_step:${inv}`);
   if (stepPayloads.length === 0) reasons.push("steps_required");
   if (!input.videoDemo) reasons.push(MISSING_DEMO_REASON);
 
@@ -355,9 +395,12 @@ export function buildScriptCatalogSnapshot(input: ScriptExportInput): ScriptCata
 export function buildScriptPublishBody(input: ScriptExportInput): ScriptPublishBody {
   const { flow, steps, version } = input;
   if (!SEMVER.test(version)) throw new Error("SCRIPT_EXPORT: invalid version");
-  const { stepPayloads, missing } = mapStepPayloads(flow, steps);
+  const { stepPayloads, missing, invalid } = mapStepPayloads(flow, steps);
   if (missing.length) {
     throw new Error(`SCRIPT_EXPORT: missing step ${missing[0]}`);
+  }
+  if (invalid.length) {
+    throw new Error(`SCRIPT_EXPORT: ${invalid[0]}`);
   }
   if (stepPayloads.length === 0) throw new Error("SCRIPT_EXPORT: steps required");
   return assembleBody(input, stepPayloads);

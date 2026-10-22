@@ -138,7 +138,7 @@ test("sync import preserves Variable id by key; Match To without OCR stays inval
     content_digest: "a".repeat(64),
     manifest: {
       script_id: "x",
-      variables: [{ key: "legacy_3", type: "text" }],
+      variables: [{ id: "f0087a5f-d0ed-47c3-8ecb-6b452d6b6c69", key: "legacy_3", type: "text" }],
       steps: [
         {
           id: "s1",
