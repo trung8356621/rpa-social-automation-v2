@@ -1,0 +1,106 @@
+{
+  "path": ".local/creator/targets/884bfc4c-ba34-4b85-a642-5d76d1f7fd74.png",
+  "width": 603,
+  "height": 52,
+  "channels": 3,
+  "sizeBytes": 1656,
+  "channelsMean": [
+    {
+      "mean": 242.18296338818726,
+      "min": 101,
+      "max": 255
+    },
+    {
+      "mean": 243.70500063783646,
+      "min": 104,
+      "max": 255
+    },
+    {
+      "mean": 245.97461410894246,
+      "min": 108,
+      "max": 255
+    }
+  ],
+  "ocr": {
+    "rawText": "Bạn viết gì đi...",
+    "confidence": 95,
+    "segmentCount": 5,
+    "lines": [
+      {
+        "id": "0",
+        "text": "Bạn viết gì đi...",
+        "bbox": {
+          "x": 13,
+          "y": 21,
+          "width": 107,
+          "height": 18
+        },
+        "confidence": 95,
+        "kind": "line"
+      }
+    ],
+    "words": [
+      {
+        "id": "1",
+        "text": "Bạn",
+        "bbox": {
+          "x": 13,
+          "y": 22,
+          "width": 26,
+          "height": 16
+        },
+        "confidence": 96,
+        "kind": "word"
+      },
+      {
+        "id": "2",
+        "text": "viết",
+        "bbox": {
+          "x": 44,
+          "y": 21,
+          "width": 28,
+          "height": 14
+        },
+        "confidence": 95,
+        "kind": "word"
+      },
+      {
+        "id": "3",
+        "text": "gì",
+        "bbox": {
+          "x": 76,
+          "y": 21,
+          "width": 13,
+          "height": 18
+        },
+        "confidence": 96,
+        "kind": "word"
+      },
+      {
+        "id": "4",
+        "text": "đi...",
+        "bbox": {
+          "x": 95,
+          "y": 21,
+          "width": 25,
+          "height": 14
+        },
+        "confidence": 95,
+        "kind": "word"
+      }
+    ],
+    "matchBan": [
+      {
+        "text": "Bạn viết gì đi...",
+        "confidence": 95,
+        "bbox": {
+          "x": 13,
+          "y": 21,
+          "width": 107,
+          "height": 18
+        }
+      }
+    ],
+    "normalizedRaw": "bạn viết gì đi"
+  }
+}

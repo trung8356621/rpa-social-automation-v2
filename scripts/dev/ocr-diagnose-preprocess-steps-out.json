@@ -1,0 +1,27 @@
+[
+  {
+    "name": "raw_2x",
+    "text": "Bạn viết gì đi...",
+    "confidence": 95
+  },
+  {
+    "name": "flatten_2x",
+    "text": "Bạn viết gì đi...",
+    "confidence": 95
+  },
+  {
+    "name": "current",
+    "text": "",
+    "confidence": 0
+  },
+  {
+    "name": "no_flatten",
+    "text": "",
+    "confidence": 0
+  },
+  {
+    "name": "current_plus_linear",
+    "text": "Bạn viết gì di...",
+    "confidence": 95
+  }
+]

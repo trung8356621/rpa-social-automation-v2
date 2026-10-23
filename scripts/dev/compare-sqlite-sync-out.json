@@ -1,0 +1,1956 @@
+{
+  "flows": [
+    {
+      "id": "e7c3f6d4-6a46-4ff8-9a70-f029f9b0c111",
+      "name": "Facebook draft POC",
+      "laptopFound": true,
+      "pinDiffs": [
+        {
+          "stepId": "030160d7-4630-4c3a-aafe-8dd91378b468",
+          "desktop": 12,
+          "laptop": 11
+        }
+      ],
+      "stepDiffs": [
+        {
+          "stepId": "030160d7-4630-4c3a-aafe-8dd91378b468",
+          "desktopPinned": 12,
+          "laptopPinned": 11,
+          "desktopVersions": [
+            1,
+            2,
+            3,
+            4,
+            5,
+            6,
+            7,
+            8,
+            9,
+            10,
+            11,
+            12
+          ],
+          "laptopVersions": [
+            1,
+            2,
+            3,
+            4,
+            5,
+            6,
+            7,
+            8,
+            9,
+            10,
+            11,
+            12
+          ],
+          "pinFieldDiffs": [
+            {
+              "field": "ocr.text",
+              "desktop": "Bạn viết gì đi...",
+              "laptop": "@ Bạn viết gì đi..."
+            }
+          ],
+          "sameVersionDiffs": [
+            {
+              "field": "method",
+              "desktop": "auto",
+              "laptop": null
+            },
+            {
+              "field": "threshold",
+              "desktop": 0.96,
+              "laptop": null
+            },
+            {
+              "field": "timeoutMs",
+              "desktop": 3000,
+              "laptop": null
+            },
+            {
+              "field": "ocr",
+              "desktop": {
+                "confirmed": true,
+                "text": "Bạn viết gì đi...",
+                "kind": "line",
+                "confidence": 88,
+                "language": "vie+eng",
+                "bbox": {
+                  "x": 18,
+                  "y": 16,
+                  "width": 168,
+                  "height": 41
+                }
+              },
+              "laptop": null
+            }
+          ],
+          "desktopExec": {
+            "name": "CLICK_TARGET",
+            "action": "CLICK_TARGET",
+            "method": "auto",
+            "threshold": 0.96,
+            "timeoutMs": 3000,
+            "matchTo": "top",
+            "ocr": {
+              "confirmed": true,
+              "text": "Bạn viết gì đi...",
+              "kind": "line",
+              "confidence": 88,
+              "language": "vie+eng",
+              "bbox": {
+                "x": 18,
+                "y": 16,
+                "width": 168,
+                "height": 41
+              }
+            },
+            "roi": {
+              "x": 164,
+              "y": 177,
+              "width": 685,
+              "height": 132
+            },
+            "asset": "17ddecd0-1e09-4198-a20a-171b8ff0d080.png"
+          },
+          "laptopPinnedExec": {
+            "name": "CLICK_TARGET",
+            "action": "CLICK_TARGET",
+            "method": "auto",
+            "threshold": 0.96,
+            "timeoutMs": 3000,
+            "matchTo": "top",
+            "ocr": {
+              "confirmed": true,
+              "text": "@ Bạn viết gì đi...",
+              "kind": "line",
+              "confidence": 88,
+              "language": "vie+eng",
+              "bbox": {
+                "x": 18,
+                "y": 16,
+                "width": 168,
+                "height": 41
+              }
+            },
+            "roi": {
+              "x": 164,
+              "y": 177,
+              "width": 685,
+              "height": 132
+            },
+            "asset": "17ddecd0-1e09-4198-a20a-171b8ff0d080.png"
+          },
+          "laptopSameVersionExec": {
+            "name": "CLICK_TARGET",
+            "action": "CLICK_TARGET",
+            "matchTo": "top",
+            "ocr": null,
+            "roi": {
+              "x": 164,
+              "y": 177,
+              "width": 685,
+              "height": 132
+            },
+            "asset": "17ddecd0-1e09-4198-a20a-171b8ff0d080.png"
+          }
+        },
+        {
+          "stepId": "7093f687-9f6b-4ca7-af58-e5877412d5ee",
+          "desktopPinned": 3,
+          "laptopPinned": 3,
+          "desktopVersions": [
+            1,
+            2,
+            3
+          ],
+          "laptopVersions": [
+            1,
+            2,
+            3
+          ],
+          "pinFieldDiffs": [
+            {
+              "field": "method",
+              "desktop": "image",
+              "laptop": null
+            },
+            {
+              "field": "threshold",
+              "desktop": 0.96,
+              "laptop": null
+            },
+            {
+              "field": "timeoutMs",
+              "desktop": 3000,
+              "laptop": null
+            },
+            {
+              "field": "variableId",
+              "desktop": "2a5f15cc-696f-4c6b-ac5a-74dc84fd555b",
+              "laptop": "var-2-legacy_3"
+            },
+            {
+              "field": "inputMethod",
+              "desktop": "keyboard",
+              "laptop": null
+            },
+            {
+              "field": "ocr",
+              "desktop": {
+                "confirmed": true,
+                "text": "Bạn viết gì đi...",
+                "kind": "line",
+                "confidence": 95,
+                "language": "vie+eng",
+                "bbox": {
+                  "x": 6,
+                  "y": 22,
+                  "width": 150,
+                  "height": 24
+                }
+              },
+              "laptop": null
+            }
+          ],
+          "sameVersionDiffs": [
+            {
+              "field": "method",
+              "desktop": "image",
+              "laptop": null
+            },
+            {
+              "field": "threshold",
+              "desktop": 0.96,
+              "laptop": null
+            },
+            {
+              "field": "timeoutMs",
+              "desktop": 3000,
+              "laptop": null
+            },
+            {
+              "field": "variableId",
+              "desktop": "2a5f15cc-696f-4c6b-ac5a-74dc84fd555b",
+              "laptop": "var-2-legacy_3"
+            },
+            {
+              "field": "inputMethod",
+              "desktop": "keyboard",
+              "laptop": null
+            },
+            {
+              "field": "ocr",
+              "desktop": {
+                "confirmed": true,
+                "text": "Bạn viết gì đi...",
+                "kind": "line",
+                "confidence": 95,
+                "language": "vie+eng",
+                "bbox": {
+                  "x": 6,
+                  "y": 22,
+                  "width": 150,
+                  "height": 24
+                }
+              },
+              "laptop": null
+            }
+          ],
+          "desktopExec": {
+            "name": "viết gì đó",
+            "action": "CLICK_AND_TYPE",
+            "method": "image",
+            "threshold": 0.96,
+            "timeoutMs": 3000,
+            "variableId": "2a5f15cc-696f-4c6b-ac5a-74dc84fd555b",
+            "inputMethod": "keyboard",
+            "ocr": {
+              "confirmed": true,
+              "text": "Bạn viết gì đi...",
+              "kind": "line",
+              "confidence": 95,
+              "language": "vie+eng",
+              "bbox": {
+                "x": 6,
+                "y": 22,
+                "width": 150,
+                "height": 24
+              }
+            },
+            "roi": {
+              "x": 267,
+              "y": 241,
+              "width": 480,
+              "height": 139
+            },
+            "asset": "3547b983-9d08-4e42-a519-895fe10d2c4d.png"
+          },
+          "laptopPinnedExec": {
+            "name": "viết gì đó",
+            "action": "CLICK_AND_TYPE",
+            "variableId": "var-2-legacy_3",
+            "ocr": null,
+            "roi": {
+              "x": 267,
+              "y": 241,
+              "width": 480,
+              "height": 139
+            },
+            "asset": "3547b983-9d08-4e42-a519-895fe10d2c4d.png"
+          },
+          "laptopSameVersionExec": {
+            "name": "viết gì đó",
+            "action": "CLICK_AND_TYPE",
+            "variableId": "var-2-legacy_3",
+            "ocr": null,
+            "roi": {
+              "x": 267,
+              "y": 241,
+              "width": 480,
+              "height": 139
+            },
+            "asset": "3547b983-9d08-4e42-a519-895fe10d2c4d.png"
+          }
+        },
+        {
+          "stepId": "a1e47f92-f411-42ff-96b3-82ec3f7f0323",
+          "desktopPinned": 1,
+          "laptopPinned": 1,
+          "desktopVersions": [
+            1
+          ],
+          "laptopVersions": [
+            1
+          ],
+          "pinFieldDiffs": [
+            {
+              "field": "method",
+              "desktop": "auto",
+              "laptop": null
+            },
+            {
+              "field": "threshold",
+              "desktop": 0.96,
+              "laptop": null
+            },
+            {
+              "field": "timeoutMs",
+              "desktop": 3000,
+              "laptop": null
+            },
+            {
+              "field": "variableId",
+              "desktop": "b5c35011-2270-4026-a672-12d9ef38e85f",
+              "laptop": "var-3-legacy_4"
+            }
+          ],
+          "sameVersionDiffs": [
+            {
+              "field": "method",
+              "desktop": "auto",
+              "laptop": null
+            },
+            {
+              "field": "threshold",
+              "desktop": 0.96,
+              "laptop": null
+            },
+            {
+              "field": "timeoutMs",
+              "desktop": 3000,
+              "laptop": null
+            },
+            {
+              "field": "variableId",
+              "desktop": "b5c35011-2270-4026-a672-12d9ef38e85f",
+              "laptop": "var-3-legacy_4"
+            }
+          ],
+          "desktopExec": {
+            "name": "UPLOAD_FILE",
+            "action": "UPLOAD_FILE",
+            "method": "auto",
+            "threshold": 0.96,
+            "timeoutMs": 3000,
+            "variableId": "b5c35011-2270-4026-a672-12d9ef38e85f",
+            "ocr": null,
+            "roi": {
+              "x": 531,
+              "y": 429,
+              "width": 42,
+              "height": 44
+            },
+            "asset": "a1eb15bd-886d-4ce7-bcff-2a55336eeeb8.png"
+          },
+          "laptopPinnedExec": {
+            "name": "UPLOAD_FILE",
+            "action": "UPLOAD_FILE",
+            "variableId": "var-3-legacy_4",
+            "ocr": null,
+            "roi": {
+              "x": 531,
+              "y": 429,
+              "width": 42,
+              "height": 44
+            },
+            "asset": "a1eb15bd-886d-4ce7-bcff-2a55336eeeb8.png"
+          },
+          "laptopSameVersionExec": {
+            "name": "UPLOAD_FILE",
+            "action": "UPLOAD_FILE",
+            "variableId": "var-3-legacy_4",
+            "ocr": null,
+            "roi": {
+              "x": 531,
+              "y": 429,
+              "width": 42,
+              "height": 44
+            },
+            "asset": "a1eb15bd-886d-4ce7-bcff-2a55336eeeb8.png"
+          }
+        },
+        {
+          "stepId": "fbc1a289-ec51-41f2-8ce9-41ceaa373595",
+          "desktopPinned": 1,
+          "laptopPinned": 1,
+          "desktopVersions": [
+            1
+          ],
+          "laptopVersions": [
+            1
+          ],
+          "pinFieldDiffs": [
+            {
+              "field": "method",
+              "desktop": "auto",
+              "laptop": null
+            },
+            {
+              "field": "threshold",
+              "desktop": 0.96,
+              "laptop": null
+            },
+            {
+              "field": "timeoutMs",
+              "desktop": 3000,
+              "laptop": null
+            },
+            {
+              "field": "ocr",
+              "desktop": {
+                "confirmed": true,
+                "text": "Đăng",
+                "kind": "line",
+                "confidence": 96,
+                "language": "vie+eng",
+                "bbox": {
+                  "x": 215,
+                  "y": 13,
+                  "width": 37,
+                  "height": 15
+                }
+              },
+              "laptop": null
+            }
+          ],
+          "sameVersionDiffs": [
+            {
+              "field": "method",
+              "desktop": "auto",
+              "laptop": null
+            },
+            {
+              "field": "threshold",
+              "desktop": 0.96,
+              "laptop": null
+            },
+            {
+              "field": "timeoutMs",
+              "desktop": 3000,
+              "laptop": null
+            },
+            {
+              "field": "ocr",
+              "desktop": {
+                "confirmed": true,
+                "text": "Đăng",
+                "kind": "line",
+                "confidence": 96,
+                "language": "vie+eng",
+                "bbox": {
+                  "x": 215,
+                  "y": 13,
+                  "width": 37,
+                  "height": 15
+                }
+              },
+              "laptop": null
+            }
+          ],
+          "desktopExec": {
+            "name": "Đăng",
+            "action": "CLICK_TARGET",
+            "method": "auto",
+            "threshold": 0.96,
+            "timeoutMs": 3000,
+            "ocr": {
+              "confirmed": true,
+              "text": "Đăng",
+              "kind": "line",
+              "confidence": 96,
+              "language": "vie+eng",
+              "bbox": {
+                "x": 215,
+                "y": 13,
+                "width": 37,
+                "height": 15
+              }
+            },
+            "roi": {
+              "x": 95,
+              "y": 508,
+              "width": 468,
+              "height": 37
+            },
+            "asset": "3d782834-0c67-46cf-886f-d00866421c81.png",
+            "environment": {
+              "width": 672,
+              "height": 560,
+              "zoom": 1
+            }
+          },
+          "laptopPinnedExec": {
+            "name": "Đăng",
+            "action": "CLICK_TARGET",
+            "ocr": null,
+            "roi": {
+              "x": 95,
+              "y": 508,
+              "width": 468,
+              "height": 37
+            },
+            "asset": "3d782834-0c67-46cf-886f-d00866421c81.png",
+            "environment": {
+              "zoom": 1,
+              "width": 672,
+              "height": 560
+            }
+          },
+          "laptopSameVersionExec": {
+            "name": "Đăng",
+            "action": "CLICK_TARGET",
+            "ocr": null,
+            "roi": {
+              "x": 95,
+              "y": 508,
+              "width": 468,
+              "height": 37
+            },
+            "asset": "3d782834-0c67-46cf-886f-d00866421c81.png",
+            "environment": {
+              "zoom": 1,
+              "width": 672,
+              "height": 560
+            }
+          }
+        }
+      ],
+      "variableDiffs": [
+        {
+          "id": "abd7ec0e-4379-4b22-9755-63d223fbccf8",
+          "desktop": {
+            "id": "abd7ec0e-4379-4b22-9755-63d223fbccf8",
+            "key": "legacy_1",
+            "type": "text"
+          },
+          "laptop": null,
+          "diffs": [
+            {
+              "field": "id",
+              "desktop": "abd7ec0e-4379-4b22-9755-63d223fbccf8",
+              "laptop": null
+            },
+            {
+              "field": "key",
+              "desktop": "legacy_1",
+              "laptop": null
+            },
+            {
+              "field": "type",
+              "desktop": "text",
+              "laptop": null
+            }
+          ]
+        },
+        {
+          "id": "f0087a5f-d0ed-47c3-8ecb-6b452d6b6c69",
+          "desktop": {
+            "id": "f0087a5f-d0ed-47c3-8ecb-6b452d6b6c69",
+            "key": "legacy_2",
+            "type": "text"
+          },
+          "laptop": null,
+          "diffs": [
+            {
+              "field": "id",
+              "desktop": "f0087a5f-d0ed-47c3-8ecb-6b452d6b6c69",
+              "laptop": null
+            },
+            {
+              "field": "key",
+              "desktop": "legacy_2",
+              "laptop": null
+            },
+            {
+              "field": "type",
+              "desktop": "text",
+              "laptop": null
+            }
+          ]
+        },
+        {
+          "id": "2a5f15cc-696f-4c6b-ac5a-74dc84fd555b",
+          "desktop": {
+            "id": "2a5f15cc-696f-4c6b-ac5a-74dc84fd555b",
+            "key": "legacy_3",
+            "type": "text"
+          },
+          "laptop": null,
+          "diffs": [
+            {
+              "field": "id",
+              "desktop": "2a5f15cc-696f-4c6b-ac5a-74dc84fd555b",
+              "laptop": null
+            },
+            {
+              "field": "key",
+              "desktop": "legacy_3",
+              "laptop": null
+            },
+            {
+              "field": "type",
+              "desktop": "text",
+              "laptop": null
+            }
+          ]
+        },
+        {
+          "id": "b5c35011-2270-4026-a672-12d9ef38e85f",
+          "desktop": {
+            "id": "b5c35011-2270-4026-a672-12d9ef38e85f",
+            "key": "legacy_4",
+            "type": "files"
+          },
+          "laptop": null,
+          "diffs": [
+            {
+              "field": "id",
+              "desktop": "b5c35011-2270-4026-a672-12d9ef38e85f",
+              "laptop": null
+            },
+            {
+              "field": "key",
+              "desktop": "legacy_4",
+              "laptop": null
+            },
+            {
+              "field": "type",
+              "desktop": "files",
+              "laptop": null
+            }
+          ]
+        },
+        {
+          "id": "var-0-legacy_1",
+          "desktop": null,
+          "laptop": {
+            "id": "var-0-legacy_1",
+            "key": "legacy_1",
+            "type": "text"
+          },
+          "diffs": [
+            {
+              "field": "id",
+              "desktop": null,
+              "laptop": "var-0-legacy_1"
+            },
+            {
+              "field": "key",
+              "desktop": null,
+              "laptop": "legacy_1"
+            },
+            {
+              "field": "type",
+              "desktop": null,
+              "laptop": "text"
+            }
+          ]
+        },
+        {
+          "id": "var-1-legacy_2",
+          "desktop": null,
+          "laptop": {
+            "id": "var-1-legacy_2",
+            "key": "legacy_2",
+            "type": "text"
+          },
+          "diffs": [
+            {
+              "field": "id",
+              "desktop": null,
+              "laptop": "var-1-legacy_2"
+            },
+            {
+              "field": "key",
+              "desktop": null,
+              "laptop": "legacy_2"
+            },
+            {
+              "field": "type",
+              "desktop": null,
+              "laptop": "text"
+            }
+          ]
+        },
+        {
+          "id": "var-2-legacy_3",
+          "desktop": null,
+          "laptop": {
+            "id": "var-2-legacy_3",
+            "key": "legacy_3",
+            "type": "text"
+          },
+          "diffs": [
+            {
+              "field": "id",
+              "desktop": null,
+              "laptop": "var-2-legacy_3"
+            },
+            {
+              "field": "key",
+              "desktop": null,
+              "laptop": "legacy_3"
+            },
+            {
+              "field": "type",
+              "desktop": null,
+              "laptop": "text"
+            }
+          ]
+        },
+        {
+          "id": "var-3-legacy_4",
+          "desktop": null,
+          "laptop": {
+            "id": "var-3-legacy_4",
+            "key": "legacy_4",
+            "type": "files"
+          },
+          "diffs": [
+            {
+              "field": "id",
+              "desktop": null,
+              "laptop": "var-3-legacy_4"
+            },
+            {
+              "field": "key",
+              "desktop": null,
+              "laptop": "legacy_4"
+            },
+            {
+              "field": "type",
+              "desktop": null,
+              "laptop": "files"
+            }
+          ]
+        }
+      ],
+      "patternDiffs": []
+    },
+    {
+      "id": "375845b5-1187-4b09-b732-740e720f4627",
+      "name": "Facebook draft POC 2",
+      "laptopFound": true,
+      "pinDiffs": [
+        {
+          "stepId": "9455fa49-ae93-477a-8954-83b957fc909f",
+          "desktop": 3,
+          "laptop": 2
+        }
+      ],
+      "stepDiffs": [
+        {
+          "stepId": "9455fa49-ae93-477a-8954-83b957fc909f",
+          "desktopPinned": 3,
+          "laptopPinned": 2,
+          "desktopVersions": [
+            1,
+            2,
+            3
+          ],
+          "laptopVersions": [
+            1,
+            2,
+            3
+          ],
+          "pinFieldDiffs": [
+            {
+              "field": "ocr.text",
+              "desktop": "Bạn viết gì đi...",
+              "laptop": "Bạn viết gì di..."
+            }
+          ],
+          "sameVersionDiffs": [
+            {
+              "field": "method",
+              "desktop": "auto",
+              "laptop": null
+            },
+            {
+              "field": "threshold",
+              "desktop": 0.96,
+              "laptop": null
+            },
+            {
+              "field": "timeoutMs",
+              "desktop": 3000,
+              "laptop": null
+            },
+            {
+              "field": "ocr",
+              "desktop": {
+                "confirmed": true,
+                "text": "Bạn viết gì đi...",
+                "kind": "line",
+                "confidence": 86,
+                "language": "vie+eng",
+                "bbox": {
+                  "x": 15,
+                  "y": 13,
+                  "width": 168,
+                  "height": 41
+                }
+              },
+              "laptop": null
+            }
+          ],
+          "desktopExec": {
+            "name": "CLICK_TARGET",
+            "action": "CLICK_TARGET",
+            "method": "auto",
+            "threshold": 0.96,
+            "timeoutMs": 3000,
+            "matchTo": "top",
+            "ocr": {
+              "confirmed": true,
+              "text": "Bạn viết gì đi...",
+              "kind": "line",
+              "confidence": 86,
+              "language": "vie+eng",
+              "bbox": {
+                "x": 15,
+                "y": 13,
+                "width": 168,
+                "height": 41
+              }
+            },
+            "roi": {
+              "x": 167,
+              "y": 229,
+              "width": 677,
+              "height": 127
+            },
+            "asset": "62e383d3-9e4d-4251-a778-f03521c7ddb7.png",
+            "environment": {
+              "width": 1024,
+              "height": 560,
+              "zoom": 1
+            }
+          },
+          "laptopPinnedExec": {
+            "name": "CLICK_TARGET",
+            "action": "CLICK_TARGET",
+            "method": "auto",
+            "threshold": 0.96,
+            "timeoutMs": 3000,
+            "matchTo": "top",
+            "ocr": {
+              "confirmed": true,
+              "text": "Bạn viết gì di...",
+              "kind": "line",
+              "confidence": 86,
+              "language": "vie+eng",
+              "bbox": {
+                "x": 15,
+                "y": 13,
+                "width": 168,
+                "height": 41
+              }
+            },
+            "roi": {
+              "x": 167,
+              "y": 229,
+              "width": 677,
+              "height": 127
+            },
+            "asset": "62e383d3-9e4d-4251-a778-f03521c7ddb7.png",
+            "environment": {
+              "width": 1024,
+              "height": 560,
+              "zoom": 1
+            }
+          },
+          "laptopSameVersionExec": {
+            "name": "CLICK_TARGET",
+            "action": "CLICK_TARGET",
+            "matchTo": "top",
+            "ocr": null,
+            "roi": {
+              "x": 167,
+              "y": 229,
+              "width": 677,
+              "height": 127
+            },
+            "asset": "62e383d3-9e4d-4251-a778-f03521c7ddb7.png",
+            "environment": {
+              "zoom": 1,
+              "width": 1024,
+              "height": 560
+            }
+          }
+        }
+      ],
+      "variableDiffs": [],
+      "patternDiffs": []
+    },
+    {
+      "id": "48f48584-75b8-4e01-8bff-20a95be2daba",
+      "name": "Facebook draft POC 3",
+      "laptopFound": true,
+      "pinDiffs": [
+        {
+          "stepId": "08947dd7-1436-4210-9279-130f2d00d4ad",
+          "desktop": 2,
+          "laptop": 1
+        }
+      ],
+      "stepDiffs": [
+        {
+          "stepId": "08947dd7-1436-4210-9279-130f2d00d4ad",
+          "desktopPinned": 2,
+          "laptopPinned": 1,
+          "desktopVersions": [
+            1,
+            2
+          ],
+          "laptopVersions": [
+            1,
+            2
+          ],
+          "pinFieldDiffs": [
+            {
+              "field": "matchTo",
+              "desktop": "top",
+              "laptop": "none"
+            }
+          ],
+          "sameVersionDiffs": [
+            {
+              "field": "method",
+              "desktop": "auto",
+              "laptop": null
+            },
+            {
+              "field": "threshold",
+              "desktop": 0.96,
+              "laptop": null
+            },
+            {
+              "field": "timeoutMs",
+              "desktop": 3000,
+              "laptop": null
+            },
+            {
+              "field": "ocr",
+              "desktop": {
+                "confirmed": true,
+                "text": "@ Bạn viết gì đi...",
+                "kind": "line",
+                "confidence": 88,
+                "language": "vie+eng",
+                "bbox": {
+                  "x": 16,
+                  "y": 13,
+                  "width": 168,
+                  "height": 41
+                }
+              },
+              "laptop": null
+            }
+          ],
+          "desktopExec": {
+            "name": "CLICK_TARGET",
+            "action": "CLICK_TARGET",
+            "method": "auto",
+            "threshold": 0.96,
+            "timeoutMs": 3000,
+            "matchTo": "top",
+            "ocr": {
+              "confirmed": true,
+              "text": "@ Bạn viết gì đi...",
+              "kind": "line",
+              "confidence": 88,
+              "language": "vie+eng",
+              "bbox": {
+                "x": 16,
+                "y": 13,
+                "width": 168,
+                "height": 41
+              }
+            },
+            "roi": {
+              "x": 166,
+              "y": 313,
+              "width": 684,
+              "height": 131
+            },
+            "asset": "ee23380e-02b5-4c60-abfb-dd8b3ce16756.png",
+            "environment": {
+              "width": 1024,
+              "height": 560,
+              "zoom": 1
+            }
+          },
+          "laptopPinnedExec": {
+            "name": "CLICK_TARGET",
+            "action": "CLICK_TARGET",
+            "method": "auto",
+            "threshold": 0.96,
+            "timeoutMs": 3000,
+            "matchTo": "none",
+            "ocr": {
+              "confirmed": true,
+              "text": "@ Bạn viết gì đi...",
+              "kind": "line",
+              "confidence": 88,
+              "language": "vie+eng",
+              "bbox": {
+                "x": 16,
+                "y": 13,
+                "width": 168,
+                "height": 41
+              }
+            },
+            "roi": {
+              "x": 166,
+              "y": 313,
+              "width": 684,
+              "height": 131
+            },
+            "asset": "ee23380e-02b5-4c60-abfb-dd8b3ce16756.png",
+            "environment": {
+              "width": 1024,
+              "height": 560,
+              "zoom": 1
+            }
+          },
+          "laptopSameVersionExec": {
+            "name": "CLICK_TARGET",
+            "action": "CLICK_TARGET",
+            "matchTo": "top",
+            "ocr": null,
+            "roi": {
+              "x": 166,
+              "y": 313,
+              "width": 684,
+              "height": 131
+            },
+            "asset": "ee23380e-02b5-4c60-abfb-dd8b3ce16756.png",
+            "environment": {
+              "zoom": 1,
+              "width": 1024,
+              "height": 560
+            }
+          }
+        },
+        {
+          "stepId": "583d6885-aa83-49e1-a32b-3c3617a27b81",
+          "desktopPinned": 1,
+          "laptopPinned": 1,
+          "desktopVersions": [
+            1
+          ],
+          "laptopVersions": [
+            1
+          ],
+          "pinFieldDiffs": [
+            {
+              "field": "method",
+              "desktop": "auto",
+              "laptop": null
+            },
+            {
+              "field": "threshold",
+              "desktop": 0.96,
+              "laptop": null
+            },
+            {
+              "field": "timeoutMs",
+              "desktop": 3000,
+              "laptop": null
+            },
+            {
+              "field": "variableId",
+              "desktop": "4a33024b-f24c-4b98-a1fc-7ea8c7001089",
+              "laptop": "var-0-content"
+            },
+            {
+              "field": "inputMethod",
+              "desktop": "keyboard",
+              "laptop": null
+            },
+            {
+              "field": "ocr",
+              "desktop": {
+                "confirmed": true,
+                "text": "Bạn viết gì đi...",
+                "kind": "line",
+                "confidence": 95,
+                "language": "vie+eng",
+                "bbox": {
+                  "x": 10,
+                  "y": 21,
+                  "width": 150,
+                  "height": 24
+                }
+              },
+              "laptop": null
+            }
+          ],
+          "sameVersionDiffs": [
+            {
+              "field": "method",
+              "desktop": "auto",
+              "laptop": null
+            },
+            {
+              "field": "threshold",
+              "desktop": 0.96,
+              "laptop": null
+            },
+            {
+              "field": "timeoutMs",
+              "desktop": 3000,
+              "laptop": null
+            },
+            {
+              "field": "variableId",
+              "desktop": "4a33024b-f24c-4b98-a1fc-7ea8c7001089",
+              "laptop": "var-0-content"
+            },
+            {
+              "field": "inputMethod",
+              "desktop": "keyboard",
+              "laptop": null
+            },
+            {
+              "field": "ocr",
+              "desktop": {
+                "confirmed": true,
+                "text": "Bạn viết gì đi...",
+                "kind": "line",
+                "confidence": 95,
+                "language": "vie+eng",
+                "bbox": {
+                  "x": 10,
+                  "y": 21,
+                  "width": 150,
+                  "height": 24
+                }
+              },
+              "laptop": null
+            }
+          ],
+          "desktopExec": {
+            "name": "CLICK_AND_TYPE",
+            "action": "CLICK_AND_TYPE",
+            "method": "auto",
+            "threshold": 0.96,
+            "timeoutMs": 3000,
+            "variableId": "4a33024b-f24c-4b98-a1fc-7ea8c7001089",
+            "inputMethod": "keyboard",
+            "matchTo": "none",
+            "ocr": {
+              "confirmed": true,
+              "text": "Bạn viết gì đi...",
+              "kind": "line",
+              "confidence": 95,
+              "language": "vie+eng",
+              "bbox": {
+                "x": 10,
+                "y": 21,
+                "width": 150,
+                "height": 24
+              }
+            },
+            "roi": {
+              "x": 263,
+              "y": 242,
+              "width": 484,
+              "height": 137
+            },
+            "asset": "ddcc7330-1a6e-4ae1-ad3e-ef97176450e2.png",
+            "environment": {
+              "width": 1024,
+              "height": 560,
+              "zoom": 1
+            }
+          },
+          "laptopPinnedExec": {
+            "name": "CLICK_AND_TYPE",
+            "action": "CLICK_AND_TYPE",
+            "variableId": "var-0-content",
+            "matchTo": "none",
+            "ocr": null,
+            "roi": {
+              "x": 263,
+              "y": 242,
+              "width": 484,
+              "height": 137
+            },
+            "asset": "ddcc7330-1a6e-4ae1-ad3e-ef97176450e2.png",
+            "environment": {
+              "zoom": 1,
+              "width": 1024,
+              "height": 560
+            }
+          },
+          "laptopSameVersionExec": {
+            "name": "CLICK_AND_TYPE",
+            "action": "CLICK_AND_TYPE",
+            "variableId": "var-0-content",
+            "matchTo": "none",
+            "ocr": null,
+            "roi": {
+              "x": 263,
+              "y": 242,
+              "width": 484,
+              "height": 137
+            },
+            "asset": "ddcc7330-1a6e-4ae1-ad3e-ef97176450e2.png",
+            "environment": {
+              "zoom": 1,
+              "width": 1024,
+              "height": 560
+            }
+          }
+        },
+        {
+          "stepId": "06e1509e-86b0-436e-bc01-9c7fb5744202",
+          "desktopPinned": 1,
+          "laptopPinned": 1,
+          "desktopVersions": [
+            1
+          ],
+          "laptopVersions": [
+            1
+          ],
+          "pinFieldDiffs": [
+            {
+              "field": "method",
+              "desktop": "auto",
+              "laptop": null
+            },
+            {
+              "field": "threshold",
+              "desktop": 0.96,
+              "laptop": null
+            },
+            {
+              "field": "timeoutMs",
+              "desktop": 3000,
+              "laptop": null
+            },
+            {
+              "field": "variableId",
+              "desktop": "bf949f00-2d94-4151-9318-a103a4eaf290",
+              "laptop": "var-1-imgs"
+            }
+          ],
+          "sameVersionDiffs": [
+            {
+              "field": "method",
+              "desktop": "auto",
+              "laptop": null
+            },
+            {
+              "field": "threshold",
+              "desktop": 0.96,
+              "laptop": null
+            },
+            {
+              "field": "timeoutMs",
+              "desktop": 3000,
+              "laptop": null
+            },
+            {
+              "field": "variableId",
+              "desktop": "bf949f00-2d94-4151-9318-a103a4eaf290",
+              "laptop": "var-1-imgs"
+            }
+          ],
+          "desktopExec": {
+            "name": "UPLOAD_FILE",
+            "action": "UPLOAD_FILE",
+            "method": "auto",
+            "threshold": 0.96,
+            "timeoutMs": 3000,
+            "variableId": "bf949f00-2d94-4151-9318-a103a4eaf290",
+            "matchTo": "none",
+            "ocr": null,
+            "roi": {
+              "x": 533,
+              "y": 429,
+              "width": 37,
+              "height": 48
+            },
+            "asset": "74403ef5-5ced-4e03-a502-e39c2c6a28a2.png",
+            "environment": {
+              "width": 1024,
+              "height": 560,
+              "zoom": 1
+            }
+          },
+          "laptopPinnedExec": {
+            "name": "UPLOAD_FILE",
+            "action": "UPLOAD_FILE",
+            "variableId": "var-1-imgs",
+            "matchTo": "none",
+            "ocr": null,
+            "roi": {
+              "x": 533,
+              "y": 429,
+              "width": 37,
+              "height": 48
+            },
+            "asset": "74403ef5-5ced-4e03-a502-e39c2c6a28a2.png",
+            "environment": {
+              "zoom": 1,
+              "width": 1024,
+              "height": 560
+            }
+          },
+          "laptopSameVersionExec": {
+            "name": "UPLOAD_FILE",
+            "action": "UPLOAD_FILE",
+            "variableId": "var-1-imgs",
+            "matchTo": "none",
+            "ocr": null,
+            "roi": {
+              "x": 533,
+              "y": 429,
+              "width": 37,
+              "height": 48
+            },
+            "asset": "74403ef5-5ced-4e03-a502-e39c2c6a28a2.png",
+            "environment": {
+              "zoom": 1,
+              "width": 1024,
+              "height": 560
+            }
+          }
+        },
+        {
+          "stepId": "ddeafab2-2b8c-4cf9-a9e6-ec41948b7014",
+          "desktopPinned": 3,
+          "laptopPinned": 3,
+          "desktopVersions": [
+            1,
+            2,
+            3
+          ],
+          "laptopVersions": [
+            1,
+            2,
+            3
+          ],
+          "pinFieldDiffs": [
+            {
+              "field": "method",
+              "desktop": "auto",
+              "laptop": null
+            },
+            {
+              "field": "threshold",
+              "desktop": 0.96,
+              "laptop": null
+            },
+            {
+              "field": "timeoutMs",
+              "desktop": 3000,
+              "laptop": null
+            }
+          ],
+          "sameVersionDiffs": [
+            {
+              "field": "method",
+              "desktop": "auto",
+              "laptop": null
+            },
+            {
+              "field": "threshold",
+              "desktop": 0.96,
+              "laptop": null
+            },
+            {
+              "field": "timeoutMs",
+              "desktop": 3000,
+              "laptop": null
+            }
+          ],
+          "desktopExec": {
+            "name": "choose tags",
+            "action": "CLICK_TARGET",
+            "method": "auto",
+            "threshold": 0.96,
+            "timeoutMs": 3000,
+            "matchTo": "none",
+            "ocr": null,
+            "roi": {
+              "x": 572,
+              "y": 428,
+              "width": 36,
+              "height": 46
+            },
+            "asset": "952bbd01-0177-4a1f-8e1d-bdf819328fc1.png",
+            "environment": {
+              "width": 1024,
+              "height": 560,
+              "zoom": 1
+            }
+          },
+          "laptopPinnedExec": {
+            "name": "choose tags",
+            "action": "CLICK_TARGET",
+            "matchTo": "none",
+            "ocr": null,
+            "roi": {
+              "x": 572,
+              "y": 428,
+              "width": 36,
+              "height": 46
+            },
+            "asset": "952bbd01-0177-4a1f-8e1d-bdf819328fc1.png",
+            "environment": {
+              "zoom": 1,
+              "width": 1024,
+              "height": 560
+            }
+          },
+          "laptopSameVersionExec": {
+            "name": "choose tags",
+            "action": "CLICK_TARGET",
+            "matchTo": "none",
+            "ocr": null,
+            "roi": {
+              "x": 572,
+              "y": 428,
+              "width": 36,
+              "height": 46
+            },
+            "asset": "952bbd01-0177-4a1f-8e1d-bdf819328fc1.png",
+            "environment": {
+              "zoom": 1,
+              "width": 1024,
+              "height": 560
+            }
+          }
+        },
+        {
+          "stepId": "2ea9c776-2277-4d48-8daf-c6dce3112962",
+          "desktopPinned": 1,
+          "laptopPinned": 1,
+          "desktopVersions": [
+            1
+          ],
+          "laptopVersions": [
+            1
+          ],
+          "pinFieldDiffs": [
+            {
+              "field": "timeoutMs",
+              "desktop": null,
+              "laptop": 100
+            },
+            {
+              "field": "variableId",
+              "desktop": "278b9688-6907-4899-bbcb-28664091a95e",
+              "laptop": null
+            }
+          ],
+          "sameVersionDiffs": [
+            {
+              "field": "timeoutMs",
+              "desktop": null,
+              "laptop": 100
+            },
+            {
+              "field": "variableId",
+              "desktop": "278b9688-6907-4899-bbcb-28664091a95e",
+              "laptop": null
+            }
+          ],
+          "desktopExec": {
+            "name": "SLEEP",
+            "action": "SLEEP",
+            "variableId": "278b9688-6907-4899-bbcb-28664091a95e",
+            "ocr": null
+          },
+          "laptopPinnedExec": {
+            "name": "SLEEP",
+            "action": "SLEEP",
+            "timeoutMs": 100,
+            "ocr": null
+          },
+          "laptopSameVersionExec": {
+            "name": "SLEEP",
+            "action": "SLEEP",
+            "timeoutMs": 100,
+            "ocr": null
+          }
+        },
+        {
+          "stepId": "97a6950e-4fdb-4828-893c-809b1b8cfb8c",
+          "desktopPinned": 1,
+          "laptopPinned": 1,
+          "desktopVersions": [
+            1
+          ],
+          "laptopVersions": [
+            1
+          ],
+          "pinFieldDiffs": [
+            {
+              "field": "variableId",
+              "desktop": "cddb0ba2-3b88-4280-870c-f14407f180d7",
+              "laptop": "var-2-tags"
+            },
+            {
+              "field": "quickTagRows",
+              "desktop": 5,
+              "laptop": null
+            }
+          ],
+          "sameVersionDiffs": [
+            {
+              "field": "variableId",
+              "desktop": "cddb0ba2-3b88-4280-870c-f14407f180d7",
+              "laptop": "var-2-tags"
+            },
+            {
+              "field": "quickTagRows",
+              "desktop": 5,
+              "laptop": null
+            }
+          ],
+          "desktopExec": {
+            "name": "QUICK_TAG",
+            "action": "QUICK_TAG",
+            "variableId": "cddb0ba2-3b88-4280-870c-f14407f180d7",
+            "quickTagRows": 5,
+            "matchTo": "none",
+            "ocr": null,
+            "roi": {
+              "x": 265,
+              "y": 345,
+              "width": 476,
+              "height": 103
+            },
+            "asset": "2a5118dd-66b6-4f3f-9c26-33cdcb407df0.png",
+            "environment": {
+              "width": 1024,
+              "height": 560,
+              "zoom": 1
+            }
+          },
+          "laptopPinnedExec": {
+            "name": "QUICK_TAG",
+            "action": "QUICK_TAG",
+            "variableId": "var-2-tags",
+            "matchTo": "none",
+            "ocr": null,
+            "roi": {
+              "x": 265,
+              "y": 345,
+              "width": 476,
+              "height": 103
+            },
+            "asset": "2a5118dd-66b6-4f3f-9c26-33cdcb407df0.png",
+            "environment": {
+              "zoom": 1,
+              "width": 1024,
+              "height": 560
+            }
+          },
+          "laptopSameVersionExec": {
+            "name": "QUICK_TAG",
+            "action": "QUICK_TAG",
+            "variableId": "var-2-tags",
+            "matchTo": "none",
+            "ocr": null,
+            "roi": {
+              "x": 265,
+              "y": 345,
+              "width": 476,
+              "height": 103
+            },
+            "asset": "2a5118dd-66b6-4f3f-9c26-33cdcb407df0.png",
+            "environment": {
+              "zoom": 1,
+              "width": 1024,
+              "height": 560
+            }
+          }
+        },
+        {
+          "stepId": "3c959196-bb8d-4355-9c14-b56ca4abeb2e",
+          "desktopPinned": 5,
+          "laptopPinned": 5,
+          "desktopVersions": [
+            1,
+            2,
+            3,
+            4,
+            5
+          ],
+          "laptopVersions": [
+            1,
+            2,
+            3,
+            4,
+            5
+          ],
+          "pinFieldDiffs": [
+            {
+              "field": "method",
+              "desktop": "auto",
+              "laptop": null
+            },
+            {
+              "field": "threshold",
+              "desktop": 0.96,
+              "laptop": null
+            },
+            {
+              "field": "timeoutMs",
+              "desktop": 3000,
+              "laptop": null
+            }
+          ],
+          "sameVersionDiffs": [
+            {
+              "field": "method",
+              "desktop": "auto",
+              "laptop": null
+            },
+            {
+              "field": "threshold",
+              "desktop": 0.96,
+              "laptop": null
+            },
+            {
+              "field": "timeoutMs",
+              "desktop": 3000,
+              "laptop": null
+            }
+          ],
+          "desktopExec": {
+            "name": "xong",
+            "action": "CLICK_TARGET",
+            "method": "auto",
+            "threshold": 0.96,
+            "timeoutMs": 3000,
+            "matchTo": "none",
+            "ocr": null,
+            "roi": {
+              "x": 691,
+              "y": 157,
+              "width": 43,
+              "height": 31
+            },
+            "asset": "bb62fe92-a7bf-4767-ae9f-073d23540be0.png",
+            "environment": {
+              "width": 1024,
+              "height": 560,
+              "zoom": 1
+            }
+          },
+          "laptopPinnedExec": {
+            "name": "xong",
+            "action": "CLICK_TARGET",
+            "matchTo": "none",
+            "ocr": null,
+            "roi": {
+              "x": 691,
+              "y": 157,
+              "width": 43,
+              "height": 31
+            },
+            "asset": "bb62fe92-a7bf-4767-ae9f-073d23540be0.png",
+            "environment": {
+              "zoom": 1,
+              "width": 1024,
+              "height": 560
+            }
+          },
+          "laptopSameVersionExec": {
+            "name": "xong",
+            "action": "CLICK_TARGET",
+            "matchTo": "none",
+            "ocr": null,
+            "roi": {
+              "x": 691,
+              "y": 157,
+              "width": 43,
+              "height": 31
+            },
+            "asset": "bb62fe92-a7bf-4767-ae9f-073d23540be0.png",
+            "environment": {
+              "zoom": 1,
+              "width": 1024,
+              "height": 560
+            }
+          }
+        }
+      ],
+      "variableDiffs": [
+        {
+          "id": "4a33024b-f24c-4b98-a1fc-7ea8c7001089",
+          "desktop": {
+            "id": "4a33024b-f24c-4b98-a1fc-7ea8c7001089",
+            "key": "content",
+            "type": "text"
+          },
+          "laptop": null,
+          "diffs": [
+            {
+              "field": "id",
+              "desktop": "4a33024b-f24c-4b98-a1fc-7ea8c7001089",
+              "laptop": null
+            },
+            {
+              "field": "key",
+              "desktop": "content",
+              "laptop": null
+            },
+            {
+              "field": "type",
+              "desktop": "text",
+              "laptop": null
+            }
+          ]
+        },
+        {
+          "id": "bf949f00-2d94-4151-9318-a103a4eaf290",
+          "desktop": {
+            "id": "bf949f00-2d94-4151-9318-a103a4eaf290",
+            "key": "imgs",
+            "type": "files"
+          },
+          "laptop": null,
+          "diffs": [
+            {
+              "field": "id",
+              "desktop": "bf949f00-2d94-4151-9318-a103a4eaf290",
+              "laptop": null
+            },
+            {
+              "field": "key",
+              "desktop": "imgs",
+              "laptop": null
+            },
+            {
+              "field": "type",
+              "desktop": "files",
+              "laptop": null
+            }
+          ]
+        },
+        {
+          "id": "cddb0ba2-3b88-4280-870c-f14407f180d7",
+          "desktop": {
+            "id": "cddb0ba2-3b88-4280-870c-f14407f180d7",
+            "key": "tags",
+            "type": "integer"
+          },
+          "laptop": null,
+          "diffs": [
+            {
+              "field": "id",
+              "desktop": "cddb0ba2-3b88-4280-870c-f14407f180d7",
+              "laptop": null
+            },
+            {
+              "field": "key",
+              "desktop": "tags",
+              "laptop": null
+            },
+            {
+              "field": "type",
+              "desktop": "integer",
+              "laptop": null
+            }
+          ]
+        },
+        {
+          "id": "278b9688-6907-4899-bbcb-28664091a95e",
+          "desktop": {
+            "id": "278b9688-6907-4899-bbcb-28664091a95e",
+            "key": "tag_sleep",
+            "type": "number"
+          },
+          "laptop": null,
+          "diffs": [
+            {
+              "field": "id",
+              "desktop": "278b9688-6907-4899-bbcb-28664091a95e",
+              "laptop": null
+            },
+            {
+              "field": "key",
+              "desktop": "tag_sleep",
+              "laptop": null
+            },
+            {
+              "field": "type",
+              "desktop": "number",
+              "laptop": null
+            }
+          ]
+        },
+        {
+          "id": "var-0-content",
+          "desktop": null,
+          "laptop": {
+            "id": "var-0-content",
+            "key": "content",
+            "type": "text"
+          },
+          "diffs": [
+            {
+              "field": "id",
+              "desktop": null,
+              "laptop": "var-0-content"
+            },
+            {
+              "field": "key",
+              "desktop": null,
+              "laptop": "content"
+            },
+            {
+              "field": "type",
+              "desktop": null,
+              "laptop": "text"
+            }
+          ]
+        },
+        {
+          "id": "var-1-imgs",
+          "desktop": null,
+          "laptop": {
+            "id": "var-1-imgs",
+            "key": "imgs",
+            "type": "files"
+          },
+          "diffs": [
+            {
+              "field": "id",
+              "desktop": null,
+              "laptop": "var-1-imgs"
+            },
+            {
+              "field": "key",
+              "desktop": null,
+              "laptop": "imgs"
+            },
+            {
+              "field": "type",
+              "desktop": null,
+              "laptop": "files"
+            }
+          ]
+        },
+        {
+          "id": "var-2-tags",
+          "desktop": null,
+          "laptop": {
+            "id": "var-2-tags",
+            "key": "tags",
+            "type": "integer"
+          },
+          "diffs": [
+            {
+              "field": "id",
+              "desktop": null,
+              "laptop": "var-2-tags"
+            },
+            {
+              "field": "key",
+              "desktop": null,
+              "laptop": "tags"
+            },
+            {
+              "field": "type",
+              "desktop": null,
+              "laptop": "integer"
+            }
+          ]
+        },
+        {
+          "id": "var-3-tag_sleep",
+          "desktop": null,
+          "laptop": {
+            "id": "var-3-tag_sleep",
+            "key": "tag_sleep",
+            "type": "number"
+          },
+          "diffs": [
+            {
+              "field": "id",
+              "desktop": null,
+              "laptop": "var-3-tag_sleep"
+            },
+            {
+              "field": "key",
+              "desktop": null,
+              "laptop": "tag_sleep"
+            },
+            {
+              "field": "type",
+              "desktop": null,
+              "laptop": "number"
+            }
+          ]
+        }
+      ],
+      "patternDiffs": []
+    }
+  ],
+  "summary": {
+    "lostOcr": [
+      "Facebook draft POC:7093f687 v3→pin3",
+      "Facebook draft POC:fbc1a289 v1→pin1",
+      "Facebook draft POC 3:583d6885 v1→pin1"
+    ],
+    "matchToChanged": [
+      "Facebook draft POC 3:08947dd7 top→none"
+    ],
+    "varOrphan": [],
+    "pinChanged": [
+      "Facebook draft POC:030160d7 12→11",
+      "Facebook draft POC 2:9455fa49 3→2",
+      "Facebook draft POC 3:08947dd7 2→1"
+    ]
+  }
+}

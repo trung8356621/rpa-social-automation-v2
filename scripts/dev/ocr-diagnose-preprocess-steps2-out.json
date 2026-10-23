@@ -1,0 +1,90 @@
+{
+  "caseD": {
+    "none": {
+      "text": "Bạn viết gì đi...",
+      "conf": 95
+    },
+    "gray": {
+      "text": "Bạn viết gì đi...",
+      "conf": 95
+    },
+    "norm": {
+      "text": "",
+      "conf": 0
+    },
+    "gray+norm": {
+      "text": "",
+      "conf": 0
+    },
+    "gray+linear": {
+      "text": "Bạn viết gì di...",
+      "conf": 95
+    }
+  },
+  "caseB": {
+    "none": {
+      "text": "Bạn viết gì đi...",
+      "conf": 96
+    },
+    "gray": {
+      "text": "Bạn viết gì đi...",
+      "conf": 96
+    },
+    "norm": {
+      "text": "Bạn viết gì đi...",
+      "conf": 96
+    },
+    "gray+norm": {
+      "text": "Bạn viết gì đi...",
+      "conf": 96
+    },
+    "gray+linear": {
+      "text": "Bạn viết gì đi...",
+      "conf": 95
+    }
+  },
+  "caseA": {
+    "none": {
+      "text": "@ Bạn viết gì di...\n\nMB. Bài viết ẩn danh\n\n® Cam xúc/hoạt động\n\n( Thăm dò ý kiến",
+      "conf": 89
+    },
+    "gray": {
+      "text": "@ Bạn viết gì đi...\n\nMB; viết ẩn danh\n\n® Cam xúc/hoạt động\n\n(7 Thăm dò ý kiến",
+      "conf": 88
+    },
+    "norm": {
+      "text": "@ Bạn viết gì đi...\n\nMB. Bài viết ẩn danh\n\n® Cảm xúc/hoạt động\n\n@ Thăm dò ý kiến",
+      "conf": 90
+    },
+    "gray+norm": {
+      "text": "@ Bạn viết gì đi...\n\nBB. Bài viết ẩn danh\n\n® Cảm xúc/hoạt động\n\nThăm dò ý kiến",
+      "conf": 89
+    },
+    "gray+linear": {
+      "text": "& Bạn viết gì đi...\n\nBài viết ẩn danh\n\n@ Cảm xúc/hoạt động\n\nThăm dò ý kiến",
+      "conf": 93
+    }
+  },
+  "fixture": {
+    "none": {
+      "text": "Tạo bài viết\n\nCreate post",
+      "conf": 95
+    },
+    "gray": {
+      "text": "Tạo bài viết\n\nCreate post",
+      "conf": 95
+    },
+    "norm": {
+      "text": "Tạo bài viết\n\nCreate post",
+      "conf": 94
+    },
+    "gray+norm": {
+      "text": "Tạo bài viết\n\nCreate post",
+      "conf": 94
+    },
+    "gray+linear": {
+      "text": "Tạo bài viết\n\nCreate post",
+      "conf": 95
+    }
+  }
+}

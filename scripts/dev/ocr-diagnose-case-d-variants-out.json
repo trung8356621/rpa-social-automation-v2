@@ -1,0 +1,44 @@
+[
+  {
+    "name": "original",
+    "width": 603,
+    "height": 52,
+    "rawText": "",
+    "confidence": 0,
+    "lines": []
+  },
+  {
+    "name": "contrast",
+    "width": 603,
+    "height": 52,
+    "rawText": "Bạn viết gì đi...",
+    "confidence": 95,
+    "lines": [
+      "Bạn viết gì đi..."
+    ]
+  },
+  {
+    "name": "padded",
+    "width": 643,
+    "height": 132,
+    "rawText": "",
+    "confidence": 0,
+    "lines": []
+  },
+  {
+    "name": "upscale3",
+    "width": 1809,
+    "height": 156,
+    "error": "OCR_IMAGE_SIZE: ảnh cần rộng ≤1024 và cao ≤16384 pixel."
+  },
+  {
+    "name": "grayThresh",
+    "width": 603,
+    "height": 52,
+    "rawText": "Bạn viết gì đi...",
+    "confidence": 94,
+    "lines": [
+      "Bạn viết gì đi..."
+    ]
+  }
+]

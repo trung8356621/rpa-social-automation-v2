@@ -1,0 +1,267 @@
+{
+  "tables": [
+    "flows",
+    "overrides",
+    "runs",
+    "settings",
+    "steps"
+  ],
+  "schemas": {
+    "flows": [
+      "id",
+      "payload"
+    ],
+    "overrides": [
+      "id",
+      "step_id",
+      "base_version",
+      "payload"
+    ],
+    "runs": [
+      "id",
+      "payload"
+    ],
+    "settings": [
+      "key",
+      "value"
+    ],
+    "steps": [
+      "id",
+      "version",
+      "payload"
+    ]
+  },
+  "dump": {
+    "like_flows.payload:030160d7-4630-4c3a-aafe-8dd91378b468": [
+      {
+        "id": "e7c3f6d4-6a46-4ff8-9a70-f029f9b0c111",
+        "payload": "{\"id\":\"e7c3f6d4-6a46-4ff8-9a70-f029f9b0c111\",\"name\":\"Facebook draft POC\",\"zoom\":1,\"steps\":[{\"id\":\"030160d7-4630-4c3a-aafe-8dd91378b468\",\"version\":11},{\"id\":\"7093f687-9f6b-4ca7-af58-e5877412d5ee\",\"version\":3},{\"id\":\"a1e47f92-f411-42ff-96b3-82ec3f7f0323\",\"version\":1},{\"id\":\"fbc1a289-ec51-41f2-8ce9-41ceaa373595\",\"version\":1}],\"variables\":[{\"id\":\"var-0-legacy_1\",\"key\":\"legacy_1\",\"type\":\"text\"},{\"id\":\"var-1-legacy_2\",\"key\":\"legacy_2\",\"type\":\"text\"},{\"id\":\"var-2-legacy_3\",\"key\":\"legacy_3\",\"type\":\"text\"},{\"id\":\"var-3-legacy_4\",\"key\":\"legacy_4\",\"type\":\"files\"}],\"defaultPattern\":{\"values\":{\"abd7ec0e-4379-4b22-9755-63d223fbccf8\":\"viết gì đó\",\"f0087a5f-d0ed-47c3-8ecb-6b452d6b6c69\":\"viết gì đó\",\"2a5f15cc-696f-4c6b-ac5a-74dc84fd555b\":\"viết gì đó\",\"b5c35011-2270-4026-a672-12d9ef38e85f\":[\"C:\\\\Users\\\\trung\\\\Pictures\\\\Screenshots\\\\Screenshot (1).png\",\"C:\\\\Users\\\\trung\\\\Pictures\\\\Screenshots\\\\Screenshot (2).png\",\"C:\\\\Users\\\\trung\\\\Pictures\\\\Screenshots\\\\Screenshot (3).png\"]}},\"groups\":[{\"id\":\"8468e225-15cd-42ec-ac63-8648ff9c54cd\",\"name\":\"test\",\"slug\":\"test\",\"collapsed\":false,\"stepIds\":[]}]}"
+      }
+    ],
+    "like_flows.payload:7093f687-9f6b-4ca7-af58-e5877412d5ee": [
+      {
+        "id": "e7c3f6d4-6a46-4ff8-9a70-f029f9b0c111",
+        "payload": "{\"id\":\"e7c3f6d4-6a46-4ff8-9a70-f029f9b0c111\",\"name\":\"Facebook draft POC\",\"zoom\":1,\"steps\":[{\"id\":\"030160d7-4630-4c3a-aafe-8dd91378b468\",\"version\":11},{\"id\":\"7093f687-9f6b-4ca7-af58-e5877412d5ee\",\"version\":3},{\"id\":\"a1e47f92-f411-42ff-96b3-82ec3f7f0323\",\"version\":1},{\"id\":\"fbc1a289-ec51-41f2-8ce9-41ceaa373595\",\"version\":1}],\"variables\":[{\"id\":\"var-0-legacy_1\",\"key\":\"legacy_1\",\"type\":\"text\"},{\"id\":\"var-1-legacy_2\",\"key\":\"legacy_2\",\"type\":\"text\"},{\"id\":\"var-2-legacy_3\",\"key\":\"legacy_3\",\"type\":\"text\"},{\"id\":\"var-3-legacy_4\",\"key\":\"legacy_4\",\"type\":\"files\"}],\"defaultPattern\":{\"values\":{\"abd7ec0e-4379-4b22-9755-63d223fbccf8\":\"viết gì đó\",\"f0087a5f-d0ed-47c3-8ecb-6b452d6b6c69\":\"viết gì đó\",\"2a5f15cc-696f-4c6b-ac5a-74dc84fd555b\":\"viết gì đó\",\"b5c35011-2270-4026-a672-12d9ef38e85f\":[\"C:\\\\Users\\\\trung\\\\Pictures\\\\Screenshots\\\\Screenshot (1).png\",\"C:\\\\Users\\\\trung\\\\Pictures\\\\Screenshots\\\\Screenshot (2).png\",\"C:\\\\Users\\\\trung\\\\Pictures\\\\Screenshots\\\\Screenshot (3).png\"]}},\"groups\":[{\"id\":\"8468e225-15cd-42ec-ac63-8648ff9c54cd\",\"name\":\"test\",\"slug\":\"test\",\"collapsed\":false,\"stepIds\":[]}]}"
+      }
+    ],
+    "like_flows.payload:08947dd7-1436-4210-9279-130f2d00d4ad": [
+      {
+        "id": "48f48584-75b8-4e01-8bff-20a95be2daba",
+        "payload": "{\"id\":\"48f48584-75b8-4e01-8bff-20a95be2daba\",\"name\":\"Facebook draft POC 3\",\"zoom\":1,\"steps\":[{\"id\":\"08947dd7-1436-4210-9279-130f2d00d4ad\",\"version\":1},{\"id\":\"583d6885-aa83-49e1-a32b-3c3617a27b81\",\"version\":1},{\"id\":\"06e1509e-86b0-436e-bc01-9c7fb5744202\",\"version\":1},{\"id\":\"ddeafab2-2b8c-4cf9-a9e6-ec41948b7014\",\"version\":3},{\"id\":\"2ea9c776-2277-4d48-8daf-c6dce3112962\",\"version\":1},{\"id\":\"97a6950e-4fdb-4828-893c-809b1b8cfb8c\",\"version\":1},{\"id\":\"3c959196-bb8d-4355-9c14-b56ca4abeb2e\",\"version\":5}],\"groups\":[{\"id\":\"64f96a5a-4f1a-4417-a6f4-7c7dd569a966\",\"name\":\"tag\",\"slug\":\"tag\",\"collapsed\":false,\"stepIds\":[\"ddeafab2-2b8c-4cf9-a9e6-ec41948b7014\",\"2ea9c776-2277-4d48-8daf-c6dce3112962\",\"97a6950e-4fdb-4828-893c-809b1b8cfb8c\",\"3c959196-bb8d-4355-9c14-b56ca4abeb2e\"]}],\"variables\":[{\"id\":\"var-0-content\",\"key\":\"content\",\"type\":\"text\"},{\"id\":\"var-1-imgs\",\"key\":\"imgs\",\"type\":\"files\"},{\"id\":\"var-2-tags\",\"key\":\"tags\",\"type\":\"integer\"},{\"id\":\"var-3-tag_sleep\",\"key\":\"tag_sleep\",\"type\":\"number\"}],\"defaultPattern\":{\"values\":{\"4a33024b-f24c-4b98-a1fc-7ea8c7001089\":\"Alo có ai không alo alo\",\"bf949f00-2d94-4151-9318-a103a4eaf290\":[\"C:\\\\Users\\\\trung\\\\Pictures\\\\Screenshots\\\\Screenshot (1).png\",\"C:\\\\Users\\\\trung\\\\Pictures\\\\Screenshots\\\\Screenshot (2).png\",\"C:\\\\Users\\\\trung\\\\Pictures\\\\Screenshots\\\\Screenshot (3).png\"],\"cddb0ba2-3b88-4280-870c-f14407f180d7\":3,\"278b9688-6907-4899-bbcb-28664091a95e\":2000}}}"
+      }
+    ],
+    "like_runs.payload:030160d7-4630-4c3a-aafe-8dd91378b468": [
+      {
+        "id": "0335dafc-955e-4803-870a-ce2e8bdcc5c6",
+        "payload": "{\"id\":\"0335dafc-955e-4803-870a-ce2e8bdcc5c6\",\"ok\":true,\"action\":\"CLICK_TARGET\",\"message\":\"Click đã gửi tại 506.5, 243; chưa xác nhận kết quả nghiệp vụ.\",\"before\":{\"id\":\"ce87edde-bf47-4c54-9599-0d983cfa6682\",\"width\":1024,\"height\":560,\"zoom\":1,\"url\":\"https://www.facebook.com/groups/314158368669766\",\"timestamp\":\"2026-10-19T05:22:16.714Z\",\"backend\":\"cdp-surface\"},\"after\":{\"id\":\"9c2e47d7-979f-4173-8fea-ca3af70bff01\",\"width\":1024,\"height\":560,\"zoom\":1,\"url\":\"https://www.facebook.com/groups/314158368669766\",\"timestamp\":\"2026-10-19T05:22:16.961Z\",\"backend\":\"cdp-surface\"},\"match\":{\"score\":1,\"x\":506.5,\"y\":243},\"source\":\"base\",\"stepId\":\"030160d7-4630-4c3a-aafe-8dd91378b468\",\"version\":1}"
+      },
+      {
+        "id": "726796c9-ca4c-48e4-a3ac-917ef6a3ab45",
+        "payload": "{\"id\":\"726796c9-ca4c-48e4-a3ac-917ef6a3ab45\",\"ok\":true,\"action\":\"CLICK_TARGET\",\"message\":\"Click đã gửi tại 506.5, 243; chưa xác nhận kết quả nghiệp vụ.\",\"before\":{\"id\":\"837b10b5-e58a-42ef-85f2-3548bd127327\",\"width\":1024,\"height\":560,\"zoom\":1,\"url\":\"https://www.facebook.com/groups/314158368669766\",\"timestamp\":\"2026-10-19T05:23:02.091Z\",\"backend\":\"cdp-surface\"},\"after\":{\"id\":\"3081f21c-664f-4fa1-8d76-a634a9c73c99\",\"width\":1024,\"height\":560,\"zoom\":1,\"url\":\"https://www.facebook.com/groups/314158368669766\",\"timestamp\":\"2026-10-19T05:23:02.324Z\",\"backend\":\"cdp-surface\"},\"match\":{\"score\":1,\"x\":506.5,\"y\":243},\"source\":\"base\",\"stepId\":\"030160d7-4630-4c3a-aafe-8dd91378b468\",\"version\":1}"
+      },
+      {
+        "id": "3206b0ce-fcf4-41af-97aa-db08c52f2196",
+        "payload": "{\"id\":\"3206b0ce-fcf4-41af-97aa-db08c52f2196\",\"ok\":true,\"status\":\"ACTION_SENT\",\"action\":\"CLICK_TARGET\",\"message\":\"Click đã gửi tại 506.5, 276; chưa xác nhận kết quả nghiệp vụ.\",\"before\":{\"id\":\"d3c7130e-58c7-4d45-901f-26078a142bae\",\"width\":1024,\"height\":560,\"zoom\":1,\"url\":\"https://www.facebook.com/groups/314158368669766\",\"timestamp\":\"2026-10-19T06:22:38.885Z\",\"backend\":\"cdp-surface\"},\"after\":{\"id\":\"0ee6629c-2a48-4549-98ba-d6090e402479\",\"width\":1024,\"height\":560,\"zoom\":1,\"url\":\"https://www.facebook.com/groups/314158368669766\",\"timestamp\":\"2026-10-19T06:22:39.146Z\",\"backend\":\"cdp-surface\"},\"match\":{\"score\":1,\"x\":506.5,\"y\":276,\"ambiguous\":false,\"method\":\"image\"},\"source\":\"base\",\"stepId\":\"030160d7-4630-4c3a-aafe-8dd91378b468\",\"version\":2}"
+      },
+      {
+        "id": "d92527a2-68b0-4a7c-b2d2-418d6a7f4582",
+        "payload": "{\"id\":\"d92527a2-68b0-4a7c-b2d2-418d6a7f4582\",\"ok\":true,\"status\":\"ACTION_SENT\",\"action\":\"CLICK_TARGET\",\"message\":\"Click đã gửi tại 506.5, 276; chưa xác nhận kết quả nghiệp vụ.\",\"before\":{\"id\":\"55e12971-00d4-4c7d-b363-ae73376f0492\",\"width\":1024,\"height\":560,\"zoom\":1,\"url\":\"https://www.facebook.com/groups/314158368669766\",\"timestamp\":\"2026-10-19T06:22:46.643Z\",\"backend\":\"cdp-surface\"},\"after\":{\"id\":\"8b12128c-d49d-4e0f-9f32-a81054a28eac\",\"width\":1024,\"height\":560,\"zoom\":1,\"url\":\"https://www.facebook.com/groups/314158368669766\",\"timestamp\":\"2026-10-19T06:22:46.890Z\",\"backend\":\"cdp-surface\"},\"match\":{\"score\":1,\"x\":506.5,\"y\":276,\"ambiguous\":false,\"method\":\"image\"},\"source\":\"base\",\"stepId\":\"030160d7-4630-4c3a-aafe-8dd91378b468\",\"version\":2}"
+      },
+      {
+        "id": "81140dc1-acdf-4885-acec-e233b6a3981b",
+        "payload": "{\"id\":\"81140dc1-acdf-4885-acec-e233b6a3981b\",\"ok\":true,\"status\":\"ACTION_SENT\",\"action\":\"CLICK_TARGET\",\"message\":\"Click đã gửi tại 506.5, 243; chưa xác nhận kết quả nghiệp vụ.\",\"before\":{\"id\":\"e95a1ec2-cb31-45a5-9d2c-9024d7bd0ec0\",\"width\":1024,\"height\":560,\"zoom\":1,\"url\":\"https://www.facebook.com/groups/314158368669766\",\"timestamp\":\"2026-10-19T06:24:35.764Z\",\"backend\":\"cdp-surface\"},\"after\":{\"id\":\"18b72f57-991d-43fe-8527-95385db77507\",\"width\":1024,\"height\":560,\"zoom\":1,\"url\":\"https://www.facebook.com/groups/314158368669766\",\"timestamp\":\"2026-10-19T06:24:36.012Z\",\"backend\":\"cdp-surface\"},\"match\":{\"score\":1,\"x\":506.5,\"y\":243,\"ambiguous\":false,\"method\":\"image\"},\"source\":\"base\",\"stepId\":\"030160d7-4630-4c3a-aafe-8dd91378b468\",\"version\":2}"
+      }
+    ],
+    "like_runs.payload:7093f687-9f6b-4ca7-af58-e5877412d5ee": [
+      {
+        "id": "80ce0f37-adad-41a9-a8e7-b662dd1f6f23",
+        "payload": "{\"id\":\"80ce0f37-adad-41a9-a8e7-b662dd1f6f23\",\"ok\":false,\"status\":\"FAILED\",\"action\":\"TYPE_ONLY\",\"message\":\"TYPE_ONLY: browser chưa có focus. Click thủ công vào ô nhập rồi dùng phím tắt test.\",\"after\":{\"id\":\"8485b5e2-2977-4b16-b079-007c72088069\",\"width\":1024,\"height\":560,\"zoom\":1,\"url\":\"https://www.facebook.com/groups/314158368669766\",\"timestamp\":\"2026-10-19T06:44:35.246Z\",\"backend\":\"cdp-surface\"},\"source\":\"base\",\"stepId\":\"7093f687-9f6b-4ca7-af58-e5877412d5ee\",\"version\":1,\"flowId\":\"e7c3f6d4-6a46-4ff8-9a70-f029f9b0c111\"}"
+      },
+      {
+        "id": "175e3dbc-f095-4d13-b716-c5d1fb71e524",
+        "payload": "{\"id\":\"175e3dbc-f095-4d13-b716-c5d1fb71e524\",\"ok\":false,\"status\":\"FAILED\",\"action\":\"TYPE_ONLY\",\"message\":\"TYPE_ONLY: browser chưa có focus. Click thủ công vào ô nhập rồi dùng phím tắt test.\",\"after\":{\"id\":\"cdc3f5b3-b97c-465e-a70c-913ab60ced66\",\"width\":1024,\"height\":560,\"zoom\":1,\"url\":\"https://www.facebook.com/groups/314158368669766\",\"timestamp\":\"2026-10-19T06:45:45.934Z\",\"backend\":\"cdp-surface\"},\"source\":\"base\",\"stepId\":\"7093f687-9f6b-4ca7-af58-e5877412d5ee\",\"version\":1,\"flowId\":\"e7c3f6d4-6a46-4ff8-9a70-f029f9b0c111\"}"
+      },
+      {
+        "id": "eb64012e-0d0d-41de-b7cc-8d8bc02581d5",
+        "payload": "{\"id\":\"eb64012e-0d0d-41de-b7cc-8d8bc02581d5\",\"ok\":false,\"status\":\"FAILED\",\"action\":\"TYPE_ONLY\",\"message\":\"TYPE_ONLY: browser chưa có focus. Click thủ công vào ô nhập rồi dùng phím tắt test.\",\"after\":{\"id\":\"7ba0282d-0532-4745-ad07-27c6c47923a5\",\"width\":1024,\"height\":560,\"zoom\":1,\"url\":\"https://www.facebook.com/groups/314158368669766\",\"timestamp\":\"2026-10-19T06:45:55.704Z\",\"backend\":\"cdp-surface\"},\"source\":\"base\",\"stepId\":\"7093f687-9f6b-4ca7-af58-e5877412d5ee\",\"version\":1,\"flowId\":\"e7c3f6d4-6a46-4ff8-9a70-f029f9b0c111\"}"
+      },
+      {
+        "id": "3665dfe4-4984-4477-b6ae-aca7658a20c9",
+        "payload": "{\"id\":\"3665dfe4-4984-4477-b6ae-aca7658a20c9\",\"ok\":false,\"status\":\"BLOCKED\",\"action\":\"CLICK_AND_TYPE\",\"message\":\"OCR không tìm thấy chính xác chữ đã xác nhận. Không gửi action.\",\"before\":{\"id\":\"14f862a7-205f-4cf7-8166-733833f70278\",\"width\":1024,\"height\":560,\"zoom\":1,\"url\":\"https://www.facebook.com/groups/314158368669766\",\"timestamp\":\"2026-10-19T07:28:54.487Z\",\"backend\":\"cdp-surface\"},\"source\":\"base\",\"stepId\":\"7093f687-9f6b-4ca7-af58-e5877412d5ee\",\"version\":2,\"flowId\":\"e7c3f6d4-6a46-4ff8-9a70-f029f9b0c111\",\"targetAsset\":\"3547b983-9d08-4e42-a519-895fe10d2c4d.png\",\"clickSent\":false}"
+      },
+      {
+        "id": "4481dcb8-3f21-4f36-9327-ed993f8ec825",
+        "payload": "{\"id\":\"4481dcb8-3f21-4f36-9327-ed993f8ec825\",\"ok\":false,\"status\":\"BLOCKED\",\"action\":\"CLICK_AND_TYPE\",\"message\":\"OCR không tìm thấy chính xác chữ đã xác nhận. Không gửi action.\",\"before\":{\"id\":\"b54b826c-9f9f-4f26-b3d3-cb1fd4ad8c8e\",\"width\":1024,\"height\":560,\"zoom\":1,\"url\":\"https://www.facebook.com/groups/314158368669766\",\"timestamp\":\"2026-10-19T07:29:53.684Z\",\"backend\":\"cdp-surface\"},\"source\":\"base\",\"stepId\":\"7093f687-9f6b-4ca7-af58-e5877412d5ee\",\"version\":2,\"flowId\":\"e7c3f6d4-6a46-4ff8-9a70-f029f9b0c111\",\"targetAsset\":\"3547b983-9d08-4e42-a519-895fe10d2c4d.png\",\"clickSent\":false}"
+      }
+    ],
+    "like_runs.payload:08947dd7-1436-4210-9279-130f2d00d4ad": [
+      {
+        "id": "7af5b982-d7d2-4c87-b20a-43b9338fa083",
+        "payload": "{\"id\":\"7af5b982-d7d2-4c87-b20a-43b9338fa083\",\"execution\":{\"stepId\":\"08947dd7-1436-4210-9279-130f2d00d4ad\",\"version\":2,\"matchTo\":\"top\",\"pipeline\":\"ocr-viewport\",\"runId\":\"7af5b982-d7d2-4c87-b20a-43b9338fa083\",\"testRunId\":\"342529f5-39dd-4286-aef2-b96b18303e6a\",\"ocrPasses\":2,\"scrolls\":1,\"stopReason\":\"MATCHED_CONTEXT_CONFIRMED\"},\"ok\":true,\"status\":\"ACTION_SENT\",\"action\":\"CLICK_TARGET\",\"message\":\"v2 · Base · Match To Top · ocr-viewport: Đã gửi click một lần; chưa xác nhận kết quả nghiệp vụ.\",\"before\":{\"id\":\"d77ae82d-6b95-49d9-8a21-255e4e6e4488\",\"width\":1024,\"height\":560,\"zoom\":1,\"url\":\"https://www.facebook.com/groups/314158368669766\",\"timestamp\":\"2026-10-20T05:19:07.408Z\",\"backend\":\"cdp-surface\"},\"match\":{\"method\":\"ocr\",\"text\":\"Bạn viết gì đi...\",\"confidence\":93,\"score\":0.93,\"x\":296,\"y\":465},\"source\":\"base\",\"stepId\":\"08947dd7-1436-4210-9279-130f2d00d4ad\",\"version\":2,\"flowId\":\"48f48584-75b8-4e01-8bff-20a95be2daba\",\"targetAsset\":\"ee23380e-02b5-4c60-abfb-dd8b3ce16756.png\",\"clickSent\":true,\"resolution\":{\"mode\":\"auto\",\"attempts\":[{\"method\":\"ocr\",\"outcome\":\"matched\",\"x\":296,\"y\":465,\"confidence\":93}],\"context\":[{\"x\":296,\"y\":465,\"confirmed\":true,\"reason\":\"CONTEXT_CONFIRMED: bbox OCR hiện tại + 2 anchor chữ lân cận; không kiểm tra pixel/ROI đầy đủ.\",\"anchor\":\"danh | ® Cảm xúc/hoạt động\"}],\"selectedMethod\":\"ocr\"}}"
+      },
+      {
+        "id": "4027bb3c-316f-4eb7-bb2e-fb133230171c",
+        "payload": "{\"id\":\"4027bb3c-316f-4eb7-bb2e-fb133230171c\",\"execution\":{\"stepId\":\"08947dd7-1436-4210-9279-130f2d00d4ad\",\"version\":2,\"matchTo\":\"top\",\"pipeline\":\"ocr-viewport\",\"runId\":\"4027bb3c-316f-4eb7-bb2e-fb133230171c\",\"testRunId\":\"8ea82c75-ee0b-4b82-8a5d-743a7bb16c34\",\"ocrPasses\":2,\"scrolls\":2,\"stopReason\":\"MATCHED_CONTEXT_CONFIRMED\"},\"ok\":true,\"status\":\"ACTION_SENT\",\"action\":\"CLICK_TARGET\",\"message\":\"v2 · Base · Match To Top · ocr-viewport: Đã gửi click một lần; chưa xác nhận kết quả nghiệp vụ.\",\"before\":{\"id\":\"0a092080-8236-45ab-a44a-49454e664a6c\",\"width\":1024,\"height\":560,\"zoom\":1,\"url\":\"https://www.facebook.com/groups/314158368669766\",\"timestamp\":\"2026-10-20T06:53:33.739Z\",\"backend\":\"cdp-surface\"},\"match\":{\"method\":\"ocr\",\"text\":\"Bạn viết gì đi...\",\"confidence\":93,\"score\":0.93,\"x\":296,\"y\":465},\"source\":\"base\",\"stepId\":\"08947dd7-1436-4210-9279-130f2d00d4ad\",\"version\":2,\"flowId\":\"48f48584-75b8-4e01-8bff-20a95be2daba\",\"targetAsset\":\"ee23380e-02b5-4c60-abfb-dd8b3ce16756.png\",\"clickSent\":true,\"resolution\":{\"mode\":\"auto\",\"attempts\":[{\"method\":\"ocr\",\"outcome\":\"matched\",\"x\":296,\"y\":465,\"confidence\":93}],\"context\":[{\"x\":296,\"y\":465,\"confirmed\":true,\"reason\":\"CONTEXT_CONFIRMED: bbox OCR hiện tại + 2 anchor chữ lân cận; không kiểm tra pixel/ROI đầy đủ.\",\"anchor\":\"danh | ® Cảm xúc/hoạt động\"}],\"selectedMethod\":\"ocr\"}}"
+      },
+      {
+        "id": "04d97630-2a34-4350-acfd-bec51ce1998e",
+        "payload": "{\"id\":\"04d97630-2a34-4350-acfd-bec51ce1998e\",\"execution\":{\"stepId\":\"08947dd7-1436-4210-9279-130f2d00d4ad\",\"version\":2,\"matchTo\":\"top\",\"pipeline\":\"ocr-viewport\",\"runId\":\"04d97630-2a34-4350-acfd-bec51ce1998e\",\"testRunId\":\"d8621d97-489e-4ee3-a85a-3d68b911f1d7\",\"batchRunId\":\"b307d666-1dd5-4614-92fe-7969d76df89d\",\"ocrPasses\":2,\"scrolls\":2,\"stopReason\":\"MATCHED_CONTEXT_CONFIRMED\"},\"ok\":true,\"status\":\"ACTION_SENT\",\"action\":\"CLICK_TARGET\",\"message\":\"v2 · Base · Match To Top · ocr-viewport: Đã gửi click một lần; chưa xác nhận kết quả nghiệp vụ.\",\"before\":{\"id\":\"7e7cf185-e773-4663-81f3-fc1cb39afd8c\",\"width\":1024,\"height\":560,\"zoom\":1,\"url\":\"https://www.facebook.com/groups/314158368669766\",\"timestamp\":\"2026-10-20T07:27:27.400Z\",\"backend\":\"cdp-surface\"},\"match\":{\"method\":\"ocr\",\"text\":\"Bạn viết gì đi...\",\"confidence\":93,\"score\":0.93,\"x\":296,\"y\":465},\"source\":\"base\",\"stepId\":\"08947dd7-1436-4210-9279-130f2d00d4ad\",\"version\":2,\"flowId\":\"48f48584-75b8-4e01-8bff-20a95be2daba\",\"targetAsset\":\"ee23380e-02b5-4c60-abfb-dd8b3ce16756.png\",\"clickSent\":true,\"resolution\":{\"mode\":\"auto\",\"attempts\":[{\"method\":\"ocr\",\"outcome\":\"matched\",\"x\":296,\"y\":465,\"confidence\":93}],\"context\":[{\"x\":296,\"y\":465,\"confirmed\":true,\"reason\":\"CONTEXT_CONFIRMED: bbox OCR hiện tại + 2 anchor chữ lân cận; không kiểm tra pixel/ROI đầy đủ.\",\"anchor\":\"danh | ® Cảm xúc/hoạt động\"}],\"selectedMethod\":\"ocr\"}}"
+      },
+      {
+        "id": "1f891d5a-1ec5-4633-8141-a6dcc48f20fd",
+        "payload": "{\"id\":\"1f891d5a-1ec5-4633-8141-a6dcc48f20fd\",\"execution\":{\"stepId\":\"08947dd7-1436-4210-9279-130f2d00d4ad\",\"version\":2,\"matchTo\":\"top\",\"pipeline\":\"ocr-viewport\",\"runId\":\"1f891d5a-1ec5-4633-8141-a6dcc48f20fd\",\"testRunId\":\"a240bfa5-1e31-4419-a092-1227682f0ee3\",\"batchRunId\":\"e4e415b9-abda-4f65-8124-b8a8745dad9e\",\"ocrPasses\":2,\"scrolls\":2,\"stopReason\":\"MATCHED_CONTEXT_CONFIRMED\"},\"ok\":true,\"status\":\"ACTION_SENT\",\"action\":\"CLICK_TARGET\",\"message\":\"v2 · Base · Match To Top · ocr-viewport: Đã gửi click một lần; chưa xác nhận kết quả nghiệp vụ.\",\"before\":{\"id\":\"5da6f3ba-d032-43c1-906b-4ad3808cc9f7\",\"width\":1024,\"height\":560,\"zoom\":1,\"url\":\"https://www.facebook.com/groups/314158368669766\",\"timestamp\":\"2026-10-20T07:57:58.184Z\",\"backend\":\"cdp-surface\"},\"match\":{\"method\":\"ocr\",\"text\":\"Bạn viết gì đi...\",\"confidence\":93,\"score\":0.93,\"x\":296,\"y\":465},\"source\":\"base\",\"stepId\":\"08947dd7-1436-4210-9279-130f2d00d4ad\",\"version\":2,\"flowId\":\"48f48584-75b8-4e01-8bff-20a95be2daba\",\"targetAsset\":\"ee23380e-02b5-4c60-abfb-dd8b3ce16756.png\",\"clickSent\":true,\"resolution\":{\"mode\":\"auto\",\"attempts\":[{\"method\":\"ocr\",\"outcome\":\"matched\",\"x\":296,\"y\":465,\"confidence\":93}],\"context\":[{\"x\":296,\"y\":465,\"confirmed\":true,\"reason\":\"CONTEXT_CONFIRMED: bbox OCR hiện tại + 2 anchor chữ lân cận; không kiểm tra pixel/ROI đầy đủ.\",\"anchor\":\"danh | ® Cảm xúc/hoạt động\"}],\"selectedMethod\":\"ocr\"}}"
+      },
+      {
+        "id": "1677a1e3-5122-45d1-82bf-fcfb459b65a4",
+        "payload": "{\"id\":\"1677a1e3-5122-45d1-82bf-fcfb459b65a4\",\"execution\":{\"stepId\":\"08947dd7-1436-4210-9279-130f2d00d4ad\",\"version\":2,\"matchTo\":\"top\",\"pipeline\":\"ocr-viewport\",\"runId\":\"1677a1e3-5122-45d1-82bf-fcfb459b65a4\",\"testRunId\":\"08b493b7-07e7-4ece-ae1e-faee167cf6aa\",\"batchRunId\":\"9f7d504d-2f65-420d-a30d-2cb54075fb27\",\"ocrPasses\":2,\"scrolls\":2,\"stopReason\":\"MATCHED_CONTEXT_CONFIRMED\"},\"ok\":true,\"status\":\"ACTION_SENT\",\"action\":\"CLICK_TARGET\",\"message\":\"v2 · Base · Match To Top · ocr-viewport: Đã gửi click một lần; chưa xác nhận kết quả nghiệp vụ.\",\"before\":{\"id\":\"3c94ee1a-c9f8-4b89-9f27-d53be031c191\",\"width\":1024,\"height\":560,\"zoom\":1,\"url\":\"https://www.facebook.com/groups/314158368669766\",\"timestamp\":\"2026-10-20T08:59:13.739Z\",\"backend\":\"cdp-surface\"},\"match\":{\"method\":\"ocr\",\"text\":\"Bạn viết gì đi...\",\"confidence\":93,\"score\":0.93,\"x\":296,\"y\":465},\"source\":\"base\",\"stepId\":\"08947dd7-1436-4210-9279-130f2d00d4ad\",\"version\":2,\"flowId\":\"48f48584-75b8-4e01-8bff-20a95be2daba\",\"targetAsset\":\"ee23380e-02b5-4c60-abfb-dd8b3ce16756.png\",\"clickSent\":true,\"resolution\":{\"mode\":\"auto\",\"attempts\":[{\"method\":\"ocr\",\"outcome\":\"matched\",\"x\":296,\"y\":465,\"confidence\":93}],\"context\":[{\"x\":296,\"y\":465,\"confirmed\":true,\"reason\":\"CONTEXT_CONFIRMED: bbox OCR hiện tại + 2 anchor chữ lân cận; không kiểm tra pixel/ROI đầy đủ.\",\"anchor\":\"danh | ® Cảm xúc/hoạt động\"}],\"selectedMethod\":\"ocr\"}}"
+      }
+    ],
+    "steps:030160d7-4630-4c3a-aafe-8dd91378b468": [
+      {
+        "id": "030160d7-4630-4c3a-aafe-8dd91378b468",
+        "version": 1,
+        "payload": "{\"id\":\"030160d7-4630-4c3a-aafe-8dd91378b468\",\"version\":1,\"name\":\"CLICK_TARGET\",\"payload\":{\"action\":\"CLICK_TARGET\",\"target\":{\"asset\":\"17ddecd0-1e09-4198-a20a-171b8ff0d080.png\",\"roi\":{\"x\":164,\"y\":177,\"width\":685,\"height\":132}},\"threshold\":0.96,\"timeoutMs\":3000},\"createdAt\":\"2026-10-19T05:22:00.614Z\"}"
+      },
+      {
+        "id": "030160d7-4630-4c3a-aafe-8dd91378b468",
+        "version": 2,
+        "payload": "{\"id\":\"030160d7-4630-4c3a-aafe-8dd91378b468\",\"version\":2,\"name\":\"CLICK_TARGET\",\"payload\":{\"action\":\"CLICK_TARGET\",\"target\":{\"asset\":\"17ddecd0-1e09-4198-a20a-171b8ff0d080.png\",\"roi\":{\"x\":164,\"y\":177,\"width\":685,\"height\":132},\"ocr\":{\"text\":\"@ Bạn viết gì đi...\",\"bbox\":{\"x\":18,\"y\":16,\"width\":168,\"height\":41},\"confidence\":88,\"kind\":\"line\",\"language\":\"vie+eng\",\"confirmed\":true}},\"method\":\"image\",\"threshold\":0.96,\"timeoutMs\":3000},\"createdAt\":\"2026-10-19T06:22:33.589Z\"}"
+      },
+      {
+        "id": "030160d7-4630-4c3a-aafe-8dd91378b468",
+        "version": 3,
+        "payload": "{\"id\":\"030160d7-4630-4c3a-aafe-8dd91378b468\",\"version\":3,\"name\":\"CLICK_TARGET\",\"payload\":{\"action\":\"CLICK_TARGET\",\"target\":{\"asset\":\"17ddecd0-1e09-4198-a20a-171b8ff0d080.png\",\"roi\":{\"x\":164,\"y\":177,\"width\":685,\"height\":132},\"ocr\":{\"text\":\"@ Bạn viết gì đi...\",\"bbox\":{\"x\":18,\"y\":16,\"width\":168,\"height\":41},\"confidence\":88,\"kind\":\"line\",\"language\":\"vie+eng\",\"confirmed\":true}},\"method\":\"ocr\",\"threshold\":0.96,\"timeoutMs\":3000},\"createdAt\":\"2026-10-19T06:42:12.515Z\"}"
+      },
+      {
+        "id": "030160d7-4630-4c3a-aafe-8dd91378b468",
+        "version": 4,
+        "payload": "{\"id\":\"030160d7-4630-4c3a-aafe-8dd91378b468\",\"version\":4,\"name\":\"CLICK_TARGET\",\"payload\":{\"action\":\"CLICK_TARGET\",\"target\":{\"asset\":\"17ddecd0-1e09-4198-a20a-171b8ff0d080.png\",\"roi\":{\"x\":164,\"y\":177,\"width\":685,\"height\":132},\"ocr\":{\"text\":\"@ Bạn viết gì đi...\",\"bbox\":{\"x\":18,\"y\":16,\"width\":168,\"height\":41},\"confidence\":88,\"kind\":\"line\",\"language\":\"vie+eng\",\"confirmed\":true}},\"method\":\"auto\",\"threshold\":0.96,\"timeoutMs\":3000},\"createdAt\":\"2026-10-19T13:18:37.921Z\"}"
+      },
+      {
+        "id": "030160d7-4630-4c3a-aafe-8dd91378b468",
+        "version": 5,
+        "payload": "{\"id\":\"030160d7-4630-4c3a-aafe-8dd91378b468\",\"version\":5,\"name\":\"CLICK_TARGET\",\"payload\":{\"action\":\"CLICK_TARGET\",\"target\":{\"asset\":\"17ddecd0-1e09-4198-a20a-171b8ff0d080.png\",\"roi\":{\"x\":164,\"y\":177,\"width\":685,\"height\":132},\"ocr\":{\"text\":\"@ Bạn viết gì đi...\",\"bbox\":{\"x\":18,\"y\":16,\"width\":168,\"height\":41},\"confidence\":88,\"kind\":\"line\",\"language\":\"vie+eng\",\"confirmed\":true},\"matchTo\":\"middle\"},\"method\":\"auto\",\"threshold\":0.96,\"timeoutMs\":3000},\"createdAt\":\"2026-10-19T13:35:18.721Z\"}"
+      },
+      {
+        "id": "030160d7-4630-4c3a-aafe-8dd91378b468",
+        "version": 6,
+        "payload": "{\"id\":\"030160d7-4630-4c3a-aafe-8dd91378b468\",\"version\":6,\"name\":\"CLICK_TARGET\",\"payload\":{\"action\":\"CLICK_TARGET\",\"target\":{\"asset\":\"17ddecd0-1e09-4198-a20a-171b8ff0d080.png\",\"roi\":{\"x\":164,\"y\":177,\"width\":685,\"height\":132},\"ocr\":{\"text\":\"@ Bạn viết gì đi...\",\"bbox\":{\"x\":18,\"y\":16,\"width\":168,\"height\":41},\"confidence\":88,\"kind\":\"line\",\"language\":\"vie+eng\",\"confirmed\":true},\"matchTo\":\"current\"},\"method\":\"auto\",\"threshold\":0.96,\"timeoutMs\":3000},\"createdAt\":\"2026-10-19T13:36:39.466Z\"}"
+      },
+      {
+        "id": "030160d7-4630-4c3a-aafe-8dd91378b468",
+        "version": 7,
+        "payload": "{\"id\":\"030160d7-4630-4c3a-aafe-8dd91378b468\",\"version\":7,\"name\":\"CLICK_TARGET\",\"payload\":{\"action\":\"CLICK_TARGET\",\"target\":{\"asset\":\"17ddecd0-1e09-4198-a20a-171b8ff0d080.png\",\"roi\":{\"x\":164,\"y\":177,\"width\":685,\"height\":132},\"ocr\":{\"text\":\"@ Bạn viết gì đi...\",\"bbox\":{\"x\":18,\"y\":16,\"width\":168,\"height\":41},\"confidence\":88,\"kind\":\"line\",\"language\":\"vie+eng\",\"confirmed\":true},\"matchTo\":\"top\"},\"method\":\"auto\",\"threshold\":0.96,\"timeoutMs\":3000},\"createdAt\":\"2026-10-19T13:51:38.312Z\"}"
+      },
+      {
+        "id": "030160d7-4630-4c3a-aafe-8dd91378b468",
+        "version": 8,
+        "payload": "{\"id\":\"030160d7-4630-4c3a-aafe-8dd91378b468\",\"version\":8,\"name\":\"CLICK_TARGET\",\"payload\":{\"action\":\"CLICK_TARGET\",\"target\":{\"asset\":\"17ddecd0-1e09-4198-a20a-171b8ff0d080.png\",\"roi\":{\"x\":164,\"y\":177,\"width\":685,\"height\":132},\"ocr\":{\"text\":\"@ Bạn viết gì đi...\",\"bbox\":{\"x\":18,\"y\":16,\"width\":168,\"height\":41},\"confidence\":88,\"kind\":\"line\",\"language\":\"vie+eng\",\"confirmed\":true},\"matchTo\":\"current\"},\"method\":\"auto\",\"threshold\":0.96,\"timeoutMs\":3000},\"createdAt\":\"2026-10-19T13:52:00.138Z\"}"
+      },
+      {
+        "id": "030160d7-4630-4c3a-aafe-8dd91378b468",
+        "version": 9,
+        "payload": "{\"id\":\"030160d7-4630-4c3a-aafe-8dd91378b468\",\"version\":9,\"name\":\"CLICK_TARGET\",\"payload\":{\"action\":\"CLICK_TARGET\",\"target\":{\"asset\":\"17ddecd0-1e09-4198-a20a-171b8ff0d080.png\",\"roi\":{\"x\":164,\"y\":177,\"width\":685,\"height\":132},\"ocr\":{\"text\":\"@ Bạn viết gì đi...\",\"bbox\":{\"x\":18,\"y\":16,\"width\":168,\"height\":41},\"confidence\":88,\"kind\":\"line\",\"language\":\"vie+eng\",\"confirmed\":true},\"matchTo\":\"top\"},\"method\":\"auto\",\"threshold\":0.96,\"timeoutMs\":3000},\"createdAt\":\"2026-10-19T14:05:38.428Z\"}"
+      },
+      {
+        "id": "030160d7-4630-4c3a-aafe-8dd91378b468",
+        "version": 10,
+        "payload": "{\"id\":\"030160d7-4630-4c3a-aafe-8dd91378b468\",\"version\":10,\"name\":\"CLICK_TARGET\",\"payload\":{\"action\":\"CLICK_TARGET\",\"target\":{\"asset\":\"17ddecd0-1e09-4198-a20a-171b8ff0d080.png\",\"roi\":{\"x\":164,\"y\":177,\"width\":685,\"height\":132},\"ocr\":{\"text\":\"Bạn viết gì đi...\",\"bbox\":{\"x\":18,\"y\":16,\"width\":168,\"height\":41},\"confidence\":88,\"kind\":\"line\",\"language\":\"vie+eng\",\"confirmed\":true},\"matchTo\":\"top\"},\"method\":\"auto\",\"threshold\":0.96,\"timeoutMs\":3000},\"createdAt\":\"2026-10-19T23:43:04.579Z\"}"
+      },
+      {
+        "id": "030160d7-4630-4c3a-aafe-8dd91378b468",
+        "version": 11,
+        "payload": "{\"id\":\"030160d7-4630-4c3a-aafe-8dd91378b468\",\"version\":11,\"name\":\"CLICK_TARGET\",\"payload\":{\"action\":\"CLICK_TARGET\",\"target\":{\"asset\":\"17ddecd0-1e09-4198-a20a-171b8ff0d080.png\",\"roi\":{\"x\":164,\"y\":177,\"width\":685,\"height\":132},\"ocr\":{\"text\":\"@ Bạn viết gì đi...\",\"bbox\":{\"x\":18,\"y\":16,\"width\":168,\"height\":41},\"confidence\":88,\"kind\":\"line\",\"language\":\"vie+eng\",\"confirmed\":true},\"matchTo\":\"top\"},\"method\":\"auto\",\"threshold\":0.96,\"timeoutMs\":3000},\"createdAt\":\"2026-10-19T23:56:20.355Z\"}"
+      },
+      {
+        "id": "030160d7-4630-4c3a-aafe-8dd91378b468",
+        "version": 12,
+        "payload": "{\"id\":\"030160d7-4630-4c3a-aafe-8dd91378b468\",\"version\":12,\"name\":\"CLICK_TARGET\",\"payload\":{\"action\":\"CLICK_TARGET\",\"target\":{\"asset\":\"17ddecd0-1e09-4198-a20a-171b8ff0d080.png\",\"roi\":{\"x\":164,\"y\":177,\"width\":685,\"height\":132},\"matchTo\":\"top\"}},\"createdAt\":\"2026-10-22T09:39:32.147Z\"}"
+      }
+    ],
+    "steps:7093f687-9f6b-4ca7-af58-e5877412d5ee": [
+      {
+        "id": "7093f687-9f6b-4ca7-af58-e5877412d5ee",
+        "version": 1,
+        "payload": "{\"id\":\"7093f687-9f6b-4ca7-af58-e5877412d5ee\",\"version\":1,\"name\":\"viết gì đó\",\"payload\":{\"action\":\"TYPE_ONLY\",\"variableId\":\"abd7ec0e-4379-4b22-9755-63d223fbccf8\"},\"createdAt\":\"2026-10-19T06:44:27.730Z\"}"
+      },
+      {
+        "id": "7093f687-9f6b-4ca7-af58-e5877412d5ee",
+        "version": 2,
+        "payload": "{\"id\":\"7093f687-9f6b-4ca7-af58-e5877412d5ee\",\"version\":2,\"name\":\"viết gì đó\",\"payload\":{\"action\":\"CLICK_AND_TYPE\",\"inputMethod\":\"keyboard\",\"target\":{\"asset\":\"3547b983-9d08-4e42-a519-895fe10d2c4d.png\",\"roi\":{\"x\":267,\"y\":241,\"width\":480,\"height\":139},\"ocr\":{\"text\":\"Bạn viết gì đi...\",\"bbox\":{\"x\":6,\"y\":22,\"width\":150,\"height\":24},\"confidence\":95,\"kind\":\"line\",\"language\":\"vie+eng\",\"confirmed\":true}},\"method\":\"ocr\",\"threshold\":0.96,\"timeoutMs\":3000,\"variableId\":\"f0087a5f-d0ed-47c3-8ecb-6b452d6b6c69\"},\"createdAt\":\"2026-10-19T07:28:51.719Z\"}"
+      },
+      {
+        "id": "7093f687-9f6b-4ca7-af58-e5877412d5ee",
+        "version": 3,
+        "payload": "{\"id\":\"7093f687-9f6b-4ca7-af58-e5877412d5ee\",\"version\":3,\"name\":\"viết gì đó\",\"payload\":{\"action\":\"CLICK_AND_TYPE\",\"variableId\":\"var-2-legacy_3\",\"target\":{\"asset\":\"3547b983-9d08-4e42-a519-895fe10d2c4d.png\",\"roi\":{\"x\":267,\"y\":241,\"width\":480,\"height\":139}}},\"createdAt\":\"2026-10-22T09:39:32.225Z\"}"
+      }
+    ],
+    "steps:08947dd7-1436-4210-9279-130f2d00d4ad": [
+      {
+        "id": "08947dd7-1436-4210-9279-130f2d00d4ad",
+        "version": 1,
+        "payload": "{\"id\":\"08947dd7-1436-4210-9279-130f2d00d4ad\",\"version\":1,\"name\":\"CLICK_TARGET\",\"payload\":{\"action\":\"CLICK_TARGET\",\"target\":{\"asset\":\"ee23380e-02b5-4c60-abfb-dd8b3ce16756.png\",\"roi\":{\"x\":166,\"y\":313,\"width\":684,\"height\":131},\"environment\":{\"width\":1024,\"height\":560,\"zoom\":1},\"ocr\":{\"text\":\"@ Bạn viết gì đi...\",\"bbox\":{\"x\":16,\"y\":13,\"width\":168,\"height\":41},\"confidence\":88,\"kind\":\"line\",\"language\":\"vie+eng\",\"confirmed\":true},\"matchTo\":\"none\"},\"method\":\"auto\",\"threshold\":0.96,\"timeoutMs\":3000},\"createdAt\":\"2026-10-20T05:18:58.540Z\"}"
+      },
+      {
+        "id": "08947dd7-1436-4210-9279-130f2d00d4ad",
+        "version": 2,
+        "payload": "{\"id\":\"08947dd7-1436-4210-9279-130f2d00d4ad\",\"version\":2,\"name\":\"CLICK_TARGET\",\"payload\":{\"action\":\"CLICK_TARGET\",\"target\":{\"asset\":\"ee23380e-02b5-4c60-abfb-dd8b3ce16756.png\",\"roi\":{\"x\":166,\"y\":313,\"width\":684,\"height\":131},\"matchTo\":\"top\",\"environment\":{\"zoom\":1,\"width\":1024,\"height\":560}}},\"createdAt\":\"2026-10-22T09:39:29.780Z\"}"
+      }
+    ],
+    "like_steps.payload:030160d7-4630-4c3a-aafe-8dd91378b468": [
+      {
+        "id": "030160d7-4630-4c3a-aafe-8dd91378b468",
+        "version": 1,
+        "payload": "{\"id\":\"030160d7-4630-4c3a-aafe-8dd91378b468\",\"version\":1,\"name\":\"CLICK_TARGET\",\"payload\":{\"action\":\"CLICK_TARGET\",\"target\":{\"asset\":\"17ddecd0-1e09-4198-a20a-171b8ff0d080.png\",\"roi\":{\"x\":164,\"y\":177,\"width\":685,\"height\":132}},\"threshold\":0.96,\"timeoutMs\":3000},\"createdAt\":\"2026-10-19T05:22:00.614Z\"}"
+      },
+      {
+        "id": "030160d7-4630-4c3a-aafe-8dd91378b468",
+        "version": 2,
+        "payload": "{\"id\":\"030160d7-4630-4c3a-aafe-8dd91378b468\",\"version\":2,\"name\":\"CLICK_TARGET\",\"payload\":{\"action\":\"CLICK_TARGET\",\"target\":{\"asset\":\"17ddecd0-1e09-4198-a20a-171b8ff0d080.png\",\"roi\":{\"x\":164,\"y\":177,\"width\":685,\"height\":132},\"ocr\":{\"text\":\"@ Bạn viết gì đi...\",\"bbox\":{\"x\":18,\"y\":16,\"width\":168,\"height\":41},\"confidence\":88,\"kind\":\"line\",\"language\":\"vie+eng\",\"confirmed\":true}},\"method\":\"image\",\"threshold\":0.96,\"timeoutMs\":3000},\"createdAt\":\"2026-10-19T06:22:33.589Z\"}"
+      },
+      {
+        "id": "030160d7-4630-4c3a-aafe-8dd91378b468",
+        "version": 3,
+        "payload": "{\"id\":\"030160d7-4630-4c3a-aafe-8dd91378b468\",\"version\":3,\"name\":\"CLICK_TARGET\",\"payload\":{\"action\":\"CLICK_TARGET\",\"target\":{\"asset\":\"17ddecd0-1e09-4198-a20a-171b8ff0d080.png\",\"roi\":{\"x\":164,\"y\":177,\"width\":685,\"height\":132},\"ocr\":{\"text\":\"@ Bạn viết gì đi...\",\"bbox\":{\"x\":18,\"y\":16,\"width\":168,\"height\":41},\"confidence\":88,\"kind\":\"line\",\"language\":\"vie+eng\",\"confirmed\":true}},\"method\":\"ocr\",\"threshold\":0.96,\"timeoutMs\":3000},\"createdAt\":\"2026-10-19T06:42:12.515Z\"}"
+      },
+      {
+        "id": "030160d7-4630-4c3a-aafe-8dd91378b468",
+        "version": 4,
+        "payload": "{\"id\":\"030160d7-4630-4c3a-aafe-8dd91378b468\",\"version\":4,\"name\":\"CLICK_TARGET\",\"payload\":{\"action\":\"CLICK_TARGET\",\"target\":{\"asset\":\"17ddecd0-1e09-4198-a20a-171b8ff0d080.png\",\"roi\":{\"x\":164,\"y\":177,\"width\":685,\"height\":132},\"ocr\":{\"text\":\"@ Bạn viết gì đi...\",\"bbox\":{\"x\":18,\"y\":16,\"width\":168,\"height\":41},\"confidence\":88,\"kind\":\"line\",\"language\":\"vie+eng\",\"confirmed\":true}},\"method\":\"auto\",\"threshold\":0.96,\"timeoutMs\":3000},\"createdAt\":\"2026-10-19T13:18:37.921Z\"}"
+      },
+      {
+        "id": "030160d7-4630-4c3a-aafe-8dd91378b468",
+        "version": 5,
+        "payload": "{\"id\":\"030160d7-4630-4c3a-aafe-8dd91378b468\",\"version\":5,\"name\":\"CLICK_TARGET\",\"payload\":{\"action\":\"CLICK_TARGET\",\"target\":{\"asset\":\"17ddecd0-1e09-4198-a20a-171b8ff0d080.png\",\"roi\":{\"x\":164,\"y\":177,\"width\":685,\"height\":132},\"ocr\":{\"text\":\"@ Bạn viết gì đi...\",\"bbox\":{\"x\":18,\"y\":16,\"width\":168,\"height\":41},\"confidence\":88,\"kind\":\"line\",\"language\":\"vie+eng\",\"confirmed\":true},\"matchTo\":\"middle\"},\"method\":\"auto\",\"threshold\":0.96,\"timeoutMs\":3000},\"createdAt\":\"2026-10-19T13:35:18.721Z\"}"
+      }
+    ],
+    "like_steps.payload:7093f687-9f6b-4ca7-af58-e5877412d5ee": [
+      {
+        "id": "7093f687-9f6b-4ca7-af58-e5877412d5ee",
+        "version": 1,
+        "payload": "{\"id\":\"7093f687-9f6b-4ca7-af58-e5877412d5ee\",\"version\":1,\"name\":\"viết gì đó\",\"payload\":{\"action\":\"TYPE_ONLY\",\"variableId\":\"abd7ec0e-4379-4b22-9755-63d223fbccf8\"},\"createdAt\":\"2026-10-19T06:44:27.730Z\"}"
+      },
+      {
+        "id": "7093f687-9f6b-4ca7-af58-e5877412d5ee",
+        "version": 2,
+        "payload": "{\"id\":\"7093f687-9f6b-4ca7-af58-e5877412d5ee\",\"version\":2,\"name\":\"viết gì đó\",\"payload\":{\"action\":\"CLICK_AND_TYPE\",\"inputMethod\":\"keyboard\",\"target\":{\"asset\":\"3547b983-9d08-4e42-a519-895fe10d2c4d.png\",\"roi\":{\"x\":267,\"y\":241,\"width\":480,\"height\":139},\"ocr\":{\"text\":\"Bạn viết gì đi...\",\"bbox\":{\"x\":6,\"y\":22,\"width\":150,\"height\":24},\"confidence\":95,\"kind\":\"line\",\"language\":\"vie+eng\",\"confirmed\":true}},\"method\":\"ocr\",\"threshold\":0.96,\"timeoutMs\":3000,\"variableId\":\"f0087a5f-d0ed-47c3-8ecb-6b452d6b6c69\"},\"createdAt\":\"2026-10-19T07:28:51.719Z\"}"
+      },
+      {
+        "id": "7093f687-9f6b-4ca7-af58-e5877412d5ee",
+        "version": 3,
+        "payload": "{\"id\":\"7093f687-9f6b-4ca7-af58-e5877412d5ee\",\"version\":3,\"name\":\"viết gì đó\",\"payload\":{\"action\":\"CLICK_AND_TYPE\",\"variableId\":\"var-2-legacy_3\",\"target\":{\"asset\":\"3547b983-9d08-4e42-a519-895fe10d2c4d.png\",\"roi\":{\"x\":267,\"y\":241,\"width\":480,\"height\":139}}},\"createdAt\":\"2026-10-22T09:39:32.225Z\"}"
+      }
+    ],
+    "like_steps.payload:08947dd7-1436-4210-9279-130f2d00d4ad": [
+      {
+        "id": "08947dd7-1436-4210-9279-130f2d00d4ad",
+        "version": 1,
+        "payload": "{\"id\":\"08947dd7-1436-4210-9279-130f2d00d4ad\",\"version\":1,\"name\":\"CLICK_TARGET\",\"payload\":{\"action\":\"CLICK_TARGET\",\"target\":{\"asset\":\"ee23380e-02b5-4c60-abfb-dd8b3ce16756.png\",\"roi\":{\"x\":166,\"y\":313,\"width\":684,\"height\":131},\"environment\":{\"width\":1024,\"height\":560,\"zoom\":1},\"ocr\":{\"text\":\"@ Bạn viết gì đi...\",\"bbox\":{\"x\":16,\"y\":13,\"width\":168,\"height\":41},\"confidence\":88,\"kind\":\"line\",\"language\":\"vie+eng\",\"confirmed\":true},\"matchTo\":\"none\"},\"method\":\"auto\",\"threshold\":0.96,\"timeoutMs\":3000},\"createdAt\":\"2026-10-20T05:18:58.540Z\"}"
+      },
+      {
+        "id": "08947dd7-1436-4210-9279-130f2d00d4ad",
+        "version": 2,
+        "payload": "{\"id\":\"08947dd7-1436-4210-9279-130f2d00d4ad\",\"version\":2,\"name\":\"CLICK_TARGET\",\"payload\":{\"action\":\"CLICK_TARGET\",\"target\":{\"asset\":\"ee23380e-02b5-4c60-abfb-dd8b3ce16756.png\",\"roi\":{\"x\":166,\"y\":313,\"width\":684,\"height\":131},\"matchTo\":\"top\",\"environment\":{\"zoom\":1,\"width\":1024,\"height\":560}}},\"createdAt\":\"2026-10-22T09:39:29.780Z\"}"
+      }
+    ]
+  }
+}

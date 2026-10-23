@@ -53,6 +53,32 @@ test("local OCR reads Vietnamese accents and English with ROI-relative boxes", a
   }
   assert.equal(Object.hasOwn(result, "selected"), false);
 });
+test("local OCR reads low-contrast gray Vietnamese placeholder without normalize crush", async () => {
+  const png = await sharp("tests/fixtures/ocr-low-contrast-placeholder.png").png().toBuffer();
+  const meta = await sharp(png).metadata();
+  const result = await localOcr.recognize(png);
+  const expected = "Bạn viết gì đi...";
+  const line = result.segments.find(
+    (s) =>
+      s.kind === "line" &&
+      normalizeTargetText(s.text) === normalizeTargetText(expected),
+  );
+  assert.ok(line, `Missing OCR line: ${expected}; got ${JSON.stringify(result.text)}`);
+  assert.ok(line!.confidence >= 80);
+  const match = resolveOcrText(
+    result,
+    {
+      text: expected,
+      kind: "line",
+      bbox: line!.bbox,
+      confidence: line!.confidence,
+      confirmed: true,
+      language: "vie+eng",
+    },
+    { x: 0, y: 0, width: meta.width!, height: meta.height! },
+  );
+  assert.equal(normalizeTargetText(match.text), normalizeTargetText(expected));
+});
 test("blank/icon ROI returns no text and can remain image-only", async () => {
   const blank = await sharp({
     create: { width: 100, height: 60, channels: 3, background: "white" },

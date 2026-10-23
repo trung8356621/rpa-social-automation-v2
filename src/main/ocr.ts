@@ -121,11 +121,12 @@ export class LocalOcr implements OcrEngine {
     if (!width || !height || width * height > 1024 * 560)
       throw new Error("Ảnh OCR vượt giới hạn ROI/viewport.");
     const scale = 2;
+    // Keep grayscale after upscale, but do not normalize: sharp.normalize() can
+    // crush low-contrast gray placeholder text on light UI chips (Facebook).
     const pixels = await sharp(image)
       .flatten({ background: "white" })
       .resize(width * scale, height * scale)
       .grayscale()
-      .normalize()
       .png()
       .toBuffer();
     const worker = await this.getWorker();
