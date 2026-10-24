@@ -60,15 +60,24 @@ test("selected Test Run demo persists, survives newer runs, updates explicitly, 
     assert.equal(JSON.parse(store.setting(`videoDemo:${flow.id}`)!).testRunId, run2);
     const selectedMetadata = store.setting(`videoDemo:${flow.id}`)!;
     const originalFetch = globalThis.fetch;
+    let publishedVersion = "";
+    let publishCalls = 0;
     token = "test-token";
     globalThis.fetch = async (url, init) => {
       const address = String(url);
+      if (address.endsWith("/scripts")) {
+        return new Response(JSON.stringify({ ok: true, scripts: [] }), { status: 200, headers: { "Content-Type": "application/json" } });
+      }
       if (address.endsWith("/scripts/sync/plan")) {
         const body = JSON.parse(String(init?.body)) as { local_scripts: unknown[] };
         return new Response(JSON.stringify({ ok: true, plan: { push_to_remote: body.local_scripts, pull_to_local: [], skip: [], conflicts: [] } }),
           { status: 200, headers: { "Content-Type": "application/json" } });
       }
-      if (address.endsWith("/scripts/publish")) return new Response(JSON.stringify({ ok: true }), { status: 200 });
+      if (address.endsWith("/scripts/publish")) {
+        publishCalls++;
+        publishedVersion = String((JSON.parse(String(init?.body)) as { version?: unknown }).version ?? "");
+        return new Response(JSON.stringify({ ok: true }), { status: 200 });
+      }
       if (address.endsWith("/scripts/video-demo")) return new Response(JSON.stringify({ ok: false, errors: ["test upload failure"] }), { status: 500 });
       throw new Error(`Unexpected test URL: ${address}`);
     };
@@ -76,9 +85,13 @@ test("selected Test Run demo persists, survives newer runs, updates explicitly, 
       const sync = await service.syncAll({ flowId: flow.id, version: "1.0.0" });
       const push = sync.results.find(result => result.action === "push");
       assert.equal(push?.ok, false, "metadata publish must not count as success when video transfer fails");
+      assert.equal(publishedVersion, "1", "Admin assigns version 1 without user input");
       assert.match(push?.message ?? "", /video upload failed/);
       assert.equal(store.setting(`videoDemo:${flow.id}`), selectedMetadata);
       assert.equal(await readFile(path.join(evidence, second.artifactRef), "utf8"), "video-two");
+      await service.syncAll({ flowId: flow.id });
+      assert.equal(publishCalls, 2, "interrupted media upload retries the same immutable release");
+      assert.equal(publishedVersion, "1", "retry does not allocate a duplicate version");
     } finally { globalThis.fetch = originalFetch; token = null; }
     await unlink(path.join(evidence, second.artifactRef));
     assert.equal((await service.refreshStatusRows()).find(row => row.script_id === flow.id)?.demo_status, "error");

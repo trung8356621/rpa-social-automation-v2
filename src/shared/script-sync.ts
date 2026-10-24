@@ -12,6 +12,7 @@ export type LocalScriptRow = {
   execution_digest?: string;
   lineage?: string[];
   assets_complete?: boolean;
+  demo_status?: "ready" | "missing" | "outdated" | "error";
   /** Full publish body when pushing — required for usable import. */
   publish_body?: ScriptPublishBody;
 };

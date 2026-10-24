@@ -3,7 +3,6 @@ import { UiPopover } from "./ui-popover";
 import type { AppPage, Command, ScenarioOrganization, State } from "../shared/contracts";
 import type { ScriptSyncRow } from "../shared/sync-status";
 import { SeoOpsSyncControls, syncBadge } from "./seo-ops-panel";
-import type { ManualSyncResponse } from "../shared/sync-ipc";
 import { ScriptHealthPanel } from "./script-health-panel";
 
 /** Primary Admin nav only — Variations / Widget / Workflow / Builds remain routable legacy, not listed. */
@@ -51,8 +50,6 @@ export function ScenariosPage({ state, name, setName, locked, open, create, sess
   const [working, setWorking] = useState(false);
   const [error, setError] = useState("");
   const [syncRows, setSyncRows] = useState<ScriptSyncRow[]>([]);
-  const [syncFlowId, setSyncFlowId] = useState<string>();
-  const [syncVersion, setSyncVersion] = useState("1.0.0");
   const organization: ScenarioOrganization = state?.scenarioOrganization ?? { groups: [], membership: {}, ungroupedCollapsed: false };
   const disabled = locked || working;
 
@@ -151,17 +148,6 @@ export function ScenariosPage({ state, name, setName, locked, open, create, sess
               <button disabled={disabled} onClick={() => open(flow.id)}>Mở Creator</button>
               <details><summary aria-label={`Menu Scenario ${flow.name}`}>...</summary><div className="scenario-menu">
                 <button disabled={disabled} onClick={() => show("move", flow.id, organization.membership[flow.id] ?? "")}>Move to Group</button>
-                {invoke && (
-                  <button
-                    disabled={disabled || !authenticated}
-                    onClick={() => {
-                      setSyncVersion("1.0.0");
-                      setSyncFlowId(flow.id);
-                    }}
-                  >
-                    Sync SEO-OPS
-                  </button>
-                )}
                 <button disabled={disabled} onClick={() => show("scenario-delete", flow.id)}>Delete Scenario</button>
               </div></details>
             </div>;
@@ -179,42 +165,6 @@ export function ScenariosPage({ state, name, setName, locked, open, create, sess
         open={open}
         onPinned={(next) => onState?.(next)}
       />
-    )}
-    {syncFlowId && invoke && (
-      <UiPopover variant="modal" label="Sync SEO-OPS" className="unsaved-confirm" close={() => { if (!working) setSyncFlowId(undefined); }}>
-        <div className="popover-heading">
-          <b>Sync Scenario lên SEO-OPS</b>
-          <button disabled={working} onClick={() => setSyncFlowId(undefined)}>×</button>
-        </div>
-        <label>
-          Version (semver)
-          <input value={syncVersion} disabled={working} onChange={(e) => setSyncVersion(e.target.value)} />
-        </label>
-        <div className="popover-actions">
-          <button disabled={working} onClick={() => setSyncFlowId(undefined)}>Hủy</button>
-          <button
-            className="primary"
-            disabled={working || !syncVersion.trim()}
-            onClick={() => {
-              const flowId = syncFlowId;
-              const version = syncVersion.trim();
-              setWorking(true);
-              setError("");
-              void invoke<ManualSyncResponse>({ type: "seoOpsSyncFlow", flowId, version })
-                .then((result) => { if (!result.ok) throw new Error(result.error.message); })
-                .then(() => invoke<{ rows: ScriptSyncRow[] }>({ type: "seoOpsSyncStatus" }))
-                .then((r) => {
-                  setSyncRows(r.rows);
-                  setSyncFlowId(undefined);
-                })
-                .catch((e) => setError(String((e as Error).message || e)))
-                .finally(() => setWorking(false));
-            }}
-          >
-            Sync now
-          </button>
-        </div>
-      </UiPopover>
     )}
     {dialog && <UiPopover variant="modal" label={dialog.kind === "scenario-delete" ? "Delete Scenario" : "Scenario Group"} className="unsaved-confirm"
       close={() => { if (!working) setDialog(undefined); }}>

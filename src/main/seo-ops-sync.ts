@@ -191,7 +191,7 @@ export function createSeoOpsSyncService(options: {
       return { errors: ["VIDEO_DEMO: demo must be reviewed via Use as Script Demo"] };
     }
     try {
-      const demo = toScriptVideoDemo(attachment);
+      const demo = toScriptVideoDemo({ ...attachment, scriptVersion: version });
       return { demo, attachment, errors: [] };
     } catch (e) {
       return { errors: [String((e as Error).message || e)] };
@@ -528,20 +528,23 @@ export function createSeoOpsSyncService(options: {
 
   async function syncAll(options?: { flowId?: string; version?: string }) {
     if (!tokenStore.getToken()) throw new Error("SEO_OPS: cần đăng nhập trước khi sync");
-    const localAll = await buildLocalCatalog();
-    const local = options?.flowId
-      ? localAll.filter((r) => r.flow_id === options.flowId)
-      : localAll;
-    if (options?.flowId && options.version) {
-      for (const row of local) {
-        store.setSetting(`seoOpsVersion:${row.flow_id}`, options.version);
+    const client = syncClient();
+    const remote = await client.catalog();
+    const remoteById = new Map(remote.map(row => [row.script_id, row]));
+    const selectedFlows = options?.flowId ? store.flows().filter(flow => flow.id === options.flowId) : store.flows();
+    const refreshedLocal: LocalCatalogRow[] = [];
+    for (const flow of selectedFlows) {
+      const server = remoteById.get(flow.id);
+      const currentVersion = server?.version ?? store.setting(`seoOpsVersion:${flow.id}`) ?? "1";
+      const current = await localRow(flow, currentVersion);
+      if (!server || current.content_digest !== server.content_digest) {
+        const parsed = Number.parseInt(server?.version ?? "0", 10);
+        const nextVersion = String(Number.isSafeInteger(parsed) && parsed >= 0 ? parsed + 1 : 1);
+        refreshedLocal.push(await localRow(flow, nextVersion));
+      } else {
+        refreshedLocal.push(current);
       }
     }
-    const refreshedLocal = options?.flowId
-      ? await buildLocalCatalog().then((rows) => rows.filter((r) => r.flow_id === options.flowId))
-      : await buildLocalCatalog();
-
-    const client = syncClient();
     const now = new Date().toISOString();
     const meta = loadMeta();
     const results: Array<{ script_id: string; action: string; ok: boolean; message?: string }> = [];
@@ -576,7 +579,15 @@ export function createSeoOpsSyncService(options: {
       };
     }
 
-    const plan = await client.plan(publishable.map(toPlanRow));
+    const plan: SyncPlan = { push_to_remote: [], pull_to_local: [], skip: [], conflicts: [] };
+    for (const row of publishable) {
+      const server = remoteById.get(row.script_id);
+      if (server && server.content_digest === row.content_digest && server.demo_status === "ready") {
+        plan.skip.push({ script_id: row.script_id, reason: "same_digest" });
+      } else {
+        plan.push_to_remote.push(toPlanRow(row));
+      }
+    }
 
     for (const row of plan.push_to_remote) {
       try {
@@ -616,6 +627,7 @@ export function createSeoOpsSyncService(options: {
           message,
         });
         if (ok) {
+          store.setSetting(`seoOpsVersion:${full.flow_id}`, full.version);
           const lineage = JSON.parse(store.setting(`seoOpsLineage:${full.flow_id}`) || "[]") as string[];
           lineage.push(full.content_digest);
           store.setSetting(`seoOpsLineage:${full.flow_id}`, JSON.stringify(lineage.slice(-20)));

@@ -2,7 +2,6 @@ import React, { useCallback, useEffect, useState } from "react";
 import type { Command } from "../shared/contracts";
 import { mapSeoOpsAuthError, mapSeoOpsAuthErrors } from "../shared/seo-ops-auth";
 import { labelForStatus, type ScriptSyncRow } from "../shared/sync-status";
-import { UiPopover } from "./ui-popover";
 import type { ManualSyncResponse } from "../shared/sync-ipc";
 
 type SessionState = {
@@ -13,55 +12,6 @@ type SessionState = {
   user?: { id: number; email: string; name: string; role: string };
   error?: string;
 };
-
-function VersionDialog({
-  open,
-  defaultVersion,
-  busy,
-  onCancel,
-  onConfirm,
-}: {
-  open: boolean;
-  defaultVersion: string;
-  busy: boolean;
-  onCancel: () => void;
-  onConfirm: (version: string) => void;
-}) {
-  const [version, setVersion] = useState(defaultVersion);
-  useEffect(() => {
-    if (open) setVersion(defaultVersion);
-  }, [open, defaultVersion]);
-  if (!open) return null;
-  return (
-    <UiPopover variant="modal" label="Script version" className="unsaved-confirm" close={() => { if (!busy) onCancel(); }}>
-      <div className="popover-heading">
-        <b>Phiên bản Script (semver)</b>
-        <button disabled={busy} onClick={onCancel}>×</button>
-      </div>
-      <p>Dùng khi push Script lên SEO-OPS. Để trống sẽ giữ phiên bản hiện tại.</p>
-      <label>
-        Version
-        <input
-          value={version}
-          disabled={busy}
-          onChange={(e) => setVersion(e.target.value)}
-          placeholder="1.0.0"
-          autoFocus
-        />
-      </label>
-      <div className="popover-actions">
-        <button disabled={busy} onClick={onCancel}>Hủy</button>
-        <button
-          className="primary"
-          disabled={busy}
-          onClick={() => onConfirm(version.trim() || defaultVersion)}
-        >
-          Sync now
-        </button>
-      </div>
-    </UiPopover>
-  );
-}
 
 export function SeoOpsAuthPanel({
   locked,
@@ -197,7 +147,6 @@ export function SeoOpsSyncControls({
   const [busy, setBusy] = useState(false);
   const [message, setMessage] = useState("");
   const [rows, setRows] = useState<ScriptSyncRow[]>([]);
-  const [versionDialog, setVersionDialog] = useState<"all" | "one" | null>(null);
 
   const applyRows = useCallback(
     (next: ScriptSyncRow[]) => {
@@ -221,7 +170,7 @@ export function SeoOpsSyncControls({
     return () => clearInterval(timer);
   }, [authenticated, autoSyncEnabled, pullStatus]);
 
-  async function runSync(all: boolean, version?: string) {
+  async function runSync() {
     if (!authenticated) {
       setMessage("Cần đăng nhập SEO-OPS trước khi sync.");
       return;
@@ -231,9 +180,7 @@ export function SeoOpsSyncControls({
     setMessage("");
     try {
       const result = await invoke<ManualSyncResponse>(
-        all
-          ? { type: "seoOpsSyncAll", version }
-          : { type: "seoOpsSyncFlow", flowId: flowId!, version },
+        { type: "seoOpsSyncAll" },
       );
       if (!result.ok) {
         setMessage(result.error.message);
@@ -251,20 +198,14 @@ export function SeoOpsSyncControls({
       setMessage(mapSeoOpsAuthError(String((e as Error).message || e)));
     } finally {
       setBusy(false);
-      setVersionDialog(null);
     }
   }
 
   return (
     <div className="seo-ops-sync-controls">
-      <button disabled={locked || busy || !authenticated} onClick={() => setVersionDialog("all")}>
+      <button disabled={locked || busy || !authenticated} onClick={() => void runSync()}>
         Sync now
       </button>
-      {flowId && (
-        <button disabled={locked || busy || !authenticated} onClick={() => setVersionDialog("one")}>
-          Sync Scenario này
-        </button>
-      )}
       {message && <small>{message}</small>}
       {rows.length > 0 && (
         <details className="seo-ops-sync-summary">
@@ -279,13 +220,6 @@ export function SeoOpsSyncControls({
           </ul>
         </details>
       )}
-      <VersionDialog
-        open={versionDialog !== null}
-        defaultVersion="1.0.0"
-        busy={busy}
-        onCancel={() => setVersionDialog(null)}
-        onConfirm={(version) => void runSync(versionDialog === "all", version)}
-      />
     </div>
   );
 }

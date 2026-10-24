@@ -76,7 +76,7 @@ export type ScriptCatalogSnapshot = {
 };
 
 const PACKAGE_KEY = /^[a-z0-9][a-z0-9._-]{1,126}[a-z0-9]$/;
-const SEMVER = /^[0-9]+\.[0-9]+\.[0-9]+([.-][A-Za-z0-9.-]+)?$/;
+const RELEASE_VERSION = /^(?:[1-9][0-9]*|[0-9]+\.[0-9]+\.[0-9]+(?:[.-][A-Za-z0-9.-]+)?)$/;
 
 function packageKeyFor(flow: Flow, explicit?: string): string {
   const packageKey =
@@ -324,7 +324,7 @@ function assembleBody(
  */
 export function buildScriptCatalogSnapshot(input: ScriptExportInput): ScriptCatalogSnapshot {
   const reasons: string[] = [];
-  if (!SEMVER.test(input.version)) {
+  if (!RELEASE_VERSION.test(input.version)) {
     reasons.push("invalid_version");
   }
   let package_key = input.flow.id;
@@ -344,7 +344,7 @@ export function buildScriptCatalogSnapshot(input: ScriptExportInput): ScriptCata
   if (stepPayloads.length === 0) reasons.push("steps_required");
   if (!input.videoDemo) reasons.push(MISSING_DEMO_REASON);
 
-  const version = SEMVER.test(input.version) ? input.version : "0.0.0";
+  const version = RELEASE_VERSION.test(input.version) ? input.version : "0.0.0";
   const softInput = { ...input, version };
   let body: ScriptPublishBody;
   try {
@@ -394,7 +394,7 @@ export function buildScriptCatalogSnapshot(input: ScriptExportInput): ScriptCata
 /** Map Scenario/Flow → SEO-OPS Script release (publish path — requires Steps). */
 export function buildScriptPublishBody(input: ScriptExportInput): ScriptPublishBody {
   const { flow, steps, version } = input;
-  if (!SEMVER.test(version)) throw new Error("SCRIPT_EXPORT: invalid version");
+  if (!RELEASE_VERSION.test(version)) throw new Error("SCRIPT_EXPORT: invalid version");
   const { stepPayloads, missing, invalid } = mapStepPayloads(flow, steps);
   if (missing.length) {
     throw new Error(`SCRIPT_EXPORT: missing step ${missing[0]}`);
