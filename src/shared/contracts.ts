@@ -316,6 +316,7 @@ export type Command =
       packageKey?: string;
       includeVideoDemo?: boolean;
     }
+  | { type: "exportFullBackup" }
   | { type: "seoOpsGetSession" }
   | { type: "seoOpsSetEndpoint"; baseUrl: string }
   | { type: "seoOpsLogin"; email: string; password: string }

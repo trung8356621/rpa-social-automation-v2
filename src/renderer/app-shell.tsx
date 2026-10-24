@@ -49,6 +49,7 @@ export function ScenariosPage({ state, name, setName, locked, open, create, sess
   const [value, setValue] = useState("");
   const [working, setWorking] = useState(false);
   const [error, setError] = useState("");
+  const [backupMessage, setBackupMessage] = useState("");
   const [syncRows, setSyncRows] = useState<ScriptSyncRow[]>([]);
   const organization: ScenarioOrganization = state?.scenarioOrganization ?? { groups: [], membership: {}, ungroupedCollapsed: false };
   const disabled = locked || working;
@@ -95,6 +96,14 @@ export function ScenariosPage({ state, name, setName, locked, open, create, sess
           includeVideoDemo: true,
         });
       }}>Export Script JSON</button>
+      <button disabled={disabled || !invoke} onClick={() => {
+        if (!invoke) return; setWorking(true); setBackupMessage("Đang tạo và kiểm tra backup…");
+        void invoke<{ cancelled: boolean; counts?: { scenarios: number; stepVersions: number; assets: number } }>({ type: "exportFullBackup" })
+          .then(result => setBackupMessage(result.cancelled ? "Đã hủy export." : `Backup verified: ${result.counts?.scenarios ?? 0} Scenario, ${result.counts?.stepVersions ?? 0} Step versions, ${result.counts?.assets ?? 0} assets.`))
+          .catch(e => setBackupMessage(`Backup incomplete/failed: ${String((e as Error).message || e)}`))
+          .finally(() => setWorking(false));
+      }}>Export Full Backup (.zip)</button>
+      {backupMessage && <small role={backupMessage.startsWith("Backup verified") ? "status" : "alert"}>{backupMessage}</small>}
       {sessionControl}
       {invoke && (
         <SeoOpsSyncControls

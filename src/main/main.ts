@@ -13,13 +13,14 @@ import {
   clipboard,
   net,
 } from "electron";
-import { mkdir, writeFile, readFile, stat } from "node:fs/promises";
+import { mkdir, mkdtemp, rm, writeFile, readFile, stat } from "node:fs/promises";
+import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import sharp from "sharp";
 import { randomUUID } from "node:crypto";
 import { promoteScriptDemoFiles } from "./script-demo-store.js";
-import { applyAdminBackup, inspectAdminBackup } from "./admin-backup.js";
+import { applyAdminBackup, createAdminBackup, inspectAdminBackup } from "./admin-backup.js";
 import { registerFixtureWorkspace } from "./fixture-ui.js";
 import { PointerTrace } from "./pointer-trace.js";
 import { ClickMarker } from "./click-marker.js";
@@ -871,6 +872,25 @@ async function boot() {
         store.setSetting(`videoDemo:${item.flowId}`, JSON.stringify(attachment));
         store.setSetting(`videoDemo:${item.flowId}:${scriptVersion}`, JSON.stringify(attachment));
         return attachment;
+      }
+      case "exportFullBackup": {
+        isIdle();
+        const bundle = await createAdminBackup(store, dataPath, store.setting("seoOpsInstallationId") || "local-export", Date.now());
+        if (!bundle.manifest.complete) throw new Error(`BACKUP_INCOMPLETE: ${bundle.manifest.missing.join(", ")}`);
+        inspectAdminBackup(bundle.archive, bundle.sha256);
+        const stamp = new Date().toLocaleString("sv-SE").replace(/[-: ]/g, "").slice(0, 14);
+        const selected = await dialog.showSaveDialog(window, { title: "Export Full Backup", defaultPath: `rpa-backup-${stamp}.zip`,
+          filters: [{ name: "RPA Full Backup", extensions: ["zip"] }] });
+        if (selected.canceled || !selected.filePath) return { cancelled: true };
+        await writeFile(selected.filePath, bundle.archive);
+        const isolated = await mkdtemp(path.join(os.tmpdir(), "rpa-backup-verify-"));
+        const verifyStore = new Store(path.join(isolated, "creator.sqlite"));
+        try {
+          await applyAdminBackup(verifyStore, isolated, bundle.archive, bundle.sha256);
+          if (verifyStore.flows().length !== bundle.manifest.counts.scenarios || verifyStore.steps().length !== bundle.manifest.counts.stepVersions)
+            throw new Error("BACKUP_VERIFY: restored counts differ from source");
+        } finally { verifyStore.close(); await rm(isolated, { recursive: true, force: true }).catch(() => {}); }
+        return { cancelled: false, path: selected.filePath, sha256: bundle.sha256, ...bundle.manifest };
       }
       case "exportScriptRelease": {
         isIdle();
