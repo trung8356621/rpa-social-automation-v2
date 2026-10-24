@@ -57,11 +57,11 @@ export function ScenariosPage({ state, name, setName, locked, open, create, sess
   const disabled = locked || working;
 
   useEffect(() => {
-    if (!invoke || !authenticated || !autoSyncEnabled) return;
+    if (!invoke || !authenticated) return;
     void invoke<{ rows: ScriptSyncRow[] }>({ type: "seoOpsSyncStatus" })
       .then((r) => setSyncRows(r.rows))
       .catch(() => undefined);
-  }, [invoke, authenticated, autoSyncEnabled, state?.flows?.length]);
+  }, [invoke, authenticated, state?.flows?.length]);
   function show(kind: "create" | "rename" | "delete" | "move" | "scenario-delete", id?: string, initial = "") {
     setValue(initial); setError(""); setDialog({ kind, id });
   }

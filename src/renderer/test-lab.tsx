@@ -207,13 +207,19 @@ export function CaseResultView({ item, state, locked = false, runAgain, compact 
       <div className="case-media-tools"><button disabled={locked || attaching || !demoOk || !videoSource}
         title={demoOk ? "Gắn recording này làm Script Demo" : "Chỉ Run thành công + recording hoàn chỉnh mới làm được Script Demo"}
         onClick={() => {
-          const version = window.prompt("Script version for video demo (semver)", "1.0.0");
-          if (!version || !result.runId || !window.confirm("Confirm you reviewed this browser recording (no desktop/audio). Use as Script Demo?")) return;
+          if (!result.runId || !window.confirm("Dùng video này làm demo cho đúng Scenario của Test Case?")) return;
           setAttaching(true); setAttachMsg("");
           void window.creator.invoke({ type: "attachScriptVideoDemo", caseId: item.id, runId: result.runId,
-            scriptVersion: version.trim(), reviewed: true }).then(() => setAttachMsg("Đã gắn Script Demo cho version " + version.trim()))
-            .catch(error => setAttachMsg(String((error as Error).message || error))).finally(() => setAttaching(false));
-        }}>Use as Script Demo</button>{attachMsg && <span role={attachMsg.startsWith("Đã gắn") ? "status" : "alert"}>{attachMsg}</span>}</div>
+            reviewed: true }).then(() => setAttachMsg("Demo saved"))
+            .catch(error => {
+              const message = String((error as Error).message || error);
+              setAttachMsg(/Scenario\/Script not found/i.test(message) ? "Không tìm thấy Scenario liên kết với Test Case này."
+                : /video file missing|recording incomplete/i.test(message) ? "Video không tồn tại hoặc chưa hoàn tất. Hãy chạy lại Test Case."
+                : `Không lưu được demo: ${message.replace(/^.*VIDEO_DEMO:\s*/i, "")}`);
+            }).finally(() => setAttaching(false));
+        }}>{attaching ? "Đang lưu demo…" : "Use as Script Demo"}</button>
+        {!demoOk && <span className="hint">{canUseAsScriptDemo(result).reason?.replace(/^VIDEO_DEMO:\s*/, "")}</span>}
+        {attachMsg && <span role={attachMsg === "Demo saved" ? "status" : "alert"}>{attachMsg}</span>}</div>
     </section>
     <section className="case-step-results"><h2>Step Results</h2>
       <ol>{result.steps?.map((step, index) => <li key={`${step.stepId}-${step.version}`}>

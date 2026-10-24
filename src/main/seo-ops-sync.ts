@@ -54,6 +54,7 @@ type LocalCatalogRow = LocalScriptRow & {
   incomplete_reasons: string[];
   flow_id: string;
   video_attachment?: VideoDemoAttachment;
+  demo_status?: ScriptSyncRow["demo_status"];
 };
 
 function toPlanRow(row: LocalScriptRow): LocalScriptRow {
@@ -147,7 +148,7 @@ export function createSeoOpsSyncService(options: {
     executionDigest: string,
   ): Promise<{ demo?: ScriptVideoDemo; attachment?: VideoDemoAttachment; errors: string[] }> {
     const errors: string[] = [];
-    const raw = store.setting(`videoDemo:${flow.id}:${version}`);
+    const raw = store.setting(`videoDemo:${flow.id}`) || store.setting(`videoDemo:${flow.id}:${version}`);
     if (!raw) return { errors: [MISSING_DEMO_REASON] };
     let attachment: VideoDemoAttachment;
     try {
@@ -210,6 +211,7 @@ export function createSeoOpsSyncService(options: {
     const { assets, complete, missing } = await collectLocalAssets(flow, steps);
     // Probe execution digest first (video metadata must not affect it).
     const probe = buildScriptCatalogSnapshot({ flow, steps, version, assets });
+    const hasStoredDemo = Boolean(store.setting(`videoDemo:${flow.id}`) || store.setting(`videoDemo:${flow.id}:${version}`));
     const resolved = await resolveVideoDemo(flow, version, probe.execution_digest);
     const snap = buildScriptCatalogSnapshot({
       flow,
@@ -256,6 +258,7 @@ export function createSeoOpsSyncService(options: {
       incomplete,
       incomplete_reasons: [...new Set(reasons)],
       video_attachment: resolved.attachment,
+      demo_status: resolved.demo ? "ready" : hasStoredDemo ? (resolved.errors.some(error => /execution changed/i.test(error)) ? "outdated" : "error") : "missing",
     };
   }
 
@@ -397,6 +400,7 @@ export function createSeoOpsSyncService(options: {
         last_result: prev?.last_result,
         message,
         incomplete,
+        demo_status: l?.demo_status,
       };
     });
 

@@ -18,6 +18,7 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import sharp from "sharp";
 import { randomUUID } from "node:crypto";
+import { promoteScriptDemoFiles } from "./script-demo-store.js";
 import { registerFixtureWorkspace } from "./fixture-ui.js";
 import { PointerTrace } from "./pointer-trace.js";
 import { ClickMarker } from "./click-marker.js";
@@ -812,10 +813,11 @@ async function boot() {
         const flow = store.flows().find((f) => f.id === item.flowId);
         if (!flow) throw new Error("VIDEO_DEMO: Scenario/Script not found");
         const steps = flow.steps.map((ref) => store.step(ref.id, ref.version));
+        const scriptVersion = command.scriptVersion || store.setting(`seoOpsVersion:${flow.id}`) || "1.0.0";
         const snap = buildScriptCatalogSnapshot({
           flow,
           steps,
-          version: command.scriptVersion,
+          version: scriptVersion,
           assets: [],
           videoDemo: undefined,
         });
@@ -837,18 +839,24 @@ async function boot() {
           throw new Error("VIDEO_DEMO: thumbnail missing — re-run Test Case to capture last browser frame");
         }
         if (!thumbBuf.length) throw new Error("VIDEO_DEMO: thumbnail empty — refusing placeholder");
+        const promoted = await promoteScriptDemoFiles({ testRunsDir: path.join(dataPath, "test-runs"),
+          flowId: flow.id, runId: command.runId, videoSource: recordingAbs, thumbnailSource: thumbAbs });
         const attachment = attachVideoDemo({
           scriptId: item.flowId,
-          scriptVersion: command.scriptVersion,
+          scriptVersion,
           caseId: command.caseId,
           testRunId: command.runId,
           executionDigest,
           sha256: createHash("sha256").update(videoBuf).digest("hex"),
-          thumbnailRef: `${command.caseId}/${command.runId}/recording-thumb.jpg`,
+          artifactRef: promoted.artifactRef,
+          thumbnailRef: promoted.thumbnailRef,
           thumbnailSha256: createHash("sha256").update(thumbBuf).digest("hex"),
           reviewed: command.reviewed === true,
+          stepVersions: flow.steps,
+          selectedAt: new Date().toISOString(),
         });
-        store.setSetting(`videoDemo:${item.flowId}:${command.scriptVersion}`, JSON.stringify(attachment));
+        store.setSetting(`videoDemo:${item.flowId}`, JSON.stringify(attachment));
+        store.setSetting(`videoDemo:${item.flowId}:${scriptVersion}`, JSON.stringify(attachment));
         return attachment;
       }
       case "exportScriptRelease": {

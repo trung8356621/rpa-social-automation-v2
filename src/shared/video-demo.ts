@@ -15,6 +15,9 @@ export type VideoDemoAttachment = {
   /** Relative path to JPEG from last valid browser frame. */
   thumbnailRef?: string;
   thumbnailSha256?: string;
+  /** Exact pinned Step versions represented by this recording. */
+  stepVersions?: Array<{ id: string; version: number }>;
+  selectedAt?: string;
 };
 
 /** Promote a Test Lab browser recording into a Script video demo reference. */
@@ -28,6 +31,9 @@ export function attachVideoDemo(input: {
   reviewed?: boolean;
   thumbnailRef?: string;
   thumbnailSha256?: string;
+  artifactRef?: string;
+  stepVersions?: Array<{ id: string; version: number }>;
+  selectedAt?: string;
 }): VideoDemoAttachment {
   const { scriptId, scriptVersion, caseId, testRunId, executionDigest } = input;
   if (!scriptId || !scriptVersion || !caseId || !testRunId) {
@@ -37,7 +43,7 @@ export function attachVideoDemo(input: {
     throw new Error("VIDEO_DEMO: executionDigest required (64-hex)");
   }
   // Screenshots are not video demos.
-  const artifactRef = `${caseId}/${testRunId}/recording.webm`;
+  const artifactRef = input.artifactRef ?? `${caseId}/${testRunId}/recording.webm`;
   return {
     scriptId,
     scriptVersion,
@@ -50,6 +56,8 @@ export function attachVideoDemo(input: {
     ...(input.thumbnailRef ? { thumbnailRef: input.thumbnailRef } : {}),
     ...(input.thumbnailSha256 ? { thumbnailSha256: input.thumbnailSha256 } : {}),
     reviewed: input.reviewed === true,
+    ...(input.stepVersions ? { stepVersions: input.stepVersions.map(step => ({ ...step })) } : {}),
+    ...(input.selectedAt ? { selectedAt: input.selectedAt } : {}),
   };
 }
 

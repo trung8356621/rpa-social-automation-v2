@@ -292,5 +292,9 @@ export function SeoOpsSyncControls({
 
 export function syncBadge(rows: ScriptSyncRow[], flowId: string): string {
   const row = rows.find((r) => r.flow_id === flowId || r.script_id === flowId);
-  return row ? labelForStatus(row.status) : "—";
+  if (!row) return "—";
+  const demo = row.demo_status === "ready" ? "Demo ready"
+    : row.demo_status === "outdated" ? "Demo outdated"
+      : row.demo_status === "error" ? "Demo error" : "Missing demo";
+  return `${demo} · ${labelForStatus(row.status)}`;
 }

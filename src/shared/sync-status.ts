@@ -40,6 +40,7 @@ export type ScriptSyncRow = {
   last_result?: string;
   message?: string;
   incomplete?: boolean;
+  demo_status?: "ready" | "missing" | "outdated" | "error";
 };
 
 export function labelForStatus(code: SyncStatusCode): string {

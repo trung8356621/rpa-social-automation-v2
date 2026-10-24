@@ -306,7 +306,7 @@ export type Command =
       type: "attachScriptVideoDemo";
       caseId: string;
       runId: string;
-      scriptVersion: string;
+      scriptVersion?: string;
       reviewed: boolean;
     }
   | {
