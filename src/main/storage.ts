@@ -138,6 +138,7 @@ export function validatePayload(p: Payload) {
 export class Store {
   readonly db: DatabaseSync;
   private invalidStepRefs: InvalidStepRef[] = [];
+  private persistentChange?: () => void;
   constructor(file: string) {
     this.db = new DatabaseSync(file);
     const schema = this.db.prepare("PRAGMA user_version").get() as {
@@ -173,6 +174,26 @@ export class Store {
   }
   reindexInvalidSteps() {
     this.refreshInvalidStepRefs();
+  }
+  onPersistentChange(listener: () => void) { this.persistentChange = listener; }
+  private changed() { this.persistentChange?.(); }
+  backupSnapshot() {
+    const tables = ["settings", "flows", "steps", "overrides", "runs"] as const;
+    return Object.fromEntries(tables.map(table => [table, this.db.prepare(`SELECT * FROM ${table} ORDER BY rowid`).all()]));
+  }
+  restoreSnapshot(snapshot: Record<string, unknown[]>) {
+    const required = ["settings", "flows", "steps", "overrides", "runs"];
+    if (!required.every(table => Array.isArray(snapshot[table]))) throw new Error("RESTORE_INVALID: missing SQLite tables");
+    this.db.exec("BEGIN IMMEDIATE");
+    try {
+      for (const table of ["overrides", "runs", "steps", "flows", "settings"]) this.db.exec(`DELETE FROM ${table}`);
+      for (const row of snapshot.settings as Array<{key:string;value:string}>) this.db.prepare("INSERT INTO settings VALUES(?,?)").run(row.key, row.value);
+      for (const row of snapshot.flows as Array<{id:string;payload:string}>) this.db.prepare("INSERT INTO flows VALUES(?,?)").run(row.id, row.payload);
+      for (const row of snapshot.steps as Array<{id:string;version:number;payload:string}>) this.db.prepare("INSERT INTO steps VALUES(?,?,?)").run(row.id, row.version, row.payload);
+      for (const row of snapshot.overrides as Array<{id:string;step_id:string;base_version:number;payload:string}>) this.db.prepare("INSERT INTO overrides VALUES(?,?,?,?)").run(row.id, row.step_id, row.base_version, row.payload);
+      for (const row of snapshot.runs as Array<{id:string;payload:string}>) this.db.prepare("INSERT INTO runs VALUES(?,?)").run(row.id, row.payload);
+      this.db.exec("COMMIT"); this.refreshInvalidStepRefs();
+    } catch (error) { this.db.exec("ROLLBACK"); throw error; }
   }
   /** Read-only audit of every Scenario Step version. Never writes SQLite. */
   scanScriptHealth(): ScriptHealthReport {
@@ -491,6 +512,7 @@ export class Store {
         "INSERT INTO settings VALUES(?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value",
       )
       .run(key, value);
+    if (!key.startsWith("seoOps")) this.changed();
   }
   flow(): Flow | null {
     const id = this.setting("currentFlow");
@@ -514,6 +536,7 @@ export class Store {
       )
       .run(flow.id, JSON.stringify(flow));
     this.setSetting("currentFlow", flow.id);
+    this.changed();
   }
   newFlow(name: string, zoom: number): Flow {
     const f = {
@@ -556,6 +579,7 @@ export class Store {
       }
       this.db.exec("COMMIT");
       this.refreshInvalidStepRefs();
+      this.changed();
     } catch (error) { this.db.exec("ROLLBACK"); throw error; }
   }
   steps(): Step[] {
@@ -609,6 +633,7 @@ export class Store {
       throw e;
     }
     this.refreshInvalidStepRefs();
+    this.changed();
     return s;
   }
   selectVersion(id: string, version: number) {

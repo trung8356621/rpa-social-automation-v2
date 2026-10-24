@@ -323,6 +323,8 @@ export type Command =
   | { type: "seoOpsSyncStatus" }
   | { type: "seoOpsSyncAll"; version?: string }
   | { type: "seoOpsSyncFlow"; flowId: string; version?: string }
+  | { type: "seoOpsBackupInfo" }
+  | { type: "seoOpsRestore"; confirmed: boolean }
   | { type: "deleteScenario"; id: string; confirmed: boolean }
   | { type: "testGroup"; operation: "create" | "update" | "delete"; id?: string; name?: string; collapsed?: boolean; confirmed?: boolean }
   | { type: "collapseUngroupedCases"; collapsed: boolean }

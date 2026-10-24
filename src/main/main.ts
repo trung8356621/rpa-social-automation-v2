@@ -19,6 +19,7 @@ import { fileURLToPath } from "node:url";
 import sharp from "sharp";
 import { randomUUID } from "node:crypto";
 import { promoteScriptDemoFiles } from "./script-demo-store.js";
+import { applyAdminBackup, inspectAdminBackup } from "./admin-backup.js";
 import { registerFixtureWorkspace } from "./fixture-ui.js";
 import { PointerTrace } from "./pointer-trace.js";
 import { ClickMarker } from "./click-marker.js";
@@ -151,6 +152,18 @@ async function boot() {
     assetDir,
     tokenStore: seoOpsTokenStore,
     testRunsDir: path.join(dataPath, "test-runs"),
+    dataPath,
+  });
+  let draftBackupTimer: NodeJS.Timeout | undefined;
+  store.onPersistentChange(() => {
+    if (!seoOpsTokenStore.getToken()) return;
+    if (draftBackupTimer) clearTimeout(draftBackupTimer);
+    draftBackupTimer = setTimeout(() => {
+      void seoOpsSync.backupNow().catch(error => {
+        store.setSetting("seoOpsBackupStatus", JSON.stringify({ status: "failed", at: new Date().toISOString(), message: String((error as Error).message || error) }));
+        logMainError(runDir, "seo-ops-draft-backup", error);
+      });
+    }, 750);
   });
   const autoSyncEnabled = isSeoOpsAutoSyncEnabled();
   const seoOpsAutoSync = createSeoOpsAutoSync({
@@ -931,6 +944,20 @@ async function boot() {
       case "seoOpsSyncFlow":
         isIdle();
         return manualSeoOpsSync(command.type, { flowId: command.flowId, version: command.version });
+      case "seoOpsBackupInfo":
+        isIdle(); return seoOpsSync.backupInfo();
+      case "seoOpsRestore": {
+        isIdle();
+        const hasLocalData = store.flows().length > 0 || store.steps().length > 0;
+        if (hasLocalData && !command.confirmed) {
+          const info = await seoOpsSync.backupInfo();
+          return { requiresConfirmation: true, backup: info.backup };
+        }
+        const downloaded = await seoOpsSync.downloadBackup();
+        const checked = inspectAdminBackup(downloaded.archive, downloaded.sha256);
+        const applied = await applyAdminBackup(store, dataPath, downloaded.archive, downloaded.sha256);
+        return { restored: true, backup: downloaded.backup, manifest: applied.manifest, rollbackPath: applied.rollbackPath, state: state() };
+      }
       case "runTestCase":
         if (event.sender !== window.webContents) throw new Error("Invalid Test Case sender");
         return runTestCase(command.id);

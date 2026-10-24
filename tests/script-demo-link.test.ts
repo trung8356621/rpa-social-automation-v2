@@ -46,6 +46,7 @@ test("selected Test Run demo persists, survives newer runs, updates explicitly, 
 
     let token: string | null = null;
     const service = createSeoOpsSyncService({ store, assetDir: assets, testRunsDir: evidence,
+      dataPath: root,
       tokenStore: { getToken: () => token, setToken: value => { token = value; } } });
     assert.equal((await service.refreshStatusRows()).find(row => row.script_id === flow.id)?.demo_status, "ready");
 
@@ -65,6 +66,8 @@ test("selected Test Run demo persists, survives newer runs, updates explicitly, 
     token = "test-token";
     globalThis.fetch = async (url, init) => {
       const address = String(url);
+      if (address.endsWith("/backup")) return new Response(JSON.stringify({ ok: true }), { status: 200 });
+      if (address.includes("/execution-reports")) return new Response(JSON.stringify({ ok: true, reports: [], next_after_id: 0 }), { status: 200 });
       if (address.endsWith("/scripts")) {
         return new Response(JSON.stringify({ ok: true, scripts: [] }), { status: 200, headers: { "Content-Type": "application/json" } });
       }

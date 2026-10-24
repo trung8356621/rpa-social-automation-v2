@@ -265,6 +265,13 @@ export function createHttpScriptSyncClient(options: {
         errors: Array.isArray(json.errors) ? (json.errors as string[]) : undefined,
       };
     },
+    async uploadAsset(input: { packageKey: string; version: string; assetPath: string; sha256: string; binary: Buffer | Uint8Array; mime?: string }) {
+      const { response, json } = await authed("/scripts/asset", { method: "POST", body: JSON.stringify({
+        package_key: input.packageKey, version: input.version, asset_path: input.assetPath, sha256: input.sha256,
+        mime: input.mime ?? "application/octet-stream", asset_base64: Buffer.from(input.binary).toString("base64"),
+      }) });
+      return { ok: response.ok && json.ok === true, errors: Array.isArray(json.errors) ? json.errors as string[] : undefined };
+    },
     async pull(packageKey: string, version: string): Promise<PullResult> {
       const { response, json } = await authed("/scripts/pull", {
         method: "POST",

@@ -147,6 +147,7 @@ export function SeoOpsSyncControls({
   const [busy, setBusy] = useState(false);
   const [message, setMessage] = useState("");
   const [rows, setRows] = useState<ScriptSyncRow[]>([]);
+  const [backupLabel, setBackupLabel] = useState("");
 
   const applyRows = useCallback(
     (next: ScriptSyncRow[]) => {
@@ -169,6 +170,13 @@ export function SeoOpsSyncControls({
     }, 30_000);
     return () => clearInterval(timer);
   }, [authenticated, autoSyncEnabled, pullStatus]);
+  useEffect(() => {
+    if (!authenticated) return;
+    const read = () => void invoke<{ backup?: unknown }>({ type: "seoOpsBackupInfo" })
+      .then(value => setBackupLabel(value.backup ? "Backed up" : "Backup pending"))
+      .catch(() => setBackupLabel("Backup failed"));
+    read(); const timer = setInterval(read, 30_000); return () => clearInterval(timer);
+  }, [authenticated, invoke]);
 
   async function runSync() {
     if (!authenticated) {
@@ -187,13 +195,9 @@ export function SeoOpsSyncControls({
         return;
       }
       applyRows(result.rows);
-      const conflicts = result.results.filter((r) => r.action === "conflict").length;
-      const failed = result.results.filter((r) => !r.ok && r.action !== "conflict").length;
-      setMessage(
-        `Sync xong: ${result.results.length} mục` +
-          (conflicts ? `, ${conflicts} conflict (không overwrite)` : "") +
-          (failed ? `, ${failed} lỗi` : ""),
-      );
+      const s = result.summary;
+      setMessage(s ? `Sync xong: ${s.published} published, ${s.unchanged} unchanged, ${s.blocked} draft blocked, ${s.reports} reports, ${s.failed} failed`
+        : `Sync xong: ${result.results.length} mục`);
     } catch (e) {
       setMessage(mapSeoOpsAuthError(String((e as Error).message || e)));
     } finally {
@@ -201,12 +205,33 @@ export function SeoOpsSyncControls({
     }
   }
 
+  async function restoreBackup() {
+    if (!authenticated || locked || busy) return;
+    setBusy(true); setMessage("Đang kiểm tra backup…");
+    try {
+      const preview = await invoke<{ requiresConfirmation?: boolean; restored?: boolean; backup?: { backed_up_at?: string; summary?: Record<string, number> } }>({ type: "seoOpsRestore", confirmed: false });
+      if (preview.requiresConfirmation) {
+        const info = preview.backup; const counts = info?.summary ?? {};
+        if (!window.confirm(`Backup ${info?.backed_up_at ?? ""}: ${counts.scenarios ?? 0} Scenario, ${counts.stepVersions ?? 0} Step versions. Dữ liệu local hiện tại sẽ được backup riêng trước khi restore. Tiếp tục?`)) {
+          setMessage("Đã hủy Restore."); return;
+        }
+        await invoke({ type: "seoOpsRestore", confirmed: true });
+      }
+      setMessage("Restore hoàn tất. Dữ liệu local cũ đã được lưu trong restore-backups.");
+    } catch (error) { setMessage(`Restore thất bại: ${String((error as Error).message || error)}`); }
+    finally { setBusy(false); }
+  }
+
   return (
     <div className="seo-ops-sync-controls">
       <button disabled={locked || busy || !authenticated} onClick={() => void runSync()}>
         Sync now
       </button>
+      <button disabled={locked || busy || !authenticated} onClick={() => void restoreBackup()}>
+        Restore from SEO-OPS
+      </button>
       {message && <small>{message}</small>}
+      {backupLabel && <small>{backupLabel}</small>}
       {rows.length > 0 && (
         <details className="seo-ops-sync-summary">
           <summary>Diagnostics sync ({rows.length})</summary>

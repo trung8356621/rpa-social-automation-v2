@@ -10,7 +10,7 @@ export type SyncIpcDiagnostic = {
   path?: string;
 };
 export type ManualSyncResponse =
-  | { ok: true; plan: SyncPlan; results: SyncActionResult[]; rows: ScriptSyncRow[] }
+  | { ok: true; plan: SyncPlan; results: SyncActionResult[]; rows: ScriptSyncRow[]; summary?: { backed_up: number; published: number; unchanged: number; blocked: number; failed: number; reports: number } }
   | { ok: false; error: SyncIpcDiagnostic };
 
 export class IpcSerializationError extends Error {

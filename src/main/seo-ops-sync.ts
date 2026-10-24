@@ -1,4 +1,4 @@
-import { createHash } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import { access, readFile } from "node:fs/promises";
 import path from "node:path";
 import type { Flow, Step } from "../shared/contracts.js";
@@ -37,6 +37,7 @@ import {
   MISSING_DEMO_REASON,
 } from "../shared/video-demo-policy.js";
 import { validatePayload, type Store } from "./storage.js";
+import { createAdminBackup } from "./admin-backup.js";
 
 export type SeoOpsConfig = {
   baseUrl: string;
@@ -75,9 +76,13 @@ export function createSeoOpsSyncService(options: {
   tokenStore: TokenStore;
   /** Root of Test Lab evidence (`…/test-runs`). */
   testRunsDir?: string;
+  dataPath?: string;
 }) {
   const { store, assetDir, tokenStore } = options;
   const testRunsDir = options.testRunsDir;
+  const dataPath = options.dataPath;
+  const installationId = store.setting("seoOpsInstallationId") || randomUUID();
+  if (!store.setting("seoOpsInstallationId")) store.setSetting("seoOpsInstallationId", installationId);
 
   function config(): SeoOpsConfig {
     const raw = store.setting("seoOpsBaseUrl");
@@ -99,6 +104,43 @@ export function createSeoOpsSyncService(options: {
       baseUrl: config().baseUrl,
       getToken: () => tokenStore.getToken(),
     });
+  }
+
+  async function adminApi(pathname: string, init?: RequestInit) {
+    const token = tokenStore.getToken();
+    if (!token) throw new Error("SEO_OPS: cần đăng nhập trước khi backup");
+    const response = await fetch(`${config().baseUrl}/api/v1/social-automation/rpa-admin${pathname}`, {
+      ...init,
+      headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/json", ...(init?.headers ?? {}) },
+    });
+    const body = await response.json() as Record<string, unknown>;
+    if (!response.ok || body.ok !== true) throw new Error(`SEO_OPS_BACKUP: ${JSON.stringify(body.errors ?? response.status)}`);
+    return body;
+  }
+
+  async function backupNow() {
+    if (!dataPath) throw new Error("SEO_OPS_BACKUP: data path unavailable");
+    const revision = Number(store.setting("seoOpsDraftRevisionIssued") || store.setting("seoOpsDraftRevision") || "0") + 1;
+    store.setSetting("seoOpsDraftRevisionIssued", String(revision));
+    const bundle = await createAdminBackup(store, dataPath, installationId, revision);
+    const result = await adminApi("/backup", { method: "POST", body: JSON.stringify({ installation_id: installationId,
+      draft_revision: revision, sha256: bundle.sha256, archive_base64: bundle.archive.toString("base64"), summary: bundle.manifest.counts }) });
+    store.setSetting("seoOpsDraftRevision", String(revision));
+    store.setSetting("seoOpsBackupStatus", JSON.stringify({ status: "backed_up", at: new Date().toISOString(), revision }));
+    return result;
+  }
+
+  async function backupInfo() { return adminApi("/backup"); }
+  async function downloadBackup() {
+    const body = await adminApi("/backup/download", { method: "POST", body: JSON.stringify({}) });
+    return { archive: Buffer.from(String(body.archive_base64), "base64"), sha256: String(body.sha256), backup: body.backup };
+  }
+  async function fetchReports() {
+    const after = Number(store.setting("seoOpsReportsAfterId") || "0");
+    const body = await adminApi(`/execution-reports?after_id=${after}`);
+    store.setSetting("seoOpsReportsAfterId", String(body.next_after_id ?? after));
+    store.setSetting("seoOpsExecutionReports", JSON.stringify(body.reports ?? []));
+    return body.reports as unknown[];
   }
 
   function loadMeta(): SyncMeta {
@@ -528,6 +570,7 @@ export function createSeoOpsSyncService(options: {
 
   async function syncAll(options?: { flowId?: string; version?: string }) {
     if (!tokenStore.getToken()) throw new Error("SEO_OPS: cần đăng nhập trước khi sync");
+    await backupNow();
     const client = syncClient();
     const remote = await client.catalog();
     const remoteById = new Map(remote.map(row => [row.script_id, row]));
@@ -599,6 +642,13 @@ export function createSeoOpsSyncService(options: {
         const published = await client.publish(full.publish_body);
         let ok = published.httpStatus < 300 && (published as { ok?: boolean }).ok !== false;
         let message = ok ? "pushed" : JSON.stringify((published as { errors?: string[] }).errors ?? published);
+        if (ok) {
+          for (const asset of full.publish_body.manifest.assets) {
+            const uploaded = await client.uploadAsset({ packageKey: full.package_key, version: full.version,
+              assetPath: asset.path, sha256: asset.sha256, binary: await readFile(path.join(assetDir, asset.path)) });
+            if (!uploaded.ok) { ok = false; message = `release asset upload failed: ${(uploaded.errors ?? []).join(",")}`; break; }
+          }
+        }
         if (ok && full.video_attachment && testRunsDir) {
           try {
             const binary = await readFile(path.join(testRunsDir, full.video_attachment.artifactRef));
@@ -740,8 +790,16 @@ export function createSeoOpsSyncService(options: {
       ? "ok"
       : "partial";
     saveMeta(meta);
+    const reports = await fetchReports();
     const rows = await refreshStatusRows();
-    return { plan, results, rows };
+    return { plan, results, rows, summary: {
+      backed_up: refreshedLocal.length,
+      published: results.filter(r => r.action === "push" && r.ok).length,
+      unchanged: results.filter(r => r.action === "skip").length,
+      blocked: refreshedLocal.filter(r => r.incomplete).length,
+      failed: results.filter(r => !r.ok).length,
+      reports: reports.length,
+    } };
   }
 
   return {
@@ -753,6 +811,9 @@ export function createSeoOpsSyncService(options: {
     refreshStatusRows,
     syncAll,
     loadMeta,
+    backupNow,
+    backupInfo,
+    downloadBackup,
   };
 }
 
