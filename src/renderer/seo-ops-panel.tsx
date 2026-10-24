@@ -3,6 +3,7 @@ import type { Command } from "../shared/contracts";
 import { mapSeoOpsAuthError, mapSeoOpsAuthErrors } from "../shared/seo-ops-auth";
 import { labelForStatus, type ScriptSyncRow } from "../shared/sync-status";
 import { UiPopover } from "./ui-popover";
+import type { ManualSyncResponse } from "../shared/sync-ipc";
 
 type SessionState = {
   configured: boolean;
@@ -229,14 +230,15 @@ export function SeoOpsSyncControls({
     setBusy(true);
     setMessage("");
     try {
-      const result = await invoke<{
-        results: Array<{ script_id: string; action: string; ok: boolean; message?: string }>;
-        rows: ScriptSyncRow[];
-      }>(
+      const result = await invoke<ManualSyncResponse>(
         all
           ? { type: "seoOpsSyncAll", version }
           : { type: "seoOpsSyncFlow", flowId: flowId!, version },
       );
+      if (!result.ok) {
+        setMessage(result.error.message);
+        return;
+      }
       applyRows(result.rows);
       const conflicts = result.results.filter((r) => r.action === "conflict").length;
       const failed = result.results.filter((r) => !r.ok && r.action !== "conflict").length;

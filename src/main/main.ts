@@ -52,6 +52,7 @@ import {
 import { effectiveMatchTo, matchToLabel, matchToLogLabel } from "../shared/match-to.js";
 import { DRAFT_KEYS } from "../shared/contracts.js";
 import type { Command, State, CaseResult, Step } from "../shared/contracts.js";
+import { executeManualSync } from "../shared/sync-ipc.js";
 import {
   buildScriptPublishBody,
   assertScriptPublishBody,
@@ -160,6 +161,21 @@ async function boot() {
       else logMainEvent(runDir, "seo-ops-auto-sync", { message });
     },
   });
+  const manualSeoOpsSync = async (
+    command: "seoOpsSyncAll" | "seoOpsSyncFlow",
+    options: { flowId?: string; version?: string },
+  ) => {
+    const response = await executeManualSync(() => seoOpsSync.syncAll(options),
+      (error, detail) => logMainError(runDir, "seo-ops-manual-sync", error, { command, flowId: options.flowId, diagnostic: detail }));
+    if (response.ok) {
+      const failures = response.results.filter(result => !result.ok && result.action !== "conflict");
+      logMainEvent(runDir, "seo-ops-manual-sync", {
+        command, flowId: options.flowId, resultCount: response.results.length,
+        failureCount: failures.length, failures,
+      });
+    }
+    return response;
+  };
   if (autoSyncEnabled) {
     seoOpsAutoSync.start();
     // Session restore: if token exists, verify then sync once (no keystroke spam).
@@ -903,10 +919,10 @@ async function boot() {
         };
       case "seoOpsSyncAll":
         isIdle();
-        return seoOpsSync.syncAll({ version: command.version });
+        return manualSeoOpsSync(command.type, { version: command.version });
       case "seoOpsSyncFlow":
         isIdle();
-        return seoOpsSync.syncAll({ flowId: command.flowId, version: command.version });
+        return manualSeoOpsSync(command.type, { flowId: command.flowId, version: command.version });
       case "runTestCase":
         if (event.sender !== window.webContents) throw new Error("Invalid Test Case sender");
         return runTestCase(command.id);

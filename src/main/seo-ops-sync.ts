@@ -22,7 +22,6 @@ import {
   type SyncPlan,
 } from "../shared/script-sync.js";
 import {
-  labelForStatus,
   statusFromPlanSides,
   type ScriptSyncRow,
   type SyncStatusCode,
@@ -726,7 +725,7 @@ export function createSeoOpsSyncService(options: {
       : "partial";
     saveMeta(meta);
     const rows = await refreshStatusRows();
-    return { plan, results, rows, label: labelForStatus };
+    return { plan, results, rows };
   }
 
   return {

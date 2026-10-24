@@ -3,6 +3,7 @@ import { UiPopover } from "./ui-popover";
 import type { AppPage, Command, ScenarioOrganization, State } from "../shared/contracts";
 import type { ScriptSyncRow } from "../shared/sync-status";
 import { SeoOpsSyncControls, syncBadge } from "./seo-ops-panel";
+import type { ManualSyncResponse } from "../shared/sync-ipc";
 import { ScriptHealthPanel } from "./script-health-panel";
 
 /** Primary Admin nav only — Variations / Widget / Workflow / Builds remain routable legacy, not listed. */
@@ -199,7 +200,8 @@ export function ScenariosPage({ state, name, setName, locked, open, create, sess
               const version = syncVersion.trim();
               setWorking(true);
               setError("");
-              void invoke({ type: "seoOpsSyncFlow", flowId, version })
+              void invoke<ManualSyncResponse>({ type: "seoOpsSyncFlow", flowId, version })
+                .then((result) => { if (!result.ok) throw new Error(result.error.message); })
                 .then(() => invoke<{ rows: ScriptSyncRow[] }>({ type: "seoOpsSyncStatus" }))
                 .then((r) => {
                   setSyncRows(r.rows);
