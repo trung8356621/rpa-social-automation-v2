@@ -570,7 +570,8 @@ export function createSeoOpsSyncService(options: {
 
   async function syncAll(options?: { flowId?: string; version?: string }) {
     if (!tokenStore.getToken()) throw new Error("SEO_OPS: cần đăng nhập trước khi sync");
-    await backupNow();
+    let backupError: string | undefined;
+    try { await backupNow(); } catch (error) { backupError = String((error as Error).message || error); }
     const client = syncClient();
     const remote = await client.catalog();
     const remoteById = new Map(remote.map(row => [row.script_id, row]));
@@ -591,6 +592,7 @@ export function createSeoOpsSyncService(options: {
     const now = new Date().toISOString();
     const meta = loadMeta();
     const results: Array<{ script_id: string; action: string; ok: boolean; message?: string }> = [];
+    if (backupError) results.push({ script_id: "admin-backup", action: "backup", ok: false, message: backupError });
 
     // Incomplete Scripts are skipped individually — never block others / never publish.
     const publishable = refreshedLocal.filter((r) => !r.incomplete && r.publish_body);
@@ -793,7 +795,7 @@ export function createSeoOpsSyncService(options: {
     const reports = await fetchReports();
     const rows = await refreshStatusRows();
     return { plan, results, rows, summary: {
-      backed_up: refreshedLocal.length,
+      backed_up: backupError ? 0 : refreshedLocal.length,
       published: results.filter(r => r.action === "push" && r.ok).length,
       unchanged: results.filter(r => r.action === "skip").length,
       blocked: refreshedLocal.filter(r => r.incomplete).length,
