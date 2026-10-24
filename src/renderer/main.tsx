@@ -814,7 +814,8 @@ function Creator() {
     void task(async () => {
       try {
         await activateTab(tab);
-        setState(await invoke<State>({ type: "runTestCase", id }));
+        await invoke<State>({ type: "runTestCase", id });
+        setState(await invoke<State>({ type: "appPage", page: "test-case" }));
       } catch (error) { setState(await invoke<State>({ type: "state" })); throw error; }
       finally { workspaceLock.current = false; }
     });
@@ -1212,7 +1213,7 @@ function Creator() {
         hidden={tab.id !== activeTabId || appPage !== "test-case"}>
         <TestCaseEditor tabId={tab.id} item={state.testLab?.cases.find(c => c.id === tab.caseId)} state={state}
           locked={navigationLocked} report={reportCase} saved={caseSaved} saving={setBusy} run={runCase}
-          fix={error => fixExecutionError(error, tab.flowId)} />
+          fix={error => fixExecutionError(error, tab.flowId)} back={() => navigateApp("test-lab")} />
       </div>)}
       {shell && state && <AdminStudioPage report={reportStudio} page={appPage} state={state} locked={navigationLocked}
         selectedId={tabs.find(t => t.id === activeTabId && t.kind === "studio")?.studioId}
@@ -1396,7 +1397,7 @@ function Creator() {
               {!state?.runningTestCaseId && state?.testLab?.cases.find(c => c.id === activeCaseTab.caseId)?.lastResult &&
                 <CaseResultView item={state.testLab.cases.find(c => c.id === activeCaseTab.caseId)!} state={state}
                   locked={navigationLocked || !canRunCase(activeCaseTab.caseId!)} runAgain={() => runCase(activeCaseTab.caseId!)}
-                  onFix={error => fixExecutionError(error, activeCaseTab.flowId)} />}</>}
+                  compact onFix={error => fixExecutionError(error, activeCaseTab.flowId)} />}</>}
             {state?.sessionError && <p className="network-failure-hint" role="alert">{state.sessionError}</p>}
             {results.filter(result => result.networkHint).map(result =>
               <p key={result.id} className="network-failure-hint" role="alert">{result.networkHint}</p>)}

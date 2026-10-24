@@ -1259,22 +1259,34 @@ body[data-panel="shell"] .app-shell[data-case-browser="true"] > aside.creator-st
 }
 .case-editor-host[hidden] { display: none; }
 .case-editor-host .app-page { height: calc(100vh - 36px); }
-.case-layout { display: grid; grid-template-columns: minmax(0, 1.65fr) minmax(280px, 1fr); gap: 16px; align-items: start; }
-.case-layout-main { min-width: 0; }
+.case-configure { width: min(900px, 100%); }
 .case-form { max-width: none; padding: 20px; background: #162639; border: 1px solid #32475f; border-radius: 8px; }
 .case-form h2 { font-size: 16px; margin-top: 24px; }
 .case-actions { display: flex; flex-wrap: wrap; align-items: center; gap: 10px; margin-top: 20px; }
-.case-video-preview { min-width: 0; position: sticky; top: 12px; }
-.case-video-panel, .case-video-empty { padding: 16px; background: #122033; border: 1px solid #32475f; border-radius: 8px; }
-.case-video-heading { display: flex; align-items: center; gap: 10px; margin-bottom: 10px; }
-.case-video-player { display: block; width: 100%; max-height: 360px; background: #0c1524; border-radius: 6px; margin: 10px 0 14px; }
-.case-video-empty p { color: #9bb0c7; margin: 8px 0 0; }
-@media (max-width: 1100px) {
-  .case-layout { grid-template-columns: 1fr; }
-  .case-video-preview { position: static; }
-}
-.case-result { padding: 10px; margin: 10px 0; border: 1px solid #45627a; border-radius: 6px; overflow-wrap: anywhere; }
+.test-case-result-page { padding-inline: clamp(14px, 3vw, 44px); }
+.case-result { width: 100%; padding: 0; margin: 0; overflow-wrap: anywhere; }
 .case-result p { margin: 5px 0; }
+.case-result-compact { padding: 10px; margin: 10px 0; border: 1px solid #45627a; border-radius: 6px; }
+.case-result-header { display: flex; justify-content: space-between; align-items: end; gap: 20px; margin-bottom: 14px; }
+.case-result-header h1 { margin: 4px 0; }
+.case-result-header small { color: #8cc9ff; letter-spacing: .12em; }
+.case-result-summary { display: flex; align-items: center; gap: 12px; }
+.case-result-actions { display: flex; flex-wrap: wrap; gap: 10px; margin-bottom: 20px; }
+.case-result-actions .primary { margin-left: auto; }
+.case-result-media { width: min(1180px, 100%); padding: 14px; background: #122033; border: 1px solid #32475f; border-radius: 10px; }
+.case-media-tabs { display: flex; gap: 6px; margin-bottom: 12px; }
+.case-media-tabs button[aria-selected="true"] { color: #dff7ec; border-color: #68d6a6; background: #1d3a3d; }
+.case-video-player { display: block; width: 100%; max-width: 1180px; max-height: 72vh; aspect-ratio: auto; object-fit: contain; background: #0c1524; border-radius: 7px; }
+.case-media-state { min-height: 280px; display: grid; place-content: center; gap: 12px; text-align: center; color: #afc0d5; background: #0c1524; border-radius: 7px; }
+.case-media-tools { display: flex; align-items: center; gap: 10px; margin-top: 12px; }
+.case-step-results, .case-diagnostics { width: min(1180px, 100%); margin-top: 22px; }
+.case-step-results > ol { list-style: none; padding: 0; display: grid; gap: 9px; }
+.case-step-results > ol > li { padding: 13px; border: 1px solid #304359; border-radius: 8px; background: #162639; }
+.case-step-heading { display: flex; align-items: center; gap: 10px; }
+.case-step-heading .case-run-status { margin-left: auto; }
+.case-step-number { color: #8cc9ff; font-variant-numeric: tabular-nums; }
+.case-step-results details { margin-top: 8px; }
+.case-step-results summary, .case-diagnostics > summary { cursor: pointer; color: #afc0d5; }
 .test-case-item { padding-bottom: 10px; border-bottom: 1px solid #304359; }
 .test-case-item > small { display: block; padding: 0 10px; color: #9bb0c7; overflow-wrap: anywhere; }
 .test-lab-rows { padding: 0 12px; }
@@ -1312,6 +1324,8 @@ body[data-panel="shell"] .app-shell[data-case-browser="true"] > aside.creator-st
 .case-run-steps li p { color: #afc0d5; }
 .case-screenshot { display: block; width: 100%; margin-top: 12px; padding: 6px; }
 .case-screenshot img { display: block; width: 100%; max-height: 260px; object-fit: contain; background: #0c1524; }
+.case-screenshot-primary { margin: 0; }
+.case-screenshot-primary img { max-height: 72vh; }
 .case-screenshot span { display: block; font-size: 12px; padding-top: 6px; color: #afc0d5; }
 .case-screenshot-modal { width: min(1150px, calc(100vw - 40px)); padding: 16px; overflow: auto; }
 .case-screenshot-modal img { display: block; width: 100%; max-height: 75vh; object-fit: contain; background: #0c1524; }
@@ -1322,6 +1336,13 @@ body[data-panel="shell"] .app-shell[data-case-browser="true"] > aside.creator-st
   .test-lab-row .case-session { grid-column: 3 / 6; grid-row: 2; }
   .case-scenario::before { content: "Scenario: "; color: #9bb0c7; }
   .case-session::before { content: "Session: "; color: #9bb0c7; }
+}
+@media (max-width: 720px) {
+  .test-case-result-page { padding-inline: 12px; }
+  .case-result-header { align-items: flex-start; flex-direction: column; }
+  .case-result-actions .primary { margin-left: 0; }
+  .case-result-media { padding: 8px; }
+  .case-media-state { min-height: 180px; }
 }
 body[data-panel="shell"] .app-shell > header { justify-content: flex-start; }
 body[data-panel="shell"] .app-shell > header .workspace-tabs { position: sticky; left: 0; z-index: 21; background: #142238; }
