@@ -9,6 +9,19 @@ export type CaseStepResult = {
   stepId: string; name: string; version: number;
   status: CaseRunStatus | "PENDING"; message: string;
   runtimeStatus?: Result["status"];
+  error?: ExecutionError;
+};
+export type ExecutionError = {
+  code: "UPLOAD_FILES_INVALID" | "VARIABLE_INVALID" | "STEP_BLOCKED";
+  category: "Dữ liệu upload" | "Variable" | "Runtime";
+  stepId: string;
+  version: number;
+  variableId?: string;
+  variableKey?: string;
+  field?: string;
+  message: string;
+  suggestedAction: string;
+  details?: string[];
 };
 export type CaseResult = {
   status: CaseRunStatus | "FAILED"; // FAILED remains readable for saved V1 results.
@@ -20,6 +33,7 @@ export type CaseResult = {
   screenshotPath?: string; screenshotAt?: string; screenshotError?: string;
   evidenceError?: string;
   recordingPath?: string; recordingError?: string;
+  error?: ExecutionError;
 };
 export type TestCaseConfig = { recording?: boolean; name: string; flowId: string; sessionId: string; startUrl: string; values: VariableValues };
 export type TestCase = TestCaseConfig & { id: string; groupId?: string; lastResult?: CaseResult };
@@ -178,6 +192,7 @@ export type Result = {
   resolution?: ResolutionTrace;
   upload?: UploadInfo;
   evidenceWarning?: string;
+  error?: ExecutionError;
   input?: {
     method: "keyboard" | "clipboard";
     focus: {
@@ -213,6 +228,18 @@ export type UploadInfo = {
   chooserMode?: "selectSingle" | "selectMultiple";
   preview: "unverified" | "confirmed_by_user";
   cleanupWarning?: string;
+};
+export type UploadFileCheck = {
+  path: string;
+  name: string;
+  status: "VALID" | "INVALID" | "UNRESOLVED";
+  reason?: string;
+};
+export type UploadFileValidation = {
+  status: "VALID" | "INVALID" | "UNRESOLVED";
+  validCount: number;
+  invalidCount: number;
+  files: UploadFileCheck[];
 };
 export type ResolutionTrace = {
   ocrOutcome?: "NOT_FOUND" | "OCR_LOW_CONFIDENCE" | "CONTEXT_REJECTED";
@@ -341,6 +368,7 @@ export type Command =
   | { type: "ocrTarget"; asset: string }
   | { type: "capture" }
   | { type: "pickUploadFiles" }
+  | { type: "validateUploadFiles"; files?: unknown; unresolved?: boolean }
   | { type: "crop"; captureId: string; roi: Rect }
   | { type: "saveStep"; id?: string; name: string; payload: Payload }
   | { type: "selectVersion"; id: string; version: number }

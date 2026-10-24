@@ -8,6 +8,8 @@ import { EventEmitter } from "node:events";
 import type { Debugger } from "electron";
 import {
   inspectUploadFiles,
+  uploadPreflightError,
+  validateUploadFiles,
   validateUploadFileList,
 } from "../src/main/upload-files.js";
 import { chooseUploadFiles } from "../src/main/file-chooser.js";
@@ -38,6 +40,28 @@ test("UPLOAD_FILE validates readable real images, count, paths, duplicates and i
     /Không dùng được/,
   );
   await assert.rejects(inspectUploadFiles([image, image]), /trùng/);
+});
+test("file validation reports every item and leaves unresolved dynamic input alone", async () => {
+  const dir = path.resolve(".local", `unit-upload-report-${process.pid}`);
+  await mkdir(dir, { recursive: true });
+  const image = path.join(dir, "exists.png"), missing = path.join(dir, "missing.png");
+  await sharp({ create: { width: 2, height: 2, channels: 3, background: "white" } }).png().toFile(image);
+  const report = await validateUploadFiles([image, missing]);
+  assert.equal(report.status, "INVALID");
+  assert.equal(report.validCount, 1); assert.equal(report.invalidCount, 1);
+  assert.equal(report.files.find(file => file.status === "INVALID")?.name, "missing.png");
+  assert.equal((await validateUploadFiles(undefined, true)).status, "UNRESOLVED");
+});
+test("upload preflight identifies Variable without mutating payload or Default Pattern", async () => {
+  const missing = path.resolve(".local", "does-not-exist.png");
+  const payload = { action: "UPLOAD_FILE" as const, variableId: "imgs", files: [missing] };
+  const flow = { id: "flow", name: "Flow", zoom: 1, steps: [{ id: "step", version: 3 }],
+    variables: [{ id: "imgs", key: "imgs", type: "files" as const }], defaultPattern: { values: { imgs: [missing] } } };
+  const before = structuredClone({ payload, flow });
+  const error = await uploadPreflightError(payload, flow, "step", 3);
+  assert.equal(error?.code, "UPLOAD_FILES_INVALID");
+  assert.equal(error?.variableKey, "imgs");
+  assert.deepEqual({ payload, flow }, before);
 });
 test("UPLOAD_FILE target/files survive version and Override without changing legacy steps", () => {
   const store = new Store(":memory:");

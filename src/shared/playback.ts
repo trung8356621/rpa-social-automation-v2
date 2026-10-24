@@ -3,6 +3,7 @@ export type StepPlayback = {
   status: "running" | "pass" | "fail" | "blocked" | "skipped";
   message: string;
   resultStatus?: Result["status"];
+  error?: Result["error"];
 };
 export function playbackResult(results: Result[]): StepPlayback {
   const failed = results.find((r) => !r.ok),
@@ -12,6 +13,7 @@ export function playbackResult(results: Result[]): StepPlayback {
     status: last.status === "BLOCKED" ? "blocked" : last.ok ? "pass" : "fail",
     message: last.message,
     resultStatus: last.status,
+    error: last.error,
   };
 }
 /** UI sequencing only: every action is still sent through the existing Test API. */

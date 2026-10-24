@@ -16,7 +16,7 @@ import { Store } from "./storage.js";
 import { localOcr, type OcrEngine } from "./ocr.js";
 import { advanceOcrSearch, clearOcrSearch } from "./ocr-match-scroll.js";
 import { normalizeTargetText, resolveVisualTarget, TargetNotConfident, OcrNotFound, OcrTechnicalError } from "./target-resolver.js";
-import { inspectUploadFiles, UploadError } from "./upload-files.js";
+import { uploadPreflightError, UploadError } from "./upload-files.js";
 import { effectiveMatchTo, matchToLabel, matchToLogLabel } from "../shared/match-to.js";
 import { quickTag, QuickTagBlocked } from "./quick-tag.js";
 import { assertVisualEnvironment } from "../shared/visual-environment.js";
@@ -219,6 +219,18 @@ export class Runtime {
         source: override ? ("override" as const) : ("base" as const),
       };
     });
+    // Read-only upload preflight happens before capture, matching, scrolling,
+    // clicking, or opening a file chooser.
+    for (const plan of plans) for (const payload of plan.payloads) {
+      if (payload.action !== "UPLOAD_FILE") continue;
+      const error = await uploadPreflightError(payload, flow, plan.stepId, plan.version);
+      if (error) {
+        logMainError(this.runDir, "upload-preflight", new Error(error.details?.join("; ") || error.message), { runId: scope.runId, batchRunId: scope.batchRunId, ...error });
+        return [{ id: randomUUID(), ok: false, status: "BLOCKED", action: payload.action,
+          message: error.message, error, source: plan.source, stepId: plan.stepId,
+          version: plan.version, flowId: flow.id, overrideId: plan.overrideId, clickSent: false }];
+      }
+    }
     // Width changes reflow page content. Refuse the entire plan before any capture,
     // click, file chooser or input; legacy targets retain their original 1024 viewport.
     const first = plans[0];
@@ -403,7 +415,7 @@ export class Runtime {
       } else {
         const files =
           payload.action === "UPLOAD_FILE"
-            ? await inspectUploadFiles(payload.files)
+            ? payload.files
             : undefined;
         const template = await readFile(
           path.join(this.assetDir, payload.target!.asset),

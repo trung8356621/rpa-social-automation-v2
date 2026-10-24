@@ -40,7 +40,7 @@ import {
 import { Runtime } from "./runtime.js";
 import { startFixture } from "./fixture.js";
 import { localOcr } from "./ocr.js";
-import { inspectUploadFiles, IMAGE_EXTENSIONS } from "./upload-files.js";
+import { inspectUploadFiles, uploadPreflightError, validateUploadFiles, IMAGE_EXTENSIONS } from "./upload-files.js";
 import {
   WEB_WIDTH,
   WEB_HEIGHT,
@@ -548,6 +548,17 @@ async function boot() {
         }
       }
       batchId = runtime.startPlayAllLog(flow);
+      for (const step of steps) {
+        currentStep = step;
+        const payload = resolvePayload(step.payload, flow);
+        const error = await uploadPreflightError(payload, flow, step.id, step.version);
+        if (error) {
+          outcome.error = error;
+          logMainError(runDir, "upload-preflight", new Error(error.details?.join("; ") || error.message), { runId, batchRunId: batchId, ...error });
+          throw new Error(error.message);
+        }
+      }
+      currentStep = undefined;
       await switchBrowserSession(item.sessionId, true, false);
       store.setSetting("currentFlow", flow.id);
       browser.setZoom(flow.zoom);
@@ -600,11 +611,12 @@ async function boot() {
           : progress.status === "fail" ? "ERROR" : progress.status === "skipped" ? "SKIPPED"
           : progress.resultStatus === "ACTION_SENT" ? "ACTION_SENT" : "PASS";
         entry.message = progress.message; entry.runtimeStatus = progress.resultStatus;
+        entry.error = progress.error;
         outcome.message = `${step.name}: ${progress.message}`;
         if (["blocked", "fail"].includes(progress.status)) {
           stopped = true;
           Object.assign(outcome, { status: entry.status, message: progress.message,
-            stepId: step.id, stepName: step.name, version: step.version });
+            stepId: step.id, stepName: step.name, version: step.version, error: progress.error });
         }
         publish();
       }, undefined, async (previous, next) => { currentStep = next; await delayBetweenSteps(batchId!, previous, next); });
@@ -618,7 +630,7 @@ async function boot() {
         message, stepId: currentStep?.id, stepName: currentStep?.name, version: currentStep?.version });
       if (currentStep) {
         const entry = outcome.steps?.find(entry => entry.stepId === currentStep!.id);
-        if (entry) { entry.status = outcome.status === "BLOCKED" ? "BLOCKED" : "ERROR"; entry.message = message; }
+        if (entry) { entry.status = outcome.status === "BLOCKED" ? "BLOCKED" : "ERROR"; entry.message = message; entry.error = outcome.error; }
       }
       await screenshot();
     } finally {
@@ -1167,6 +1179,8 @@ async function boot() {
           ? undefined
           : inspectUploadFiles(picked.filePaths);
       }
+      case "validateUploadFiles":
+        return validateUploadFiles(command.files, command.unresolved);
       case "crop": {
         isIdle();
         const environment = captures.get(command.captureId);

@@ -2,12 +2,15 @@ import React, { useEffect, useState } from "react";
 import type { State, Command, Variable } from "../shared/contracts";
 import { UiPopover, usePopover } from "./ui-popover";
 import { slugify } from "../shared/flow-model";
+import { FileValidation, validateFileValues } from "./file-validation";
 type Props = {
   state: State;
   update: (c: Command) => Promise<void>;
   locked: boolean;
+  focusVariableId?: string;
+  onFocusHandled?: () => void;
 };
-export function Variables({ state, update, locked }: Props) {
+export function Variables({ state, update, locked, focusVariableId, onFocusHandled }: Props) {
   const [open, setOpen] = useState(false),
     [error, setError] = useState("");
   const f = state.flow;
@@ -15,7 +18,16 @@ export function Variables({ state, update, locked }: Props) {
     setOpen(false);
   }, [f?.id]);
   const [vars, setVars] = useState<Variable[]>([]),
-    [values, setValues] = useState<Record<string, string | string[] | number>>({});
+    [values, setValues] = useState<Record<string, string | string[] | number>>({}),
+    [fileCheckRevision, setFileCheckRevision] = useState(0);
+  useEffect(() => {
+    if (!f || !focusVariableId) return;
+    setVars(structuredClone(f.variables ?? []));
+    setValues(structuredClone(f.defaultPattern?.values ?? {}));
+    setOpen(true);
+    setTimeout(() => document.querySelector(`[data-variable-id="${focusVariableId}"]`)?.scrollIntoView({ block: "center" }), 0);
+    onFocusHandled?.();
+  }, [f?.id, focusVariableId]);
   return (
     <div className="variables">
       <button
@@ -60,7 +72,7 @@ export function Variables({ state, update, locked }: Props) {
             </div>
             <div className="variable-table-body">
               {vars.map((v) => (
-                <div className="variable-row" key={v.id}>
+                <div className="variable-row" data-variable-id={v.id} key={v.id}>
                   <input
                     aria-label="Variable key"
                     value={v.key}
@@ -95,7 +107,7 @@ export function Variables({ state, update, locked }: Props) {
                       </option>
                     ))}
                   </select>
-                  {v.type === "integer" || v.type === "number" ? <input
+                  <div className="variable-value">{v.type === "integer" || v.type === "number" ? <input
                     type="number" step={v.type === "integer" ? 1 : "any"}
                     aria-label={`Default value ${v.key}`}
                     value={typeof values[v.id] === "number" ? values[v.id] as number : ""}
@@ -117,6 +129,10 @@ export function Variables({ state, update, locked }: Props) {
                       })
                     }
                   />}
+                  {(v.type === "file" || v.type === "files") && <FileValidation value={values[v.id]} disabled={locked}
+                    refreshKey={fileCheckRevision}
+                    onChange={picked => setValues({ ...values, [v.id]: v.type === "file" ? picked[0] ?? "" : picked })} />}
+                  </div>
                   <button
                     className="icon-button"
                     aria-label={`Delete ${v.key}`}
@@ -156,7 +172,11 @@ export function Variables({ state, update, locked }: Props) {
             <button
               disabled={locked}
               onClick={() =>
-                void update({ type: "variables", variables: vars, values })
+                void (setFileCheckRevision(value => value + 1), validateFileValues(vars, values).then(checks => {
+                  const invalid = checks.find(check => check.report.status === "INVALID");
+                  if (invalid) throw new Error(`Variable ${invalid.variable.key}: ${invalid.report.invalidCount} file không hợp lệ.`);
+                  return update({ type: "variables", variables: vars, values });
+                }))
                   .then(() => {
                     setError("");
                     setOpen(false);

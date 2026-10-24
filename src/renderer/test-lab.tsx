@@ -1,29 +1,45 @@
 import React, { useEffect, useRef, useState } from "react";
-import type { Command, State, TestCase, TestCaseConfig, VariableValues } from "../shared/contracts";
+import type { Command, ExecutionError, State, TestCase, TestCaseConfig, VariableValues } from "../shared/contracts";
 import { validateVariables } from "../shared/flow-model";
 import { canUseAsScriptDemo } from "../shared/video-demo-policy";
 import { UiPopover } from "./ui-popover";
+import { FileValidation, validateFileValues } from "./file-validation";
 
 export type CaseEditorHandle = {
   dirty: boolean; name: string; flowId: string; sessionId: string;
   save: () => Promise<void>; discard: () => void;
 };
+export function ExecutionErrorView({ error, stepName, onFix }: {
+  error: ExecutionError; stepName?: string; onFix?: (error: ExecutionError) => void;
+}) {
+  return <div className="structured-error" role="alert">
+    <b>{stepName ?? error.stepId} · v{error.version}</b>
+    <span>{error.category}</span>
+    <p>{error.message}</p>
+    {(error.variableKey || error.field) && <p><b>Cần sửa:</b> {error.variableKey ? `Variable ${error.variableKey}` : error.field}</p>}
+    <p>{error.suggestedAction}</p>
+    {onFix && <button type="button" onClick={() => onFix(error)}>{error.variableId ? "Mở Variables" : "Mở Step Editor"}</button>}
+    {!!error.details?.length && <details><summary>Chi tiết kỹ thuật</summary><ul>{error.details.map(detail => <li key={detail}>{detail}</li>)}</ul></details>}
+  </div>;
+}
 function initial(state: State): TestCaseConfig {
   const flow = state.flows[0], session = state.browserSessions?.find(s => s.id === state.activeBrowserSessionId);
   return { name: "", flowId: flow?.id ?? "", sessionId: session?.id ?? "", startUrl: session?.lastUrl ?? "",
     values: structuredClone(flow?.defaultPattern?.values ?? {}), recording: true };
 }
-export function TestCaseEditor({ tabId, item, state, locked, report, saved, saving, run }: {
+export function TestCaseEditor({ tabId, item, state, locked, report, saved, saving, run, fix }: {
   tabId: string; item?: TestCase; state: State; locked: boolean;
   report: (id: string, handle: CaseEditorHandle) => void;
   saved: (tabId: string, item: TestCase, state: State) => void; run: (id: string) => void;
   saving: (value: boolean) => void;
+  fix?: (error: ExecutionError) => void;
 }) {
   const [config, setConfig] = useState<TestCaseConfig>(() => item ? structuredClone({ name: item.name,
     flowId: item.flowId, sessionId: item.sessionId, startUrl: item.startUrl, recording: true, values: item.values }) : initial(state));
   const [baseline, setBaseline] = useState(config);
   const [error, setError] = useState("");
   const [working, setWorking] = useState(false);
+  const [fileCheckRevision, setFileCheckRevision] = useState(0);
   const saveLock = useRef(false);
   const dirty = !item || JSON.stringify({ ...config, recording: true }) !== JSON.stringify({ ...baseline, recording: true });
   const flow = state.flows.find(f => f.id === config.flowId);
@@ -31,8 +47,12 @@ export function TestCaseEditor({ tabId, item, state, locked, report, saved, savi
     if (saveLock.current) throw new Error("Đang lưu Case; vui lòng đợi.");
     saveLock.current = true;
     setWorking(true); saving(true); setError("");
+    setFileCheckRevision(value => value + 1);
     try {
       validateVariables(flow?.variables ?? [], config.values);
+      const fileChecks = await validateFileValues(flow?.variables ?? [], config.values);
+      const invalid = fileChecks.find(check => check.report.status === "INVALID");
+      if (invalid) throw new Error(`Variable ${invalid.variable.key}: ${invalid.report.invalidCount} file không hợp lệ.`);
       const next = await window.creator.invoke({ type: "saveTestCase", id: item?.id, config: { ...config, recording: true } }) as State;
       const previousIds = new Set(state.testLab?.cases.map(c => c.id));
       const result = next.testLab!.cases.find(c => item ? c.id === item.id : !previousIds.has(c.id))!;
@@ -85,9 +105,12 @@ export function TestCaseEditor({ tabId, item, state, locked, report, saved, savi
           {v.type === "number" || v.type === "integer" ? <input disabled={disabled} type="number" step={v.type === "integer" ? 1 : "any"}
             value={typeof config.values[v.id] === "number" ? config.values[v.id] as number : ""}
             onChange={e => values({ ...config.values, [v.id]: e.target.value === "" ? "" : Number(e.target.value) })} />
-            : <textarea disabled={disabled} value={Array.isArray(config.values[v.id]) ? (config.values[v.id] as string[]).join("\n") : config.values[v.id] ?? ""}
+            : <><textarea disabled={disabled} value={Array.isArray(config.values[v.id]) ? (config.values[v.id] as string[]).join("\n") : config.values[v.id] ?? ""}
               placeholder={v.type === "files" ? "Mỗi dòng một đường dẫn file" : undefined}
-              onChange={e => values({ ...config.values, [v.id]: v.type === "files" ? e.target.value.split("\n").filter(Boolean) : e.target.value })} />}
+              onChange={e => values({ ...config.values, [v.id]: v.type === "files" ? e.target.value.split("\n").filter(Boolean) : e.target.value })} />
+              {(v.type === "file" || v.type === "files") && <FileValidation value={config.values[v.id]} disabled={disabled}
+                refreshKey={fileCheckRevision}
+                onChange={picked => values({ ...config.values, [v.id]: v.type === "file" ? picked[0] ?? "" : picked })} />}</>}
         </label>)}
         {flow && <button disabled={disabled} onClick={() => values(Object.fromEntries((flow.variables ?? []).map(v => [v.id,
           config.values[v.id] ?? flow.defaultPattern?.values[v.id] ?? (v.type === "files" ? [] : "")])))}>Đồng bộ với template hiện tại</button>}
@@ -95,7 +118,7 @@ export function TestCaseEditor({ tabId, item, state, locked, report, saved, savi
         <div className="case-actions"><button className="primary" disabled={disabled || !dirty} onClick={() => void save().catch(() => {})}>Lưu Case</button>
           <button disabled={disabled || dirty || !item} onClick={() => item && run(item.id)}>Run Test Case</button>
           {dirty && <small>Lưu cấu hình trước khi chạy.</small>}</div>
-        {item?.lastResult && <CaseResultView item={item} state={state} locked={disabled || dirty} runAgain={() => run(item.id)} compact />}
+        {item?.lastResult && <CaseResultView item={item} state={state} locked={disabled || dirty} runAgain={() => run(item.id)} compact onFix={fix} />}
       </div>
       <aside className="case-video-preview" aria-label="Video Preview">
         {item?.lastResult
@@ -165,8 +188,9 @@ function VideoPreviewPanel({ item, locked }: { item: TestCase; locked: boolean }
   </div>;
 }
 
-export function CaseResultView({ item, state, locked = false, runAgain, compact = false }: {
+export function CaseResultView({ item, state, locked = false, runAgain, compact = false, onFix }: {
   item: TestCase; state?: State; locked?: boolean; runAgain?: () => void; compact?: boolean;
+  onFix?: (error: ExecutionError) => void;
 }) {
   const result = item.lastResult;
   const [image, setImage] = useState<{ runId: string; src: string }>();
@@ -196,6 +220,7 @@ export function CaseResultView({ item, state, locked = false, runAgain, compact 
       <dt>Thời gian</dt><dd>{result.status === "RUNNING" ? "Đang chạy…" : `${seconds.toFixed(1)} giây`}</dd>
       {result.stepId && <><dt>Step dừng</dt><dd>{result.stepName ?? result.stepId} · v{result.version}</dd></>}
     </dl>
+    {result.error && <ExecutionErrorView error={result.error} stepName={result.stepName} onFix={onFix} />}
     <p role="status">{result.message}</p>
     <p className="hint">PASS chỉ theo xác nhận Runtime. ACTION_SENT cần kiểm tra website, không xác nhận hoàn tất nghiệp vụ.</p>
     {!!result.steps?.length && <details className="case-run-steps"><summary>Steps ({result.steps.length})</summary>

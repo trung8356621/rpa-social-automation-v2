@@ -8,7 +8,7 @@ import { UiPopover } from "./ui-popover";
 import { NetworkSettings } from "./network-settings";
 import { AppNavigation, ScenariosPage } from "./app-shell";
 import { BrowserSessionsPage, SessionSelector } from "./browser-sessions";
-import { TestLabPage, TestCaseEditor, CaseResultView, type CaseEditorHandle } from "./test-lab";
+import { TestLabPage, TestCaseEditor, CaseResultView, ExecutionErrorView, type CaseEditorHandle } from "./test-lab";
 import { Variables, Groups } from "./flow-controls";
 import { SeoOpsAuthPanel } from "./seo-ops-panel";
 import React, { useCallback, useEffect, useRef, useState } from "react";
@@ -30,9 +30,11 @@ import type {
   OcrResult,
   OcrSegment,
   ExecutionStart,
+  ExecutionError,
   State,
   Step,
 } from "../shared/contracts";
+import { errorDestination } from "../shared/error-navigation";
 import "./style.css";
 import { useDraft, captureEditorDraft, restoreEditorDraft, type EditorDraft } from "./draft";
 import { targetEnvironment } from "../shared/visual-environment";
@@ -89,6 +91,7 @@ function Creator() {
   const [state, setState] = useDraft<State>("state");
   const [seoOpsAuthenticated, setSeoOpsAuthenticated] = useState(false);
   const [seoOpsAutoSyncEnabled, setSeoOpsAutoSyncEnabled] = useState(false);
+  const [focusVariableId, setFocusVariableId] = useState<string>();
   const appPage = state?.appPage ?? "scenarios";
   const creatorVisible = appPage === "creator";
   const activeCaseTab = tabs.find(t => t.id === activeTabId && t.kind === "test-case");
@@ -786,6 +789,13 @@ function Creator() {
     workspaceLock.current = true;
     void task(async () => { try { await activateTab(tab); } finally { workspaceLock.current = false; } });
   }
+  function fixExecutionError(error: ExecutionError, flowId: string) {
+    const destination = errorDestination(error);
+    if (destination.kind === "variable") {
+      setFocusVariableId(destination.variableId);
+      openFlow(flowId);
+    } else openFlow(flowId, { stepId: destination.stepId, version: destination.version });
+  }
   function caseSaved(tabId: string, item: TestCase, next: State) {
     setState(next);
     updateTabs(tabsRef.current.map(t => t.id === tabId ? { ...t, caseId: item.id, flowId: item.flowId, sessionId: item.sessionId } : t));
@@ -1201,7 +1211,8 @@ function Creator() {
       {shell && state && tabs.filter(tab => tab.kind === "test-case").map(tab => <div key={tab.id} className="case-editor-host"
         hidden={tab.id !== activeTabId || appPage !== "test-case"}>
         <TestCaseEditor tabId={tab.id} item={state.testLab?.cases.find(c => c.id === tab.caseId)} state={state}
-          locked={navigationLocked} report={reportCase} saved={caseSaved} saving={setBusy} run={runCase} />
+          locked={navigationLocked} report={reportCase} saved={caseSaved} saving={setBusy} run={runCase}
+          fix={error => fixExecutionError(error, tab.flowId)} />
       </div>)}
       {shell && state && <AdminStudioPage report={reportStudio} page={appPage} state={state} locked={navigationLocked}
         selectedId={tabs.find(t => t.id === activeTabId && t.kind === "studio")?.studioId}
@@ -1260,6 +1271,8 @@ function Creator() {
               <Variables
                 state={state}
                 locked={locked}
+                focusVariableId={focusVariableId}
+                onFocusHandled={() => setFocusVariableId(undefined)}
                 update={async (c) => setState(await invoke<State>(c))}
               />
             )}
@@ -1382,7 +1395,8 @@ function Creator() {
               <p>{state?.runningTestCaseId ? "Đang chạy, vui lòng đợi." : "Đã kết thúc. Kiểm tra website hoặc mở Cấu hình Case để chạy lại."}</p>
               {!state?.runningTestCaseId && state?.testLab?.cases.find(c => c.id === activeCaseTab.caseId)?.lastResult &&
                 <CaseResultView item={state.testLab.cases.find(c => c.id === activeCaseTab.caseId)!} state={state}
-                  locked={navigationLocked || !canRunCase(activeCaseTab.caseId!)} runAgain={() => runCase(activeCaseTab.caseId!)} />}</>}
+                  locked={navigationLocked || !canRunCase(activeCaseTab.caseId!)} runAgain={() => runCase(activeCaseTab.caseId!)}
+                  onFix={error => fixExecutionError(error, activeCaseTab.flowId)} />}</>}
             {state?.sessionError && <p className="network-failure-hint" role="alert">{state.sessionError}</p>}
             {results.filter(result => result.networkHint).map(result =>
               <p key={result.id} className="network-failure-hint" role="alert">{result.networkHint}</p>)}
@@ -1395,6 +1409,9 @@ function Creator() {
                 {result.execution && <> · OCR {result.execution.ocrPasses} / scroll {result.execution.scrolls} · {result.execution.stopReason}</>}
               </p>)}
             </div>
+            {results.filter(result => result.error).map(result => <ExecutionErrorView key={`error-${result.id}`} error={result.error!}
+              stepName={state?.steps.find(step => step.id === result.stepId && step.version === result.version)?.name}
+              onFix={error => state?.flow && fixExecutionError(error, state.flow.id)} />)}
             {state && !activeCaseTab && (
               <Groups
                 newStep={newStep}

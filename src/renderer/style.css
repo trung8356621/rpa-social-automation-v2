@@ -1289,6 +1289,15 @@ body[data-panel="shell"] .app-shell[data-case-browser="true"] > aside.creator-st
 .case-run-status[data-status="PASS"] { color: #8de1b9; border-color: #42795e; }
 .case-run-status[data-status="RUNNING"] { color: #8cc9ff; border-color: #467aac; }
 .case-run-status[data-status="BLOCKED"], .case-run-status[data-status="ACTION_SENT"] { color: #efc070; border-color: #8b7145; }
+.file-validation { display: grid; gap: 4px; margin-top: 6px; }
+.file-validation-row { display: flex; justify-content: space-between; gap: 8px; font-size: 12px; }
+.file-validation-row[data-status="INVALID"], .file-validation small[data-status="INVALID"] { color: #ef6b73; }
+.file-validation-row[data-status="VALID"], .file-validation small[data-status="VALID"] { color: #73c991; }
+.structured-error { border: 1px solid #8b4148; border-radius: 8px; padding: 10px; background: rgba(139, 65, 72, .12); }
+.structured-error > span { margin-left: 8px; color: #ef6b73; }
+.structured-error p { margin: 6px 0; }
+.variable-value { min-width: 0; }
+.variable-value > textarea, .variable-value > input { width: 100%; box-sizing: border-box; }
 .case-run-status[data-status="ERROR"] { color: #f29d9d; border-color: #a65a5a; }
 .case-run-status[data-status="SKIPPED"], .case-run-status[data-status="PENDING"] { color: #9bb0c7; }
 .case-result-heading { display: flex; align-items: center; flex-wrap: wrap; gap: 9px; }
