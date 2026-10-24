@@ -1,6 +1,7 @@
 import type { Rect } from "./contracts.js";
-export const WEB_WIDTH = 1024;
-export const WEB_HEIGHT = 560;
+export const EXECUTION_VIEWPORT = Object.freeze({ width: 1024, height: 560 });
+export const WEB_WIDTH = EXECUTION_VIEWPORT.width;
+export const WEB_HEIGHT = EXECUTION_VIEWPORT.height;
 export const SIDE_WIDTH = 320;
 export const TOP_HEIGHT = 88;
 export function validateZoom(value: number) {
@@ -52,6 +53,13 @@ export function imageToInput(
   };
 }
 
+export function assertCanonicalScreenshot(width?: number, height?: number) {
+  if (width !== EXECUTION_VIEWPORT.width || height !== EXECUTION_VIEWPORT.height)
+    throw new Error(
+      `Screenshot viewport mismatch: expected ${EXECUTION_VIEWPORT.width}×${EXECUTION_VIEWPORT.height}, got ${width ?? "unknown"}×${height ?? "unknown"}. Không scale ảnh hoặc tọa độ.`,
+    );
+}
+
 export const EDITOR_WIDTH = 352;
 export const APP_NAV_EXPANDED = 208;
 export const APP_NAV_COLLAPSED = 56;
@@ -79,8 +87,7 @@ export function workspaceLayout(
     browser: {
       x,
       y: TOP_HEIGHT,
-      width: WEB_WIDTH,
-      height: Math.max(1, contentHeight - TOP_HEIGHT),
+      ...EXECUTION_VIEWPORT,
     },
     debug: {
       x,

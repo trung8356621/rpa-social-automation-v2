@@ -12,7 +12,6 @@ import { advanceOcrSearch, clearOcrSearch } from "./ocr-match-scroll.js";
 import { normalizeTargetText, resolveVisualTarget, TargetNotConfident, OcrNotFound, OcrTechnicalError } from "./target-resolver.js";
 import { inspectUploadFiles, UploadError } from "./upload-files.js";
 import { effectiveMatchTo, matchToLabel, matchToLogLabel } from "../shared/match-to.js";
-import { WEB_HEIGHT } from "../shared/geometry.js";
 import { quickTag, QuickTagBlocked } from "./quick-tag.js";
 import { assertVisualEnvironment } from "../shared/visual-environment.js";
 import { snapshotNetworkSettings, type NetworkRunSettings } from "../shared/network-mode.js";
@@ -206,10 +205,11 @@ export class Runtime {
     for (const plan of plans)
       for (const payload of plan.payloads) {
         try {
-          const viewportOcr = effectiveMatchTo(payload) !== "none";
-          assertVisualEnvironment(payload, flow.zoom, { ...this.browser.bounds,
-            height: viewportOcr ? payload.target?.environment?.height ?? WEB_HEIGHT : this.browser.bounds.height,
-            zoom: this.browser.zoom });
+          assertVisualEnvironment(payload, flow.zoom, {
+            width: this.browser.bounds.width,
+            height: this.browser.bounds.height,
+            zoom: this.browser.zoom,
+          });
         } catch (error) {
           logMainError(this.runDir, "preflight", error, {
             ...this.executionStart(payload, plan.stepId, plan.version, plan.overrideId),
@@ -322,7 +322,15 @@ export class Runtime {
     const execution: ExecutionDetails = { ...this.executionStart(payload, stepId, version, overrideId),
       runId: randomUUID(), testRunId: scope.runId, batchRunId: scope.batchRunId, ocrPasses: 0, scrolls: 0, stopReason: "STARTED", network: scope.network };
     this.onExecution?.(execution);
-    logMainEvent(this.runDir, "execution-start", { ...execution, action: payload.action });
+    logMainEvent(this.runDir, "execution-start", {
+      ...execution,
+      action: payload.action,
+      viewport: {
+        width: this.browser.bounds.width,
+        height: this.browser.bounds.height,
+        zoom: this.browser.zoom,
+      },
+    });
     let before: Result["before"];
     let afterQuickTag: Result["after"];
     let status: Result["status"] = "FAILED",
@@ -400,7 +408,15 @@ export class Runtime {
             const reset = await advanceOcrSearch(this.browser.view.webContents, matchTo, this.browser.zoom, true);
             if (reset.moved) resetScrolls = 1;
             execution.scrolls = resetScrolls;
-            logMainEvent(this.runDir, "ocr-scan-start", { ...execution, ...reset });
+            logMainEvent(this.runDir, "ocr-scan-start", {
+              ...execution,
+              viewport: {
+                width: this.browser.bounds.width,
+                height: this.browser.bounds.height,
+                zoom: this.browser.zoom,
+              },
+              initialScroll: reset,
+            });
             await new Promise(resolve => setTimeout(resolve, 250));
             current = await this.browser.capture();
           }

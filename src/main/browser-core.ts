@@ -14,12 +14,12 @@ import { mkdir, writeFile } from "node:fs/promises";
 import path from "node:path";
 import type { Capture, Rect } from "../shared/contracts.js";
 import {
-  WEB_WIDTH,
-  WEB_HEIGHT,
+  EXECUTION_VIEWPORT,
   SIDE_WIDTH,
   TOP_HEIGHT,
   validateZoom,
   imageToInput,
+  assertCanonicalScreenshot,
 } from "../shared/geometry.js";
 export class InputNotReady extends Error {
   constructor(readonly focus: ReturnType<BrowserCore["inputFocus"]>) {
@@ -37,8 +37,7 @@ export class BrowserCore {
   readonly bounds: Rect = {
     x: SIDE_WIDTH,
     y: TOP_HEIGHT,
-    width: WEB_WIDTH,
-    height: WEB_HEIGHT,
+    ...EXECUTION_VIEWPORT,
   };
   private editors: WebContents[] = [];
   trackEditor(contents: WebContents) {
@@ -188,11 +187,9 @@ export class BrowserCore {
       }
     }
     if (!raw.length) throw new Error("Browser trả về ảnh rỗng.");
-    // Normalize physical PNG pixels to view DIPs; crop and input share this space.
-    const buffer = await sharp(raw)
-      .resize(this.bounds.width, this.bounds.height, { fit: "fill" })
-      .png()
-      .toBuffer();
+    const metadata = await sharp(raw).metadata();
+    assertCanonicalScreenshot(metadata.width, metadata.height);
+    const buffer = raw;
     const id = randomUUID();
     await mkdir(this.evidenceDir, { recursive: true });
     await writeFile(path.join(this.evidenceDir, `${id}.png`), buffer);

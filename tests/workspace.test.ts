@@ -5,6 +5,9 @@ import {
   WEB_WIDTH,
   WEB_HEIGHT,
   EDITOR_WIDTH,
+  EXECUTION_VIEWPORT,
+  assertCanonicalScreenshot,
+  imageToInput,
 } from "../src/shared/geometry.js";
 import {
   assertVisualEnvironment,
@@ -18,11 +21,12 @@ const target = {
   roi: { x: 120, y: 120, width: 300, height: 64 },
   environment: env,
 };
-test("Editor occupies only the column beside Step List; Debug collapse frees the entire former native body", () => {
+test("maximize, restore and resize preserve the canonical browser viewport", () => {
   for (const editor of [true, false])
     for (const debug of [true, false])
       for (const size of [
         [1344, 648],
+        [1400, 705],
         [1920, 1080],
       ]) {
         const layout = workspaceLayout(
@@ -30,19 +34,25 @@ test("Editor occupies only the column beside Step List; Debug collapse frees the
           debug,
           ...(size as [number, number]),
         );
-        assert.equal(layout.browser.height, 560);
-        assert.equal(layout.browser.width, 1024);
-        const controlEdge = editor && size[0] >= 1696 ? 672 : 320;
-        assert.equal(
-          layout.browser.x,
-          controlEdge +
-            Math.max(0, Math.floor((size[0] - controlEdge - 1024) / 2)),
+        assert.deepEqual(
+          { width: layout.browser.width, height: layout.browser.height },
+          EXECUTION_VIEWPORT,
         );
-        assert.equal(layout.debug.x, controlEdge);
+        assert.equal(layout.debug.x, layout.browser.x);
         assert.equal(layout.debug.y + layout.debug.height, size[1]);
         assert.equal(layout.debug.height, debug ? 200 : 36);
-        assert.equal(layout.debug.width, size[0] - layout.debug.x);
+        assert.equal(layout.debug.width, Math.max(1, size[0] - layout.debug.x));
       }
+});
+
+test("canonical screenshots and click coordinates use the same unscaled coordinate system", () => {
+  assert.doesNotThrow(() => assertCanonicalScreenshot(WEB_WIDTH, WEB_HEIGHT));
+  assert.throws(() => assertCanonicalScreenshot(WEB_WIDTH, 617), /Không scale/);
+  const bounds = { x: 200, y: 88, width: WEB_WIDTH, height: WEB_HEIGHT };
+  assert.deepEqual(imageToInput(296, 264.5, WEB_WIDTH, WEB_HEIGHT, bounds), {
+    x: 296,
+    y: 264,
+  });
 });
 test("visual preflight rejects mismatched width, height and zoom for every visual action, without scaling ROI", () => {
   for (const action of [
@@ -86,7 +96,7 @@ test("legacy targets retain 1024x560 at the flow zoom and never inherit current 
         ...env,
         zoom: 0.8,
       }),
-    /Crop lại/,
+    /crop lại/i,
   );
   assert.doesNotThrow(() =>
     assertVisualEnvironment({ action: "CLICK_TARGET", target: legacy }, 0.8, {

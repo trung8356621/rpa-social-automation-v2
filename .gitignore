@@ -52,6 +52,7 @@ credentials*.json
 *.pfx
 
 # Logs, temporary files and OS/editor state
+.local/logs/
 *.log
 *.tmp
 *.bak

@@ -31,7 +31,12 @@ import { playSequential } from "../shared/playback.js";
 import { validateVariables, resolvePayload } from "../shared/flow-model.js";
 import { ScenarioGroups } from "./scenario-groups.js";
 import { Store } from "./storage.js";
-import { logMainError, logMainEvent, logTestBoundary } from "./main-error-log.js";
+import {
+  initializeMainFileLogging,
+  logMainError,
+  logMainEvent,
+  logTestBoundary,
+} from "./main-error-log.js";
 import { Runtime } from "./runtime.js";
 import { startFixture } from "./fixture.js";
 import { localOcr } from "./ocr.js";
@@ -120,9 +125,16 @@ async function boot() {
   await mkdir(dataPath, { recursive: true });
   const assetDir = path.join(dataPath, "targets"),
     evidenceDir = path.join(dataPath, "captures"),
-    runDir = path.join(dataPath, "runs");
-  for (const dir of [assetDir, evidenceDir, runDir])
+    runDir = path.join(dataPath, "runs"),
+    logDir = path.join(project, ".local", "logs");
+  for (const dir of [assetDir, evidenceDir, runDir, logDir])
     await mkdir(dir, { recursive: true });
+  try {
+    const logFile = initializeMainFileLogging(logDir);
+    console.info(`[Creator] Log: ${logFile}`);
+  } catch (error) {
+    console.error("[Creator] File logging unavailable:", error instanceof Error ? error.message : String(error));
+  }
   // RPA Admin session token — Electron safeStorage only; never SQLite plaintext.
   const seoOpsTokenStore = createSeoOpsTokenStore(dataPath);
   await seoOpsTokenStore.hydrate();
