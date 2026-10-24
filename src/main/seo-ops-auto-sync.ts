@@ -10,6 +10,8 @@ export type AutoSyncRequest = {
 };
 
 export type AutoSyncDeps = {
+  /** Fail-closed feature switch. Auto-sync is disabled unless explicitly enabled. */
+  enabled?: boolean;
   isAuthenticated: () => boolean;
   /** Full sync (push/pull/skip/conflict). Must be safe to call with same digests (no-op). */
   sync: (opts?: { flowId?: string }) => Promise<unknown>;
@@ -22,7 +24,14 @@ export type AutoSyncDeps = {
   now?: () => number;
 };
 
+export function isSeoOpsAutoSyncEnabled(
+  value = process.env.SEO_OPS_AUTO_SYNC_ENABLED,
+): boolean {
+  return value?.trim().toLowerCase() === "true";
+}
+
 export function createSeoOpsAutoSync(deps: AutoSyncDeps) {
+  const enabled = deps.enabled ?? false;
   const debounceMs = deps.debounceMs ?? 1500;
   const pollIntervalMs = deps.pollIntervalMs ?? 120_000;
   const maxBackoffMs = deps.maxBackoffMs ?? 60_000;
@@ -59,6 +68,7 @@ export function createSeoOpsAutoSync(deps: AutoSyncDeps) {
   }
 
   function request(req: AutoSyncRequest) {
+    if (!enabled) return;
     if (!deps.isAuthenticated() && req.reason !== "online") {
       offlinePending = true;
       queued = { ...queued, ...req, reason: req.reason };
@@ -92,6 +102,7 @@ export function createSeoOpsAutoSync(deps: AutoSyncDeps) {
   }
 
   async function flush(): Promise<void> {
+    if (!enabled) return;
     if (inFlight) return;
     if (!queued && !offlinePending) return;
     if (!deps.isAuthenticated()) {
@@ -125,6 +136,7 @@ export function createSeoOpsAutoSync(deps: AutoSyncDeps) {
   }
 
   function scheduleRetry() {
+    if (!enabled) return;
     if (retryTimer) return;
     const wait = backoffMs;
     backoffMs = Math.min(maxBackoffMs, Math.floor(backoffMs * 2));
@@ -139,6 +151,7 @@ export function createSeoOpsAutoSync(deps: AutoSyncDeps) {
   }
 
   function notifyOnline() {
+    if (!enabled) return;
     if (!deps.isAuthenticated()) return;
     if (offlinePending || queued) {
       request({ reason: "online", immediate: true });
@@ -147,6 +160,7 @@ export function createSeoOpsAutoSync(deps: AutoSyncDeps) {
 
   function start() {
     stop();
+    if (!enabled) return;
     pollTimer = setInterval(() => {
       if (!deps.isAuthenticated()) return;
       request({ reason: "poll" });
@@ -170,9 +184,12 @@ export function createSeoOpsAutoSync(deps: AutoSyncDeps) {
     flush,
     /** Test/introspection helpers */
     getState: () => ({
+      enabled,
       offlinePending,
       inFlight: Boolean(inFlight),
       queued,
+      polling: Boolean(pollTimer),
+      retryScheduled: Boolean(retryTimer),
       backoffMs,
       lastSuccessAt,
       syncGeneration,

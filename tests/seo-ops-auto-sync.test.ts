@@ -1,6 +1,9 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { createSeoOpsAutoSync } from "../src/main/seo-ops-auto-sync.js";
+import {
+  createSeoOpsAutoSync,
+  isSeoOpsAutoSyncEnabled,
+} from "../src/main/seo-ops-auto-sync.js";
 import { buildScriptCatalogSnapshot, buildScriptPublishBody, assertScriptPublishBody } from "../src/shared/script-release.js";
 import { planScriptSync } from "../src/shared/script-sync.js";
 import { labelForStatus, statusFromPlanSides } from "../src/shared/sync-status.js";
@@ -191,11 +194,71 @@ test("UI status labels map to Synced/Pending/Incomplete/Conflict/Error", () => {
   );
 });
 
+test("auto-sync defaults OFF and only explicit true enables it", () => {
+  assert.equal(isSeoOpsAutoSyncEnabled(undefined), false);
+  assert.equal(isSeoOpsAutoSyncEnabled("false"), false);
+  assert.equal(isSeoOpsAutoSyncEnabled("TRUE"), true);
+});
+
+test("auto-sync OFF ignores automatic requests and startup restore", async () => {
+  let syncCalls = 0;
+  const auto = createSeoOpsAutoSync({
+    isAuthenticated: () => true,
+    sync: async () => { syncCalls += 1; },
+  });
+
+  auto.request({ reason: "save", flowId: "s1" });
+  auto.request({ reason: "login", immediate: true });
+  auto.request({ reason: "session_restore", immediate: true });
+  await new Promise((resolve) => setTimeout(resolve, 10));
+
+  assert.equal(syncCalls, 0);
+  assert.equal(auto.getState().queued, null);
+  assert.equal(auto.getState().offlinePending, false);
+});
+
+test("auto-sync OFF does not start poll or retry timers", async () => {
+  let syncCalls = 0;
+  const auto = createSeoOpsAutoSync({
+    pollIntervalMs: 5,
+    maxBackoffMs: 5,
+    isAuthenticated: () => true,
+    sync: async () => {
+      syncCalls += 1;
+      throw new Error("Failed to fetch");
+    },
+  });
+
+  auto.start();
+  auto.request({ reason: "save", immediate: true });
+  await new Promise((resolve) => setTimeout(resolve, 20));
+
+  assert.equal(syncCalls, 0);
+  assert.equal(auto.getState().polling, false);
+  assert.equal(auto.getState().retryScheduled, false);
+});
+
+test("manual sync remains available while auto-sync is OFF", async () => {
+  let syncCalls = 0;
+  const syncAll = async () => { syncCalls += 1; };
+  const auto = createSeoOpsAutoSync({
+    isAuthenticated: () => true,
+    sync: syncAll,
+  });
+
+  auto.request({ reason: "save", immediate: true });
+  await syncAll();
+
+  assert.equal(auto.getState().enabled, false);
+  assert.equal(syncCalls, 1);
+});
+
 test("login and session restore trigger sync; save debounces to one flight", async () => {
   let syncCalls = 0;
   const reasons: string[] = [];
   let authenticated = true;
   const auto = createSeoOpsAutoSync({
+    enabled: true,
     debounceMs: 20,
     pollIntervalMs: 60_000,
     isAuthenticated: () => authenticated,
@@ -225,6 +288,7 @@ test("offline retry uses backoff and does not storm requests", async () => {
   let syncCalls = 0;
   let now = 1_000_000;
   const auto = createSeoOpsAutoSync({
+    enabled: true,
     debounceMs: 5,
     maxBackoffMs: 40,
     now: () => now,
@@ -252,6 +316,7 @@ test("single-flight coalesces concurrent requests without push/pull loop helper"
   const digests = new Map<string, string>();
   digests.set("s1", "a".repeat(64));
   const auto = createSeoOpsAutoSync({
+    enabled: true,
     debounceMs: 5,
     isAuthenticated: () => true,
     sync: async () => {

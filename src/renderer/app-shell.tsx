@@ -35,12 +35,13 @@ export function AppNavigation({ page, collapsed, locked, navigate, toggle }: {
   </div>;
 }
 
-export function ScenariosPage({ state, name, setName, locked, open, create, sessionControl, update, invoke, authenticated, onState }: {
+export function ScenariosPage({ state, name, setName, locked, open, create, sessionControl, update, invoke, authenticated, autoSyncEnabled, onState }: {
   state?: State; name: string; setName: (name: string) => void; locked: boolean;
   open: (id: string, focus?: { stepId: string; version: number }) => void; create: () => void;
   sessionControl?: React.ReactNode; update: (command: Command) => Promise<void>;
   invoke?: <T>(command: Command) => Promise<T>;
   authenticated?: boolean;
+  autoSyncEnabled?: boolean;
   onState?: (state: State) => void;
 }) {
   const [creating, setCreating] = useState(false);
@@ -55,11 +56,11 @@ export function ScenariosPage({ state, name, setName, locked, open, create, sess
   const disabled = locked || working;
 
   useEffect(() => {
-    if (!invoke || !authenticated) return;
+    if (!invoke || !authenticated || !autoSyncEnabled) return;
     void invoke<{ rows: ScriptSyncRow[] }>({ type: "seoOpsSyncStatus" })
       .then((r) => setSyncRows(r.rows))
       .catch(() => undefined);
-  }, [invoke, authenticated, state?.flows?.length]);
+  }, [invoke, authenticated, autoSyncEnabled, state?.flows?.length]);
   function show(kind: "create" | "rename" | "delete" | "move" | "scenario-delete", id?: string, initial = "") {
     setValue(initial); setError(""); setDialog({ kind, id });
   }
@@ -101,6 +102,7 @@ export function ScenariosPage({ state, name, setName, locked, open, create, sess
         <SeoOpsSyncControls
           locked={disabled}
           authenticated={Boolean(authenticated)}
+          autoSyncEnabled={Boolean(autoSyncEnabled)}
           invoke={invoke}
           onRows={setSyncRows}
         />

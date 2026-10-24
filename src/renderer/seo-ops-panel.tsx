@@ -8,6 +8,7 @@ type SessionState = {
   configured: boolean;
   baseUrl: string;
   authenticated: boolean;
+  autoSyncEnabled: boolean;
   user?: { id: number; email: string; name: string; role: string };
   error?: string;
 };
@@ -104,7 +105,7 @@ export function SeoOpsAuthPanel({
   return (
     <section className="seo-ops-auth" aria-label="SEO-OPS Login">
       <h2>SEO-OPS Account</h2>
-      <p>Đăng nhập bằng tài khoản SEO-OPS (`admin` / `owner`). Sync Script tự chạy sau login; tạo/sửa/test Scenario local vẫn dùng được khi chưa login.</p>
+      <p>Đăng nhập bằng tài khoản SEO-OPS (`admin` / `owner`). Auto-sync hiện {session?.autoSyncEnabled ? "bật" : "tắt"}; manual Sync và Scenario local vẫn hoạt động.</p>
       <label>
         Endpoint
         <input
@@ -180,12 +181,14 @@ export function SeoOpsAuthPanel({
 export function SeoOpsSyncControls({
   locked,
   authenticated,
+  autoSyncEnabled,
   flowId,
   invoke,
   onRows,
 }: {
   locked: boolean;
   authenticated: boolean;
+  autoSyncEnabled: boolean;
   flowId?: string;
   invoke: <T>(command: Command) => Promise<T>;
   onRows?: (rows: ScriptSyncRow[]) => void;
@@ -209,13 +212,13 @@ export function SeoOpsSyncControls({
   }, [invoke, applyRows]);
 
   useEffect(() => {
-    if (!authenticated) return;
+    if (!authenticated || !autoSyncEnabled) return;
     void pullStatus().catch(() => undefined);
     const timer = setInterval(() => {
       void pullStatus().catch(() => undefined);
     }, 30_000);
     return () => clearInterval(timer);
-  }, [authenticated, pullStatus]);
+  }, [authenticated, autoSyncEnabled, pullStatus]);
 
   async function runSync(all: boolean, version?: string) {
     if (!authenticated) {

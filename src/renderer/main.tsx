@@ -88,6 +88,7 @@ function Creator() {
 
   const [state, setState] = useDraft<State>("state");
   const [seoOpsAuthenticated, setSeoOpsAuthenticated] = useState(false);
+  const [seoOpsAutoSyncEnabled, setSeoOpsAutoSyncEnabled] = useState(false);
   const appPage = state?.appPage ?? "scenarios";
   const creatorVisible = appPage === "creator";
   const activeCaseTab = tabs.find(t => t.id === activeTabId && t.kind === "test-case");
@@ -97,8 +98,9 @@ function Creator() {
   useEffect(() => {
     if (!shell) return;
     void window.creator.invoke({ type: "seoOpsGetSession" }).then((session) => {
-      const s = session as { authenticated?: boolean };
+      const s = session as { authenticated?: boolean; autoSyncEnabled?: boolean };
       setSeoOpsAuthenticated(Boolean(s.authenticated));
+      setSeoOpsAutoSyncEnabled(Boolean(s.autoSyncEnabled));
     }).catch(() => setSeoOpsAuthenticated(false));
   }, [appPage]);
   const sidebarCollapsed = state?.sidebarCollapsed ?? false;
@@ -1189,6 +1191,7 @@ function Creator() {
         update={updateWorkspace}
         invoke={invoke}
         authenticated={seoOpsAuthenticated}
+        autoSyncEnabled={seoOpsAutoSyncEnabled}
         onState={setState}
         sessionControl={<SessionSelector state={state} locked={navigationLocked || stepPlayback[activeStepId]?.status === "running"} select={selectSession} />} />}
       {shell && appPage === "browser-sessions" && <BrowserSessionsPage state={state} locked={navigationLocked}
@@ -1216,9 +1219,10 @@ function Creator() {
             const result = await invoke(command);
             if (command.type === "seoOpsLogin" || command.type === "seoOpsLogout" || command.type === "seoOpsGetSession" || command.type === "seoOpsSetEndpoint") {
               const session = command.type === "seoOpsGetSession" || command.type === "seoOpsSetEndpoint"
-                ? result as { authenticated?: boolean }
-                : await invoke<{ authenticated?: boolean }>({ type: "seoOpsGetSession" });
+                ? result as { authenticated?: boolean; autoSyncEnabled?: boolean }
+                : await invoke<{ authenticated?: boolean; autoSyncEnabled?: boolean }>({ type: "seoOpsGetSession" });
               setSeoOpsAuthenticated(Boolean(session.authenticated));
+              setSeoOpsAutoSyncEnabled(Boolean(session.autoSyncEnabled));
             }
             return result;
           }}

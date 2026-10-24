@@ -60,7 +60,10 @@ import {
 } from "../shared/video-demo-policy.js";
 import { createSeoOpsTokenStore } from "./seo-ops-token-store.js";
 import { createSeoOpsSyncService } from "./seo-ops-sync.js";
-import { createSeoOpsAutoSync } from "./seo-ops-auto-sync.js";
+import {
+  createSeoOpsAutoSync,
+  isSeoOpsAutoSyncEnabled,
+} from "./seo-ops-auto-sync.js";
 import { createHash } from "node:crypto";
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
@@ -135,7 +138,9 @@ async function boot() {
     tokenStore: seoOpsTokenStore,
     testRunsDir: path.join(dataPath, "test-runs"),
   });
+  const autoSyncEnabled = isSeoOpsAutoSyncEnabled();
   const seoOpsAutoSync = createSeoOpsAutoSync({
+    enabled: autoSyncEnabled,
     isAuthenticated: () => Boolean(seoOpsTokenStore.getToken()),
     sync: (opts) => seoOpsSync.syncAll(opts),
     log: (level, message) => {
@@ -143,20 +148,22 @@ async function boot() {
       else logMainEvent(runDir, "seo-ops-auto-sync", { message });
     },
   });
-  seoOpsAutoSync.start();
-  // Session restore: if token exists, verify then sync once (no keystroke spam).
-  void seoOpsSync.sessionState().then((session) => {
-    if (session.authenticated) {
-      seoOpsAutoSync.request({ reason: "session_restore", immediate: true });
-    }
-  }).catch(() => undefined);
-  // Online recovery via net.isOnline() polling (Electron has no net 'online' event).
-  let wasOnline = net.isOnline();
-  setInterval(() => {
-    const online = net.isOnline();
-    if (online && !wasOnline) seoOpsAutoSync.notifyOnline();
-    wasOnline = online;
-  }, 15_000);
+  if (autoSyncEnabled) {
+    seoOpsAutoSync.start();
+    // Session restore: if token exists, verify then sync once (no keystroke spam).
+    void seoOpsSync.sessionState().then((session) => {
+      if (session.authenticated) {
+        seoOpsAutoSync.request({ reason: "session_restore", immediate: true });
+      }
+    }).catch(() => undefined);
+    // Online recovery via net.isOnline() polling (Electron has no net 'online' event).
+    let wasOnline = net.isOnline();
+    setInterval(() => {
+      const online = net.isOnline();
+      if (online && !wasOnline) seoOpsAutoSync.notifyOnline();
+      wasOnline = online;
+    }, 15_000);
+  }
   const browserSessions = new BrowserSessions(store);
   const scenarioGroups = new ScenarioGroups(store);
   const testLab = new TestLab(store, browserSessions);
@@ -841,11 +848,17 @@ async function boot() {
         return { cancelled: false, package_key: body.package_key, version: body.version, path: selected.filePath };
       }
       case "seoOpsGetSession":
-        return seoOpsSync.sessionState();
+        return {
+          ...await seoOpsSync.sessionState(),
+          autoSyncEnabled,
+        };
       case "seoOpsSetEndpoint":
         isIdle();
         seoOpsSync.setConfig(command.baseUrl);
-        return seoOpsSync.sessionState();
+        return {
+          ...await seoOpsSync.sessionState(),
+          autoSyncEnabled,
+        };
       case "seoOpsLogin": {
         isIdle();
         const loginResult = await seoOpsSync.login(command.email, command.password);
