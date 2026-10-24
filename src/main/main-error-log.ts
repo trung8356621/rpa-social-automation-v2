@@ -9,13 +9,17 @@ import {
 } from "node:fs";
 import path from "node:path";
 
-const DEFAULT_MAX_FILES = 20;
+const DEFAULT_MAX_FILES = 40;
 const DEFAULT_MAX_BYTES = 10 * 1024 * 1024;
+const APP_MAX_BYTES = 1024 * 1024;
 const SENSITIVE_KEY = /authorization|cookie|password|passwd|secret|token|credential/i;
 
-let activeLogFile: string | undefined;
-let activeMaxBytes = DEFAULT_MAX_BYTES;
-let limitReported = false;
+let logDirectory: string | undefined;
+let applicationLogFile: string | undefined;
+let maxFiles = DEFAULT_MAX_FILES;
+let testMaxBytes = DEFAULT_MAX_BYTES;
+const testLogs = new Map<string, string>();
+const limitedFiles = new Set<string>();
 
 function timestampName(date: Date) {
   return date.toISOString().replace(/[-:]/g, "").replace("T", "-").replace(/\.\d{3}Z$/, "");
@@ -36,23 +40,62 @@ function redact(value: unknown, seen = new WeakSet<object>()): unknown {
   ]));
 }
 
-function append(entry: Record<string, unknown>) {
-  if (!activeLogFile) return;
+function append(file: string | undefined, entry: Record<string, unknown>, sizeLimit: number) {
+  if (!file) return;
   try {
     const line = JSON.stringify(redact(entry)) + "\n";
-    const size = statSync(activeLogFile).size;
-    if (size + Buffer.byteLength(line) > activeMaxBytes) {
-      if (!limitReported) {
-        limitReported = true;
+    const size = statSync(file).size;
+    if (size + Buffer.byteLength(line) > sizeLimit) {
+      if (!limitedFiles.has(file)) {
+        limitedFiles.add(file);
         const notice = JSON.stringify({ at: new Date().toISOString(), scope: "logger", message: "LOG_SIZE_LIMIT_REACHED" }) + "\n";
-        if (size + Buffer.byteLength(notice) <= activeMaxBytes)
-          appendFileSync(activeLogFile, notice, "utf8");
+        if (size + Buffer.byteLength(notice) <= sizeLimit)
+          appendFileSync(file, notice, "utf8");
       }
       return;
     }
-    appendFileSync(activeLogFile, line, "utf8");
+    appendFileSync(file, line, "utf8");
   } catch (error) {
     console.error("[Creator diagnostics write failed]", error instanceof Error ? error.message : String(error));
+  }
+}
+
+function uniqueLog(prefix: "app" | "test", correlationId?: string, now = new Date()) {
+  if (!logDirectory) throw new Error("File logging is not initialized.");
+  const safeId = correlationId?.replace(/[^a-zA-Z0-9-]/g, "").slice(0, 80);
+  const base = [prefix, timestampName(now), safeId].filter(Boolean).join("-");
+  let candidate = path.join(logDirectory, `${base}.log`);
+  for (let suffix = 1; ; suffix++) {
+    try {
+      const handle = openSync(candidate, "wx");
+      closeSync(handle);
+      return candidate;
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== "EEXIST") throw error;
+      candidate = path.join(logDirectory, `${base}-${suffix}.log`);
+    }
+  }
+}
+
+function rotateLogs(current: string) {
+  if (!logDirectory) return;
+  try {
+    const old = readdirSync(logDirectory)
+      .filter((name) => /^(?:app|test)-.*\.log$/.test(name) && path.join(logDirectory!, name) !== current)
+      .map((name) => ({ path: path.join(logDirectory!, name), mtime: statSync(path.join(logDirectory!, name)).mtimeMs }))
+      .sort((a, b) => b.mtime - a.mtime);
+    for (const item of old.slice(maxFiles - 1)) {
+      if (item.path !== applicationLogFile && ![...testLogs.values()].includes(item.path)) unlinkSync(item.path);
+    }
+  } catch (error) {
+    console.error("[Creator log retention failed]", error instanceof Error ? error.message : String(error));
+  }
+}
+
+function correlation(entry: Record<string, unknown>) {
+  for (const key of ["batchRunId", "testRunId", "runId"]) {
+    const value = entry[key];
+    if (typeof value === "string" && testLogs.has(value)) return value;
   }
 }
 
@@ -60,43 +103,61 @@ export function initializeMainFileLogging(
   directory: string,
   options: { maxFiles?: number; maxBytes?: number; now?: Date } = {},
 ) {
-  const maxFiles = Math.max(1, options.maxFiles ?? DEFAULT_MAX_FILES);
-  activeMaxBytes = Math.max(1024, options.maxBytes ?? DEFAULT_MAX_BYTES);
-  limitReported = false;
+  logDirectory = directory;
+  maxFiles = Math.max(2, options.maxFiles ?? DEFAULT_MAX_FILES);
+  testMaxBytes = Math.max(1024, options.maxBytes ?? DEFAULT_MAX_BYTES);
   mkdirSync(directory, { recursive: true });
-  const base = `rpa-${timestampName(options.now ?? new Date())}`;
-  let candidate = path.join(directory, `${base}.log`);
-  for (let suffix = 1; ; suffix++) {
-    try {
-      const handle = openSync(candidate, "wx");
-      closeSync(handle);
-      break;
-    } catch (error) {
-      if ((error as NodeJS.ErrnoException).code !== "EEXIST") throw error;
-      candidate = path.join(directory, `${base}-${suffix}.log`);
-    }
-  }
-  activeLogFile = candidate;
-  append({ at: new Date().toISOString(), scope: "startup", pid: process.pid, message: "RPA_START" });
+  applicationLogFile = uniqueLog("app", undefined, options.now);
+  append(applicationLogFile, {
+    at: new Date().toISOString(),
+    scope: "startup",
+    pid: process.pid,
+    message: "RPA_START",
+  }, APP_MAX_BYTES);
+  rotateLogs(applicationLogFile);
+  return applicationLogFile;
+}
+
+export function beginTestRunLog(correlationId: string, label: string, now = new Date()) {
+  if (!logDirectory || !correlationId) return;
+  if (testLogs.has(correlationId)) return testLogs.get(correlationId);
   try {
-    const old = readdirSync(directory)
-      .filter((name) => /^rpa-.*\.log$/.test(name) && path.join(directory, name) !== candidate)
-      .map((name) => ({ path: path.join(directory, name), mtime: statSync(path.join(directory, name)).mtimeMs }))
-      .sort((a, b) => b.mtime - a.mtime);
-    for (const item of old.slice(maxFiles - 1)) unlinkSync(item.path);
+    const file = uniqueLog("test", correlationId, now);
+    testLogs.set(correlationId, file);
+    append(file, {
+      at: new Date().toISOString(),
+      level: "info",
+      scope: "test-log-open",
+      runId: correlationId,
+      label,
+    }, testMaxBytes);
+    rotateLogs(file);
+    console.info(`[Creator] Test log: ${file}`);
+    return file;
   } catch (error) {
-    console.error("[Creator log retention failed]", error instanceof Error ? error.message : String(error));
+    console.error("[Creator test log unavailable]", error instanceof Error ? error.message : String(error));
+    return;
   }
-  return candidate;
+}
+
+export function endTestRunLog(correlationId: string) {
+  testLogs.delete(correlationId);
 }
 
 export function resetMainFileLoggingForTest() {
-  activeLogFile = undefined;
-  activeMaxBytes = DEFAULT_MAX_BYTES;
-  limitReported = false;
+  logDirectory = undefined;
+  applicationLogFile = undefined;
+  maxFiles = DEFAULT_MAX_FILES;
+  testMaxBytes = DEFAULT_MAX_BYTES;
+  testLogs.clear();
+  limitedFiles.clear();
 }
 
-/** Main-process diagnostics are persisted in the per-start log file. */
+function write(entry: Record<string, unknown>) {
+  const id = correlation(entry);
+  append(id ? testLogs.get(id) : applicationLogFile, entry, id ? testMaxBytes : APP_MAX_BYTES);
+}
+
 export function logMainError(_directory: string, scope: string, error: unknown,
   context: Record<string, unknown> = {}) {
   const message = error instanceof Error ? error.message : String(error);
@@ -111,11 +172,11 @@ export function logMainError(_directory: string, scope: string, error: unknown,
       : { message },
   };
   console.error(`[Creator ${scope}] ${message}`);
-  append(entry);
+  write(entry);
 }
 
 export function logMainEvent(_directory: string, scope: string, context: Record<string, unknown>) {
-  append({ at: new Date().toISOString(), level: "info", scope, ...context });
+  write({ at: new Date().toISOString(), level: "info", scope, ...context });
 }
 
 export function logTestBoundary(directory: string, phase: "START" | "END", scope: {

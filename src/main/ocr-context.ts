@@ -41,13 +41,9 @@ export async function confirmOcrContext(frame: Buffer, template: Buffer, payload
       segment.confidence >= 80 && text.length >= (segment.kind === "line" ? 6 : 4) && /\p{L}/u.test(text) &&
       !generic.has(text) && !selectedText.includes(text) && !text.includes(selectedText);
   });
-  // Prefer a complete saved line over its constituent words before judging ambiguity.
-  const anchors = rawAnchors.filter(anchor => !rawAnchors.some(other => {
-    if (anchor === other || other.kind !== "line" || anchor.kind !== "word") return false;
-    const a = anchor.bbox, b = other.bbox;
-    return a.x >= b.x && a.y >= b.y && a.x+a.width <= b.x+b.width && a.y+a.height <= b.y+b.height &&
-      normalize(other.text).includes(normalize(anchor.text));
-  }));
+  // Keep constituent words until after live matching. A saved line can contain one
+  // OCR typo while its stable words still provide valid relative context.
+  const anchors = rawAnchors;
   if (!anchors.length) {
     context.reason = "CONTEXT_INSUFFICIENT: ảnh lưu không có chữ ngữ cảnh độc lập đáng tin cậy.";
     return context;
@@ -67,8 +63,8 @@ export async function confirmOcrContext(frame: Buffer, template: Buffer, payload
       expectedY+a.height*scale/2 > viewport.y && expectedY-a.height*scale/2 < viewport.y+viewport.height;
     if (expectedVisible) visible++;
     // Still look for a visible anchor shifted by reflow even when its old projection is off-screen.
-    const toleranceX = Math.min(160,Math.max(64,box.width*0.5,Math.abs(dx)*0.75));
-    const toleranceY = Math.min(160,Math.max(48,box.height*2,Math.abs(dy)*0.75));
+    const savedDistance = Math.hypot(dx, dy);
+    const maxDistance = Math.max(160, savedDistance * 2.5, box.width * 2, box.height * 6);
     const candidates = findOcrCandidates(viewportOcr, anchor).filter(candidate => {
       const b = candidate.bbox;
       if (candidate.confidence < 80 || b.x < 0 || b.y < 0 || b.x+b.width > size.width! || b.y+b.height > size.height!) return false;
@@ -80,7 +76,9 @@ export async function confirmOcrContext(frame: Buffer, template: Buffer, payload
       if (a.y >= original.y+original.height && b.y < box.y+box.height-slack) return false;
       if (a.x+a.width <= original.x && b.x+b.width > box.x+slack) return false;
       if (a.x >= original.x+original.width && b.x < box.x+box.width-slack) return false;
-      return Math.abs(b.x+b.width/2-expectedX) <= toleranceX && Math.abs(b.y+b.height/2-expectedY) <= toleranceY;
+      // Layout may reflow spacing while retaining semantic direction. Keep the
+      // anchor in a bounded neighborhood instead of requiring its old projection.
+      return Math.hypot(cx-found.x, cy-found.y) <= maxDistance;
     });
     if (candidates.length > 1) { ambiguous = true; continue; }
     if (candidates.length === 1) matched.push(anchor);

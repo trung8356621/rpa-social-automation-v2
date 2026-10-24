@@ -141,7 +141,17 @@ test("AUTO blocks both failures, unconfirmed OCR, low confidence and duplicate O
     resolveVisualTarget(frame, template, payload, {
       recognize: async () => {
         const r = ocr();
-        return { ...r, segments: [...r.segments, ...r.segments] };
+        return {
+          ...r,
+          segments: [
+            ...r.segments,
+            ...r.segments.map((segment) => ({
+              ...segment,
+              id: `${segment.id}-duplicate`,
+              bbox: { ...segment.bbox, x: segment.bbox.x + 60 },
+            })),
+          ],
+        };
       },
     }),
     /nhiều/,

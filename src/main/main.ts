@@ -1283,21 +1283,11 @@ async function boot() {
         if (uiPlayAllRunId === command.runId) uiPlayAllRunId = undefined;
         return;
       case "test":
-        try {
-          isIdle();
-          return await runtime.test(command.stepId, command.version, command.overrideId, command.batchRunId);
-        } catch (error) {
-          logMainError(runDir, "test", error, { stepId: command.stepId, version: command.version });
-          throw error;
-        }
+        isIdle();
+        return runtime.test(command.stepId, command.version, command.overrideId, command.batchRunId);
       case "testPair":
-        try {
-          isIdle();
-          return await runtime.testPair(command.firstId, command.secondId, command.delayMs);
-        } catch (error) {
-          logMainError(runDir, "testPair", error, { firstId: command.firstId, secondId: command.secondId });
-          throw error;
-        }
+        isIdle();
+        return runtime.testPair(command.firstId, command.secondId, command.delayMs);
       case "disarmTest":
         armedTest = undefined;
         return;

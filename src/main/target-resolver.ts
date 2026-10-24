@@ -109,8 +109,7 @@ export async function resolveVisualTarget(
     if (!candidates.length) throw new OcrNotFound(trace);
     if (candidates.length > 32) throw new TargetNotConfident("CONTEXT_AMBIGUOUS: quá nhiều dòng chữ trùng trong viewport; không click.", trace, true);
     const confirmed: NonNullable<Result["match"]>[] = [];
-    let confidentCandidates = 0;
-    let edgeCandidate: Rect | undefined;
+    const confident: NonNullable<Result["match"]>[] = [];
     for (const candidate of candidates) {
       let found: NonNullable<Result["match"]>;
       try {
@@ -122,26 +121,28 @@ export async function resolveVisualTarget(
           x: candidate.bbox.x+candidate.bbox.width/2, y: candidate.bbox.y+candidate.bbox.height/2, confidence: candidate.confidence });
         continue;
       }
-      confidentCandidates++;
+      confident.push(found);
       trace.attempts.push({ method: "ocr", outcome: "matched", x: found.x, y: found.y, confidence: found.confidence });
       let context: NonNullable<ResolutionTrace["context"]>[number];
       try { context = await confirmOcrContext(frame, template, payload, ocr, found, contextOcr, candidate.bbox, searchRegion); }
       catch (error) { throw new OcrTechnicalError(error); }
       trace.context!.push(context);
-      if (context.reason.startsWith("CONTEXT_INSUFFICIENT")) {
-        trace.ocrOutcome = "CONTEXT_REJECTED";
-        throw new TargetNotConfident(`CONTEXT_REJECTED: ${context.reason}`, trace);
-      }
       if (context.confirmed) confirmed.push(found);
-      if (context.reason.startsWith("CONTEXT_EDGE_PENDING")) edgeCandidate = candidate.bbox;
     }
-    if (trace.context!.some(context => context.reason.startsWith("CONTEXT_AMBIGUOUS")))
-      throw new TargetNotConfident("CONTEXT_AMBIGUOUS: ngữ cảnh chưa phân biệt được các ứng viên; không click.", trace, true);
     if (confirmed.length > 1) throw new TargetNotConfident("CONTEXT_AMBIGUOUS: nhiều mục tiêu cùng chữ/ngữ cảnh; không click.", trace, true);
-    if (!confirmed.length) throw new OcrNotFound(trace, confidentCandidates ? "CONTEXT_REJECTED" : "OCR_LOW_CONFIDENCE",
-      confidentCandidates === 1 ? edgeCandidate : undefined);
-    trace.selectedMethod = "ocr";
-    return { ...confirmed[0], resolution: trace };
+    if (confirmed.length === 1) {
+      trace.selectedMethod = "ocr";
+      return { ...confirmed[0], resolution: trace };
+    }
+    // Context is a discriminator, not a second mandatory match. A single exact,
+    // confident OCR target is safe; duplicated targets still require context.
+    if (confident.length === 1) {
+      trace.selectedMethod = "ocr";
+      return { ...confident[0], resolution: trace };
+    }
+    if (confident.length > 1)
+      throw new TargetNotConfident("CONTEXT_AMBIGUOUS: nhiều mục tiêu cùng chữ nhưng context không phân biệt được; không click.", trace, true);
+    throw new OcrNotFound(trace, "OCR_LOW_CONFIDENCE");
   }
   const trace: ResolutionTrace = {
     mode: "auto",
@@ -273,6 +274,7 @@ export async function resolveVisualTarget(
   }
   if (textMatch) {
     let context: NonNullable<ResolutionTrace["context"]>[number];
+    let candidateCount = 0;
     try {
       // Re-read only this screenshot for textual context outside the old search ROI.
       // Keep the click coordinates from the original OCR match unchanged.
@@ -282,6 +284,7 @@ export async function resolveVisualTarget(
       const fullOcr = await ocr.recognize(frame);
       onOcr?.({ phase: "result", offset, result: fullOcr });
       const candidates = findOcrCandidates(fullOcr, target.ocr!).filter(candidate => candidate.confidence >= MIN_OCR_CONFIDENCE);
+      candidateCount = candidates.length;
       if (candidates.length > 1) throw new TargetNotConfident("CONTEXT_AMBIGUOUS: nhiều ứng viên OCR trong viewport hiện tại; không click.", trace, true);
       const box = findOcrCandidates(viewportOcr!, target.ocr!).find(candidate =>
         Math.abs(candidate.bbox.x+candidate.bbox.width/2-textMatch!.x) <= 1 &&
@@ -292,11 +295,17 @@ export async function resolveVisualTarget(
       throw new OcrTechnicalError(error);
     }
     trace.context = [context];
-    if (!context.confirmed) { trace.ocrOutcome = "CONTEXT_REJECTED"; throw new TargetNotConfident(`CONTEXT_REJECTED: ${context.reason}`, trace); }
+    if (!context.confirmed && candidateCount !== 1) {
+      trace.ocrOutcome = "CONTEXT_REJECTED";
+      throw new TargetNotConfident(`CONTEXT_REJECTED: ${context.reason}`, trace);
+    }
     trace.selectedMethod = "ocr";
     return { ...textMatch, resolution: trace };
   }
-  if (ocrRejection) throw new TargetNotConfident(ocrRejection.message, trace, ocrRejection.ambiguous);
+  if (ocrRejection) {
+    trace.blockedReason = ocrRejection.message;
+    throw new TargetNotConfident(ocrRejection.message, trace, ocrRejection.ambiguous);
+  }
   return block(
     "Không xác định được target đủ tin cậy bằng AUTO. Chưa gửi click/nhập; hãy Redesign target.",
   );

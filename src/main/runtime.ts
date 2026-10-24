@@ -1,4 +1,10 @@
-import { logMainError, logMainEvent, logTestBoundary } from "./main-error-log.js";
+import {
+  beginTestRunLog,
+  endTestRunLog,
+  logMainError,
+  logMainEvent,
+  logTestBoundary,
+} from "./main-error-log.js";
 import { resolvePayload } from "../shared/flow-model.js";
 import { validatePayload } from "./storage.js";
 import path from "node:path";
@@ -30,7 +36,9 @@ export class Runtime {
   }
   startPlayAllLog(flow?: Flow, snapshotSteps?: Step[]) {
     if (this.busy || this.batch) throw new Error("Đang có lượt chạy.");
-    this.batch = { runId: randomUUID(), ocrPasses: 0, scrolls: 0, status: "STARTED",
+    const runId = randomUUID();
+    beginTestRunLog(runId, "Play All");
+    this.batch = { runId, ocrPasses: 0, scrolls: 0, status: "STARTED",
       network: snapshotNetworkSettings(this.store.networkSettings()) };
     this.batchSteps = snapshotSteps ? structuredClone(snapshotSteps) : undefined;
     this.batchFlow = flow ? structuredClone(flow) : undefined;
@@ -53,7 +61,11 @@ export class Runtime {
       : batch.status === "STARTED"
         ? "COMPLETED"
         : batch.status;
-    logTestBoundary(this.runDir, "END", { ...batch, label: "Play All", status });
+    try {
+      logTestBoundary(this.runDir, "END", { ...batch, label: "Play All", status });
+    } finally {
+      endTestRunLog(runId);
+    }
   }
   playAllNetwork(runId: string): NetworkRunSettings {
     if (!this.batch || this.batch.runId !== runId) throw new Error("Play All log runId không khớp.");
@@ -133,6 +145,8 @@ export class Runtime {
       } catch { /* Invalid versions still receive a paired boundary and validation error. */ }
       return `Step ${request.stepId} | v${request.version} | Match To ${matchLabel}`;
     }).join(" → ");
+    const ownsLog = !batchRunId;
+    if (ownsLog) beginTestRunLog(scope.runId, label);
     let status = "FAILED";
     logTestBoundary(this.runDir, "START", { runId: scope.runId, batchRunId: scope.batchRunId, label, status: "STARTED" });
     try {
@@ -143,6 +157,12 @@ export class Runtime {
       return results;
     } catch (error) {
       status = /Viewport|Zoom|variable|không thuộc flow|không hợp lệ|Invalid Step|Match To|orphan Variable|thiếu OCR|Ghim version|→ Step /i.test(error instanceof Error ? error.message : String(error)) ? "BLOCKED" : "FAILED";
+      logMainError(this.runDir, "test-error", error, {
+        runId: scope.runId,
+        batchRunId: scope.batchRunId,
+        label,
+        status,
+      });
       throw error;
     } finally {
       logTestBoundary(this.runDir, "END", { runId: scope.runId, batchRunId: scope.batchRunId, label, status, ocrPasses: scope.ocrPasses, scrolls: scope.scrolls });
@@ -151,6 +171,7 @@ export class Runtime {
         this.batch.scrolls += scope.scrolls;
         if (!["ACTION_SENT", "VERIFIED"].includes(status)) this.batch.status = status;
       }
+      if (ownsLog) endTestRunLog(scope.runId);
     }
   }
   private async runRequests(
@@ -212,6 +233,8 @@ export class Runtime {
           });
         } catch (error) {
           logMainError(this.runDir, "preflight", error, {
+            runId: scope.runId,
+            batchRunId: scope.batchRunId,
             ...this.executionStart(payload, plan.stepId, plan.version, plan.overrideId),
             ocrPasses: 0, scrolls: 0, stopReason: "VIEWPORT_MISMATCH", viewport: this.browser.bounds,
           });
@@ -531,6 +554,7 @@ export class Runtime {
         }
         if (payload.action === "UPLOAD_FILE") {
           upload = await this.browser.uploadFiles(files!, () => {
+            logMainEvent(this.runDir, "click", { ...execution, x: match!.x, y: match!.y });
             this.browser.click(match!.x, match!.y);
             this.onClick?.(match!.x, match!.y);
             clickSent = true;
@@ -539,6 +563,7 @@ export class Runtime {
         } else if (
           ["CLICK_TARGET", "CLICK_AND_TYPE"].includes(payload.action)
         ) {
+          logMainEvent(this.runDir, "click", { ...execution, x: match.x, y: match.y });
           this.browser.click(match.x, match.y);
           this.onClick?.(match.x, match.y);
           clickSent = true;
@@ -601,7 +626,7 @@ export class Runtime {
     }
     scope.ocrPasses += execution.ocrPasses;
     scope.scrolls += execution.scrolls;
-    logMainEvent(this.runDir, "execution-stop", { ...execution, status, clickSent, resolution, networkHint });
+    logMainEvent(this.runDir, "execution-stop", { ...execution, status, clickSent, match, resolution, networkHint });
     message = `v${version} · ${overrideId ? "Override" : "Base"} · Match To ${matchToLabel(execution.matchTo)} · ${execution.pipeline}: ${message}`;
     if (upload?.cleanupWarning) message += ` ${upload.cleanupWarning}`;
     await new Promise((r) => setTimeout(r, 120));
