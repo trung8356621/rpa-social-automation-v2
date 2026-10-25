@@ -58,6 +58,105 @@ type TabDraft = {
   execution?: ExecutionStart; urlInput: string; urlDirty: boolean;
 };
 
+function ScenarioTestCaseCard({
+  item,
+  flowSteps,
+  locked,
+  canRun,
+  onRun,
+  onOpen,
+  invoke,
+}: {
+  item: TestCase;
+  flowSteps: StepVersionRef[];
+  locked: boolean;
+  canRun: boolean;
+  onRun: () => void;
+  onOpen: () => void;
+  invoke: <T>(command: Command) => Promise<T>;
+}) {
+  const outdated = JSON.stringify(item.stepVersions ?? flowSteps) !== JSON.stringify(flowSteps);
+  const [thumbnail, setThumbnail] = useState("");
+  const [video, setVideo] = useState("");
+  const runId = item.lastResult?.runId;
+  const hasRecording = Boolean(item.lastResult?.recordingPath);
+
+  useEffect(() => {
+    let active = true;
+    setThumbnail("");
+    setVideo("");
+    if (runId && hasRecording) {
+      void invoke<string>({ type: "testCaseThumbnail", caseId: item.id, runId })
+        .then((val) => {
+          if (active) setThumbnail(val);
+        })
+        .catch(() => undefined);
+    }
+    return () => {
+      active = false;
+    };
+  }, [item.id, runId, hasRecording, invoke]);
+
+  return (
+    <div className="scenario-test-item" key={item.id}>
+      <div className="scenario-test-media">
+        {hasRecording ? (
+          <button
+            className="scenario-demo-thumb"
+            disabled={!thumbnail}
+            title="Xem preview video"
+            aria-label={`Xem video ${item.name}`}
+            onClick={() => {
+              if (!runId) return;
+              void invoke<string>({ type: "testCaseVideo", caseId: item.id, runId })
+                .then(setVideo)
+                .catch(() => undefined);
+            }}
+          >
+            {thumbnail ? <img src={thumbnail} alt={`Thumbnail ${item.name}`} /> : <span>Loading…</span>}
+          </button>
+        ) : (
+          <div className="scenario-demo-placeholder" aria-label="Chưa có video">
+            No video
+          </div>
+        )}
+      </div>
+      <div className="scenario-test-details">
+        <div className="scenario-test-title-row">
+          <button className="scenario-test-name" disabled={locked} onClick={onOpen} title={item.name}>
+            {item.name}
+          </button>
+          <span className="case-run-status" data-status={item.lastResult?.status ?? "none"}>
+            {item.lastResult?.status ?? "Chưa chạy"}
+          </span>
+        </div>
+        <div className="scenario-test-meta">
+          <small>{item.lastResult?.finishedAt ? new Date(item.lastResult.finishedAt).toLocaleString() : "Chưa thực thi"}</small>
+          {outdated && <span className="demo-status outdated">Outdated</span>}
+        </div>
+        <div className="scenario-test-actions">
+          <button disabled={locked || !canRun} onClick={onRun}>Run</button>
+          <button disabled={locked} onClick={onOpen}>Open</button>
+        </div>
+      </div>
+      {video && (
+        <UiPopover
+          variant="modal"
+          label={`Video · ${item.name}`}
+          className="scenario-demo-preview"
+          close={() => setVideo("")}
+        >
+          <div className="popover-heading">
+            <b>{item.name}</b>
+            <button onClick={() => setVideo("")} aria-label="Đóng video">×</button>
+          </div>
+          <video controls autoPlay={false} preload="metadata" src={video} />
+        </UiPopover>
+      )}
+    </div>
+  );
+}
+
 function Creator() {
   useEffect(() => shell ? installBrowserRecording() : undefined, []);
   const [mainPage, setMainPage] = useState<MainPage>("scenarios");
@@ -1438,18 +1537,18 @@ function Creator() {
             {!activeCaseTab && creatorSidebarTab === "tests" && state?.flow && <div className="scenario-tests-panel">
               <div className="scenario-tests-heading"><b>Test Cases</b><button className="icon-button" title="Tạo Test Case" aria-label="Tạo Test Case" disabled={locked}
                 onClick={() => ensureScenarioCase(state.flow!.id)}>+</button></div>
-              {(state.testLab?.cases ?? []).filter(item => item.flowId === state.flow!.id).map(item => {
-                const outdated = JSON.stringify(item.stepVersions ?? state.flow!.steps) !== JSON.stringify(state.flow!.steps);
-                return <div className="scenario-test-item" key={item.id}>
-                  <button className="scenario-test-name" disabled={locked} onClick={() => openCase(item.id)}>{item.name}</button>
-                  <span className="case-run-status" data-status={item.lastResult?.status ?? "none"}>{item.lastResult?.status ?? "Chưa chạy"}</span>
-                  <small>{item.lastResult?.finishedAt ? new Date(item.lastResult.finishedAt).toLocaleString() : "Chưa thực thi"}</small>
-                  <small>{item.lastResult?.recordingPath ? "Có video" : "Chưa có video"}</small>
-                  {outdated && <span className="demo-status outdated">Outdated</span>}
-                  <div><button disabled={locked || !canRunCase(item.id)} onClick={() => runCase(item.id)}>Run</button>
-                    <button disabled={locked} onClick={() => openCase(item.id)}>Open</button></div>
-                </div>;
-              })}
+              {(state.testLab?.cases ?? []).filter(item => item.flowId === state.flow!.id).map(item => (
+                <ScenarioTestCaseCard
+                  key={item.id}
+                  item={item}
+                  flowSteps={state.flow!.steps}
+                  locked={locked}
+                  canRun={canRunCase(item.id)}
+                  onRun={() => runCase(item.id)}
+                  onOpen={() => openCase(item.id)}
+                  invoke={invoke}
+                />
+              ))}
               {!(state.testLab?.cases ?? []).some(item => item.flowId === state.flow!.id) && <p className="hint">Chưa có Test Case cho Scenario này.</p>}
             </div>}
             {(!state || activeCaseTab || creatorSidebarTab === "steps") && <>

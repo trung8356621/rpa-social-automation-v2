@@ -859,6 +859,11 @@ async function boot() {
         if (!result || result.runId !== command.runId) throw new Error("Screenshot không thuộc Last Result hiện tại.");
         return testEvidence.read(command.caseId, result);
       }
+      case "testCaseThumbnail": {
+        const result = testLab.get(command.caseId).lastResult;
+        if (!result || result.runId !== command.runId) throw new Error("Run is no longer current.");
+        return testEvidence.thumbnail(command.caseId, result);
+      }
       case "scenarioDemoMedia": {
         const flow = store.flows().find(item => item.id === command.flowId);
         if (!flow) throw new Error("Scenario không còn tồn tại.");

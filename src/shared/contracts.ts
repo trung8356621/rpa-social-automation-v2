@@ -306,6 +306,7 @@ export type Command =
   | { type: "recordingEvent"; token: string; event: "ready" | "chunk" | "done" | "error"; data?: string }
   | { type: "testCaseVideo"; caseId: string; runId: string }
   | { type: "testCaseScreenshot"; caseId: string; runId: string }
+  | { type: "testCaseThumbnail"; caseId: string; runId: string }
   | { type: "scenarioDemoMedia"; flowId: string; media: "thumbnail" | "video" }
   | {
       type: "attachScriptVideoDemo";

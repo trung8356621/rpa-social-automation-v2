@@ -58,6 +58,19 @@ export class TestRunEvidence {
     if (!result.runId || result.recordingPath !== `${caseId}/${result.runId}/recording.webm`) throw new Error("No recording for this run.");
     return `data:video/webm;base64,${(await readFile(path.join(directory, "recording.webm"))).toString("base64")}`;
   }
+  async thumbnail(caseId: string, result: CaseResult) {
+    const directory = this.directory(caseId, result.runId);
+    if (!result.runId) throw new Error("Thiếu Test Run ID.");
+    try {
+      const jpg = await readFile(path.join(directory, "recording-thumb.jpg"));
+      if (jpg.length) return `data:image/jpeg;base64,${jpg.toString("base64")}`;
+    } catch { /* fallback to final screenshot */ }
+    try {
+      const png = await readFile(path.join(directory, "final.png"));
+      if (png.length) return `data:image/png;base64,${png.toString("base64")}`;
+    } catch { /* no image */ }
+    throw new Error("Không có thumbnail hoặc screenshot cho lượt chạy này.");
+  }
   /** Keep latest + one previous run per Case. Delete only known files under our UUID directories. */
   async prune(caseId: string, latestRunId?: string, deletingCase = false) {
     const directory = this.directory(caseId);

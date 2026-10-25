@@ -273,6 +273,36 @@ export function syncBadge(rows: ScriptSyncRow[], flowId: string): string {
   return labelForStatus(row.status);
 }
 
+export type ScenarioSyncBadgeInfo = {
+  label: "Synced" | "Not synced" | "Sync error" | "Incomplete" | "Conflict" | "Missing demo";
+  statusKey: "synced" | "not-synced" | "error" | "incomplete" | "conflict" | "blocked";
+  title: string;
+};
+
+export function getScenarioSyncBadge(rows: ScriptSyncRow[], flowId: string): ScenarioSyncBadgeInfo {
+  const row = rows.find((r) => r.flow_id === flowId || r.script_id === flowId);
+  if (!row) {
+    return { label: "Not synced", statusKey: "not-synced", title: "Chưa đồng bộ với SEO-OPS" };
+  }
+  const message = row.message || row.demo_reason || "";
+  if (row.status === "synced") {
+    return { label: "Synced", statusKey: "synced", title: message || "Release hiện tại đã xác nhận đồng bộ" };
+  }
+  if (row.status === "sync_error") {
+    return { label: "Sync error", statusKey: "error", title: message || "Lần đồng bộ gần nhất thất bại" };
+  }
+  if (row.status === "incomplete_assets") {
+    return { label: "Incomplete", statusKey: "incomplete", title: message || "Thiếu assets cần thiết để đồng bộ" };
+  }
+  if (row.status === "conflict") {
+    return { label: "Conflict", statusKey: "conflict", title: message || "Xung đột phiên bản release giữa Local và SEO-OPS" };
+  }
+  if (row.status === "missing_demo") {
+    return { label: "Missing demo", statusKey: "blocked", title: message || "Chưa có Script Demo hợp lệ để đồng bộ" };
+  }
+  return { label: "Not synced", statusKey: "not-synced", title: message || "Chưa đồng bộ hoặc có thay đổi chưa publish" };
+}
+
 export function scriptVersionLabel(rows: ScriptSyncRow[], flowId: string): string {
   const row = rows.find((r) => r.flow_id === flowId || r.script_id === flowId);
   if (!row) return "v1";
