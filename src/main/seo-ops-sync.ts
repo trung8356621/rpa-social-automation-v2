@@ -40,7 +40,7 @@ import {
 import { validatePayload, type Store } from "./storage.js";
 import { createAdminBackup } from "./admin-backup.js";
 import { readSeoOpsJson } from "../shared/seo-ops-http.js";
-import { parsePublishedScriptVersion } from "../shared/script-version.js";
+import { isLegacyPublishedScriptVersion, parsePublishedScriptVersion } from "../shared/script-version.js";
 import { resolveScriptReleaseState, type StoredScriptRelease } from "../shared/script-release-state.js";
 
 export type SeoOpsConfig = {
@@ -389,14 +389,34 @@ export function createSeoOpsSyncService(options: {
       try {
         const stored = loadReleaseMeta(flow.id);
         const probe = await localRow(flow, stored.pendingVersion || stored.version || "1");
-        const release = resolveScriptReleaseState({ local: stored, remote: remoteById.get(flow.id),
-          currentExecutionDigest: probe.execution_digest || "" });
+        const hasLegacyEvidence =
+          Boolean(stored.version && !stored.executionDigest && isLegacyPublishedScriptVersion(stored.version)) &&
+          !probe.incomplete &&
+          probe.assets_complete &&
+          probe.demo_status === "ready" &&
+          probe.video_attachment?.reviewed === true &&
+          Boolean(probe.video_attachment?.testRunId) &&
+          probe.video_attachment?.executionDigest?.toLowerCase() === probe.execution_digest?.toLowerCase();
+        const verifiedLegacy = hasLegacyEvidence
+          ? { executionDigest: probe.execution_digest || "", contentDigest: probe.content_digest }
+          : undefined;
+        const release = resolveScriptReleaseState({
+          local: stored,
+          remote: remoteById.get(flow.id),
+          currentExecutionDigest: probe.execution_digest || "",
+          verifiedLegacy,
+        });
         if (!release.ok) {
           out.push({ ...probe, incomplete: true, incomplete_reasons: [...new Set([release.error, ...probe.incomplete_reasons])], release_conflict: release.error,
             published_version: stored.version, draft_status: "blocked" });
           continue;
         }
-        if (release.adoptedRemote) saveRecoveredReleaseMeta(flow.id, release.local);
+        if (release.adoptedRemote || (hasLegacyEvidence && release.local.version !== stored.version)) {
+          if (hasLegacyEvidence && stored.version && !store.setting(`seoOpsLegacyVersion:${flow.id}`)) {
+            store.setSetting(`seoOpsLegacyVersion:${flow.id}`, stored.version);
+          }
+          saveRecoveredReleaseMeta(flow.id, release.local);
+        }
         const row = release.targetVersion === probe.version ? probe : await localRow(flow, release.targetVersion);
         out.push({ ...row, published_version: release.local.version, draft_status: release.draftStatus,
           draft_version: release.draftVersion });
@@ -746,12 +766,22 @@ export function createSeoOpsSyncService(options: {
         if (ok && full.video_attachment && testRunsDir) {
           try {
             const binary = await readFile(path.join(testRunsDir, full.video_attachment.artifactRef));
+            let thumbnailBinary: Buffer | undefined;
+            if (full.video_attachment.thumbnailRef) {
+              try {
+                thumbnailBinary = await readFile(path.join(testRunsDir, full.video_attachment.thumbnailRef));
+              } catch {
+                // thumbnail binary optional
+              }
+            }
             const uploaded = await client.uploadVideoDemo({
               packageKey: full.package_key,
               version: full.version,
               binary,
               mime: "video/webm",
               sha256: full.video_attachment.sha256,
+              thumbnailBinary,
+              thumbnailSha256: full.video_attachment.thumbnailSha256,
             });
             if (!uploaded.ok) {
               ok = false;

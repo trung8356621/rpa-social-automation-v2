@@ -61,3 +61,24 @@ test("version/digest conflicts and unknown legacy formats are rejected", () => {
     version: "1.2.3", content_digest: "x", execution_digest: "x",
   }, currentExecutionDigest: "x" }), /SCRIPT_VERSION_UNSUPPORTED/);
 });
+
+test("legacy 1.0.0 without execution digest requires verified evidence or reports incomplete", () => {
+  const unverified = resolveScriptReleaseState({
+    local: { version: "1.0.0" },
+    currentExecutionDigest: "digest-1",
+  });
+  assert.equal(unverified.ok, false);
+  if (!unverified.ok) assert.equal(unverified.error, "SCRIPT_VERSION_METADATA_INCOMPLETE");
+
+  const verified = resolveScriptReleaseState({
+    local: { version: "1.0.0" },
+    currentExecutionDigest: "digest-1",
+    verifiedLegacy: { executionDigest: "digest-1", contentDigest: "content-1" },
+  });
+  assert.equal(verified.ok, true);
+  if (!verified.ok) return;
+  assert.equal(verified.targetVersion, "1");
+  assert.equal(verified.draftStatus, "unchanged");
+  assert.equal(verified.local.executionDigest, "digest-1");
+  assert.equal(verified.local.contentDigest, "content-1");
+});

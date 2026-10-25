@@ -242,11 +242,24 @@ export function createHttpScriptSyncClient(options: {
       binary: Buffer | Uint8Array;
       mime?: string;
       sha256?: string;
+      thumbnailBinary?: Buffer | Uint8Array;
+      thumbnailSha256?: string;
     }): Promise<{ ok: boolean; errors?: string[] }> {
       const token = options.getToken();
       if (!token) throw new Error("SEO_OPS_SYNC: unauthenticated");
       const { response, json } = await (async () => {
         const url = `${root}/scripts/video-demo`;
+        const payload: Record<string, unknown> = {
+          package_key: input.packageKey,
+          version: input.version,
+          mime: input.mime ?? "video/webm",
+          sha256: input.sha256,
+          video_base64: Buffer.from(input.binary).toString("base64"),
+        };
+        if (input.thumbnailBinary) {
+          payload.thumbnail_base64 = Buffer.from(input.thumbnailBinary).toString("base64");
+          if (input.thumbnailSha256) payload.thumbnail_sha256 = input.thumbnailSha256;
+        }
         const res = await fetchImpl(url, {
           method: "POST",
           redirect: "manual",
@@ -254,13 +267,7 @@ export function createHttpScriptSyncClient(options: {
             Authorization: `Bearer ${token}`,
             "Content-Type": "application/json",
           },
-          body: JSON.stringify({
-            package_key: input.packageKey,
-            version: input.version,
-            mime: input.mime ?? "video/webm",
-            sha256: input.sha256,
-            video_base64: Buffer.from(input.binary).toString("base64"),
-          }),
+          body: JSON.stringify(payload),
         });
         const body = await readSeoOpsJson(res, "POST", url);
         return { response: res, json: body };

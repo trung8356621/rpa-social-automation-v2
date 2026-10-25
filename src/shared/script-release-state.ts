@@ -1,4 +1,8 @@
-import { nextPublishedScriptVersion, parsePublishedScriptVersion } from "./script-version.js";
+import {
+  isLegacyPublishedScriptVersion,
+  nextPublishedScriptVersion,
+  parsePublishedScriptVersion,
+} from "./script-version.js";
 
 export type StoredScriptRelease = {
   version?: string;
@@ -15,10 +19,16 @@ export type RemoteScriptRelease = {
   execution_digest?: string;
 };
 
+export type VerifiedLegacyRelease = {
+  executionDigest: string;
+  contentDigest?: string;
+};
+
 export function resolveScriptReleaseState(input: {
   local: StoredScriptRelease;
   remote?: RemoteScriptRelease;
   currentExecutionDigest: string;
+  verifiedLegacy?: VerifiedLegacyRelease;
 }) {
   const local = { ...input.local };
   let adoptedRemote = false;
@@ -39,7 +49,22 @@ export function resolveScriptReleaseState(input: {
     adoptedRemote = local.contentDigest !== input.local.contentDigest || local.executionDigest !== input.local.executionDigest;
   }
   if (local.version && !local.executionDigest) {
-    return { ok: false as const, error: "SCRIPT_VERSION_METADATA_INCOMPLETE", local, adoptedRemote };
+    if (
+      input.verifiedLegacy &&
+      isLegacyPublishedScriptVersion(local.version) &&
+      input.verifiedLegacy.executionDigest === input.currentExecutionDigest
+    ) {
+      const parsed = parsePublishedScriptVersion(local.version);
+      local.executionDigest = input.verifiedLegacy.executionDigest;
+      if (input.verifiedLegacy.contentDigest) {
+        local.contentDigest = input.verifiedLegacy.contentDigest;
+      }
+      if (!input.remote) {
+        local.version = String(parsed.ordinal);
+      }
+    } else {
+      return { ok: false as const, error: "SCRIPT_VERSION_METADATA_INCOMPLETE", local, adoptedRemote };
+    }
   }
 
   const changed = Boolean(local.version && local.executionDigest !== input.currentExecutionDigest);
