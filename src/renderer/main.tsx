@@ -1145,6 +1145,10 @@ function Creator() {
       `${state?.browserBounds.x ?? 320}px`,
     );
     document.documentElement.style.setProperty(
+      "--browser-top",
+      `${state?.browserBounds.y ?? 88}px`,
+    );
+    document.documentElement.style.setProperty(
       "--browser-width",
       `${state?.browserBounds.width ?? 1024}px`,
     );
@@ -1156,7 +1160,7 @@ function Creator() {
       "--editor-width",
       `${layout.editorWidth}px`,
     );
-  }, [state?.browserBounds.x, state?.browserBounds.width, state?.browserBounds.height, shot?.height, layout.editorLeft, layout.editorWidth]);
+  }, [state?.browserBounds.x, state?.browserBounds.y, state?.browserBounds.width, state?.browserBounds.height, shot?.height, layout.editorLeft, layout.editorWidth]);
   function togglePanel() {
     const next = !expanded;
     if (shell) {
@@ -1185,7 +1189,7 @@ function Creator() {
       style={{ "--app-nav-width": `${navigationWidth}px`, "--creator-min-width": `${layout.minWidth}px`,
         "--steps-left": `${layout.stepsLeft}px`, "--editor-left": `${layout.editorLeft}px`,
         "--steps-width": `${layout.editorBeside ? 320 : Math.max(320, Math.min(420, window.innerWidth - layout.stepsLeft))}px`,
-        "--editor-width": `${layout.editorWidth}px` } as React.CSSProperties}>
+        "--editor-width": `${layout.editorWidth}px`, "--workspace-height": `${layout.workspaceHeight}px` } as React.CSSProperties}>
       {shell && pendingNavigation && <UiPopover variant="modal" label="Thay đổi chưa lưu"
         className="unsaved-confirm" close={stayInEditor}>
         <div className="popover-heading"><b>Thay đổi chưa lưu</b>

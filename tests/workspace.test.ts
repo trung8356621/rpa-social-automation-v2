@@ -4,6 +4,7 @@ import {
   workspaceLayout,
   WEB_WIDTH,
   WEB_HEIGHT,
+  TOP_HEIGHT,
   EDITOR_WIDTH,
   EXECUTION_VIEWPORT,
   assertCanonicalScreenshot,
@@ -21,13 +22,14 @@ const target = {
   roi: { x: 120, y: 120, width: 300, height: 64 },
   environment: env,
 };
-test("maximize, restore and resize preserve the canonical browser viewport", () => {
+test("common desktop sizes center the canonical viewport and stretch the control workspace", () => {
   for (const editor of [true, false])
     for (const debug of [true, false])
       for (const size of [
-        [1344, 648],
-        [1400, 705],
+        [1366, 768],
         [1920, 1080],
+        [2560, 1440],
+        [1344, 648],
       ]) {
         const layout = workspaceLayout(
           editor,
@@ -37,6 +39,11 @@ test("maximize, restore and resize preserve the canonical browser viewport", () 
         assert.deepEqual(
           { width: layout.browser.width, height: layout.browser.height },
           EXECUTION_VIEWPORT,
+        );
+        assert.equal(layout.workspaceHeight, Math.max(WEB_HEIGHT, size[1] - TOP_HEIGHT));
+        assert.equal(
+          layout.browser.y,
+          TOP_HEIGHT + Math.max(0, Math.floor((layout.workspaceHeight - WEB_HEIGHT) / 2)),
         );
         assert.equal(layout.debug.x, layout.browser.x);
         assert.equal(layout.debug.y + layout.debug.height, size[1]);

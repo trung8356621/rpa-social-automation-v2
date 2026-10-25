@@ -356,7 +356,7 @@ aside > button {
 .snapshot {
   position: absolute;
   left: 320px;
-  top: 88px;
+  top: var(--browser-top, 88px);
   width: 1024px;
   height: var(--web-height);
   overflow: hidden;
@@ -1202,7 +1202,7 @@ body[data-panel="shell"] .app-shell > header { height: 36px; }
 body[data-panel="shell"] .app-shell > nav { height: 52px; padding-top: 6px; padding-bottom: 6px; }
 .creator-back { position: sticky; left: 8px; z-index: 21; }
 body[data-panel="shell"] .app-shell > aside.creator-steps {
-  left: var(--steps-left); top: 88px; width: 320px; height: var(--web-height);
+  left: var(--steps-left); top: 88px; width: 320px; height: var(--workspace-height, calc(100vh - 88px));
   padding: 10px 8px; border-right: 0; border-left: 1px solid #3c4b63;
 }
 body[data-panel="shell"] .app-shell > .editor-column {

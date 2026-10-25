@@ -77,6 +77,7 @@ export function workspaceLayout(
   const editorBeside = editorOpen && contentWidth >= navigationWidth + WEB_WIDTH + SIDE_WIDTH + EDITOR_WIDTH;
   const controlsWidth = SIDE_WIDTH + (editorBeside ? EDITOR_WIDTH : 0);
   const x = navigationWidth + Math.max(0, Math.floor((contentWidth - navigationWidth - WEB_WIDTH - controlsWidth) / 2));
+  const workspaceHeight = Math.max(WEB_HEIGHT, contentHeight - TOP_HEIGHT);
   return {
     navigationWidth,
     minWidth: navigationWidth + WEB_WIDTH + controlsWidth,
@@ -86,9 +87,10 @@ export function workspaceLayout(
     editorBeside,
     browser: {
       x,
-      y: TOP_HEIGHT,
+      y: TOP_HEIGHT + Math.max(0, Math.floor((workspaceHeight - WEB_HEIGHT) / 2)),
       ...EXECUTION_VIEWPORT,
     },
+    workspaceHeight,
     debug: {
       x,
       y: contentHeight - (debugOpen ? 200 : 36),
