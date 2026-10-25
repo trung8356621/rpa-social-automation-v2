@@ -1,7 +1,8 @@
 import { createHash, randomUUID } from "node:crypto";
 import { access, readFile } from "node:fs/promises";
 import path from "node:path";
-import type { Flow, Step } from "../shared/contracts.js";
+import type { Flow, Step, ActionTag, ScriptRequest } from "../shared/contracts.js";
+import { slugify } from "../shared/flow-model.js";
 import {
   buildScriptCatalogSnapshot,
   type ScriptVideoDemo,
@@ -186,6 +187,94 @@ export function createSeoOpsSyncService(options: {
     const body = await adminApi("/backup/download", { method: "POST", body: JSON.stringify({}) });
     return { archive: Buffer.from(String(body.archive_base64), "base64"), sha256: String(body.sha256), backup: body.backup };
   }
+  async function fetchActionTags(): Promise<ActionTag[]> {
+    try {
+      const body = await adminApi("/action-tags");
+      if (body && Array.isArray((body as { action_tags?: unknown[] }).action_tags)) {
+        const tags = (body as { action_tags: ActionTag[] }).action_tags;
+        store.setSetting("seoOpsActionTags", JSON.stringify(tags));
+        return tags;
+      }
+    } catch {
+      /* offline / unauthenticated fallback */
+    }
+    return getCachedActionTags();
+  }
+
+  function getCachedActionTags(): ActionTag[] {
+    try {
+      return JSON.parse(store.setting("seoOpsActionTags") || "[]") as ActionTag[];
+    } catch {
+      return [];
+    }
+  }
+
+  async function fetchScriptRequests(status?: string): Promise<ScriptRequest[]> {
+    try {
+      const q = status ? `?status=${encodeURIComponent(status)}` : "";
+      const body = await adminApi(`/script-requests${q}`);
+      if (body && Array.isArray((body as { script_requests?: unknown[] }).script_requests)) {
+        const requests = (body as { script_requests: ScriptRequest[] }).script_requests;
+        store.setSetting("seoOpsScriptRequests", JSON.stringify(requests));
+        return requests;
+      }
+    } catch {
+      /* offline / unauthenticated fallback */
+    }
+    return getCachedScriptRequests();
+  }
+
+  function getCachedScriptRequests(): ScriptRequest[] {
+    try {
+      return JSON.parse(store.setting("seoOpsScriptRequests") || "[]") as ScriptRequest[];
+    } catch {
+      return [];
+    }
+  }
+
+  async function createScriptFromRequest(requestId: string): Promise<Flow> {
+    const requests = getCachedScriptRequests();
+    const req = requests.find((r) => r.request_id === requestId);
+    if (!req) {
+      throw new Error(`Không tìm thấy Script Request: ${requestId}`);
+    }
+
+    const tags = getCachedActionTags();
+    const tag = tags.find((t) => t.tag_key === req.action_tag_key);
+
+    const baseName = tag?.name || req.action_tag_key.split(".").map(s => s.charAt(0).toUpperCase() + s.slice(1)).join(" ");
+    const scriptId = slugify(req.action_tag_key.replace(/\./g, "-"));
+
+    const existing = store.flows().find(f => f.id === scriptId || f.scriptRequestId === req.request_id);
+    if (existing) {
+      return existing;
+    }
+
+    const flow = store.newFlow(baseName, 1, {
+      id: scriptId,
+      actionTagKey: req.action_tag_key,
+      scriptRequestId: req.request_id,
+      resultType: "status",
+      pathInputs: req.path_inputs,
+      urlPattern: req.url_pattern,
+    });
+
+    req.status = "developing";
+    req.script_id = flow.id;
+    store.setSetting("seoOpsScriptRequests", JSON.stringify(requests));
+
+    try {
+      await adminApi(`/script-requests/${encodeURIComponent(requestId)}/claim`, {
+        method: "POST",
+        body: JSON.stringify({}),
+      });
+    } catch {
+      /* offline - keep local progress */
+    }
+
+    return flow;
+  }
+
   async function fetchReports() {
     const after = Number(store.setting("seoOpsReportsAfterId") || "0");
     const body = await adminApi(`/execution-reports?after_id=${after}`);
@@ -914,6 +1003,8 @@ export function createSeoOpsSyncService(options: {
       : results.some(r => r.action === "publish_blocked") ? "blocked" : "ok";
     saveMeta(meta);
     const reports = await fetchReports();
+    await fetchActionTags();
+    await fetchScriptRequests();
     const rows = await refreshStatusRows();
     return { plan, results, rows, summary: {
       published: results.filter(r => r.action === "push" && r.ok).length,
@@ -938,6 +1029,11 @@ export function createSeoOpsSyncService(options: {
     markBackupDirty,
     backupInfo,
     downloadBackup,
+    fetchActionTags,
+    getCachedActionTags,
+    fetchScriptRequests,
+    getCachedScriptRequests,
+    createScriptFromRequest,
   };
 }
 

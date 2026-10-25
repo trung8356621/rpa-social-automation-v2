@@ -954,10 +954,10 @@ function Creator() {
   async function updateWorkspace(command: Command) {
     if (command.type === "deleteScenario") {
       const count = state?.testLab?.cases.filter(c => c.flowId === command.id).length ?? 0;
-      if (count) throw new Error(`${count} Test Case đang dùng Scenario này. Hãy sửa hoặc xóa các Case trước.`);
+      if (count) throw new Error(`${count} Test Case đang dùng Script này. Hãy sửa hoặc xóa các Case trước.`);
       if (tabsRef.current.some(t => t.kind === "creator" && t.flowId === command.id) ||
           [...caseEditors.current.values()].some(editor => editor.flowId === command.id))
-        throw new Error("Đóng các tab đang dùng Scenario này trước khi xóa. Bản nháp chưa lưu được giữ nguyên.");
+        throw new Error("Đóng các tab đang dùng Script này trước khi xóa. Bản nháp chưa lưu được giữ nguyên.");
     }
     if (command.type === "deleteTestCase" && tabsRef.current.some(t => t.caseId === command.id))
       throw new Error("Đóng tab Test Case này trước khi xóa.");
@@ -1374,9 +1374,88 @@ function Creator() {
         <>
           <header>
             {workspaceTabs}
-            {state?.flow && <span className="script-version" aria-label="Scenario version" title={scriptSyncRows.find(row => row.flow_id === state.flow?.id || row.script_id === state.flow?.id)?.message || syncBadge(scriptSyncRows, state.flow.id)}>
+            {state?.flow && <span className="script-version" aria-label="Script version" title={scriptSyncRows.find(row => row.flow_id === state.flow?.id || row.script_id === state.flow?.id)?.message || syncBadge(scriptSyncRows, state.flow.id)}>
               {scriptVersionLabel(scriptSyncRows, state.flow.id)}
             </span>}
+            {state?.flow && (
+              <div className="script-metadata-bar" style={{ display: "inline-flex", alignItems: "center", gap: 8, fontSize: 11, padding: "2px 8px", background: "var(--card-bg, #202428)", borderRadius: 6, border: "1px solid var(--border, #3a3f45)" }}>
+                <span title="Action Tag được SEO-OPS giao" style={{ display: "inline-flex", alignItems: "center", gap: 4 }}>
+                  <span style={{ color: "#8b949e", fontWeight: 600 }}>Tag:</span>
+                  {state.actionTags && state.actionTags.length > 0 ? (
+                    <select
+                      value={state.flow.actionTagKey ?? ""}
+                      disabled={locked}
+                      onChange={async (e) => {
+                        const nextTag = e.target.value || undefined;
+                        setState(await invoke<State>({
+                          type: "updateFlowMetadata",
+                          actionTagKey: nextTag,
+                          resultType: state.flow?.resultType ?? "status",
+                          collectionType: state.flow?.collectionType,
+                        }));
+                      }}
+                      style={{ fontSize: 11, padding: "1px 4px", background: "transparent", color: "inherit", border: "1px solid #444", borderRadius: 4 }}
+                    >
+                      <option value="">— Chưa gắn Tag —</option>
+                      {state.actionTags.map((t) => (
+                        <option key={t.tag_key} value={t.tag_key}>
+                          {t.tag_key}
+                        </option>
+                      ))}
+                    </select>
+                  ) : (
+                    <code style={{ color: "#68d6a6" }}>{state.flow.actionTagKey || "Chưa gắn"}</code>
+                  )}
+                </span>
+                <span style={{ display: "inline-flex", alignItems: "center", gap: 4 }}>
+                  <span style={{ color: "#8b949e", fontWeight: 600 }}>Result:</span>
+                  <select
+                    value={state.flow.resultType ?? "status"}
+                    disabled={locked}
+                    onChange={async (e) => {
+                      const nextType = e.target.value as "status" | "collection";
+                      setState(await invoke<State>({
+                        type: "updateFlowMetadata",
+                        actionTagKey: state.flow?.actionTagKey,
+                        resultType: nextType,
+                        collectionType: state.flow?.collectionType,
+                      }));
+                    }}
+                    style={{ fontSize: 11, padding: "1px 4px", background: "transparent", color: "inherit", border: "1px solid #444", borderRadius: 4 }}
+                  >
+                    <option value="status">status</option>
+                    <option value="collection">collection</option>
+                  </select>
+                </span>
+                {state.flow.resultType === "collection" && (
+                  <span style={{ display: "inline-flex", alignItems: "center", gap: 4 }}>
+                    <span style={{ color: "#8b949e", fontWeight: 600 }}>Collection Type:</span>
+                    <input
+                      type="text"
+                      placeholder="e.g. facebook.group.posts"
+                      value={state.flow.collectionType ?? ""}
+                      disabled={locked}
+                      onChange={async (e) => {
+                        const val = e.target.value;
+                        setState(await invoke<State>({
+                          type: "updateFlowMetadata",
+                          actionTagKey: state.flow?.actionTagKey,
+                          resultType: "collection",
+                          collectionType: val,
+                        }));
+                      }}
+                      style={{ fontSize: 11, padding: "1px 6px", width: 140, background: "transparent", color: "inherit", border: "1px solid #444", borderRadius: 4 }}
+                    />
+                  </span>
+                )}
+                {state.flow.pathInputs && state.flow.pathInputs.length > 0 && (
+                  <span title="Path Inputs được kế thừa từ SEO-OPS để dựng URL đích" style={{ display: "inline-flex", alignItems: "center", gap: 4, color: "#68d6a6" }}>
+                    <span style={{ color: "#8b949e", fontWeight: 600 }}>URL Inputs:</span>
+                    <code>{state.flow.pathInputs.map(p => `{${p.key}}`).join(" ")}</code>
+                  </span>
+                )}
+              </div>
+            )}
             {activeCaseTab && <button disabled={navigationLocked} onClick={() => navigateApp("test-case")}>Cấu hình Case</button>}
             <SessionSelector state={state} locked={locked || stepPlayback[activeStepId]?.status === "running"} select={selectSession} />
             <button
@@ -1529,7 +1608,7 @@ function Creator() {
               </>
             )}
           </nav>
-          <aside className="creator-steps" aria-label="Scenario sidebar">
+          <aside className="creator-steps" aria-label="Script sidebar">
             {!activeCaseTab && <div className="creator-sidebar-tabs" role="tablist">
               <button role="tab" aria-selected={creatorSidebarTab === "steps"} onClick={() => setCreatorSidebarTab("steps")}>Steps</button>
               <button role="tab" aria-selected={creatorSidebarTab === "tests"} onClick={() => setCreatorSidebarTab("tests")}>Tests</button>
@@ -1549,7 +1628,7 @@ function Creator() {
                   invoke={invoke}
                 />
               ))}
-              {!(state.testLab?.cases ?? []).some(item => item.flowId === state.flow!.id) && <p className="hint">Chưa có Test Case cho Scenario này.</p>}
+              {!(state.testLab?.cases ?? []).some(item => item.flowId === state.flow!.id) && <p className="hint">Chưa có Test Case cho Script này.</p>}
             </div>}
             {(!state || activeCaseTab || creatorSidebarTab === "steps") && <>
             {activeCaseTab && <><b>Test Case · bản đã lưu</b>

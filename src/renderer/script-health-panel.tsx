@@ -91,7 +91,7 @@ export function ScriptHealthPanel({
       {report && (
         <>
           <p>
-            Scenarios {report.totals.scenarios} · Pinned hợp lệ {report.totals.pinnedValid} ·
+            Scripts {report.totals.scenarios} · Pinned hợp lệ {report.totals.pinnedValid} ·
             Pinned lỗi {report.totals.pinnedInvalid} · Cần sửa {report.totals.stepsNeedingFix}
           </p>
           {report.scenarios.map((scenario) => (

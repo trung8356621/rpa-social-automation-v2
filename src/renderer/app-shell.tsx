@@ -7,7 +7,7 @@ import { ScriptHealthPanel } from "./script-health-panel";
 
 /** Primary Admin nav only — Variations / Widget / Workflow / Builds remain routable legacy, not listed. */
 const menus = [
-  { page: "scenarios", label: "Scenarios", color: "#68d6a6", path: "M4 4h6v6H4zM14 14h6v6h-6zM7 10v7h7M10 7h7v7" },
+  { page: "scenarios", label: "Scripts", color: "#68d6a6", path: "M4 4h6v6H4zM14 14h6v6h-6zM7 10v7h7M10 7h7v7" },
   { page: "browser-sessions", label: "Browser Sessions", color: "#75b9ff", path: "M21 12a9 9 0 1 1-18 0 9 9 0 0 1 18 0ZM3 12h18M12 3c5 5 5 13 0 18-5-5-5-13 0-18Z" },
   { page: "test-lab", label: "Test Lab", color: "#f4ae67", path: "M9 3h6M10 3v7L4 19q-1 2 2 2h12q3 0 2-2l-6-9V3M7 15h10" },
   { page: "settings", label: "Settings", color: "#a8b2c2", path: "m9 3-1 3-3 1 1 3-2 2 2 2-1 3 3 1 1 3ZM15 12a3 3 0 1 1-6 0 3 3 0 0 1 6 0Z" },
@@ -112,12 +112,12 @@ export function ScenariosPage({ state, name, setName, locked, open, create, quic
     void apply(command, true);
   }
   const groups = [...organization.groups, { id: "", name: "Chưa phân nhóm", collapsed: organization.ungroupedCollapsed }];
-  return <section className="app-page scenarios-page" aria-label="Scenarios">
-    <div className="page-heading"><small>RPA Social Automation V2</small><h1>Scenarios</h1>
-      <p>Mở nhiều kịch bản bằng tab. Bản nháp Editor được giữ riêng trong mỗi tab.</p></div>
+  return <section className="app-page scenarios-page" aria-label="Scripts">
+    <div className="page-heading"><small>RPA Social Automation V2</small><h1>Scripts</h1>
+      <p>Mở nhiều Script bằng tab. Bản nháp Editor được giữ riêng trong mỗi tab.</p></div>
     <div className="scenario-toolbar">
       <button disabled={disabled} onClick={() => show("create")}>+ Group</button>
-      <button className="primary" disabled={disabled} onClick={() => setCreating(v => !v)}>+ Scenario</button>
+      <button className="primary" disabled={disabled} onClick={() => setCreating(v => !v)}>+ Script</button>
       <button className="primary" disabled={disabled || !invoke} onClick={() => {
         if (!invoke) return; setWorking(true); setBackupResult({ status: "working", message: "Đang đóng gói và xác minh Full Backup…" });
         void invoke<BackupResult>({ type: "exportFullBackup" })
@@ -150,12 +150,12 @@ export function ScenariosPage({ state, name, setName, locked, open, create, quic
           : backupResult.status === "incomplete" ? "Backup chưa hoàn chỉnh — chưa tạo file ZIP"
             : backupResult.status === "cancelled" ? "Đã hủy export" : "Export thất bại"}</b>
       {backupResult.message && <p>{backupResult.message}</p>}
-      {backupResult.counts && <p>{backupResult.counts.scenarios} Scenario · {backupResult.counts.stepVersions} Step versions · {backupResult.counts.assets} assets · {backupResult.counts.missingFiles} file thiếu</p>}
+      {backupResult.counts && <p>{backupResult.counts.scenarios} Script · {backupResult.counts.stepVersions} Step versions · {backupResult.counts.assets} assets · {backupResult.counts.missingFiles} file thiếu</p>}
       {backupResult.missing && backupResult.missing.length > 0 && <ul>{Object.entries(backupResult.missing.reduce<Record<string, { paths: string[]; scenarioId?: string }>>((groups, item) => {
         const group = groups[item.logicalReference] ??= { paths: [], scenarioId: item.scenarioId };
         group.paths.push(item.originalPath ?? "Không rõ đường dẫn"); return groups;
       }, {})).map(([reference, group]) => <li key={reference}><strong>{reference} → {group.paths.length} file thiếu</strong>
-        {group.scenarioId && <button type="button" onClick={() => open(group.scenarioId!)}>Mở Scenario để sửa</button>}
+        {group.scenarioId && <button type="button" onClick={() => open(group.scenarioId!)}>Mở Script để sửa</button>}
         <details><summary>Xem đường dẫn</summary>{group.paths.map(file => <code key={file}>{file}</code>)}</details></li>)}</ul>}
     </section>}
     {importResult && importResult.status !== "cancelled" && <section className={`backup-result ${importResult.status}`} role={importResult.status === "failed" ? "alert" : "status"}>
@@ -163,7 +163,7 @@ export function ScenariosPage({ state, name, setName, locked, open, create, quic
         : importResult.status === "preview" ? "Backup hợp lệ — sẵn sàng khôi phục"
           : importResult.status === "restored" ? "Đã khôi phục Full Backup" : "Import thất bại"}</b>
       {importResult.message && <p>{importResult.message}</p>}
-      {importResult.counts && <p>{importResult.counts.scenarios} Scenario · {importResult.counts.stepVersions} Step versions · {importResult.counts.assets} assets</p>}
+      {importResult.counts && <p>{importResult.counts.scenarios} Script · {importResult.counts.stepVersions} Step versions · {importResult.counts.assets} assets</p>}
       {importResult.status === "preview" && importResult.token && <><p>{importResult.hasExistingData
         ? "Dữ liệu hiện tại sẽ được thay thế sau khi tạo rollback backup. Không merge dữ liệu."
         : "Profile hiện tại trống. Một rollback backup vẫn sẽ được tạo trước khi restore."}</p>
@@ -177,11 +177,49 @@ export function ScenariosPage({ state, name, setName, locked, open, create, quic
         }}>Xác nhận khôi phục</button></>}
     </section>}
     {creating && <form className="scenario-create" onSubmit={event => { event.preventDefault(); create(); }}>
-      <label>Tên Scenario mới<input aria-label="Tên flow mới" value={name} disabled={disabled}
+      <label>Tên Script mới<input aria-label="Tên flow mới" value={name} disabled={disabled}
         onChange={event => setName(event.target.value)} /></label>
-      <button className="primary" disabled={disabled || !state || !name.trim()} type="submit">Tạo Scenario</button>
+      <button className="primary" disabled={disabled || !state || !name.trim()} type="submit">Tạo Script</button>
     </form>}
     {!dialog && error && <p role="alert">{error}</p>}
+    {state?.scriptRequests && state.scriptRequests.length > 0 && (
+      <section className="script-requests-panel" aria-label="Script Requests" style={{ marginBottom: 16, padding: "12px 16px", borderRadius: 8, border: "1px solid var(--border, #3a3f45)", background: "var(--card-bg, #202428)" }}>
+        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 8 }}>
+          <b style={{ fontSize: 13, display: "inline-flex", alignItems: "center", gap: 6 }}>
+            <span>SEO-OPS Script Requests</span>
+            <small style={{ fontWeight: "normal", color: "#8b949e" }}>({state.scriptRequests.filter(r => r.status !== "published").length} việc cần làm)</small>
+          </b>
+        </div>
+        <div style={{ display: "grid", gap: 8, gridTemplateColumns: "repeat(auto-fill, minmax(280px, 1fr))" }}>
+          {state.scriptRequests.map(req => (
+            <div key={req.request_id} style={{ padding: 10, borderRadius: 6, border: "1px solid #333", background: "#181b1e", display: "flex", flexDirection: "column", gap: 4 }}>
+              <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+                <code style={{ fontSize: 12, color: "#68d6a6" }}>{req.action_tag_key}</code>
+                <span style={{ fontSize: 10, padding: "1px 6px", borderRadius: 4, background: req.status === "needs_fix" ? "#5a1d1d" : req.status === "developing" ? "#1e3a5f" : "#283430", color: req.status === "needs_fix" ? "#f87171" : req.status === "developing" ? "#60a5fa" : "#34d399" }}>
+                  {req.request_type === "fix" ? "Fix" : "Create"} · {req.status}
+                </span>
+              </div>
+              {req.error_reason && <p style={{ fontSize: 11, color: "#f87171", margin: "2px 0" }}>{req.error_reason}</p>}
+              <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginTop: 4 }}>
+                <small style={{ fontSize: 10, color: "#888" }}>{req.request_id}</small>
+                {req.status !== "published" && (
+                  <button
+                    className="primary"
+                    disabled={disabled || !invoke}
+                    onClick={() => {
+                      void invoke({ type: "createScriptFromRequest", requestId: req.request_id });
+                    }}
+                    style={{ fontSize: 11, padding: "2px 8px" }}
+                  >
+                    Create Script
+                  </button>
+                )}
+              </div>
+            </div>
+          ))}
+        </div>
+      </section>
+    )}
     <div className="scenario-groups">
       {groups.map(group => {
         const flows = state?.flows.filter(f => {
@@ -224,13 +262,13 @@ export function ScenariosPage({ state, name, setName, locked, open, create, quic
               <small className="script-version" aria-label={`Version ${flow.name}`}>{scriptVersionLabel(syncRows, flow.id)}</small>
               <button disabled={disabled} onClick={() => open(flow.id)}>Mở Creator</button>
               <button className="scenario-acceptance" disabled={disabled} onClick={() => quickAcceptance(flow.id)}>Nghiệm thu</button>
-              <details><summary aria-label={`Menu Scenario ${flow.name}`}>...</summary><div className="scenario-menu">
+              <details><summary aria-label={`Menu Script ${flow.name}`}>...</summary><div className="scenario-menu">
                 <button disabled={disabled} onClick={() => show("move", flow.id, organization.membership[flow.id] ?? "")}>Move to Group</button>
-                <button disabled={disabled} onClick={() => show("scenario-delete", flow.id)}>Delete Scenario</button>
+                <button disabled={disabled} onClick={() => show("scenario-delete", flow.id)}>Delete Script</button>
               </div></details>
             </div>;
             })}
-            {!flows.length && <p className="page-empty">Chưa có Scenario trong nhóm.</p>}
+            {!flows.length && <p className="page-empty">Chưa có Script trong nhóm.</p>}
           </div>}
         </section>;
       })}
@@ -244,12 +282,12 @@ export function ScenariosPage({ state, name, setName, locked, open, create, quic
         onPinned={(next) => onState?.(next)}
       />
     )}
-    {dialog && <UiPopover variant="modal" label={dialog.kind === "scenario-delete" ? "Delete Scenario" : "Scenario Group"} className="unsaved-confirm"
+    {dialog && <UiPopover variant="modal" label={dialog.kind === "scenario-delete" ? "Delete Script" : "Scenario Group"} className="unsaved-confirm"
       close={() => { if (!working) setDialog(undefined); }}>
-      <div className="popover-heading"><b>{dialog.kind === "scenario-delete" ? "Delete Scenario" : dialog.kind === "create" ? "Tạo Group" : dialog.kind === "rename" ? "Đổi tên Group" : dialog.kind === "delete" ? "Xóa Group" : "Move to Group"}</b>
+      <div className="popover-heading"><b>{dialog.kind === "scenario-delete" ? "Delete Script" : dialog.kind === "create" ? "Tạo Group" : dialog.kind === "rename" ? "Đổi tên Group" : dialog.kind === "delete" ? "Xóa Group" : "Move to Group"}</b>
         <button disabled={working} onClick={() => setDialog(undefined)}>×</button></div>
-      {dialog.kind === "scenario-delete" ? <p>Xóa Scenario “{state?.flows.find(f => f.id === dialog.id)?.name}” cùng các Step/Version thuộc riêng Scenario này? Thao tác này không thể hoàn tác.</p>
-        : dialog.kind === "delete" ? <p>Xóa Group này? Các Scenario sẽ chuyển về Chưa phân nhóm, toàn bộ dữ liệu được giữ nguyên.</p>
+      {dialog.kind === "scenario-delete" ? <p>Xóa Script “{state?.flows.find(f => f.id === dialog.id)?.name}” cùng các Step/Version thuộc riêng Script này? Thao tác này không thể hoàn tác.</p>
+        : dialog.kind === "delete" ? <p>Xóa Group này? Các Script sẽ chuyển về Chưa phân nhóm, toàn bộ dữ liệu được giữ nguyên.</p>
         : dialog.kind === "move" ? <label>Group<select value={value} disabled={working} onChange={e => setValue(e.target.value)}>
           <option value="">Chưa phân nhóm</option>{organization.groups.map(g => <option key={g.id} value={g.id}>{g.name}</option>)}
         </select></label>
@@ -257,7 +295,7 @@ export function ScenariosPage({ state, name, setName, locked, open, create, quic
       {error && <p role="alert">{error}</p>}
       <div className="popover-footer"><button disabled={working} onClick={() => setDialog(undefined)}>Hủy</button>
         <button className="primary" disabled={disabled || (["create", "rename"].includes(dialog.kind) && !value.trim())} onClick={submit}>
-          {dialog.kind === "scenario-delete" ? "Delete Scenario" : dialog.kind === "delete" ? "Xóa Group" : "Lưu"}</button></div>
+          {dialog.kind === "scenario-delete" ? "Delete Script" : dialog.kind === "delete" ? "Xóa Group" : "Lưu"}</button></div>
     </UiPopover>}
   </section>;
 }

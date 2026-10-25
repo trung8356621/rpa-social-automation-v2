@@ -447,6 +447,8 @@ async function boot() {
     focused: browser.view.webContents.isFocused(),
     visible: browser.visible && (overlays.page === "creator" || overlays.page === "studio-run"),
     dataPath,
+    actionTags: seoOpsSync.getCachedActionTags(),
+    scriptRequests: seoOpsSync.getCachedScriptRequests(),
   });
   const publishLayout = () => {
     for (const editor of editors)
@@ -1257,16 +1259,41 @@ async function boot() {
         }
         return state();
       }
+      case "updateFlowMetadata": {
+        isIdle();
+        if (store.flow()) {
+          store.updateFlowMeta(store.flow()!.id, {
+            actionTagKey: command.actionTagKey,
+            resultType: command.resultType,
+            collectionType: command.collectionType,
+          });
+        }
+        return state();
+      }
+      case "createScriptFromRequest": {
+        isIdle();
+        const flow = await seoOpsSync.createScriptFromRequest(command.requestId);
+        store.setSetting("currentFlow", flow.id);
+        browser.setZoom(flow.zoom);
+        overlays.page = "creator";
+        return state();
+      }
+      case "seoOpsGetActionTags": {
+        return await seoOpsSync.fetchActionTags();
+      }
+      case "seoOpsGetScriptRequests": {
+        return await seoOpsSync.fetchScriptRequests();
+      }
       case "newFlow": {
         isIdle();
-        if (uiPlayAllRunId) throw new Error("Đợi Play All kết thúc trước khi tạo Scenario.");
+        if (uiPlayAllRunId) throw new Error("Đợi Play All kết thúc trước khi tạo Script.");
         armedTest = undefined;
         store.newFlow(command.name, browser.zoom);
         return state();
       }
       case "openFlow": {
         isIdle();
-        if (uiPlayAllRunId) throw new Error("Đợi Play All kết thúc trước khi chuyển Scenario.");
+        if (uiPlayAllRunId) throw new Error("Đợi Play All kết thúc trước khi chuyển Script.");
         const f = store.flows().find((f) => f.id === command.id);
         if (!f) throw new Error("Không tìm thấy flow.");
         armedTest = undefined;

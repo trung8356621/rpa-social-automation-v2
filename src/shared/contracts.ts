@@ -144,6 +144,49 @@ export type StepGroup = {
   /** Empty groups have no Step reference to anchor their position in the list. */
   emptyPosition?: number;
 };
+export type PathInput = {
+  key: string;
+  type: string;
+  required: boolean;
+};
+
+export type ActionTag = {
+  id: number;
+  tag_key: string;
+  site_key?: string;
+  path_key?: string;
+  action_key?: string;
+  platform: string;
+  target: string;
+  action: string;
+  name: string;
+  description?: string;
+  linked_scripts_count?: number;
+  base_url?: string;
+  url_pattern?: string;
+  path_inputs?: PathInput[];
+};
+
+export type ScriptRequest = {
+  id: number;
+  request_id: string;
+  action_tag_id?: number;
+  action_tag_key: string;
+  site_key?: string;
+  site_base_url?: string;
+  path_key?: string;
+  url_pattern?: string;
+  path_inputs?: PathInput[];
+  action_key?: string;
+  request_type: "create" | "fix";
+  status: "pending" | "developing" | "published" | "needs_fix";
+  script_id?: string;
+  script_version?: string;
+  error_reason?: string;
+  metadata?: Record<string, unknown>;
+  created_at?: string;
+};
+
 export type Flow = {
   variables?: Variable[];
   defaultPattern?: { values: Record<string, string | string[] | number> };
@@ -152,6 +195,12 @@ export type Flow = {
   name: string;
   zoom: number;
   steps: { id: string; version: number }[];
+  actionTagKey?: string;
+  scriptRequestId?: string;
+  resultType?: "status" | "collection";
+  collectionType?: string;
+  pathInputs?: PathInput[];
+  urlPattern?: string;
 };
 export type Capture = {
   id: string;
@@ -300,6 +349,8 @@ export type State = {
   focused: boolean;
   visible: boolean;
   dataPath: string;
+  actionTags?: ActionTag[];
+  scriptRequests?: ScriptRequest[];
 };
 export type Command =
   | { type: "studio"; request: V3Request }
@@ -374,6 +425,10 @@ export type Command =
   | { type: "toggleFullscreen" }
   | { type: "environment"; zoom: number }
   | { type: "newFlow"; name: string }
+  | { type: "updateFlowMetadata"; actionTagKey?: string; resultType?: "status" | "collection"; collectionType?: string }
+  | { type: "createScriptFromRequest"; requestId: string }
+  | { type: "seoOpsGetActionTags" }
+  | { type: "seoOpsGetScriptRequests" }
   | { type: "openFlow"; id: string }
   | { type: "targetImage"; asset: string }
   | { type: "ocrTarget"; asset: string }

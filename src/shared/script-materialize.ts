@@ -131,6 +131,10 @@ export function materializeScriptRelease(input: {
     variables: variables.variables,
     defaultPattern,
     groups,
+    actionTagKey: typeof manifest.action_tag_key === "string" ? manifest.action_tag_key : input.existing?.actionTagKey,
+    scriptRequestId: typeof manifest.script_request_id === "string" ? manifest.script_request_id : input.existing?.scriptRequestId,
+    resultType: (manifest.result_type === "collection" ? "collection" : (manifest.result_type === "status" ? "status" : (input.existing?.resultType ?? "status"))),
+    collectionType: typeof manifest.collection_type === "string" ? manifest.collection_type : input.existing?.collectionType,
   };
 
   return { ok: true, flow, steps: prepared, skippedVersions, inserts };

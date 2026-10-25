@@ -181,7 +181,11 @@ test("legacy SQLite migration preserves every version, override, ROI, flow selec
     s.close();
   } finally {
     try {
-      rmSync(dir, { recursive: true, force: true });
+      try {
+      rmSync(dir, { recursive: true, force: true, maxRetries: 3, retryDelay: 50 });
+    } catch {
+      /* temp dir cleanup best-effort */
+    }
     } catch {
       /* Windows may keep SQLite WAL handles briefly after close */
     }
@@ -231,10 +235,14 @@ test("defective Step does not abort schema migration; good rows convert; bad pay
     assert.ok(
       opened.invalidSteps().some((r) => r.stepId === "bad" && r.version === 1),
     );
-    assert.throws(() => opened.assertStepExecutable("bad", 1), /Invalid Step/);
+    assert.throws(() => opened.assertStepExecutable("bad", 1), /Ghim version/);
     assert.doesNotThrow(() => opened.assertStepExecutable("good", 1));
     opened.close();
   } finally {
-    rmSync(dir, { recursive: true, force: true });
+    try {
+      rmSync(dir, { recursive: true, force: true, maxRetries: 3, retryDelay: 50 });
+    } catch {
+      /* temp dir cleanup best-effort */
+    }
   }
 });

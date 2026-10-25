@@ -13,6 +13,7 @@ import type {
   Override,
   Payload,
   InvalidStepRef,
+  PathInput,
 } from "../shared/contracts.js";
 import {
   formatHumanStepError,
@@ -538,16 +539,52 @@ export class Store {
     this.setSetting("currentFlow", flow.id);
     this.changed();
   }
-  newFlow(name: string, zoom: number): Flow {
-    const f = {
-      id: randomUUID(),
-      name: name.trim() || "Untitled flow",
+  newFlow(
+    name: string,
+    zoom: number,
+    meta?: {
+      id?: string;
+      actionTagKey?: string;
+      scriptRequestId?: string;
+      resultType?: "status" | "collection";
+      collectionType?: string;
+      pathInputs?: PathInput[];
+      urlPattern?: string;
+    },
+  ): Flow {
+    const f: Flow = {
+      id: meta?.id || randomUUID(),
+      name: name.trim() || "Untitled Script",
       zoom: validateZoom(zoom),
       steps: [],
       groups: [],
       variables: [],
       defaultPattern: { values: {} },
+      ...(meta?.actionTagKey ? { actionTagKey: meta.actionTagKey } : {}),
+      ...(meta?.scriptRequestId ? { scriptRequestId: meta.scriptRequestId } : {}),
+      resultType: meta?.resultType ?? "status",
+      ...(meta?.resultType === "collection" && meta?.collectionType
+        ? { collectionType: meta.collectionType }
+        : {}),
+      ...(meta?.pathInputs ? { pathInputs: meta.pathInputs } : {}),
+      ...(meta?.urlPattern ? { urlPattern: meta.urlPattern } : {}),
     };
+    this.saveFlow(f);
+    return f;
+  }
+  updateFlowMeta(
+    id: string,
+    meta: {
+      actionTagKey?: string;
+      resultType?: "status" | "collection";
+      collectionType?: string;
+    },
+  ): Flow {
+    const f = this.flows().find((flow) => flow.id === id);
+    if (!f) throw new Error("Không tìm thấy Script.");
+    if (meta.actionTagKey !== undefined) f.actionTagKey = meta.actionTagKey || undefined;
+    if (meta.resultType !== undefined) f.resultType = meta.resultType;
+    if (meta.collectionType !== undefined) f.collectionType = meta.collectionType || undefined;
     this.saveFlow(f);
     return f;
   }

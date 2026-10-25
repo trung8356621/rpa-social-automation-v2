@@ -67,7 +67,7 @@ export function SeoOpsAuthPanel({
   return (
     <section className="seo-ops-auth" aria-label="SEO-OPS Login">
       <h2>SEO-OPS Account</h2>
-      <p>Đăng nhập bằng tài khoản SEO-OPS (`admin` / `owner`). Auto-sync hiện {session?.autoSyncEnabled ? "bật" : "tắt"}; manual Sync và Scenario local vẫn hoạt động.</p>
+      <p>Đăng nhập bằng tài khoản SEO-OPS (`admin` / `owner`). Auto-sync hiện {session?.autoSyncEnabled ? "bật" : "tắt"}; manual Sync và Script local vẫn hoạt động.</p>
       <label>
         Endpoint
         <input
@@ -227,7 +227,7 @@ export function SeoOpsSyncControls({
       const preview = await invoke<{ requiresConfirmation?: boolean; restored?: boolean; backup?: { backed_up_at?: string; summary?: Record<string, number> } }>({ type: "seoOpsRestore", confirmed: false });
       if (preview.requiresConfirmation) {
         const info = preview.backup; const counts = info?.summary ?? {};
-        if (!window.confirm(`Backup ${info?.backed_up_at ?? ""}: ${counts.scenarios ?? 0} Scenario, ${counts.stepVersions ?? 0} Step versions. Dữ liệu local hiện tại sẽ được backup riêng trước khi restore. Tiếp tục?`)) {
+        if (!window.confirm(`Backup ${info?.backed_up_at ?? ""}: ${counts.scenarios ?? 0} Script, ${counts.stepVersions ?? 0} Step versions. Dữ liệu local hiện tại sẽ được backup riêng trước khi restore. Tiếp tục?`)) {
           setMessage("Đã hủy Restore."); return;
         }
         await invoke({ type: "seoOpsRestore", confirmed: true });

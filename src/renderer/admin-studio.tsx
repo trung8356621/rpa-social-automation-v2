@@ -137,8 +137,8 @@ export function AdminStudioPage({ page, state, selectedId, open, locked, report 
         </details>)}
         <button onClick={() => edit({ fields: [...definition.fields, { key: `input${definition.fields.length + 1}`, label: "Input", type: "text", required: true, visibility: "exposed" }] })}>+ Field</button>
         <button onClick={() => setPreviewForm(true)}>Form Preview</button>
-        <h3>{definition.kind === "workflow" ? "Workflow canvas" : "Scenario composition"}</h3>
-        {definition.kind !== "workflow" ? <select value="" onChange={e => addScenario(e.target.value)}><option value="">+ Saved Scenario</option>{state.flows.map(f => <option key={f.id} value={f.id}>{f.name}</option>)}</select>
+        <h3>{definition.kind === "workflow" ? "Workflow canvas" : "Script composition"}</h3>
+        {definition.kind !== "workflow" ? <select value="" onChange={e => addScenario(e.target.value)}><option value="">+ Saved Script</option>{state.flows.map(f => <option key={f.id} value={f.id}>{f.name}</option>)}</select>
           : <select value="" onChange={e => edit({ nodes: [...definition.nodes, { id: `n${crypto.randomUUID()}`, releaseId: e.target.value, mappings: {}, failure: "stop" }] })}><option value="">+ Widget release</option>{studio.releases.filter(r => r.manifest.kind === "widget" && r.status !== "deprecated").map(r => <option key={r.manifest.releaseId} value={r.manifest.releaseId}>{r.manifest.name} · {r.manifest.version} · {r.status}</option>)}</select>}
         <div className="v3-canvas"><div className="v3-node">Start · form inputs</div>
           {definition.nodes.map((node, index) => {

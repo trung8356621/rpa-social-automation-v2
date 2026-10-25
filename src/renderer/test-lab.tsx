@@ -84,17 +84,17 @@ export function TestCaseEditor({ tabId, item, state, locked, report, saved, savi
     <div className="case-configure">
       <div className="case-form">
         <label>Name<input disabled={disabled} maxLength={120} value={config.name} onChange={e => setConfig({ ...config, name: e.target.value })} /></label>
-        <label>Scenario<select disabled={disabled || !!item} value={config.flowId} onChange={e => {
+        <label>Script<select disabled={disabled || !!item} value={config.flowId} onChange={e => {
           const chosen = state.flows.find(f => f.id === e.target.value);
           setConfig({ ...config, flowId: e.target.value, values: structuredClone(chosen?.defaultPattern?.values ?? {}), stepVersions: structuredClone(chosen?.steps ?? []) });
-        }}><option value="" disabled>Chọn Scenario</option>{state.flows.map(f => <option key={f.id} value={f.id}>{f.name}</option>)}</select></label>
+        }}><option value="" disabled>Chọn Script</option>{state.flows.map(f => <option key={f.id} value={f.id}>{f.name}</option>)}</select></label>
         <label>Browser Session<select disabled={disabled} value={config.sessionId} onChange={e => setConfig({ ...config, sessionId: e.target.value })}>
           <option value="" disabled>Chọn Session</option>{state.browserSessions?.map(s => <option key={s.id} value={s.id}>{s.name}</option>)}</select></label>
         <label>Start URL<input disabled={disabled} type="url" value={config.startUrl} placeholder="https://..." onChange={e => setConfig({ ...config, startUrl: e.target.value })} /></label>
         <p className="hint">Browser video được quay tự động mỗi lần Run (không desktop, không audio).</p>
         {flow && <>
           <h2>Steps sẽ chạy</h2>
-          <p className="hint">Test Lab dùng Base version đã ghim trên Scenario. Xem version trong Creator Editor không đổi version chạy — cần bấm “Ghim version”.</p>
+          <p className="hint">Test Lab dùng Base version đã ghim trên Script. Xem version trong Creator Editor không đổi version chạy — cần bấm “Ghim version”.</p>
           <ol className="case-pinned-steps">
             {(config.stepVersions ?? flow.steps).map(ref => {
               const step = state.steps.find(s => s.id === ref.id && s.version === ref.version);
@@ -107,7 +107,7 @@ export function TestCaseEditor({ tabId, item, state, locked, report, saved, savi
               </li>;
             })}
           </ol>
-          {!(config.stepVersions ?? flow.steps).length && <p className="hint">Scenario chưa có Step đã ghim.</p>}
+          {!(config.stepVersions ?? flow.steps).length && <p className="hint">Script chưa có Step đã ghim.</p>}
         </>}
         <h2>Variables</h2><p className="hint">Lần đầu lấy từ Default Pattern. Các giá trị bên dưới chỉ lưu vào Case này.</p>
         {(flow?.variables ?? []).map(v => <label key={v.id}>{v.key} <small>({v.type})</small>
@@ -214,7 +214,7 @@ export function CaseResultView({ item, state, locked = false, runAgain, compact 
             reviewed: true }).then(() => setAttachMsg("Demo saved"))
             .catch(error => {
               const message = String((error as Error).message || error);
-              setAttachMsg(/Scenario\/Script not found/i.test(message) ? "Không tìm thấy Scenario liên kết với Test Case này."
+              setAttachMsg(/Scenario\/Script not found/i.test(message) ? "Không tìm thấy Script liên kết với Test Case này."
                 : /video file missing|recording incomplete/i.test(message) ? "Video không tồn tại hoặc chưa hoàn tất. Hãy chạy lại Test Case."
                 : `Không lưu được demo: ${message.replace(/^.*VIDEO_DEMO:\s*/i, "")}`);
             }).finally(() => setAttaching(false));
@@ -234,7 +234,7 @@ export function CaseResultView({ item, state, locked = false, runAgain, compact 
     <details className="case-diagnostics"><summary>Run diagnostics</summary>
     <dl className="case-result-fields">
       <dt>Test Case</dt><dd>{result.caseName ?? item.name}</dd>
-      <dt>Scenario</dt><dd>{result.scenarioName ?? state?.flows.find(flow => flow.id === item.flowId)?.name ?? item.flowId}</dd>
+      <dt>Script</dt><dd>{result.scenarioName ?? state?.flows.find(flow => flow.id === item.flowId)?.name ?? item.flowId}</dd>
       <dt>Session</dt><dd>{result.sessionName ?? state?.browserSessions?.find(session => session.id === item.sessionId)?.name ?? item.sessionId}</dd>
       <dt>URL</dt><dd>{result.startUrl ?? item.startUrl}</dd>
       <dt>Bắt đầu</dt><dd>{new Date(result.startedAt).toLocaleString()}</dd>
@@ -280,7 +280,7 @@ export function TestLabPage({ state, locked, update, open, run, canRun, create, 
         id: dialog.id, name: value, confirmed: true }, true);
   }
   return <section className="app-page" aria-label="Test Lab"><div className="page-heading"><h1>Test Lab</h1>
-    <p>Mỗi Case dùng Scenario, Session, URL và bộ Values riêng. Mỗi lần Run tự quay Browser video.</p></div>
+    <p>Mỗi Case dùng Script, Session, URL và bộ Values riêng. Mỗi lần Run tự quay Browser video.</p></div>
     <div className="scenario-toolbar"><button disabled={disabled} onClick={() => show("create")}>+ Test Group</button>
       <button className="primary" disabled={disabled || !state?.flows.length} onClick={create}>+ Test Case</button></div>
     {!dialog && error && <p role="alert">{error}</p>}
@@ -293,10 +293,10 @@ export function TestLabPage({ state, locked, update, open, run, canRun, create, 
         {group.id && <details><summary>...</summary><div className="scenario-menu"><button disabled={disabled} onClick={() => show("rename", group.id, group.name, group.name)}>Đổi tên</button>
           <button disabled={disabled} onClick={() => show("group-delete", group.id, group.name)}>Xóa Group</button></div></details>}</div>
         {!group.collapsed && <div className="test-lab-rows">
-          <div className="test-lab-row test-lab-columns" aria-hidden="true"><b>Test Case</b><b>Scenario</b><b>Session</b><b>Last Result</b><span /><span /><span /></div>
+          <div className="test-lab-row test-lab-columns" aria-hidden="true"><b>Test Case</b><b>Script</b><b>Session</b><b>Last Result</b><span /><span /><span /></div>
           {cases.map(item => <div className="test-lab-row" key={item.id}>
             <button className="case-name" disabled={disabled} onClick={() => open(item.id)} title={item.name}>{item.name}</button>
-            <span className="case-scenario" title={state?.flows.find(flow => flow.id === item.flowId)?.name}>{state?.flows.find(flow => flow.id === item.flowId)?.name ?? "Scenario không còn"}</span>
+            <span className="case-scenario" title={state?.flows.find(flow => flow.id === item.flowId)?.name}>{state?.flows.find(flow => flow.id === item.flowId)?.name ?? "Script không còn"}</span>
             <span className="case-session" title={state?.browserSessions?.find(session => session.id === item.sessionId)?.name}>{state?.browserSessions?.find(session => session.id === item.sessionId)?.name ?? "Session không còn"}</span>
             <span className="case-run-status" data-status={state?.runningTestCaseId === item.id ? "RUNNING" : resultStatus(item.lastResult?.status)} title={item.lastResult?.message}>
               {state?.runningTestCaseId === item.id ? "RUNNING" : resultStatus(item.lastResult?.status)}</span>

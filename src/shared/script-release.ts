@@ -27,6 +27,9 @@ export type ScriptVideoDemo = {
 
 export type ScriptReleaseManifest = {
   script_id: string;
+  action_tag_key?: string;
+  result_type?: "status" | "collection";
+  collection_type?: string;
   variables: ScriptVariable[];
   outputs: { key: string; type: string }[];
   steps: Array<Record<string, unknown>>;
@@ -51,6 +54,8 @@ export type ScriptPublishBody = {
   runtime_compatibility: { runner_min: string };
   /** SHA-256 of the canonical release fields; excluded from its own digest input. */
   content_digest?: string;
+  action_tag_key?: string;
+  script_request_id?: string;
 };
 
 export type ScriptExportInput = {
@@ -75,6 +80,9 @@ export type ScriptCatalogSnapshot = {
   incomplete_reasons: string[];
   /** Present only when Script is publishable (has steps + valid body). */
   publish_body: ScriptPublishBody | null;
+  action_tag_key?: string;
+  result_type?: "status" | "collection";
+  collection_type?: string;
 };
 
 const PACKAGE_KEY = /^[a-z0-9][a-z0-9._-]{1,126}[a-z0-9]$/;
@@ -267,7 +275,7 @@ export function normalizeImportedVisualTarget(
   };
 }
 
-function assembleBody(
+export function assembleBody(
   input: ScriptExportInput,
   stepPayloads: Array<Record<string, unknown>>,
 ): ScriptPublishBody {
@@ -285,8 +293,12 @@ function assembleBody(
   const defaultPattern = input.flow.defaultPattern?.values
     ? { values: { ...input.flow.defaultPattern.values } }
     : undefined;
+  const resultType = input.flow.resultType ?? "status";
   const manifest: ScriptReleaseManifest = {
     script_id: input.flow.id,
+    ...(input.flow.actionTagKey ? { action_tag_key: input.flow.actionTagKey } : {}),
+    result_type: resultType,
+    ...(resultType === "collection" && input.flow.collectionType ? { collection_type: input.flow.collectionType } : {}),
     variables,
     outputs: [
       { key: "status", type: "text" },
@@ -317,6 +329,8 @@ function assembleBody(
     manifest,
     dependencies: [],
     runtime_compatibility: { runner_min: runnerMin },
+    ...(input.flow.actionTagKey ? { action_tag_key: input.flow.actionTagKey } : {}),
+    ...(input.flow.scriptRequestId ? { script_request_id: input.flow.scriptRequestId } : {}),
   };
 }
 
@@ -345,6 +359,9 @@ export function buildScriptCatalogSnapshot(input: ScriptExportInput): ScriptCata
   for (const inv of invalid) reasons.push(`invalid_step:${inv}`);
   if (stepPayloads.length === 0) reasons.push("steps_required");
   if (!input.videoDemo) reasons.push(MISSING_DEMO_REASON);
+  if (input.flow.resultType === "collection" && !input.flow.collectionType?.trim()) {
+    reasons.push("collection_type_required");
+  }
 
   const version = RELEASE_VERSION.test(input.version) ? input.version : "0.0.0";
   const softInput = { ...input, version };
@@ -392,6 +409,9 @@ export function buildScriptCatalogSnapshot(input: ScriptExportInput): ScriptCata
     incomplete,
     incomplete_reasons: [...new Set(reasons)],
     publish_body,
+    action_tag_key: body.manifest.action_tag_key,
+    result_type: body.manifest.result_type,
+    collection_type: body.manifest.collection_type,
   };
 }
 
@@ -418,6 +438,14 @@ export function assertScriptPublishBody(body: ScriptPublishBody) {
   if (!Array.isArray(body.manifest.variables)) throw new Error("SCRIPT_EXPORT: variables required");
   if (!Array.isArray(body.manifest.steps) || body.manifest.steps.length === 0) {
     throw new Error("SCRIPT_EXPORT: steps required");
+  }
+  if (body.manifest.result_type && !["status", "collection"].includes(body.manifest.result_type)) {
+    throw new Error("SCRIPT_EXPORT: invalid result_type");
+  }
+  if (body.manifest.result_type === "collection") {
+    if (!body.manifest.collection_type || typeof body.manifest.collection_type !== "string" || !body.manifest.collection_type.trim()) {
+      throw new Error("SCRIPT_EXPORT: collection_type required when result_type is collection");
+    }
   }
   const v = body.manifest.video_demo;
   if (!v) throw new Error("SCRIPT_EXPORT: missing_demo — attach a Test Lab Script Demo first");

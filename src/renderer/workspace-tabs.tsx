@@ -9,11 +9,11 @@ export function WorkspaceTabs({ tabs, activeId, state, mainPage, locked, dirty, 
 }) {
   return <div className="workspace-tabs" aria-label="Workspace tabs">
     <button className="scenarios-tab" aria-current={state?.appPage === mainPage ? "page" : undefined}
-      disabled={locked} onClick={scenarios}>{{ scenarios: "Scenarios", "browser-sessions": "Browser Sessions", "test-lab": "Test Lab", settings: "Settings", variations: "Variations", "widget-registry": "Widget Registry", workflows: "Workflows", "builds-releases": "Builds & Releases" }[mainPage]}</button>
+      disabled={locked} onClick={scenarios}>{{ scenarios: "Scripts", "browser-sessions": "Browser Sessions", "test-lab": "Test Lab", settings: "Settings", variations: "Variations", "widget-registry": "Widget Registry", workflows: "Workflows", "builds-releases": "Builds & Releases" }[mainPage]}</button>
     <div className="workspace-tab-items">
       {tabs.map(tab => {
         const name = tab.kind === "studio" ? caseName(tab.id) ?? tab.flowId ?? "Studio" : tab.kind === "test-case" ? caseName(tab.id) ?? state?.testLab?.cases.find(c => c.id === tab.caseId)?.name ?? "Test Case mới"
-          : state?.flows.find(f => f.id === tab.flowId)?.name ?? "Scenario";
+          : state?.flows.find(f => f.id === tab.flowId)?.name ?? "Script";
         const active = activeId === tab.id && ["creator", "test-case", "variations", "widget-registry", "workflows"].includes(state?.appPage ?? "");
         return <div className={`workspace-tab${active ? " active" : ""}`} key={tab.id}>
           <button disabled={locked} aria-current={active ? "page" : undefined} title={name}
