@@ -928,10 +928,25 @@ async function boot() {
           pendingBackupImports.delete(command.token);
           logMainEvent(runDir, "backup-import-restored", { counts: applied.manifest.counts, rollbackPath: applied.rollbackPath });
           return { status: "restored", restored: true, counts: applied.manifest.counts,
-            rollbackPath: applied.rollbackPath, state: state() };
+            rollbackPath: applied.rollbackPath };
         } catch (error) {
           logMainError(runDir, "backup-import", error);
-          return { status: "failed", message: String((error as Error).message || error).replace(/^RESTORE_[A-Z_]+:\s*/, "") };
+          const technical = String((error as Error).message || error);
+          const category = technical.startsWith("BACKUP_INVALID_ZIP") ? "INVALID_ZIP"
+            : technical.startsWith("BACKUP_MISSING_ENTRY") ? "MISSING_MANIFEST"
+              : technical.startsWith("BACKUP_UNSUPPORTED_SCHEMA") ? "UNSUPPORTED_SCHEMA"
+                : technical.startsWith("BACKUP_INVALID_JSON") || technical.startsWith("BACKUP_INVALID_FIELD") ? "INVALID_JSON_ENTRY"
+                  : technical.startsWith("RESTORE_ASSET_MISSING") ? "MISSING_ASSET"
+                    : technical.startsWith("RESTORE_INTEGRITY") ? "CHECKSUM_MISMATCH"
+                      : technical.startsWith("RESTORE_FILE_LOCK") ? "FILE_LOCK"
+                        : "SQLITE_RESTORE_FAILED";
+          const friendly: Record<string, string> = {
+            INVALID_ZIP: "File không phải ZIP backup hợp lệ.", MISSING_MANIFEST: "Backup thiếu manifest hoặc dữ liệu bắt buộc.",
+            UNSUPPORTED_SCHEMA: "Phiên bản backup chưa được hỗ trợ.", INVALID_JSON_ENTRY: "Một entry JSON trong backup không hợp lệ.",
+            MISSING_ASSET: "Backup thiếu asset được tham chiếu.", CHECKSUM_MISMATCH: "Checksum backup không khớp.",
+            FILE_LOCK: "Không thể thay file vì đang bị khóa hoặc thiếu quyền.", SQLITE_RESTORE_FAILED: "Không thể khôi phục SQLite; dữ liệu cũ đã được giữ nguyên.",
+          };
+          return { status: "failed", category, message: `${friendly[category]} ${technical}` };
         }
       }
       case "exportScriptRelease": {

@@ -36,7 +36,17 @@ export class BrowserSessions {
           (s.isDefault || !/^[a-f0-9-]{36}$/.test(s.id) || s.partition !== `persist:rpa-session-${s.id}`)))
       throw new Error("Metadata Browser Session không hợp lệ; dữ liệu trình duyệt được giữ nguyên.");
   }
-  list(): BrowserSession[] { return JSON.parse(this.store.setting("browserSessions")!) as BrowserSession[]; }
+  list(): BrowserSession[] {
+    const saved = this.store.setting("browserSessions");
+    if (!saved) {
+      const at = new Date().toISOString(), fallback: BrowserSession[] = [{ id: DEFAULT_SESSION_ID, name: "Default",
+        partition: DEFAULT_SESSION_PARTITION, isDefault: true, lastUrl: address(this.store.setting("lastUrl") ?? "")?.url,
+        domains: [], createdAt: at, updatedAt: at }];
+      this.save(fallback); return fallback;
+    }
+    try { return JSON.parse(saved) as BrowserSession[]; }
+    catch { throw new Error("BROWSER_SESSION_METADATA_INVALID: local Browser Session metadata is not valid JSON"); }
+  }
   get(id: string) {
     const session = this.list().find(s => s.id === id);
     if (!session) throw new Error("Không tìm thấy Browser Session.");

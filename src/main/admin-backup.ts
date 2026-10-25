@@ -3,10 +3,10 @@ import { mkdir, readFile, readdir, rename, rm, writeFile } from "node:fs/promise
 import path from "node:path";
 import { decodeZip, encodeZip } from "./package-zip.js";
 import type { Flow, Override, Step } from "../shared/contracts.js";
-import type { Store } from "./storage.js";
+import { Store } from "./storage.js";
 
 const sha = (bytes: Buffer) => createHash("sha256").update(bytes).digest("hex");
-const SECRET_SETTING = /(?:token|password|cookie|credential|browserSessions?|sessionPartition)/i;
+const SECRET_SETTING = /(?:token|password|cookie|credential|browserSessions?|activeBrowserSessionId|sessionPartition)/i;
 const RUNTIME_PATH_FIELDS = new Set(["screenshotPath", "recordingPath"]);
 
 export type BackupMissingReference = {
@@ -24,6 +24,17 @@ type BackupManifest = {
   missing: BackupMissingReference[]; uploadBindings: UploadBinding[];
   counts: { scenarios: number; stepVersions: number; assets: number; missingFiles: number };
 };
+
+function parseJson<T>(bytes: Buffer | string | undefined, location: string): T {
+  if (bytes === undefined) throw new Error(`BACKUP_MISSING_ENTRY: ${location}`);
+  try { return JSON.parse(typeof bytes === "string" ? bytes : bytes.toString("utf8")) as T; }
+  catch (error) { throw new Error(`BACKUP_INVALID_JSON: ${location}: ${String((error as Error).message || error)}`); }
+}
+
+function parsePayload<T>(value: unknown, location: string): T {
+  if (typeof value !== "string") throw new Error(`BACKUP_INVALID_FIELD: ${location} must be JSON text`);
+  return parseJson<T>(value, location);
+}
 
 function scrubRuntimePaths(value: unknown, key = ""): unknown {
   if (typeof value === "string" && RUNTIME_PATH_FIELDS.has(key) && path.isAbsolute(value))
@@ -176,36 +187,40 @@ export async function createAdminBackup(store: Store, dataPath: string, installa
 
 export function inspectAdminBackup(archive: Buffer, expectedSha256?: string) {
   const sha256 = sha(archive); if (expectedSha256 && sha256 !== expectedSha256) throw new Error("RESTORE_INTEGRITY: archive checksum mismatch");
-  const files = decodeZip(archive);
-  if (!files["creator.json"] || !files["manifest.json"] || !files["checksums.json"]) throw new Error("RESTORE_INVALID: manifest/database/checksums missing");
-  const checksums = JSON.parse(files["checksums.json"].toString("utf8")) as Record<string, string>;
+  let files: Record<string, Buffer>;
+  try { files = decodeZip(archive); }
+  catch (error) { throw new Error(`BACKUP_INVALID_ZIP: ${String((error as Error).message || error)}`); }
+  for (const required of ["manifest.json", "creator.json", "checksums.json"]) if (!files[required])
+    throw new Error(`BACKUP_MISSING_ENTRY: ${required}`);
+  const checksums = parseJson<Record<string, string>>(files["checksums.json"], "checksums.json");
   for (const [name] of Object.entries(files)) if (name !== "checksums.json" && !checksums[name]) throw new Error(`RESTORE_INTEGRITY: undeclared file ${name}`);
   for (const [name, expected] of Object.entries(checksums)) if (!files[name] || sha(files[name]) !== expected) throw new Error(`RESTORE_INTEGRITY: checksum mismatch ${name}`);
-  const snapshot = JSON.parse(files["creator.json"].toString("utf8")) as Record<string, unknown[]>;
-  const manifest = JSON.parse(files["manifest.json"].toString("utf8")) as BackupManifest;
+  const snapshot = parseJson<Record<string, unknown[]>>(files["creator.json"], "creator.json");
+  const manifest = parseJson<BackupManifest>(files["manifest.json"], "manifest.json");
+  if (manifest.schema !== 3) throw new Error(`BACKUP_UNSUPPORTED_SCHEMA: ${String((manifest as { schema?: unknown }).schema ?? "missing")}`);
   if (manifest.complete !== true) throw new Error(`RESTORE_INCOMPLETE: ${JSON.stringify(manifest.missing ?? [])}`);
   if (!["settings", "flows", "steps", "overrides", "runs"].every(table => Array.isArray(snapshot[table]))) throw new Error("RESTORE_INVALID: SQLite relationships unavailable");
   const stepVersions = new Set((snapshot.steps as Array<{ id?: string; version?: number; payload?: string }>).map(row => `${row.id}:${row.version}`));
   const flowIds = new Set<string>();
   for (const row of snapshot.flows as Array<{ id?: string; payload?: string }>) {
-    const flow = JSON.parse(String(row.payload ?? "{}")) as Flow;
+    const flow = parsePayload<Flow>(row.payload, `creator.json flows[${String(row.id ?? "unknown")}].payload`);
     if (!flow.id || flow.id !== row.id || flowIds.has(flow.id)) throw new Error(`RESTORE_INVALID: invalid or duplicate Scenario ${String(row.id ?? "")}`);
     flowIds.add(flow.id);
     for (const ref of flow.steps ?? []) if (!stepVersions.has(`${ref.id}:${ref.version}`))
       throw new Error(`RESTORE_INVALID: ${flow.name || flow.id} pins missing Step ${ref.id} v${ref.version}`);
   }
   for (const row of snapshot.overrides as Array<{ step_id?: string; base_version?: number; payload?: string }>) {
-    const override = JSON.parse(String(row.payload ?? "{}")) as Override;
+    const override = parsePayload<Override>(row.payload, `creator.json overrides[${String((row as { id?: unknown }).id ?? "unknown")}].payload`);
     const stepId = override.stepId || String(row.step_id ?? ""), version = override.baseVersion ?? Number(row.base_version);
     if (!stepVersions.has(`${stepId}:${version}`)) throw new Error(`RESTORE_INVALID: Override ${override.name || ""} references missing Step ${stepId} v${version}`);
   }
   for (const binding of manifest.uploadBindings ?? []) if (!files[binding.archiveRef]) throw new Error(`RESTORE_ASSET_MISSING: ${binding.archiveRef}`);
   for (const row of snapshot.steps as Array<{ payload?: string }>) {
-    const step = JSON.parse(String(row.payload ?? "{}")) as Step, asset = step.payload?.target?.asset;
+    const step = parsePayload<Step>(row.payload, "creator.json steps[].payload"), asset = step.payload?.target?.asset;
     if (asset && !files[`targets/${asset}`]) throw new Error(`RESTORE_ASSET_MISSING: ${asset}`);
   }
   for (const row of snapshot.overrides as Array<{ payload?: string }>) {
-    const override = JSON.parse(String(row.payload ?? "{}")) as Override;
+    const override = parsePayload<Override>(row.payload, "creator.json overrides[].payload");
     for (const payload of override.segment ?? []) {
       const asset = payload.target?.asset;
       if (asset && !files[`targets/${asset}`]) throw new Error(`RESTORE_ASSET_MISSING: ${asset}`);
@@ -213,38 +228,66 @@ export function inspectAdminBackup(archive: Buffer, expectedSha256?: string) {
   }
   for (const row of snapshot.settings as Array<{ key?: string; value?: string }>) {
     if (!String(row.key).startsWith("videoDemo:")) continue;
-    const demo = JSON.parse(String(row.value ?? "{}")) as { artifactRef?: string; thumbnailRef?: string };
+    const demo = parsePayload<{ artifactRef?: string; thumbnailRef?: string }>(row.value, `creator.json settings[${String(row.key)}].value`);
     for (const ref of [demo.artifactRef, demo.thumbnailRef].filter(Boolean) as string[]) if (!files[ref]) throw new Error(`RESTORE_ASSET_MISSING: ${ref}`);
   }
   return { files, snapshot, manifest, sha256 };
 }
 
-export async function applyAdminBackup(store: Store, dataPath: string, archive: Buffer, expectedSha256: string) {
+export async function applyAdminBackup(store: Store, dataPath: string, archive: Buffer, expectedSha256: string,
+  options?: { fault?: (phase: "after-stage" | "after-assets" | "after-sqlite") => void }) {
   const checked = inspectAdminBackup(archive, expectedSha256);
+  const originalSnapshot = store.backupSnapshot() as Record<string, unknown[]>;
   const rollback = await createAdminBackup(store, dataPath, `rollback-${randomUUID()}`, Date.now());
   if (!rollback.manifest.complete) throw new Error("RESTORE_ROLLBACK_INCOMPLETE: current profile cannot be backed up safely");
   const rollbackDir = path.join(dataPath, "restore-backups"); await mkdir(rollbackDir, { recursive: true });
   const rollbackPath = path.join(rollbackDir, `before-restore-${Date.now()}.zip`); await writeFile(rollbackPath, rollback.archive, { flag: "wx" });
   const stage = path.join(dataPath, `.restore-${randomUUID()}`); await mkdir(stage, { recursive: true });
-  const moved: Array<{ destination: string; old: string }> = [];
+  const swaps: Array<{ destination: string; old?: string }> = [];
   try {
     for (const folder of ["targets", "demos", "assets"]) await mkdir(path.join(stage, folder), { recursive: true });
     for (const [name, bytes] of Object.entries(checked.files)) {
       if (!name.startsWith("targets/") && !name.startsWith("demos/") && !name.startsWith("assets/")) continue;
       const target = path.join(stage, ...name.split("/")); await mkdir(path.dirname(target), { recursive: true }); await writeFile(target, bytes, { flag: "wx" });
     }
-    store.restoreSnapshot(materializeUploads(checked.snapshot, checked.manifest, dataPath));
+    const restored = materializeUploads(checked.snapshot, checked.manifest, dataPath);
+    const importedSettings = restored.settings as Array<{ key: string; value: string }>;
+    const importedKeys = new Set(importedSettings.map(row => row.key));
+    for (const row of originalSnapshot.settings as Array<{ key: string; value: string }>)
+      if (SECRET_SETTING.test(row.key) && !importedKeys.has(row.key)) importedSettings.push(structuredClone(row));
+    const validationStore = new Store(path.join(stage, "validation.sqlite"));
+    try {
+      validationStore.restoreSnapshot(restored);
+      if (validationStore.flows().length !== checked.manifest.counts.scenarios || validationStore.steps().length !== checked.manifest.counts.stepVersions)
+        throw new Error("RESTORE_SQLITE_FAILED: restored counts differ from manifest");
+      validationStore.flows(); validationStore.steps(); validationStore.overrides();
+    } finally { validationStore.close(); }
+    options?.fault?.("after-stage");
     for (const folder of ["targets", "demos", "assets"]) {
       const source = path.join(stage, folder), destination = folder === "demos" ? path.join(dataPath, "test-runs", "demos") : path.join(dataPath, folder);
       const old = `${destination}.before-restore-${randomUUID()}`; await mkdir(path.dirname(destination), { recursive: true });
-      await rename(destination, old).then(() => moved.push({ destination, old })).catch(() => {}); await rename(source, destination);
+      let prior: string | undefined;
+      try { await rename(destination, old); prior = old; }
+      catch (error) { if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error; }
+      swaps.push({ destination, old: prior }); await rename(source, destination);
     }
-    for (const item of moved) await rm(item.old, { recursive: true, force: true });
+    options?.fault?.("after-assets");
+    store.restoreSnapshot(restored);
+    options?.fault?.("after-sqlite");
+    if (store.flows().length !== checked.manifest.counts.scenarios || store.steps().length !== checked.manifest.counts.stepVersions)
+      throw new Error("RESTORE_SQLITE_FAILED: live counts differ from manifest");
+    for (const item of swaps) if (item.old) await rm(item.old, { recursive: true, force: true });
     return { rollbackPath, manifest: checked.manifest };
   } catch (error) {
-    const prior = inspectAdminBackup(rollback.archive, rollback.sha256);
-    store.restoreSnapshot(materializeUploads(prior.snapshot, prior.manifest, dataPath));
-    for (const item of moved.reverse()) { await rm(item.destination, { recursive: true, force: true }).catch(() => {}); await rename(item.old, item.destination).catch(() => {}); }
-    throw error;
+    for (const item of swaps.reverse()) {
+      await rm(item.destination, { recursive: true, force: true }).catch(() => {});
+      if (item.old) await rename(item.old, item.destination).catch(() => {});
+    }
+    try { store.restoreSnapshot(originalSnapshot); }
+    catch (rollbackError) { throw new Error(`RESTORE_ROLLBACK_FAILED: ${String((rollbackError as Error).message || rollbackError)}`, { cause: error }); }
+    const code = (error as NodeJS.ErrnoException).code;
+    if (["EACCES", "EPERM", "EBUSY"].includes(code ?? "")) throw new Error(`RESTORE_FILE_LOCK: ${code}: ${String((error as Error).message || error)}`);
+    if (/^BACKUP_|^RESTORE_/.test(String((error as Error).message || error))) throw error;
+    throw new Error(`RESTORE_SQLITE_FAILED: ${String((error as Error).message || error)}`);
   } finally { await rm(stage, { recursive: true, force: true }).catch(() => {}); }
 }

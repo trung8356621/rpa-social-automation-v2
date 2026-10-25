@@ -7,6 +7,24 @@ import { Store } from "../src/main/storage.js";
 import { applyAdminBackup, createAdminBackup, inspectAdminBackup } from "../src/main/admin-backup.js";
 import { decodeZip, encodeZip } from "../src/main/package-zip.js";
 import { createHash } from "node:crypto";
+import { BrowserSessions } from "../src/main/browser-sessions.js";
+
+async function canonicalRecoveryDigest(store: Store) {
+  const fileDigest = async (value: string) => `sha256:${createHash("sha256").update(await readFile(value)).digest("hex")}`;
+  const snapshot = store.backupSnapshot() as Record<string, Array<Record<string, unknown>>>;
+  const normalized: Record<string, unknown[]> = {};
+  normalized.flows = await Promise.all(snapshot.flows.map(async row => { const payload = JSON.parse(String(row.payload));
+    for (const variable of payload.variables ?? []) if (["file", "files"].includes(variable.type)) { const value = payload.defaultPattern?.values?.[variable.id];
+      payload.defaultPattern.values[variable.id] = Array.isArray(value) ? await Promise.all(value.map(fileDigest))
+        : typeof value === "string" && value ? await fileDigest(value) : value; } return { ...row, payload }; }));
+  normalized.steps = await Promise.all(snapshot.steps.map(async row => { const payload = JSON.parse(String(row.payload));
+    if (Array.isArray(payload.payload?.files)) payload.payload.files = await Promise.all(payload.payload.files.map(fileDigest)); return { ...row, payload }; }));
+  normalized.overrides = await Promise.all(snapshot.overrides.map(async row => { const payload = JSON.parse(String(row.payload));
+    for (const segment of payload.segment ?? []) if (Array.isArray(segment.files)) segment.files = await Promise.all(segment.files.map(fileDigest)); return { ...row, payload }; }));
+  normalized.runs = snapshot.runs.map(row => ({ ...row, payload: JSON.parse(String(row.payload)) }));
+  normalized.settings = snapshot.settings.filter(row => !/(?:token|password|cookie|credential|browserSessions?|activeBrowserSessionId|sessionPartition)/i.test(String(row.key)));
+  return createHash("sha256").update(JSON.stringify(normalized)).digest("hex");
+}
 
 test("Full Backup bundles Windows upload files, OCR and demo media, then restores usable paths", async () => {
   const sourceDir = await mkdtemp(path.join(os.tmpdir(), "rpa-backup-source-"));
@@ -38,6 +56,7 @@ test("Full Backup bundles Windows upload files, OCR and demo media, then restore
     source.setSetting("password", "must-not-export");
     const dbBefore = await readFile(path.join(sourceDir, "creator.sqlite"));
     const imageBefore = await readFile(imageA);
+    const sourceDigest = await canonicalRecoveryDigest(source);
 
     const bundle = await createAdminBackup(source, sourceDir, "install-a", 1);
     assert.equal(bundle.manifest.complete, true);
@@ -52,6 +71,7 @@ test("Full Backup bundles Windows upload files, OCR and demo media, then restore
       "ordinary text that resembles a path is not interpreted as a file");
 
     await applyAdminBackup(target, restoreDir, bundle.archive, bundle.sha256);
+    assert.equal(await canonicalRecoveryDigest(target), sourceDigest, "canonical SQLite data digest must survive export/import");
     const restoredFlow = target.flows()[0];
     const restoredFiles = restoredFlow.defaultPattern!.values.imgs as string[];
     assert.equal(restoredFiles.length, 2); assert.ok(restoredFiles.every(file => path.isAbsolute(file)));
@@ -124,4 +144,44 @@ test("Full Backup import rejects a Scenario pin whose immutable Step version is 
     files["checksums.json"] = Buffer.from(JSON.stringify(checksums));
     assert.throws(() => inspectAdminBackup(encodeZip(files)), /pins missing Step/);
   } finally { source.close(); await rm(root, { recursive: true, force: true }); }
+});
+
+test("restore preserves destination-only Browser Session metadata and rolls SQLite/assets back after a staged failure", async () => {
+  const sourceDir = await mkdtemp(path.join(os.tmpdir(), "rpa-backup-atomic-source-"));
+  const targetDir = await mkdtemp(path.join(os.tmpdir(), "rpa-backup-atomic-target-"));
+  const source = new Store(path.join(sourceDir, "creator.sqlite")), target = new Store(path.join(targetDir, "creator.sqlite"));
+  try {
+    await mkdir(path.join(sourceDir, "targets"), { recursive: true });
+    const roi = "55555555-5555-5555-5555-555555555555.png"; await writeFile(path.join(sourceDir, "targets", roi), "new-roi");
+    source.newFlow("Incoming", 1); source.saveStep("Click", { action: "CLICK_TARGET", target: { asset: roi, roi: { x: 0, y: 0, width: 10, height: 10 } } });
+    const bundle = await createAdminBackup(source, sourceDir, "source", 1);
+    target.newFlow("Keep me", 1); target.setSetting("browserSessions", JSON.stringify([{ id: "default", name: "Local", partition: "persist:creator-default",
+      isDefault: true, domains: [], createdAt: "now", updatedAt: "now" }]));
+    await mkdir(path.join(targetDir, "targets"), { recursive: true }); await writeFile(path.join(targetDir, "targets", "old.txt"), "old-asset");
+    const before = structuredClone(target.backupSnapshot()), sessions = target.setting("browserSessions");
+
+    await assert.rejects(() => applyAdminBackup(target, targetDir, bundle.archive, bundle.sha256,
+      { fault: phase => { if (phase === "after-sqlite") throw new Error("injected restore failure"); } }), /RESTORE_SQLITE_FAILED/);
+    assert.equal(JSON.stringify(target.backupSnapshot()), JSON.stringify(before), "failed restore must leave every SQLite row unchanged");
+    assert.equal(await readFile(path.join(targetDir, "targets", "old.txt"), "utf8"), "old-asset");
+
+    await applyAdminBackup(target, targetDir, bundle.archive, bundle.sha256);
+    assert.equal(target.flows()[0].name, "Incoming");
+    assert.equal(target.setting("browserSessions"), sessions, "machine-local Browser Sessions are preserved, never imported");
+    assert.doesNotThrow(() => new BrowserSessions(target).list(), "post-restore state serialization must not parse undefined");
+    assert.equal(await readFile(path.join(targetDir, "targets", roi), "utf8"), "new-roi");
+  } finally { source.close(); target.close(); await rm(sourceDir, { recursive: true, force: true }); await rm(targetDir, { recursive: true, force: true }); }
+});
+
+test("preview/cancel validation is read-only and JSON diagnostics name the exact entry", async () => {
+  const root = await mkdtemp(path.join(os.tmpdir(), "rpa-backup-preview-")); const store = new Store(path.join(root, "creator.sqlite"));
+  try {
+    store.newFlow("Unchanged", 1); const bundle = await createAdminBackup(store, root, "local", 1), before = structuredClone(store.backupSnapshot());
+    inspectAdminBackup(bundle.archive, bundle.sha256); // chooser preview; cancel performs no apply
+    assert.equal(JSON.stringify(store.backupSnapshot()), JSON.stringify(before));
+    const files = decodeZip(bundle.archive); files["manifest.json"] = Buffer.from("undefined");
+    const checksums = JSON.parse(files["checksums.json"].toString()) as Record<string, string>;
+    checksums["manifest.json"] = createHash("sha256").update(files["manifest.json"]).digest("hex"); files["checksums.json"] = Buffer.from(JSON.stringify(checksums));
+    assert.throws(() => inspectAdminBackup(encodeZip(files)), /BACKUP_INVALID_JSON: manifest\.json/);
+  } finally { store.close(); await rm(root, { recursive: true, force: true }); }
 });
