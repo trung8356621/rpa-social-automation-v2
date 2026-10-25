@@ -183,19 +183,6 @@ export function SeoOpsSyncControls({
     [onRows],
   );
 
-  const pullStatus = useCallback(async () => {
-    const result = await invoke<{ rows: ScriptSyncRow[] }>({ type: "seoOpsSyncStatus" });
-    applyRows(result.rows);
-  }, [invoke, applyRows]);
-
-  useEffect(() => {
-    if (!authenticated || !autoSyncEnabled) return;
-    void pullStatus().catch(() => undefined);
-    const timer = setInterval(() => {
-      void pullStatus().catch(() => undefined);
-    }, 30_000);
-    return () => clearInterval(timer);
-  }, [authenticated, autoSyncEnabled, pullStatus]);
   useEffect(() => {
     if (!authenticated) return;
     const read = () => void invoke<{ backup?: unknown }>({ type: "seoOpsBackupInfo" })

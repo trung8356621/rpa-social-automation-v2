@@ -22,6 +22,7 @@ export type AutoSyncDeps = {
   pollIntervalMs?: number;
   maxBackoffMs?: number;
   now?: () => number;
+  random?: () => number;
 };
 
 export function isSeoOpsAutoSyncEnabled(
@@ -36,6 +37,7 @@ export function createSeoOpsAutoSync(deps: AutoSyncDeps) {
   const pollIntervalMs = deps.pollIntervalMs ?? 120_000;
   const maxBackoffMs = deps.maxBackoffMs ?? 60_000;
   const now = deps.now ?? (() => Date.now());
+  const random = deps.random ?? Math.random;
 
   let inFlight: Promise<void> | null = null;
   let queued: AutoSyncRequest | null = null;
@@ -65,6 +67,11 @@ export function createSeoOpsAutoSync(deps: AutoSyncDeps) {
   function isOfflineError(err: unknown): boolean {
     const msg = String((err as Error)?.message || err || "");
     return /failed to fetch|network_error|econnrefused|enotfound|etimedout|network/i.test(msg);
+  }
+
+  function retryAfterMs(err: unknown): number | undefined {
+    const seconds = /retry-after=(\d+)/i.exec(String((err as Error)?.message || err || ""))?.[1];
+    return seconds ? Number(seconds) * 1000 : undefined;
   }
 
   function request(req: AutoSyncRequest) {
@@ -126,7 +133,7 @@ export function createSeoOpsAutoSync(deps: AutoSyncDeps) {
         } else {
           logErrorOnce(`SEO-OPS sync failed (${job?.reason ?? "flush"}): ${String((err as Error).message || err)}`);
         }
-        scheduleRetry();
+        scheduleRetry(retryAfterMs(err));
       } finally {
         inFlight = null;
         if (gen === syncGeneration && queued) void flush();
@@ -135,10 +142,11 @@ export function createSeoOpsAutoSync(deps: AutoSyncDeps) {
     await inFlight;
   }
 
-  function scheduleRetry() {
+  function scheduleRetry(serverDelayMs?: number) {
     if (!enabled) return;
     if (retryTimer) return;
-    const wait = backoffMs;
+    const jitter = Math.floor(backoffMs * 0.2 * random());
+    const wait = Math.max(serverDelayMs ?? 0, backoffMs + jitter);
     backoffMs = Math.min(maxBackoffMs, Math.floor(backoffMs * 2));
     retryTimer = setTimeout(() => {
       retryTimer = null;

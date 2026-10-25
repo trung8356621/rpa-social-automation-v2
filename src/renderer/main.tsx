@@ -102,11 +102,11 @@ function Creator() {
     if (["scenarios", "browser-sessions", "test-lab", "settings", "variations", "widget-registry", "workflows", "builds-releases"].includes(appPage)) setMainPage(appPage as MainPage);
   }, [appPage]);
   useEffect(() => {
-    if (!shell) return;
+    if (!shell || !creatorVisible) return;
     void window.creator.invoke({ type: "seoOpsSyncStatus" })
       .then(result => setScriptSyncRows((result as { rows: ScriptSyncRow[] }).rows))
       .catch(() => undefined);
-  }, [seoOpsAuthenticated, state?.flow?.id, state?.flow?.steps]);
+  }, [creatorVisible, seoOpsAuthenticated, state?.flow?.id, state?.flow?.steps]);
   useEffect(() => {
     if (!shell) return;
     void window.creator.invoke({ type: "seoOpsGetSession" }).then((session) => {
@@ -338,9 +338,8 @@ function Creator() {
       ?.scrollIntoView({ block: "center" });
   }
 
-  async function invoke<T>(command: Command): Promise<T> {
-    return window.creator.invoke(command) as Promise<T>;
-  }
+  const invoke = useCallback(async <T,>(command: Command): Promise<T> =>
+    window.creator.invoke(command) as Promise<T>, []);
   async function task(work: () => Promise<void>) {
     if (busy) return;
     setBusy(true);

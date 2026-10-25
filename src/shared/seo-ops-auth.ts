@@ -36,6 +36,10 @@ export function mapSeoOpsAuthError(codeOrMessage: string): string {
       if (/failed to fetch|networkerror|econnrefused|enotfound|timed?\s*out/i.test(raw)) {
         return "Không kết nối được SEO-OPS.";
       }
+      const rateLimit = /category=rate_limited(?:.*retry-after=(\d+))?/i.exec(raw);
+      if (rateLimit) return `SEO-OPS đang giới hạn yêu cầu.${rateLimit[1] ? ` Thử lại sau ${rateLimit[1]} giây.` : " Vui lòng thử lại sau."}`;
+      if (/category=service_unavailable|\b503\b/i.test(raw)) return "SEO-OPS tạm thời không khả dụng. Vui lòng thử lại sau.";
+      if (/category=server_error|\b5\d\d\b/i.test(raw)) return "SEO-OPS gặp lỗi máy chủ. Vui lòng thử lại sau.";
       if (!raw || raw === "login_failed") return "Đăng nhập SEO-OPS thất bại.";
       // Strip anything that looks like a token/SQL before surfacing.
       if (/bearer\s+[a-z0-9_-]{20,}|select\s+.+\s+from|sqlstate/i.test(raw)) {

@@ -68,6 +68,7 @@ import {
   assertExecutionDigestMatches,
 } from "../shared/video-demo-policy.js";
 import { createSeoOpsTokenStore } from "./seo-ops-token-store.js";
+import { createSeoOpsBackupScheduler } from "./seo-ops-backup-scheduler.js";
 import { collectScriptAssets, createSeoOpsSyncService } from "./seo-ops-sync.js";
 import {
   createSeoOpsAutoSync,
@@ -156,16 +157,17 @@ async function boot() {
     testRunsDir: path.join(dataPath, "test-runs"),
     dataPath,
   });
-  let draftBackupTimer: NodeJS.Timeout | undefined;
+  const draftBackup = createSeoOpsBackupScheduler({
+    backup: () => seoOpsSync.backupNow(),
+    failed: error => {
+      store.setSetting("seoOpsBackupStatus", JSON.stringify({ status: "failed", at: new Date().toISOString(), message: String((error as Error).message || error) }));
+      logMainError(runDir, "seo-ops-draft-backup", error);
+    },
+  });
   store.onPersistentChange(() => {
+    seoOpsSync.markBackupDirty();
     if (!seoOpsTokenStore.getToken()) return;
-    if (draftBackupTimer) clearTimeout(draftBackupTimer);
-    draftBackupTimer = setTimeout(() => {
-      void seoOpsSync.backupNow().catch(error => {
-        store.setSetting("seoOpsBackupStatus", JSON.stringify({ status: "failed", at: new Date().toISOString(), message: String((error as Error).message || error) }));
-        logMainError(runDir, "seo-ops-draft-backup", error);
-      });
-    }, 750);
+    draftBackup.request();
   });
   const autoSyncEnabled = isSeoOpsAutoSyncEnabled();
   const seoOpsAutoSync = createSeoOpsAutoSync({

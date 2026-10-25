@@ -146,7 +146,14 @@ export function createSeoOpsSyncService(options: {
     return body;
   }
 
-  async function backupNow() {
+  let backupInFlight: Promise<Record<string, unknown>> | null = null;
+  let backupInfoInFlight: Promise<Record<string, unknown>> | null = null;
+  let backupGeneration = 0;
+  let backedUpGeneration = -1;
+  let lastBackupResult: Record<string, unknown> | null = null;
+
+  async function performBackup() {
+    const generation = backupGeneration;
     if (!dataPath) throw new Error("SEO_OPS_BACKUP: data path unavailable");
     const revision = Number(store.setting("seoOpsDraftRevisionIssued") || store.setting("seoOpsDraftRevision") || "0") + 1;
     store.setSetting("seoOpsDraftRevisionIssued", String(revision));
@@ -155,10 +162,25 @@ export function createSeoOpsSyncService(options: {
       draft_revision: revision, sha256: bundle.sha256, archive_base64: bundle.archive.toString("base64"), summary: bundle.manifest.counts }) });
     store.setSetting("seoOpsDraftRevision", String(revision));
     store.setSetting("seoOpsBackupStatus", JSON.stringify({ status: "backed_up", at: new Date().toISOString(), revision }));
+    backedUpGeneration = generation;
+    lastBackupResult = result;
     return result;
   }
 
-  async function backupInfo() { return adminApi("/backup"); }
+  async function backupNow() {
+    if (backedUpGeneration === backupGeneration && lastBackupResult) return lastBackupResult;
+    if (backupInFlight) return backupInFlight;
+    backupInFlight = performBackup().finally(() => { backupInFlight = null; });
+    return backupInFlight;
+  }
+
+  function markBackupDirty() { backupGeneration += 1; }
+
+  async function backupInfo() {
+    if (backupInfoInFlight) return backupInfoInFlight;
+    backupInfoInFlight = adminApi("/backup").finally(() => { backupInfoInFlight = null; });
+    return backupInfoInFlight;
+  }
   async function downloadBackup() {
     const body = await adminApi("/backup/download", { method: "POST", body: JSON.stringify({}) });
     return { archive: Buffer.from(String(body.archive_base64), "base64"), sha256: String(body.sha256), backup: body.backup };
@@ -880,6 +902,7 @@ export function createSeoOpsSyncService(options: {
     syncAll,
     loadMeta,
     backupNow,
+    markBackupDirty,
     backupInfo,
     downloadBackup,
   };

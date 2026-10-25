@@ -3,8 +3,8 @@ import type { ScriptSyncRow } from "./sync-status.js";
 
 export type SyncActionResult = { script_id: string; action: string; ok: boolean; message?: string };
 export type SyncIpcDiagnostic = {
-  code: "IPC_SERIALIZATION" | "NETWORK_FAILURE" | "AUTHENTICATION_FAILURE" | "API_UNEXPECTED_RESPONSE" | "SYNC_FAILURE";
-  category: "ipc" | "network" | "authentication" | "sync";
+  code: "IPC_SERIALIZATION" | "NETWORK_FAILURE" | "AUTHENTICATION_FAILURE" | "AUTHORIZATION_FAILURE" | "RATE_LIMITED" | "SERVER_ERROR" | "SERVICE_UNAVAILABLE" | "API_UNEXPECTED_RESPONSE" | "SYNC_FAILURE";
+  category: "ipc" | "network" | "authentication" | "authorization" | "rate_limited" | "server" | "service_unavailable" | "sync";
   message: string;
   technicalMessage: string;
   path?: string;
@@ -55,8 +55,19 @@ export function syncIpcDiagnostic(error: unknown): SyncIpcDiagnostic {
     return { code: "IPC_SERIALIZATION", category: "ipc", message: "Dữ liệu Sync không thể chuyển về giao diện.", technicalMessage, path: error instanceof IpcSerializationError ? error.path : undefined };
   if (/failed to fetch|networkerror|econnrefused|enotfound|timed?\s*out/i.test(technicalMessage))
     return { code: "NETWORK_FAILURE", category: "network", message: "Không kết nối được SEO-OPS.", technicalMessage };
-  if (/unauthenticated|forbidden|unauthorized|\b401\b|\b403\b/i.test(technicalMessage))
+  if (/forbidden|\b403\b|category=authorization/i.test(technicalMessage))
+    return { code: "AUTHORIZATION_FAILURE", category: "authorization", message: "Tài khoản không có quyền sử dụng Social Automation.", technicalMessage };
+  if (/unauthenticated|unauthorized|\b401\b/i.test(technicalMessage))
     return { code: "AUTHENTICATION_FAILURE", category: "authentication", message: "Phiên đăng nhập SEO-OPS không hợp lệ hoặc không đủ quyền.", technicalMessage };
+  if (/category=rate_limited|\b429\b/i.test(technicalMessage)) {
+    const retry = /retry-after=(\d+)/i.exec(technicalMessage)?.[1];
+    return { code: "RATE_LIMITED", category: "rate_limited",
+      message: `SEO-OPS đang giới hạn yêu cầu.${retry ? ` Thử lại sau ${retry} giây.` : " Vui lòng thử lại sau."}`, technicalMessage };
+  }
+  if (/category=service_unavailable|\b503\b/i.test(technicalMessage))
+    return { code: "SERVICE_UNAVAILABLE", category: "service_unavailable", message: "SEO-OPS tạm thời không khả dụng. Vui lòng thử lại sau.", technicalMessage };
+  if (/category=server_error|\b5\d\d\b/i.test(technicalMessage))
+    return { code: "SERVER_ERROR", category: "server", message: "SEO-OPS gặp lỗi máy chủ. Vui lòng thử lại sau.", technicalMessage };
   if (/SEO_OPS_HTTP:.*(?:content-type|redirect|unexpected_response)/i.test(technicalMessage))
     return { code: "API_UNEXPECTED_RESPONSE", category: "sync", message: "SEO-OPS trả về trang HTML/redirect thay vì dữ liệu API JSON.", technicalMessage };
   return { code: "SYNC_FAILURE", category: "sync", message: "Đồng bộ SEO-OPS thất bại.", technicalMessage };
