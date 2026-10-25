@@ -5,7 +5,7 @@ import { buildScriptPublishBody } from "../src/shared/script-release.js";
 import { importScriptRelease } from "../src/shared/script-sync.js";
 import { labelForStatus, statusFromPlanSides } from "../src/shared/sync-status.js";
 import type { Flow, Step } from "../src/shared/contracts.js";
-import { scriptVersionLabel, syncBadge } from "../src/renderer/seo-ops-panel.js";
+import { scriptVersionLabel, seoOpsSyncAvailability, syncBadge } from "../src/renderer/seo-ops-panel.js";
 
 test("sync status labels cover required UI states", () => {
   for (const code of [
@@ -34,6 +34,14 @@ test("sync status labels cover required UI states", () => {
     }),
     "conflict",
   );
+});
+
+test("Sync and Restore availability follows verified SEO-OPS session, not publish eligibility", () => {
+  assert.equal(seoOpsSyncAvailability(undefined).enabled, false);
+  assert.match(seoOpsSyncAvailability({ configured: true, baseUrl: "http://seo-ops.test", authenticated: false,
+    autoSyncEnabled: false, error: "session_expired" }).message, /hết hạn/);
+  assert.equal(seoOpsSyncAvailability({ configured: true, baseUrl: "http://seo-ops.test", authenticated: true,
+    autoSyncEnabled: false }).enabled, true);
 });
 
 test("Scenario version column stays compact and preserves legacy representation", () => {

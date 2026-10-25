@@ -409,6 +409,9 @@ export function createSeoOpsSyncService(options: {
     }
     const result = await authClient().session();
     if (!result.ok) {
+      if (result.errors.some(error => /^(?:unauthenticated|session_expired|token_expired)$/i.test(error))) {
+        tokenStore.setToken(null);
+      }
       return {
         configured: true,
         baseUrl,

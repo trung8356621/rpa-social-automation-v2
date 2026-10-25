@@ -10,7 +10,7 @@ import { AppNavigation, ScenariosPage } from "./app-shell";
 import { BrowserSessionsPage, SessionSelector } from "./browser-sessions";
 import { TestLabPage, TestCaseEditor, CaseResultView, ExecutionErrorView, type CaseEditorHandle } from "./test-lab";
 import { Variables, Groups } from "./flow-controls";
-import { SeoOpsAuthPanel, scriptVersionLabel, syncBadge } from "./seo-ops-panel";
+import { SeoOpsAuthPanel, scriptVersionLabel, syncBadge, type SeoOpsSessionState } from "./seo-ops-panel";
 import type { ScriptSyncRow } from "../shared/sync-status";
 import React, { useCallback, useEffect, useRef, useState } from "react";
 import { createRoot } from "react-dom/client";
@@ -91,6 +91,7 @@ function Creator() {
 
   const [state, setState] = useDraft<State>("state");
   const [seoOpsAuthenticated, setSeoOpsAuthenticated] = useState(false);
+  const [seoOpsSession, setSeoOpsSession] = useState<SeoOpsSessionState>();
   const [seoOpsAutoSyncEnabled, setSeoOpsAutoSyncEnabled] = useState(false);
   const [scriptSyncRows, setScriptSyncRows] = useState<ScriptSyncRow[]>([]);
   const [focusVariableId, setFocusVariableId] = useState<string>();
@@ -112,7 +113,12 @@ function Creator() {
       const s = session as { authenticated?: boolean; autoSyncEnabled?: boolean };
       setSeoOpsAuthenticated(Boolean(s.authenticated));
       setSeoOpsAutoSyncEnabled(Boolean(s.autoSyncEnabled));
-    }).catch(() => setSeoOpsAuthenticated(false));
+      setSeoOpsSession(session as SeoOpsSessionState);
+    }).catch(error => {
+      setSeoOpsAuthenticated(false);
+      setSeoOpsSession({ configured: true, baseUrl: "", authenticated: false, autoSyncEnabled: false,
+        error: String((error as Error).message || error) });
+    });
   }, [appPage]);
   const sidebarCollapsed = state?.sidebarCollapsed ?? false;
   const networkSettings = state?.networkSettings ?? defaultNetworkSettings();
@@ -1211,8 +1217,10 @@ function Creator() {
         locked={navigationLocked || ocrLoading} open={openScenario} create={createScenario}
         update={updateWorkspace}
         invoke={invoke}
-        authenticated={seoOpsAuthenticated}
+        seoOpsSession={seoOpsSession}
         autoSyncEnabled={seoOpsAutoSyncEnabled}
+        onSeoOpsSession={session => { setSeoOpsSession(session); setSeoOpsAuthenticated(session.authenticated); }}
+        reconnectSeoOps={() => navigateApp("settings")}
         onState={setState}
         sessionControl={<SessionSelector state={state} locked={navigationLocked || stepPlayback[activeStepId]?.status === "running"} select={selectSession} />} />}
       {shell && appPage === "browser-sessions" && <BrowserSessionsPage state={state} locked={navigationLocked}
@@ -1245,6 +1253,7 @@ function Creator() {
                 : await invoke<{ authenticated?: boolean; autoSyncEnabled?: boolean }>({ type: "seoOpsGetSession" });
               setSeoOpsAuthenticated(Boolean(session.authenticated));
               setSeoOpsAutoSyncEnabled(Boolean(session.autoSyncEnabled));
+              setSeoOpsSession(session as SeoOpsSessionState);
             }
             return result;
           }}

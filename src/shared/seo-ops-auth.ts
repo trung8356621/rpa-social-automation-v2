@@ -19,6 +19,10 @@ export function mapSeoOpsAuthError(codeOrMessage: string): string {
     case "invalid_credentials":
     case "credentials_required":
       return "Email hoặc mật khẩu không đúng.";
+    case "unauthenticated":
+    case "session_expired":
+    case "token_expired":
+      return "Phiên SEO-OPS đã hết hạn. Mở Settings để đăng nhập lại.";
     case "forbidden":
     case "role_staff_forbidden":
     case "role_forbidden":

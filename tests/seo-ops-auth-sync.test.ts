@@ -26,6 +26,7 @@ test("maps SEO-OPS auth errors to safe Vietnamese copy", () => {
   assert.equal(mapSeoOpsAuthError("forbidden"), "Tài khoản không có quyền sử dụng RPA Admin.");
   assert.equal(mapSeoOpsAuthError("role_staff_forbidden"), "Tài khoản không có quyền sử dụng RPA Admin.");
   assert.equal(mapSeoOpsAuthError("network_error"), "Không kết nối được SEO-OPS.");
+  assert.equal(mapSeoOpsAuthError("session_expired"), "Phiên SEO-OPS đã hết hạn. Mở Settings để đăng nhập lại.");
   assert.equal(mapSeoOpsAuthError("Failed to fetch"), "Không kết nối được SEO-OPS.");
   assert.equal(mapSeoOpsAuthErrors(["schema_unavailable", "other"]), mapSeoOpsAuthError("schema_unavailable"));
 });

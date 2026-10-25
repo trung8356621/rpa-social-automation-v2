@@ -4,7 +4,7 @@ import { mapSeoOpsAuthError, mapSeoOpsAuthErrors } from "../shared/seo-ops-auth"
 import { labelForStatus, type ScriptSyncRow } from "../shared/sync-status";
 import type { ManualSyncResponse } from "../shared/sync-ipc";
 
-type SessionState = {
+export type SeoOpsSessionState = {
   configured: boolean;
   baseUrl: string;
   authenticated: boolean;
@@ -13,6 +13,17 @@ type SessionState = {
   error?: string;
 };
 
+export function seoOpsSyncAvailability(session: SeoOpsSessionState | undefined, locked = false, busy = false) {
+  if (locked) return { enabled: false, message: "Đợi tác vụ hiện tại kết thúc." };
+  if (busy) return { enabled: false, message: "Đang xử lý SEO-OPS…" };
+  if (!session) return { enabled: false, message: "Đang kiểm tra kết nối SEO-OPS…" };
+  if (!session.configured) return { enabled: false, message: "Chưa cấu hình SEO-OPS. Mở Settings để nhập endpoint." };
+  if (!session.authenticated) return { enabled: false, message: session.error
+    ? mapSeoOpsAuthError(session.error)
+    : "Chưa đăng nhập SEO-OPS. Mở Settings để kết nối." };
+  return { enabled: true, message: "Đã kết nối SEO-OPS." };
+}
+
 export function SeoOpsAuthPanel({
   locked,
   invoke,
@@ -20,7 +31,7 @@ export function SeoOpsAuthPanel({
   locked: boolean;
   invoke: <T>(command: Command) => Promise<T>;
 }) {
-  const [session, setSession] = useState<SessionState>();
+  const [session, setSession] = useState<SeoOpsSessionState>();
   const [baseUrl, setBaseUrl] = useState("http://seo-ops.test");
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
@@ -28,7 +39,7 @@ export function SeoOpsAuthPanel({
   const [error, setError] = useState("");
 
   const refresh = useCallback(async () => {
-    const next = await invoke<SessionState>({ type: "seoOpsGetSession" });
+    const next = await invoke<SeoOpsSessionState>({ type: "seoOpsGetSession" });
     setSession(next);
     setBaseUrl(next.baseUrl);
     if (next.error) setError(next.error);
@@ -131,23 +142,38 @@ export function SeoOpsAuthPanel({
 
 export function SeoOpsSyncControls({
   locked,
-  authenticated,
+  session,
   autoSyncEnabled,
   flowId,
   invoke,
   onRows,
+  onSession,
+  reconnect,
 }: {
   locked: boolean;
-  authenticated: boolean;
+  session?: SeoOpsSessionState;
   autoSyncEnabled: boolean;
   flowId?: string;
   invoke: <T>(command: Command) => Promise<T>;
   onRows?: (rows: ScriptSyncRow[]) => void;
+  onSession?: (session: SeoOpsSessionState) => void;
+  reconnect?: () => void;
 }) {
   const [busy, setBusy] = useState(false);
   const [message, setMessage] = useState("");
   const [rows, setRows] = useState<ScriptSyncRow[]>([]);
   const [backupLabel, setBackupLabel] = useState("");
+  const [currentSession, setCurrentSession] = useState(session);
+  const authenticated = Boolean(currentSession?.authenticated);
+  const availability = seoOpsSyncAvailability(currentSession, locked, busy);
+
+  useEffect(() => { setCurrentSession(session); }, [session]);
+
+  async function refreshSession() {
+    const next = await invoke<SeoOpsSessionState>({ type: "seoOpsGetSession" });
+    setCurrentSession(next); onSession?.(next);
+    return next;
+  }
 
   const applyRows = useCallback(
     (next: ScriptSyncRow[]) => {
@@ -192,11 +218,12 @@ export function SeoOpsSyncControls({
       );
       if (!result.ok) {
         setMessage(result.error.message);
+        if (result.error.category === "authentication") await refreshSession().catch(() => undefined);
         return;
       }
       applyRows(result.rows);
       const s = result.summary;
-      setMessage(s ? `Sync xong: ${s.published} published, ${s.unchanged} unchanged, ${s.blocked} draft blocked, ${s.reports} reports, ${s.failed} failed`
+      setMessage(s ? `Sync xong: ${s.backed_up} draft backup, ${s.published} published, ${s.unchanged} unchanged, ${s.blocked} publish blocked, ${s.reports} reports, ${s.failed} failed`
         : `Sync xong: ${result.results.length} mục`);
     } catch (e) {
       setMessage(mapSeoOpsAuthError(String((e as Error).message || e)));
@@ -224,12 +251,15 @@ export function SeoOpsSyncControls({
 
   return (
     <div className="seo-ops-sync-controls">
-      <button disabled={locked || busy || !authenticated} onClick={() => void runSync()}>
+      <button disabled={!availability.enabled} title={availability.enabled ? undefined : availability.message} onClick={() => void runSync()}>
         Sync now
       </button>
-      <button disabled={locked || busy || !authenticated} onClick={() => void restoreBackup()}>
+      <button disabled={!availability.enabled} title={availability.enabled ? undefined : availability.message} onClick={() => void restoreBackup()}>
         Restore from SEO-OPS
       </button>
+      {!availability.enabled && <small role="status">{availability.message} {reconnect && !locked && !busy &&
+        <button type="button" onClick={currentSession?.error && !/expired|hết hạn|unauthenticated/i.test(currentSession.error)
+          ? () => void refreshSession() : reconnect}>{currentSession?.error ? "Kết nối lại" : "Mở Settings"}</button>}</small>}
       {message && <small>{message}</small>}
       {backupLabel && <small>{backupLabel}</small>}
       {rows.length > 0 && (

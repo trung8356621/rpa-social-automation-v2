@@ -2,7 +2,7 @@ import React, { useEffect, useState } from "react";
 import { UiPopover } from "./ui-popover";
 import type { AppPage, Command, ScenarioOrganization, State } from "../shared/contracts";
 import type { ScriptSyncRow } from "../shared/sync-status";
-import { SeoOpsSyncControls, scriptVersionLabel, syncBadge } from "./seo-ops-panel";
+import { SeoOpsSyncControls, scriptVersionLabel, syncBadge, type SeoOpsSessionState } from "./seo-ops-panel";
 import { ScriptHealthPanel } from "./script-health-panel";
 
 /** Primary Admin nav only — Variations / Widget / Workflow / Builds remain routable legacy, not listed. */
@@ -35,13 +35,15 @@ export function AppNavigation({ page, collapsed, locked, navigate, toggle }: {
   </div>;
 }
 
-export function ScenariosPage({ state, name, setName, locked, open, create, sessionControl, update, invoke, authenticated, autoSyncEnabled, onState }: {
+export function ScenariosPage({ state, name, setName, locked, open, create, sessionControl, update, invoke, seoOpsSession, autoSyncEnabled, onSeoOpsSession, reconnectSeoOps, onState }: {
   state?: State; name: string; setName: (name: string) => void; locked: boolean;
   open: (id: string, focus?: { stepId: string; version: number }) => void; create: () => void;
   sessionControl?: React.ReactNode; update: (command: Command) => Promise<void>;
   invoke?: <T>(command: Command) => Promise<T>;
-  authenticated?: boolean;
+  seoOpsSession?: SeoOpsSessionState;
   autoSyncEnabled?: boolean;
+  onSeoOpsSession?: (session: SeoOpsSessionState) => void;
+  reconnectSeoOps?: () => void;
   onState?: (state: State) => void;
 }) {
   type BackupResult = { status: "working" | "verified" | "incomplete" | "cancelled" | "failed";
@@ -64,7 +66,7 @@ export function ScenariosPage({ state, name, setName, locked, open, create, sess
     void invoke<{ rows: ScriptSyncRow[] }>({ type: "seoOpsSyncStatus" })
       .then((r) => setSyncRows(r.rows))
       .catch(() => undefined);
-  }, [invoke, authenticated, state?.flows]);
+  }, [invoke, seoOpsSession?.authenticated, state?.flows]);
   function show(kind: "create" | "rename" | "delete" | "move" | "scenario-delete", id?: string, initial = "") {
     setValue(initial); setError(""); setDialog({ kind, id });
   }
@@ -108,10 +110,12 @@ export function ScenariosPage({ state, name, setName, locked, open, create, sess
       {invoke && (
         <SeoOpsSyncControls
           locked={disabled}
-          authenticated={Boolean(authenticated)}
+          session={seoOpsSession}
           autoSyncEnabled={Boolean(autoSyncEnabled)}
           invoke={invoke}
           onRows={setSyncRows}
+          onSession={onSeoOpsSession}
+          reconnect={reconnectSeoOps}
         />
       )}
     </div>
