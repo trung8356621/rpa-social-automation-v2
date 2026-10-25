@@ -66,8 +66,8 @@ test("selected Test Run demo persists, survives newer runs, updates explicitly, 
     token = "test-token";
     globalThis.fetch = async (url, init) => {
       const address = String(url);
-      if (address.endsWith("/backup")) return new Response(JSON.stringify({ ok: true }), { status: 200 });
-      if (address.includes("/execution-reports")) return new Response(JSON.stringify({ ok: true, reports: [], next_after_id: 0 }), { status: 200 });
+      if (address.endsWith("/backup")) return new Response(JSON.stringify({ ok: true }), { status: 200, headers: { "Content-Type": "application/json" } });
+      if (address.includes("/execution-reports")) return new Response(JSON.stringify({ ok: true, reports: [], next_after_id: 0 }), { status: 200, headers: { "Content-Type": "application/json" } });
       if (address.endsWith("/scripts")) {
         return new Response(JSON.stringify({ ok: true, scripts: [] }), { status: 200, headers: { "Content-Type": "application/json" } });
       }
@@ -79,9 +79,9 @@ test("selected Test Run demo persists, survives newer runs, updates explicitly, 
       if (address.endsWith("/scripts/publish")) {
         publishCalls++;
         publishedVersion = String((JSON.parse(String(init?.body)) as { version?: unknown }).version ?? "");
-        return new Response(JSON.stringify({ ok: true }), { status: 200 });
+        return new Response(JSON.stringify({ ok: true }), { status: 200, headers: { "Content-Type": "application/json" } });
       }
-      if (address.endsWith("/scripts/video-demo")) return new Response(JSON.stringify({ ok: false, errors: ["test upload failure"] }), { status: 500 });
+      if (address.endsWith("/scripts/video-demo")) return new Response(JSON.stringify({ ok: false, errors: ["test upload failure"] }), { status: 500, headers: { "Content-Type": "application/json" } });
       throw new Error(`Unexpected test URL: ${address}`);
     };
     try {

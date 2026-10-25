@@ -3,7 +3,7 @@ import type { ScriptSyncRow } from "./sync-status.js";
 
 export type SyncActionResult = { script_id: string; action: string; ok: boolean; message?: string };
 export type SyncIpcDiagnostic = {
-  code: "IPC_SERIALIZATION" | "NETWORK_FAILURE" | "AUTHENTICATION_FAILURE" | "SYNC_FAILURE";
+  code: "IPC_SERIALIZATION" | "NETWORK_FAILURE" | "AUTHENTICATION_FAILURE" | "API_UNEXPECTED_RESPONSE" | "SYNC_FAILURE";
   category: "ipc" | "network" | "authentication" | "sync";
   message: string;
   technicalMessage: string;
@@ -57,6 +57,8 @@ export function syncIpcDiagnostic(error: unknown): SyncIpcDiagnostic {
     return { code: "NETWORK_FAILURE", category: "network", message: "Không kết nối được SEO-OPS.", technicalMessage };
   if (/unauthenticated|forbidden|unauthorized|\b401\b|\b403\b/i.test(technicalMessage))
     return { code: "AUTHENTICATION_FAILURE", category: "authentication", message: "Phiên đăng nhập SEO-OPS không hợp lệ hoặc không đủ quyền.", technicalMessage };
+  if (/SEO_OPS_HTTP:.*(?:content-type|redirect|unexpected_response)/i.test(technicalMessage))
+    return { code: "API_UNEXPECTED_RESPONSE", category: "sync", message: "SEO-OPS trả về trang HTML/redirect thay vì dữ liệu API JSON.", technicalMessage };
   return { code: "SYNC_FAILURE", category: "sync", message: "Đồng bộ SEO-OPS thất bại.", technicalMessage };
 }
 

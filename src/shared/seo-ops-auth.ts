@@ -1,4 +1,5 @@
 /** SEO-OPS RPA Admin user session (admin|owner). Distinct from Runner service credentials. */
+import { readSeoOpsJson } from "./seo-ops-http.js";
 
 export type RpaAdminUser = {
   id: number;
@@ -80,6 +81,7 @@ export function createHttpSeoOpsAuthClient(options: {
       try {
         response = await fetchImpl(`${root}/login`, {
           method: "POST",
+          redirect: "manual",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({
             email,
@@ -90,7 +92,9 @@ export function createHttpSeoOpsAuthClient(options: {
       } catch {
         return { ok: false, errors: ["network_error"] };
       }
-      const json = (await response.json().catch(() => ({}))) as Record<string, unknown>;
+      let json: Record<string, unknown>;
+      try { json = await readSeoOpsJson(response, "POST", `${root}/login`); }
+      catch (error) { return { ok: false, errors: [String((error as Error).message || error)] }; }
       if (!response.ok || !json.ok) {
         return {
           ok: false,
@@ -114,12 +118,15 @@ export function createHttpSeoOpsAuthClient(options: {
       let response: Response;
       try {
         response = await fetchImpl(`${root}/session`, {
+          redirect: "manual",
           headers: { Authorization: `Bearer ${token}` },
         });
       } catch {
         return { ok: false, errors: ["network_error"] };
       }
-      const json = (await response.json().catch(() => ({}))) as Record<string, unknown>;
+      let json: Record<string, unknown>;
+      try { json = await readSeoOpsJson(response, "GET", `${root}/session`); }
+      catch (error) { return { ok: false, errors: [String((error as Error).message || error)] }; }
       if (!response.ok || !json.ok) {
         return {
           ok: false,
@@ -143,6 +150,7 @@ export function createHttpSeoOpsAuthClient(options: {
       try {
         response = await fetchImpl(`${root}/logout`, {
           method: "POST",
+          redirect: "manual",
           headers: { Authorization: `Bearer ${token}` },
         });
       } catch {
@@ -150,7 +158,9 @@ export function createHttpSeoOpsAuthClient(options: {
         return { ok: false, errors: ["network_error"] };
       }
       options.tokenStore.setToken(null);
-      const json = (await response.json().catch(() => ({}))) as Record<string, unknown>;
+      let json: Record<string, unknown>;
+      try { json = await readSeoOpsJson(response, "POST", `${root}/logout`); }
+      catch (error) { return { ok: false, errors: [String((error as Error).message || error)] }; }
       return {
         ok: Boolean(json.ok) || response.ok,
         errors: Array.isArray(json.errors) ? (json.errors as string[]) : undefined,

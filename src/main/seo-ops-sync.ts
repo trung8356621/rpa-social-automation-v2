@@ -38,6 +38,7 @@ import {
 } from "../shared/video-demo-policy.js";
 import { validatePayload, type Store } from "./storage.js";
 import { createAdminBackup } from "./admin-backup.js";
+import { readSeoOpsJson } from "../shared/seo-ops-http.js";
 
 export type SeoOpsConfig = {
   baseUrl: string;
@@ -109,11 +110,13 @@ export function createSeoOpsSyncService(options: {
   async function adminApi(pathname: string, init?: RequestInit) {
     const token = tokenStore.getToken();
     if (!token) throw new Error("SEO_OPS: cần đăng nhập trước khi backup");
-    const response = await fetch(`${config().baseUrl}/api/v1/social-automation/rpa-admin${pathname}`, {
+    const url = `${config().baseUrl}/api/v1/social-automation/rpa-admin${pathname}`;
+    const response = await fetch(url, {
       ...init,
+      redirect: "manual",
       headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/json", ...(init?.headers ?? {}) },
     });
-    const body = await response.json() as Record<string, unknown>;
+    const body = await readSeoOpsJson(response, init?.method ?? "GET", url);
     if (!response.ok || body.ok !== true) throw new Error(`SEO_OPS_BACKUP: ${JSON.stringify(body.errors ?? response.status)}`);
     return body;
   }

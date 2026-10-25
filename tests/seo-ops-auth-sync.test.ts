@@ -56,7 +56,7 @@ test("login ignores user_id and stores token only via TokenStore", async () => {
         expires_at: "2026-10-23T00:00:00Z",
         user: { id: 7, email: "owner@example.test", name: "Owner", role: "owner" },
       }),
-      { status: 200 },
+      { status: 200, headers: { "Content-Type": "application/json" } },
     );
   };
   const client = createHttpSeoOpsAuthClient({

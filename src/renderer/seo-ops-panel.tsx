@@ -175,7 +175,7 @@ export function SeoOpsSyncControls({
     const read = () => void invoke<{ backup?: unknown }>({ type: "seoOpsBackupInfo" })
       .then(value => setBackupLabel(value.backup ? "Backed up" : "Backup pending"))
       .catch(() => setBackupLabel("Backup failed"));
-    read(); const timer = setInterval(read, 30_000); return () => clearInterval(timer);
+    read();
   }, [authenticated, invoke]);
 
   async function runSync() {

@@ -1,4 +1,5 @@
 import type { ScriptPublishBody } from "./script-release.js";
+import { readSeoOpsJson } from "./seo-ops-http.js";
 import {
   assertScriptPublishBody,
   matchToRequiresMissingOcr,
@@ -199,15 +200,17 @@ export function createHttpScriptSyncClient(options: {
   async function authed(path: string, init?: RequestInit) {
     const token = options.getToken();
     if (!token) throw new Error("SEO_OPS_SYNC: unauthenticated");
-    const response = await fetchImpl(`${root}${path}`, {
+    const url = `${root}${path}`;
+    const response = await fetchImpl(url, {
       ...init,
+      redirect: "manual",
       headers: {
         Authorization: `Bearer ${token}`,
         "Content-Type": "application/json",
         ...(init?.headers ?? {}),
       },
     });
-    const json = (await response.json().catch(() => ({}))) as Record<string, unknown>;
+    const json = await readSeoOpsJson(response, init?.method ?? "GET", url);
     return { response, json };
   }
 
@@ -243,8 +246,10 @@ export function createHttpScriptSyncClient(options: {
       const token = options.getToken();
       if (!token) throw new Error("SEO_OPS_SYNC: unauthenticated");
       const { response, json } = await (async () => {
-        const res = await fetchImpl(`${root}/scripts/video-demo`, {
+        const url = `${root}/scripts/video-demo`;
+        const res = await fetchImpl(url, {
           method: "POST",
+          redirect: "manual",
           headers: {
             Authorization: `Bearer ${token}`,
             "Content-Type": "application/json",
@@ -257,7 +262,7 @@ export function createHttpScriptSyncClient(options: {
             video_base64: Buffer.from(input.binary).toString("base64"),
           }),
         });
-        const body = (await res.json().catch(() => ({}))) as Record<string, unknown>;
+        const body = await readSeoOpsJson(res, "POST", url);
         return { response: res, json: body };
       })();
       return {
