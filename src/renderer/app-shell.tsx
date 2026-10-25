@@ -35,9 +35,34 @@ export function AppNavigation({ page, collapsed, locked, navigate, toggle }: {
   </div>;
 }
 
-export function ScenariosPage({ state, name, setName, locked, open, create, sessionControl, update, invoke, seoOpsSession, autoSyncEnabled, onSeoOpsSession, reconnectSeoOps, onState }: {
+function ScenarioDemo({ flowId, state, invoke }: { flowId: string; state?: State; invoke?: <T>(command: Command) => Promise<T> }) {
+  const demo = state?.scenarioDemos?.[flowId];
+  const [thumbnail, setThumbnail] = useState("");
+  const [video, setVideo] = useState("");
+  useEffect(() => {
+    let active = true; setThumbnail(""); setVideo("");
+    if (demo && invoke) void invoke<string>({ type: "scenarioDemoMedia", flowId, media: "thumbnail" })
+      .then(value => { if (active) setThumbnail(value); }).catch(() => undefined);
+    return () => { active = false; };
+  }, [flowId, demo?.runId, invoke]);
+  if (!demo) return <div className="scenario-demo-placeholder" aria-label="Chưa có Script Demo">No demo</div>;
+  return <>
+    <button className="scenario-demo-thumb" disabled={!thumbnail || !invoke} title="Xem Script Demo" onClick={() => {
+      if (!invoke) return;
+      void invoke<string>({ type: "scenarioDemoMedia", flowId, media: "video" }).then(setVideo).catch(() => undefined);
+    }}>{thumbnail ? <img src={thumbnail} alt="Script Demo thumbnail" /> : <span>Loading…</span>}</button>
+    <span className={`demo-status ${demo.status}`}>{demo.status === "ready" ? "Ready" : "Outdated"}</span>
+    {video && <UiPopover variant="modal" label="Script Demo" className="scenario-demo-preview" close={() => setVideo("")}>
+      <div className="popover-heading"><b>Script Demo</b><button onClick={() => setVideo("")} aria-label="Đóng video">×</button></div>
+      <video controls autoPlay={false} preload="metadata" src={video} />
+    </UiPopover>}
+  </>;
+}
+
+export function ScenariosPage({ state, name, setName, locked, open, create, quickAcceptance, sessionControl, update, invoke, seoOpsSession, autoSyncEnabled, onSeoOpsSession, reconnectSeoOps, onState }: {
   state?: State; name: string; setName: (name: string) => void; locked: boolean;
   open: (id: string, focus?: { stepId: string; version: number }) => void; create: () => void;
+  quickAcceptance: (id: string) => void;
   sessionControl?: React.ReactNode; update: (command: Command) => Promise<void>;
   invoke?: <T>(command: Command) => Promise<T>;
   seoOpsSession?: SeoOpsSessionState;
@@ -182,6 +207,7 @@ export function ScenariosPage({ state, name, setName, locked, open, create, sess
               return <div className="scenario-item" key={flow.id}>
               <button className="scenario-title" disabled={disabled} onClick={() => open(flow.id)}>{flow.name}</button>
               <small>{flow.steps.length} Step</small>
+              <ScenarioDemo flowId={flow.id} state={state} invoke={invoke} />
               {invalidPinned.length > 0 && (
                 <small className="hint" title={`${invalidPinned.length} pinned version lỗi — mở Script Health Check`}>
                   {invalidPinned.length} Step cần sửa
@@ -192,6 +218,7 @@ export function ScenariosPage({ state, name, setName, locked, open, create, sess
                 {syncBadge(syncRows, flow.id)}
               </small>
               <button disabled={disabled} onClick={() => open(flow.id)}>Mở Creator</button>
+              <button className="scenario-acceptance" disabled={disabled} onClick={() => quickAcceptance(flow.id)}>Nghiệm thu</button>
               <details><summary aria-label={`Menu Scenario ${flow.name}`}>...</summary><div className="scenario-menu">
                 <button disabled={disabled} onClick={() => show("move", flow.id, organization.membership[flow.id] ?? "")}>Move to Group</button>
                 <button disabled={disabled} onClick={() => show("scenario-delete", flow.id)}>Delete Scenario</button>

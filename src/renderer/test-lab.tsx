@@ -26,7 +26,7 @@ export function ExecutionErrorView({ error, stepName, onFix }: {
 function initial(state: State): TestCaseConfig {
   const flow = state.flows[0], session = state.browserSessions?.find(s => s.id === state.activeBrowserSessionId);
   return { name: "", flowId: flow?.id ?? "", sessionId: session?.id ?? "", startUrl: session?.lastUrl ?? "",
-    values: structuredClone(flow?.defaultPattern?.values ?? {}), recording: true };
+    values: structuredClone(flow?.defaultPattern?.values ?? {}), recording: true, stepVersions: structuredClone(flow?.steps ?? []) };
 }
 export function TestCaseEditor({ tabId, item, state, locked, report, saved, saving, run, fix, back }: {
   tabId: string; item?: TestCase; state: State; locked: boolean;
@@ -37,7 +37,8 @@ export function TestCaseEditor({ tabId, item, state, locked, report, saved, savi
   back: () => void;
 }) {
   const [config, setConfig] = useState<TestCaseConfig>(() => item ? structuredClone({ name: item.name,
-    flowId: item.flowId, sessionId: item.sessionId, startUrl: item.startUrl, recording: true, values: item.values }) : initial(state));
+    flowId: item.flowId, sessionId: item.sessionId, startUrl: item.startUrl, recording: true, values: item.values,
+    stepVersions: item.stepVersions ?? state.flows.find(flow => flow.id === item.flowId)?.steps ?? [] }) : initial(state));
   const [baseline, setBaseline] = useState(config);
   const [error, setError] = useState("");
   const [working, setWorking] = useState(false);
@@ -61,7 +62,7 @@ export function TestCaseEditor({ tabId, item, state, locked, report, saved, savi
       const previousIds = new Set(state.testLab?.cases.map(c => c.id));
       const result = next.testLab!.cases.find(c => item ? c.id === item.id : !previousIds.has(c.id))!;
       if (!result) throw new Error("Không tìm thấy Case vừa lưu.");
-      const nextConfig = { name: result.name, flowId: result.flowId, sessionId: result.sessionId, startUrl: result.startUrl, recording: true, values: result.values };
+      const nextConfig = { name: result.name, flowId: result.flowId, sessionId: result.sessionId, startUrl: result.startUrl, recording: true, values: result.values, stepVersions: result.stepVersions };
       setConfig(nextConfig);
       setBaseline(nextConfig);
       saved(tabId, result, next);
@@ -83,9 +84,9 @@ export function TestCaseEditor({ tabId, item, state, locked, report, saved, savi
     <div className="case-configure">
       <div className="case-form">
         <label>Name<input disabled={disabled} maxLength={120} value={config.name} onChange={e => setConfig({ ...config, name: e.target.value })} /></label>
-        <label>Scenario<select disabled={disabled} value={config.flowId} onChange={e => {
+        <label>Scenario<select disabled={disabled || !!item} value={config.flowId} onChange={e => {
           const chosen = state.flows.find(f => f.id === e.target.value);
-          setConfig({ ...config, flowId: e.target.value, values: structuredClone(chosen?.defaultPattern?.values ?? {}) });
+          setConfig({ ...config, flowId: e.target.value, values: structuredClone(chosen?.defaultPattern?.values ?? {}), stepVersions: structuredClone(chosen?.steps ?? []) });
         }}><option value="" disabled>Chọn Scenario</option>{state.flows.map(f => <option key={f.id} value={f.id}>{f.name}</option>)}</select></label>
         <label>Browser Session<select disabled={disabled} value={config.sessionId} onChange={e => setConfig({ ...config, sessionId: e.target.value })}>
           <option value="" disabled>Chọn Session</option>{state.browserSessions?.map(s => <option key={s.id} value={s.id}>{s.name}</option>)}</select></label>
@@ -95,7 +96,7 @@ export function TestCaseEditor({ tabId, item, state, locked, report, saved, savi
           <h2>Steps sẽ chạy</h2>
           <p className="hint">Test Lab dùng Base version đã ghim trên Scenario. Xem version trong Creator Editor không đổi version chạy — cần bấm “Ghim version”.</p>
           <ol className="case-pinned-steps">
-            {flow.steps.map(ref => {
+            {(config.stepVersions ?? flow.steps).map(ref => {
               const step = state.steps.find(s => s.id === ref.id && s.version === ref.version);
               const invalid = (state.invalidSteps ?? []).find(r => r.stepId === ref.id && r.version === ref.version);
               return <li key={`${ref.id}@${ref.version}`}>
@@ -106,7 +107,7 @@ export function TestCaseEditor({ tabId, item, state, locked, report, saved, savi
               </li>;
             })}
           </ol>
-          {!flow.steps.length && <p className="hint">Scenario chưa có Step đã ghim.</p>}
+          {!(config.stepVersions ?? flow.steps).length && <p className="hint">Scenario chưa có Step đã ghim.</p>}
         </>}
         <h2>Variables</h2><p className="hint">Lần đầu lấy từ Default Pattern. Các giá trị bên dưới chỉ lưu vào Case này.</p>
         {(flow?.variables ?? []).map(v => <label key={v.id}>{v.key} <small>({v.type})</small>

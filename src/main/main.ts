@@ -60,7 +60,7 @@ import {
   assertScriptPublishBody,
   buildScriptCatalogSnapshot,
 } from "../shared/script-release.js";
-import { attachVideoDemo, toScriptVideoDemo, assertNotScreenshot } from "../shared/video-demo.js";
+import { attachVideoDemo, toScriptVideoDemo, assertNotScreenshot, type VideoDemoAttachment } from "../shared/video-demo.js";
 import {
   canUseAsScriptDemo,
   assertDemoBelongsToScript,
@@ -416,9 +416,20 @@ async function boot() {
   let uiPlayAllViewportRestore: (() => void) | undefined;
   let armedTest:
     { stepId: string; version: number; overrideId?: string } | undefined;
+  const scenarioDemos = () => Object.fromEntries(store.flows().flatMap(flow => {
+    const raw = store.setting(`videoDemo:${flow.id}`);
+    if (!raw) return [];
+    try {
+      const demo = JSON.parse(raw) as VideoDemoAttachment;
+      const samePins = JSON.stringify(demo.stepVersions ?? []) === JSON.stringify(flow.steps);
+      return [[flow.id, { caseId: demo.caseId, runId: demo.testRunId, selectedAt: demo.selectedAt,
+        status: samePins ? "ready" as const : "outdated" as const }]];
+    } catch { return []; }
+  }));
   const state = (): State => ({
     runningStudio, testLab: testLab.read(), runningTestCaseId,
     scenarioOrganization: scenarioGroups.read(),
+    scenarioDemos: scenarioDemos(),
     browserSessions: browserSessions.list(),
     activeBrowserSessionId: activeSessionId,
     sessionError,
@@ -674,6 +685,14 @@ async function boot() {
         catch (error) { outcome.evidenceError = `Không lưu được metadata ảnh: ${String(error)}`; }
         // Commit the new reference before pruning; never overwrite the previous image while writing.
         testLab.result(id, outcome);
+        const pinsCurrent = JSON.stringify(item.stepVersions ?? savedFlow?.steps ?? []) === JSON.stringify(savedFlow?.steps ?? []);
+        if (outcome.status === "PASS" && outcome.recordingPath && pinsCurrent && !store.setting(`videoDemo:${item.flowId}`)) {
+          try { await promoteDemo(id, runId, true); }
+          catch (error) {
+            outcome.evidenceError = [outcome.evidenceError, `Không tự gắn được Script Demo: ${String(error)}`].filter(Boolean).join(" ");
+            testLab.result(id, outcome);
+          }
+        }
         try { await testEvidence.prune(id, runId); }
         catch (error) { outcome.evidenceError = [outcome.evidenceError, `Chưa dọn được ảnh cũ: ${String(error)}`].filter(Boolean).join(" "); testLab.result(id, outcome); }
       } finally {
@@ -687,6 +706,38 @@ async function boot() {
       }
     }
     return state();
+  }
+
+  async function promoteDemo(caseId: string, runId: string, reviewed: boolean, requestedVersion?: string) {
+    const item = testLab.get(caseId), result = item.lastResult;
+    if (!result || result.runId !== runId) throw new Error("VIDEO_DEMO: current Test Run must have a browser recording.");
+    const eligibility = canUseAsScriptDemo(result);
+    if (!eligibility.ok) throw new Error(eligibility.reason);
+    assertNotScreenshot(result.recordingPath!);
+    const flow = store.flows().find((candidate) => candidate.id === item.flowId);
+    if (!flow) throw new Error("VIDEO_DEMO: Scenario/Script not found");
+    if (JSON.stringify(item.stepVersions ?? flow.steps) !== JSON.stringify(flow.steps))
+      throw new Error("VIDEO_DEMO: Test Case pins are outdated — run a Case with current Scenario pins");
+    const steps = flow.steps.map((ref) => store.step(ref.id, ref.version));
+    const scriptVersion = requestedVersion || store.setting(`seoOpsVersion:${flow.id}`) || "1";
+    const { assets, complete, missing } = await collectScriptAssets(flow, steps, assetDir);
+    if (!complete) throw new Error(`VIDEO_DEMO: OCR assets missing — ${missing.join(", ")}`);
+    const executionDigest = buildScriptCatalogSnapshot({ flow, steps, version: scriptVersion, assets, videoDemo: undefined }).execution_digest;
+    const recordingAbs = path.join(dataPath, "test-runs", caseId, runId, "recording.webm");
+    const thumbAbs = path.join(dataPath, "test-runs", caseId, runId, "recording-thumb.jpg");
+    let videoBuf: Buffer, thumbBuf: Buffer;
+    try { videoBuf = await readFile(recordingAbs); } catch { throw new Error("VIDEO_DEMO: video file missing or unreadable — re-run Test Case"); }
+    try { thumbBuf = await readFile(thumbAbs); } catch { throw new Error("VIDEO_DEMO: thumbnail missing — re-run Test Case to capture last browser frame"); }
+    if (!videoBuf.length || !thumbBuf.length) throw new Error("VIDEO_DEMO: video or thumbnail empty");
+    const promoted = await promoteScriptDemoFiles({ testRunsDir: path.join(dataPath, "test-runs"), flowId: flow.id, runId,
+      videoSource: recordingAbs, thumbnailSource: thumbAbs });
+    const attachment = attachVideoDemo({ scriptId: item.flowId, scriptVersion, caseId, testRunId: runId, executionDigest,
+      sha256: createHash("sha256").update(videoBuf).digest("hex"), artifactRef: promoted.artifactRef,
+      thumbnailRef: promoted.thumbnailRef, thumbnailSha256: createHash("sha256").update(thumbBuf).digest("hex"),
+      reviewed, stepVersions: flow.steps, selectedAt: new Date().toISOString() });
+    store.setSetting(`videoDemo:${item.flowId}`, JSON.stringify(attachment));
+    store.setSetting(`videoDemo:${item.flowId}:${scriptVersion}`, JSON.stringify(attachment));
+    return attachment;
   }
 
   ipcMain.handle("creator:command", async (event, command: Command) => {
@@ -808,66 +859,23 @@ async function boot() {
         if (!result || result.runId !== command.runId) throw new Error("Screenshot không thuộc Last Result hiện tại.");
         return testEvidence.read(command.caseId, result);
       }
+      case "scenarioDemoMedia": {
+        const flow = store.flows().find(item => item.id === command.flowId);
+        if (!flow) throw new Error("Scenario không còn tồn tại.");
+        const raw = store.setting(`videoDemo:${flow.id}`);
+        if (!raw) throw new Error("Scenario chưa có Script Demo.");
+        const demo = JSON.parse(raw) as VideoDemoAttachment;
+        assertDemoBelongsToScript(demo, flow.id);
+        const ref = command.media === "thumbnail" ? demo.thumbnailRef : demo.artifactRef;
+        if (!ref) throw new Error("Script Demo chưa có media yêu cầu.");
+        const root = path.resolve(dataPath, "test-runs"), file = path.resolve(root, ref);
+        if (!file.startsWith(`${root}${path.sep}`)) throw new Error("VIDEO_DEMO: invalid media reference");
+        const mime = command.media === "thumbnail" ? "image/jpeg" : "video/webm";
+        return `data:${mime};base64,${(await readFile(file)).toString("base64")}`;
+      }
       case "attachScriptVideoDemo": {
         isIdle();
-        const item = testLab.get(command.caseId);
-        const result = item.lastResult;
-        if (!result || result.runId !== command.runId) {
-          throw new Error("VIDEO_DEMO: current Test Run must have a browser recording.");
-        }
-        const eligibility = canUseAsScriptDemo(result);
-        if (!eligibility.ok) throw new Error(eligibility.reason);
-        assertNotScreenshot(result.recordingPath!);
-        const flow = store.flows().find((f) => f.id === item.flowId);
-        if (!flow) throw new Error("VIDEO_DEMO: Scenario/Script not found");
-        const steps = flow.steps.map((ref) => store.step(ref.id, ref.version));
-        const scriptVersion = command.scriptVersion || store.setting(`seoOpsVersion:${flow.id}`) || "1";
-        const { assets, complete, missing } = await collectScriptAssets(flow, steps, assetDir);
-        if (!complete) throw new Error(`VIDEO_DEMO: OCR assets missing — ${missing.join(", ")}`);
-        const snap = buildScriptCatalogSnapshot({
-          flow,
-          steps,
-          version: scriptVersion,
-          assets,
-          videoDemo: undefined,
-        });
-        // Probe digest without demo requirement side-effects: recompute execution from assembled steps.
-        const executionDigest = snap.execution_digest;
-        const recordingAbs = path.join(dataPath, "test-runs", command.caseId, command.runId, "recording.webm");
-        const thumbAbs = path.join(dataPath, "test-runs", command.caseId, command.runId, "recording-thumb.jpg");
-        let videoBuf: Buffer;
-        try {
-          videoBuf = await readFile(recordingAbs);
-        } catch {
-          throw new Error("VIDEO_DEMO: video file missing or unreadable — re-run Test Case");
-        }
-        if (!videoBuf.length) throw new Error("VIDEO_DEMO: video file empty");
-        let thumbBuf: Buffer;
-        try {
-          thumbBuf = await readFile(thumbAbs);
-        } catch {
-          throw new Error("VIDEO_DEMO: thumbnail missing — re-run Test Case to capture last browser frame");
-        }
-        if (!thumbBuf.length) throw new Error("VIDEO_DEMO: thumbnail empty — refusing placeholder");
-        const promoted = await promoteScriptDemoFiles({ testRunsDir: path.join(dataPath, "test-runs"),
-          flowId: flow.id, runId: command.runId, videoSource: recordingAbs, thumbnailSource: thumbAbs });
-        const attachment = attachVideoDemo({
-          scriptId: item.flowId,
-          scriptVersion,
-          caseId: command.caseId,
-          testRunId: command.runId,
-          executionDigest,
-          sha256: createHash("sha256").update(videoBuf).digest("hex"),
-          artifactRef: promoted.artifactRef,
-          thumbnailRef: promoted.thumbnailRef,
-          thumbnailSha256: createHash("sha256").update(thumbBuf).digest("hex"),
-          reviewed: command.reviewed === true,
-          stepVersions: flow.steps,
-          selectedAt: new Date().toISOString(),
-        });
-        store.setSetting(`videoDemo:${item.flowId}`, JSON.stringify(attachment));
-        store.setSetting(`videoDemo:${item.flowId}:${scriptVersion}`, JSON.stringify(attachment));
-        return attachment;
+        return promoteDemo(command.caseId, command.runId, command.reviewed === true, command.scriptVersion);
       }
       case "exportFullBackup": {
         isIdle();
@@ -1029,6 +1037,11 @@ async function boot() {
         return runTestCase(command.id);
       case "saveTestCase":
         isIdle(); testLab.save(command.id, command.config); return state();
+      case "ensureScenarioTestCase": {
+        isIdle();
+        const item = testLab.ensureForScenario(command.flowId, command.defaultAcceptance === true);
+        return { item, state: state() };
+      }
       case "deleteTestCase":
         isIdle();
         if (!command.confirmed) throw new Error("Cần xác nhận xóa Test Case.");

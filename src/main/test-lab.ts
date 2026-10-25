@@ -1,5 +1,5 @@
 import { randomUUID } from "node:crypto";
-import type { CaseResult, TestCaseConfig, TestLabState } from "../shared/contracts.js";
+import type { CaseResult, Flow, TestCase, TestCaseConfig, TestLabState } from "../shared/contracts.js";
 import { validateVariables } from "../shared/flow-model.js";
 import type { Store } from "./storage.js";
 import type { BrowserSessions } from "./browser-sessions.js";
@@ -50,17 +50,51 @@ export class TestLab {
     if (!["http:", "https:"].includes(url.protocol)) throw new Error("Start URL chỉ hỗ trợ HTTP/HTTPS.");
     if (!config.values || typeof config.values !== "object" || Array.isArray(config.values)) throw new Error("Values không hợp lệ.");
     if (checkValues) validateVariables(flow.variables ?? [], config.values);
-    return flow;
+    const pins = config.stepVersions !== undefined ? config.stepVersions : flow.steps;
+    for (const ref of pins) {
+      if (!flow.steps.some(step => step.id === ref.id)) throw new Error("Test Case chứa Step không thuộc Scenario.");
+      this.store.step(ref.id, ref.version);
+    }
+    return { ...flow, steps: structuredClone(pins) } as Flow;
   }
   save(id: string | undefined, config: TestCaseConfig) {
-    this.validate(config);
     const value = this.read(), old = id ? this.get(id) : undefined;
+    const flow = this.store.flows().find(f => f.id === config.flowId);
+    const stepVersions = config.stepVersions ?? (old?.flowId === config.flowId ? old.stepVersions : undefined) ?? flow?.steps ?? [];
+    const normalized = { ...config, stepVersions };
+    this.validate(normalized);
     const item = { id: old?.id ?? randomUUID(), groupId: old?.groupId, lastResult: old?.lastResult,
+      isDefaultAcceptance: old?.isDefaultAcceptance,
       name: this.name(config.name), flowId: config.flowId, sessionId: config.sessionId,
-      startUrl: new URL(config.startUrl).href, recording: config.recording === true, values: structuredClone(config.values) };
+      startUrl: new URL(config.startUrl).href, recording: config.recording === true, values: structuredClone(config.values),
+      stepVersions: structuredClone(stepVersions) };
     value.cases = old ? value.cases.map(c => c.id === id ? item : c) : [...value.cases, item];
     this.write(value);
     return item;
+  }
+  ensureForScenario(flowId: string, defaultAcceptance = false): TestCase {
+    const flow = this.store.flows().find(item => item.id === flowId);
+    if (!flow) throw new Error("Scenario không còn tồn tại.");
+    const value = this.read();
+    if (defaultAcceptance) {
+      const existing = value.cases.find(item => item.flowId === flowId && item.isDefaultAcceptance);
+      if (existing) {
+        const refreshed = { ...existing, stepVersions: structuredClone(flow.steps) };
+        value.cases = value.cases.map(item => item.id === existing.id ? refreshed : item);
+        this.write(value);
+        return refreshed;
+      }
+    }
+    const session = this.sessions.list().find(item => item.id === this.sessions.activeId()) ?? this.sessions.list()[0];
+    if (!session) throw new Error("Cần tạo Browser Session trước khi tạo Test Case.");
+    const startUrl = session.lastUrl && /^https?:/i.test(session.lastUrl) ? session.lastUrl : "https://www.facebook.com/";
+    const item: TestCase = {
+      id: randomUUID(), name: defaultAcceptance ? `Nghiệm thu · ${flow.name}` : `Test · ${flow.name}`,
+      flowId, sessionId: session.id, startUrl, recording: true,
+      values: structuredClone(flow.defaultPattern?.values ?? {}), stepVersions: structuredClone(flow.steps),
+      ...(defaultAcceptance ? { isDefaultAcceptance: true } : {}),
+    };
+    value.cases.push(item); this.write(value); return item;
   }
   delete(id: string) { this.get(id); const value = this.read(); value.cases = value.cases.filter(c => c.id !== id); this.write(value); }
   move(id: string, groupId?: string) {

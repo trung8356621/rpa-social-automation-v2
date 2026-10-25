@@ -76,6 +76,7 @@ function Creator() {
   const [tabs, setTabs] = useState<WorkspaceTab[]>([]);
   const tabsRef = useRef<WorkspaceTab[]>([]);
   const [activeTabId, setActiveTabId] = useState<string>();
+  const [creatorSidebarTab, setCreatorSidebarTab] = useState<"steps" | "tests">("steps");
   const tabDrafts = useRef(new Map<string, TabDraft>());
   const workspaceRestoring = useRef(false);
   const workspaceLock = useRef(false);
@@ -801,10 +802,10 @@ function Creator() {
       finally { workspaceLock.current = false; }
     });
   }
-  function openCase(id?: string) {
+  function openCase(id?: string, supplied?: TestCase) {
     if (busy || shot || ocrLoading || workspaceLock.current || pendingNavigationRef.current || !state) return;
     const existing = id ? tabsRef.current.find(t => t.kind === "test-case" && t.caseId === id) : undefined;
-    const item = id ? state.testLab?.cases.find(c => c.id === id) : undefined;
+    const item = supplied ?? (id ? state.testLab?.cases.find(c => c.id === id) : undefined);
     if (id && !item) return;
     const tab: WorkspaceTab = existing ?? { id: crypto.randomUUID(), kind: "test-case", caseId: id,
       flowId: item?.flowId ?? state.flows[0]?.id ?? "", sessionId: item?.sessionId };
@@ -830,6 +831,7 @@ function Creator() {
     if (busy || shot || ocrLoading || workspaceLock.current || pendingNavigationRef.current || !state || !canRunCase(id)) return;
     const item = state.testLab?.cases.find(item => item.id === id);
     if (!item) return;
+    if (!window.confirm(`Chạy “${item.name}” có thể thực hiện hành động thật trên mạng xã hội. Tiếp tục?`)) return;
     const tab: WorkspaceTab = tabsRef.current.find(tab => tab.kind === "test-case" && tab.caseId === id)
       ?? { id: crypto.randomUUID(), kind: "test-case", caseId: id, flowId: item.flowId, sessionId: item.sessionId };
     workspaceLock.current = true;
@@ -841,6 +843,14 @@ function Creator() {
       } catch (error) { setState(await invoke<State>({ type: "state" })); throw error; }
       finally { workspaceLock.current = false; }
     });
+  }
+  function ensureScenarioCase(flowId: string, defaultAcceptance = false) {
+    if (busy || workspaceLock.current) return;
+    setBusy(true);
+    void invoke<{ item: TestCase; state: State }>({ type: "ensureScenarioTestCase", flowId, defaultAcceptance })
+      .then(result => { setState(result.state); openCase(result.item.id, result.item); })
+      .catch(error => setPageError(String(error)))
+      .finally(() => setBusy(false));
   }
   async function updateWorkspace(command: Command) {
     if (command.type === "deleteScenario") {
@@ -1214,6 +1224,7 @@ function Creator() {
       {shell && appPage === "studio-run" && <div className="studio-run-status" role="status">Studio execution · local Browser Session · shared V2 Runtime. Wait for the structured result.</div>}
       {shell && appPage === "scenarios" && <ScenariosPage state={state} name={flowName} setName={setFlowName}
         locked={navigationLocked || ocrLoading} open={openScenario} create={createScenario}
+        quickAcceptance={(flowId) => ensureScenarioCase(flowId, true)}
         update={updateWorkspace}
         invoke={invoke}
         seoOpsSession={seoOpsSession}
@@ -1377,16 +1388,23 @@ function Creator() {
                 >
                   Copy URL
                 </button>
-                <button
-                  disabled={locked}
-                  onClick={() =>
-                    void task(async () =>
-                      setState(await invoke<State>({ type: "fixture" })),
-                    )
-                  }
-                >
-                  Trang kiểm chuẩn
-                </button>
+                <details className="scenario-toolbar-more">
+                  <summary aria-label="Công cụ nâng cao" title="Công cụ nâng cao">⋯</summary>
+                  <div className="scenario-menu">
+                    <button
+                      disabled={locked}
+                      onClick={(e) => {
+                        const d = e.currentTarget.closest("details") as HTMLDetailsElement | null;
+                        if (d) d.open = false;
+                        void task(async () =>
+                          setState(await invoke<State>({ type: "fixture" })),
+                        );
+                      }}
+                    >
+                      Trang kiểm chuẩn
+                    </button>
+                  </div>
+                </details>
                 <label>
                   Zoom
                   <select
@@ -1412,7 +1430,29 @@ function Creator() {
               </>
             )}
           </nav>
-          <aside className="creator-steps" aria-label="Steps">
+          <aside className="creator-steps" aria-label="Scenario sidebar">
+            {!activeCaseTab && <div className="creator-sidebar-tabs" role="tablist">
+              <button role="tab" aria-selected={creatorSidebarTab === "steps"} onClick={() => setCreatorSidebarTab("steps")}>Steps</button>
+              <button role="tab" aria-selected={creatorSidebarTab === "tests"} onClick={() => setCreatorSidebarTab("tests")}>Tests</button>
+            </div>}
+            {!activeCaseTab && creatorSidebarTab === "tests" && state?.flow && <div className="scenario-tests-panel">
+              <div className="scenario-tests-heading"><b>Test Cases</b><button className="icon-button" title="Tạo Test Case" aria-label="Tạo Test Case" disabled={locked}
+                onClick={() => ensureScenarioCase(state.flow!.id)}>+</button></div>
+              {(state.testLab?.cases ?? []).filter(item => item.flowId === state.flow!.id).map(item => {
+                const outdated = JSON.stringify(item.stepVersions ?? state.flow!.steps) !== JSON.stringify(state.flow!.steps);
+                return <div className="scenario-test-item" key={item.id}>
+                  <button className="scenario-test-name" disabled={locked} onClick={() => openCase(item.id)}>{item.name}</button>
+                  <span className="case-run-status" data-status={item.lastResult?.status ?? "none"}>{item.lastResult?.status ?? "Chưa chạy"}</span>
+                  <small>{item.lastResult?.finishedAt ? new Date(item.lastResult.finishedAt).toLocaleString() : "Chưa thực thi"}</small>
+                  <small>{item.lastResult?.recordingPath ? "Có video" : "Chưa có video"}</small>
+                  {outdated && <span className="demo-status outdated">Outdated</span>}
+                  <div><button disabled={locked || !canRunCase(item.id)} onClick={() => runCase(item.id)}>Run</button>
+                    <button disabled={locked} onClick={() => openCase(item.id)}>Open</button></div>
+                </div>;
+              })}
+              {!(state.testLab?.cases ?? []).some(item => item.flowId === state.flow!.id) && <p className="hint">Chưa có Test Case cho Scenario này.</p>}
+            </div>}
+            {(!state || activeCaseTab || creatorSidebarTab === "steps") && <>
             {activeCaseTab && <><b>Test Case · bản đã lưu</b>
               <p>{state?.runningTestCaseId ? "Đang chạy, vui lòng đợi." : "Đã kết thúc. Kiểm tra website hoặc mở Cấu hình Case để chạy lại."}</p>
               {!state?.runningTestCaseId && state?.testLab?.cases.find(c => c.id === activeCaseTab.caseId)?.lastResult &&
@@ -1482,6 +1522,7 @@ function Creator() {
                 Chọn Action trong Step Editor, crop target rồi Save step.
               </p>
             )}
+            </>}
           </aside>
           {shot && (
             <div

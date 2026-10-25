@@ -35,8 +35,11 @@ export type CaseResult = {
   recordingPath?: string; recordingError?: string;
   error?: ExecutionError;
 };
-export type TestCaseConfig = { recording?: boolean; name: string; flowId: string; sessionId: string; startUrl: string; values: VariableValues };
-export type TestCase = TestCaseConfig & { id: string; groupId?: string; lastResult?: CaseResult };
+export type StepVersionRef = { id: string; version: number };
+export type TestCaseConfig = { recording?: boolean; name: string; flowId: string; sessionId: string; startUrl: string; values: VariableValues;
+  /** Immutable Scenario pins captured when the Case is created or explicitly moved to another Scenario. */
+  stepVersions?: StepVersionRef[] };
+export type TestCase = TestCaseConfig & { id: string; groupId?: string; lastResult?: CaseResult; isDefaultAcceptance?: boolean };
 export type TestLabState = {
   groups: { id: string; name: string; collapsed: boolean }[];
   cases: TestCase[]; ungroupedCollapsed: boolean;
@@ -279,6 +282,7 @@ export type State = {
   testLab?: TestLabState;
   runningTestCaseId?: string;
   scenarioOrganization?: ScenarioOrganization;
+  scenarioDemos?: Record<string, { caseId: string; runId: string; selectedAt?: string; status: "ready" | "outdated" }>;
   browserSessions?: BrowserSession[];
   activeBrowserSessionId?: string;
   sessionError?: string;
@@ -302,6 +306,7 @@ export type Command =
   | { type: "recordingEvent"; token: string; event: "ready" | "chunk" | "done" | "error"; data?: string }
   | { type: "testCaseVideo"; caseId: string; runId: string }
   | { type: "testCaseScreenshot"; caseId: string; runId: string }
+  | { type: "scenarioDemoMedia"; flowId: string; media: "thumbnail" | "video" }
   | {
       type: "attachScriptVideoDemo";
       caseId: string;
@@ -331,6 +336,7 @@ export type Command =
   | { type: "testGroup"; operation: "create" | "update" | "delete"; id?: string; name?: string; collapsed?: boolean; confirmed?: boolean }
   | { type: "collapseUngroupedCases"; collapsed: boolean }
   | { type: "saveTestCase"; id?: string; config: TestCaseConfig }
+  | { type: "ensureScenarioTestCase"; flowId: string; defaultAcceptance?: boolean }
   | { type: "deleteTestCase"; id: string; confirmed: boolean }
   | { type: "moveTestCase"; id: string; groupId?: string }
   | { type: "runTestCase"; id: string }
