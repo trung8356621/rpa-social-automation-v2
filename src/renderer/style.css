@@ -1349,6 +1349,13 @@ body[data-panel="shell"] .app-shell > header .workspace-tabs { position: sticky;
 body[data-panel="shell"] .app-shell > header > .environment { flex-shrink: 0; }
 .scenario-toolbar { display: flex; align-items: center; flex-wrap: wrap; gap: 12px; margin-bottom: 22px; }
 .scenario-toolbar .session-selector { margin-left: auto; }
+.backup-result { margin: -10px 0 22px; padding: 14px 16px; border: 1px solid var(--line); border-radius: 10px; background: var(--panel); }
+.backup-result.incomplete, .backup-result.failed { border-color: #d76666; background: rgba(215, 102, 102, .08); }
+.backup-result.verified { border-color: #53b88a; background: rgba(83, 184, 138, .08); }
+.backup-result p { margin: 7px 0 0; }
+.backup-result ul { margin: 10px 0 0; padding-left: 20px; }
+.backup-result li + li { margin-top: 8px; }
+.backup-result details code { display: block; margin-top: 5px; overflow-wrap: anywhere; }
 .scenario-groups { display: flex; flex-direction: column; gap: 14px; }
 .scenario-folder { border: 1px solid #32475f; border-radius: 8px; background: #162639; }
 .scenario-folder-heading { display: flex; align-items: center; justify-content: space-between; padding: 4px 10px; background: #1c3045; border-radius: 8px; }

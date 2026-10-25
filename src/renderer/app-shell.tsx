@@ -44,12 +44,15 @@ export function ScenariosPage({ state, name, setName, locked, open, create, sess
   autoSyncEnabled?: boolean;
   onState?: (state: State) => void;
 }) {
+  type BackupResult = { status: "working" | "verified" | "incomplete" | "cancelled" | "failed";
+    message?: string; counts?: { scenarios: number; stepVersions: number; assets: number; missingFiles: number };
+    missing?: Array<{ logicalReference: string; originalPath?: string; scenarioId?: string; variableKey?: string }> };
   const [creating, setCreating] = useState(false);
   const [dialog, setDialog] = useState<{ kind: "create" | "rename" | "delete" | "move" | "scenario-delete"; id?: string }>();
   const [value, setValue] = useState("");
   const [working, setWorking] = useState(false);
   const [error, setError] = useState("");
-  const [backupMessage, setBackupMessage] = useState("");
+  const [backupResult, setBackupResult] = useState<BackupResult>();
   const [syncRows, setSyncRows] = useState<ScriptSyncRow[]>([]);
   const organization: ScenarioOrganization = state?.scenarioOrganization ?? { groups: [], membership: {}, ungroupedCollapsed: false };
   const disabled = locked || working;
@@ -86,24 +89,13 @@ export function ScenariosPage({ state, name, setName, locked, open, create, sess
     <div className="scenario-toolbar">
       <button disabled={disabled} onClick={() => show("create")}>+ Group</button>
       <button className="primary" disabled={disabled} onClick={() => setCreating(v => !v)}>+ Scenario</button>
-      <button disabled={disabled || !state?.flow} onClick={() => {
-        const version = window.prompt("Script version (semver)", "1.0.0");
-        if (!version || !state?.flow) return;
-        void apply({
-          type: "exportScriptRelease",
-          flowId: state.flow.id,
-          version,
-          includeVideoDemo: true,
-        });
-      }}>Export Script JSON</button>
-      <button disabled={disabled || !invoke} onClick={() => {
-        if (!invoke) return; setWorking(true); setBackupMessage("Đang tạo và kiểm tra backup…");
-        void invoke<{ cancelled: boolean; counts?: { scenarios: number; stepVersions: number; assets: number } }>({ type: "exportFullBackup" })
-          .then(result => setBackupMessage(result.cancelled ? "Đã hủy export." : `Backup verified: ${result.counts?.scenarios ?? 0} Scenario, ${result.counts?.stepVersions ?? 0} Step versions, ${result.counts?.assets ?? 0} assets.`))
-          .catch(e => setBackupMessage(`Backup incomplete/failed: ${String((e as Error).message || e)}`))
+      <button className="primary" disabled={disabled || !invoke} onClick={() => {
+        if (!invoke) return; setWorking(true); setBackupResult({ status: "working", message: "Đang đóng gói và xác minh Full Backup…" });
+        void invoke<BackupResult>({ type: "exportFullBackup" })
+          .then(setBackupResult)
+          .catch(() => setBackupResult({ status: "failed", message: "Không thể tạo Full Backup. Xem application log để biết chi tiết." }))
           .finally(() => setWorking(false));
       }}>Export Full Backup (.zip)</button>
-      {backupMessage && <small role={backupMessage.startsWith("Backup verified") ? "status" : "alert"}>{backupMessage}</small>}
       {sessionControl}
       {invoke && (
         <SeoOpsSyncControls
@@ -115,6 +107,20 @@ export function ScenariosPage({ state, name, setName, locked, open, create, sess
         />
       )}
     </div>
+    {backupResult && <section className={`backup-result ${backupResult.status}`} role={backupResult.status === "incomplete" || backupResult.status === "failed" ? "alert" : "status"}>
+      <b>{backupResult.status === "working" ? "Đang export"
+        : backupResult.status === "verified" ? "Full Backup đã được lưu và xác minh"
+          : backupResult.status === "incomplete" ? "Backup chưa hoàn chỉnh — chưa tạo file ZIP"
+            : backupResult.status === "cancelled" ? "Đã hủy export" : "Export thất bại"}</b>
+      {backupResult.message && <p>{backupResult.message}</p>}
+      {backupResult.counts && <p>{backupResult.counts.scenarios} Scenario · {backupResult.counts.stepVersions} Step versions · {backupResult.counts.assets} assets · {backupResult.counts.missingFiles} file thiếu</p>}
+      {backupResult.missing && backupResult.missing.length > 0 && <ul>{Object.entries(backupResult.missing.reduce<Record<string, { paths: string[]; scenarioId?: string }>>((groups, item) => {
+        const group = groups[item.logicalReference] ??= { paths: [], scenarioId: item.scenarioId };
+        group.paths.push(item.originalPath ?? "Không rõ đường dẫn"); return groups;
+      }, {})).map(([reference, group]) => <li key={reference}><strong>{reference} → {group.paths.length} file thiếu</strong>
+        {group.scenarioId && <button type="button" onClick={() => open(group.scenarioId!)}>Mở Scenario để sửa</button>}
+        <details><summary>Xem đường dẫn</summary>{group.paths.map(file => <code key={file}>{file}</code>)}</details></li>)}</ul>}
+    </section>}
     {creating && <form className="scenario-create" onSubmit={event => { event.preventDefault(); create(); }}>
       <label>Tên Scenario mới<input aria-label="Tên flow mới" value={name} disabled={disabled}
         onChange={event => setName(event.target.value)} /></label>

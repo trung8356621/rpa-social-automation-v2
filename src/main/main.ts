@@ -875,22 +875,31 @@ async function boot() {
       }
       case "exportFullBackup": {
         isIdle();
-        const bundle = await createAdminBackup(store, dataPath, store.setting("seoOpsInstallationId") || "local-export", Date.now());
-        if (!bundle.manifest.complete) throw new Error(`BACKUP_INCOMPLETE: ${bundle.manifest.missing.join(", ")}`);
-        inspectAdminBackup(bundle.archive, bundle.sha256);
-        const stamp = new Date().toLocaleString("sv-SE").replace(/[-: ]/g, "").slice(0, 14);
-        const selected = await dialog.showSaveDialog(window, { title: "Export Full Backup", defaultPath: `rpa-backup-${stamp}.zip`,
-          filters: [{ name: "RPA Full Backup", extensions: ["zip"] }] });
-        if (selected.canceled || !selected.filePath) return { cancelled: true };
-        await writeFile(selected.filePath, bundle.archive);
-        const isolated = await mkdtemp(path.join(os.tmpdir(), "rpa-backup-verify-"));
-        const verifyStore = new Store(path.join(isolated, "creator.sqlite"));
         try {
-          await applyAdminBackup(verifyStore, isolated, bundle.archive, bundle.sha256);
-          if (verifyStore.flows().length !== bundle.manifest.counts.scenarios || verifyStore.steps().length !== bundle.manifest.counts.stepVersions)
-            throw new Error("BACKUP_VERIFY: restored counts differ from source");
-        } finally { verifyStore.close(); await rm(isolated, { recursive: true, force: true }).catch(() => {}); }
-        return { cancelled: false, path: selected.filePath, sha256: bundle.sha256, ...bundle.manifest };
+          const bundle = await createAdminBackup(store, dataPath, store.setting("seoOpsInstallationId") || "local-export", Date.now());
+          if (!bundle.manifest.complete) {
+            logMainEvent(runDir, "backup-export-incomplete", { counts: bundle.manifest.counts, missing: bundle.manifest.missing });
+            return { status: "incomplete", cancelled: false, ...bundle.manifest };
+          }
+          inspectAdminBackup(bundle.archive, bundle.sha256);
+          const isolated = await mkdtemp(path.join(os.tmpdir(), "rpa-backup-verify-"));
+          const verifyStore = new Store(path.join(isolated, "creator.sqlite"));
+          try {
+            await applyAdminBackup(verifyStore, isolated, bundle.archive, bundle.sha256);
+            if (verifyStore.flows().length !== bundle.manifest.counts.scenarios || verifyStore.steps().length !== bundle.manifest.counts.stepVersions)
+              throw new Error("BACKUP_VERIFY: restored counts differ from source");
+          } finally { verifyStore.close(); await rm(isolated, { recursive: true, force: true }).catch(() => {}); }
+          const stamp = new Date().toLocaleString("sv-SE").replace(/[-: ]/g, "").slice(0, 14);
+          const selected = await dialog.showSaveDialog(window, { title: "Export Full Backup", defaultPath: `rpa-backup-${stamp}.zip`,
+            filters: [{ name: "RPA Full Backup", extensions: ["zip"] }] });
+          if (selected.canceled || !selected.filePath) return { status: "cancelled", cancelled: true, counts: bundle.manifest.counts, missing: [] };
+          await writeFile(selected.filePath, bundle.archive);
+          logMainEvent(runDir, "backup-export-verified", { path: selected.filePath, sha256: bundle.sha256, counts: bundle.manifest.counts });
+          return { status: "verified", cancelled: false, path: selected.filePath, sha256: bundle.sha256, ...bundle.manifest };
+        } catch (error) {
+          logMainError(runDir, "backup-export", error);
+          return { status: "failed", cancelled: false, message: "Không thể tạo hoặc xác minh Full Backup. Xem application log để biết chi tiết." };
+        }
       }
       case "exportScriptRelease": {
         isIdle();
