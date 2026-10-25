@@ -22,7 +22,7 @@ const target = {
   roi: { x: 120, y: 120, width: 300, height: 64 },
   environment: env,
 };
-test("common desktop sizes center the canonical viewport and stretch the control workspace", () => {
+test("common desktop sizes fill Creator height while execution stays canonical", () => {
   for (const editor of [true, false])
     for (const debug of [true, false])
       for (const size of [
@@ -36,14 +36,17 @@ test("common desktop sizes center the canonical viewport and stretch the control
           debug,
           ...(size as [number, number]),
         );
-        assert.deepEqual(
-          { width: layout.browser.width, height: layout.browser.height },
-          EXECUTION_VIEWPORT,
-        );
         assert.equal(layout.workspaceHeight, Math.max(WEB_HEIGHT, size[1] - TOP_HEIGHT));
-        assert.equal(
-          layout.browser.y,
-          TOP_HEIGHT + Math.max(0, Math.floor((layout.workspaceHeight - WEB_HEIGHT) / 2)),
+        assert.deepEqual(layout.browser, {
+          x: layout.browser.x,
+          y: TOP_HEIGHT,
+          width: WEB_WIDTH,
+          height: layout.workspaceHeight,
+        });
+        assert.equal(layout.browser.y + layout.browser.height, size[1]);
+        assert.deepEqual(
+          workspaceLayout(editor, debug, size[0], size[1], false, true).browser,
+          { ...layout.browser, height: WEB_HEIGHT },
         );
         assert.equal(layout.debug.x, layout.browser.x);
         assert.equal(layout.debug.y + layout.debug.height, size[1]);
@@ -60,6 +63,11 @@ test("canonical screenshots and click coordinates use the same unscaled coordina
     x: 296,
     y: 264,
   });
+  for (const height of [680, 992, 1352])
+    assert.deepEqual(
+      imageToInput(296, 264.5, WEB_WIDTH, height, { ...bounds, height }),
+      { x: 296, y: 264 },
+    );
 });
 test("visual preflight rejects mismatched width, height and zoom for every visual action, without scaling ROI", () => {
   for (const action of [

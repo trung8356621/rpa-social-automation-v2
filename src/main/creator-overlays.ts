@@ -7,6 +7,7 @@ import type { AppPage } from "../shared/contracts.js";
 export class CreatorOverlays {
   readonly debug: WebContentsView;
   private expanded = { editor: false, debug: true };
+  private executionDepth = 0;
   private visible = true;
   page: AppPage = "scenarios";
   sidebarCollapsed: boolean;
@@ -49,6 +50,7 @@ export class CreatorOverlays {
       width,
       height,
       this.sidebarCollapsed,
+      this.executionDepth > 0,
     );
     const scrollLeft = Math.min(this.scroll.left, Math.max(0, bounds.minWidth - width));
     bounds.browser.x -= scrollLeft;
@@ -67,6 +69,17 @@ export class CreatorOverlays {
   }
   toggle(panel: "editor" | "debug") {
     return this.setExpanded(panel, !this.expanded[panel]);
+  }
+  enterExecutionMode() {
+    this.executionDepth++;
+    this.layout();
+    let restored = false;
+    return () => {
+      if (restored) return;
+      restored = true;
+      this.executionDepth = Math.max(0, this.executionDepth - 1);
+      this.layout();
+    };
   }
   setVisible(visible: boolean) {
     this.visible = visible;

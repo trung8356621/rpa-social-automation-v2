@@ -70,6 +70,7 @@ export function workspaceLayout(
   contentWidth: number,
   contentHeight: number,
   sidebarCollapsed = false,
+  executionMode = false,
 ) {
   const requestedNav = sidebarCollapsed ? APP_NAV_COLLAPSED : APP_NAV_EXPANDED;
   const navigationWidth = contentWidth >= WEB_WIDTH + SIDE_WIDTH + requestedNav ? requestedNav
@@ -87,8 +88,9 @@ export function workspaceLayout(
     editorBeside,
     browser: {
       x,
-      y: TOP_HEIGHT + Math.max(0, Math.floor((workspaceHeight - WEB_HEIGHT) / 2)),
-      ...EXECUTION_VIEWPORT,
+      y: TOP_HEIGHT,
+      width: WEB_WIDTH,
+      height: executionMode ? WEB_HEIGHT : workspaceHeight,
     },
     workspaceHeight,
     debug: {

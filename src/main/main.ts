@@ -440,6 +440,7 @@ async function boot() {
     (execution) => window.webContents.send("creator:execution-start", execution));
   const recorder = new BrowserRecording(window.webContents, path.join(dataPath, "test-runs"));
   let uiPlayAllRunId: string | undefined;
+  let uiPlayAllViewportRestore: (() => void) | undefined;
   let armedTest:
     { stepId: string; version: number; overrideId?: string } | undefined;
   const state = (): State => ({
@@ -467,6 +468,18 @@ async function boot() {
     for (const editor of editors)
       if (!editor.isDestroyed())
         editor.send("creator:layout", { ...browser.bounds });
+  };
+  const settleViewport = () => new Promise<void>(resolve => setTimeout(resolve, 50));
+  const withCanonicalViewport = async <T>(work: () => Promise<T>) => {
+    const restore = overlays.enterExecutionMode();
+    publishLayout();
+    try {
+      await settleViewport();
+      return await work();
+    } finally {
+      restore();
+      publishLayout();
+    }
   };
   const captures = new Map<
     string,
@@ -536,6 +549,8 @@ async function boot() {
     const item = testLab.get(id);
     runningTestCaseId = id;
     armedTest = undefined;
+    const restoreViewport = overlays.enterExecutionMode();
+    publishLayout();
     const runId = randomUUID(), startedAt = new Date().toISOString();
     const savedFlow = store.flows().find(flow => flow.id === item.flowId);
     const session = browserSessions.list().find(session => session.id === item.sessionId);
@@ -561,6 +576,7 @@ async function boot() {
       catch (error) { outcome.screenshotError = error instanceof Error ? error.message : String(error); }
     };
     try {
+      await settleViewport();
       publish();
       const flow = structuredClone(testLab.validate(item, false));
       flow.defaultPattern = { values: structuredClone(item.values) };
@@ -691,6 +707,7 @@ async function boot() {
         try { if (batchId) runtime.endPlayAllLog(batchId, !["PASS", "ACTION_SENT", "SKIPPED"].includes(outcome.status)); }
         finally {
           runningTestCaseId = undefined; armedTest = undefined;
+          restoreViewport();
           overlays.setPage(contextReady ? "creator" : "test-case");
           publishLayout(); window.webContents.send("creator:case-state", state());
         }
@@ -758,8 +775,11 @@ async function boot() {
             if (!["http:", "https:"].includes(url.protocol) || url.username || url.password) throw new Error("Use a local HTTP(S) test URL without credentials.");
             const previousPage = overlays.page;
             runningStudio = true; armedTest = undefined;
+            const restoreViewport = overlays.enterExecutionMode();
+            publishLayout();
             window.webContents.send("creator:case-state", state());
             try {
+              await settleViewport();
               if (imported || prepared && !prepared.issues.length) {
                 await switchBrowserSession(request.sessionId, true, false);
                 overlays.setExpanded("editor", false); overlays.setPage("studio-run"); publishLayout();
@@ -789,7 +809,7 @@ async function boot() {
                 : await studio.execute(prepared!, request.values, execute);
               if (imported) await studio.data.put("runs", response.result.id, { ...response.result, outputs: {}, nodes: response.result.nodes.map(n => ({ ...n, outputs: {} })) }, true);
             } finally {
-              runningStudio = false; overlays.setPage(previousPage); publishLayout();
+              runningStudio = false; restoreViewport(); overlays.setPage(previousPage); publishLayout();
               window.webContents.send("creator:case-state", state());
             }
             break;
@@ -1287,14 +1307,16 @@ async function boot() {
       }
       case "capture": {
         isIdle();
-        const image = await browser.capture();
-        captures.set(image.id, {
-          width: image.width,
-          height: image.height,
-          zoom: image.zoom,
+        return withCanonicalViewport(async () => {
+          const image = await browser.capture();
+          captures.set(image.id, {
+            width: image.width,
+            height: image.height,
+            zoom: image.zoom,
+          });
+          if (captures.size > 12) captures.delete(captures.keys().next().value!);
+          return { ...image, bounds: { ...browser.bounds } };
         });
-        if (captures.size > 12) captures.delete(captures.keys().next().value!);
-        return { ...image, bounds: { ...browser.bounds } };
       }
       case "pickUploadFiles": {
         isIdle();
@@ -1417,19 +1439,36 @@ async function boot() {
         isIdle();
         const flow = store.flow();
         if (flow) store.assertFlowExecutable(flow);
-        uiPlayAllRunId = runtime.startPlayAllLog();
-        return uiPlayAllRunId;
+        uiPlayAllViewportRestore = overlays.enterExecutionMode();
+        publishLayout();
+        try {
+          await settleViewport();
+          uiPlayAllRunId = runtime.startPlayAllLog();
+          return uiPlayAllRunId;
+        } catch (error) {
+          uiPlayAllViewportRestore(); uiPlayAllViewportRestore = undefined;
+          publishLayout();
+          throw error;
+        }
       }
       case "endPlayAllLog":
-        runtime.endPlayAllLog(command.runId, command.failed);
-        if (uiPlayAllRunId === command.runId) uiPlayAllRunId = undefined;
+        try { runtime.endPlayAllLog(command.runId, command.failed); }
+        finally {
+          if (uiPlayAllRunId === command.runId) {
+            uiPlayAllRunId = undefined;
+            uiPlayAllViewportRestore?.(); uiPlayAllViewportRestore = undefined;
+            publishLayout();
+          }
+        }
         return;
       case "test":
         isIdle();
-        return runtime.test(command.stepId, command.version, command.overrideId, command.batchRunId);
+        return uiPlayAllRunId
+          ? runtime.test(command.stepId, command.version, command.overrideId, command.batchRunId)
+          : withCanonicalViewport(() => runtime.test(command.stepId, command.version, command.overrideId, command.batchRunId));
       case "testPair":
         isIdle();
-        return runtime.testPair(command.firstId, command.secondId, command.delayMs);
+        return withCanonicalViewport(() => runtime.testPair(command.firstId, command.secondId, command.delayMs));
       case "disarmTest":
         armedTest = undefined;
         return;
@@ -1498,8 +1537,8 @@ async function boot() {
           const test = armedTest;
           setImmediate(() => {
             if (runningStudio || runningTestCaseId || switchingWorkspace || switchingSession || uiPlayAllRunId || test !== armedTest || wc !== browser.view.webContents || overlays.page !== "creator") return;
-            void runtime
-              .test(test.stepId, test.version, test.overrideId)
+            void withCanonicalViewport(() => runtime
+              .test(test.stepId, test.version, test.overrideId))
               .then((result) =>
                 window.webContents.send("creator:shortcut-result", result),
               )

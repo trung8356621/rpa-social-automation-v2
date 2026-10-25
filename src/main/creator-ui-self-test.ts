@@ -300,7 +300,7 @@ export async function runSelfTest({
   window.setFullScreen(true);
   await wait(300);
   assert.equal(browser.bounds.width, 1024);
-  assert.equal(browser.bounds.height, 560);
+  assert.equal(browser.bounds.height, window.getContentSize()[1] - 88);
   assert.equal(
     overlays.debug.getBounds().y + overlays.debug.getBounds().height,
     window.getContentSize()[1],
@@ -372,7 +372,7 @@ export async function runSelfTest({
   await shell.executeJavaScript(`window.scrollTo(200,0)`);
   await until(async () => browser.bounds.x === 120, "workspace scroll");
   assert.equal(browser.bounds.width, 1024);
-  assert.equal(browser.bounds.height, 560);
+  assert.equal(browser.bounds.height, window.getContentSize()[1] - 88);
   assert.equal(page.getZoomFactor(), zoom);
   await shell.executeJavaScript(`window.scrollTo(0,0)`);
   window.setContentSize(1344, 648);
@@ -594,7 +594,7 @@ export async function runSelfTest({
     320 + Math.max(0, Math.floor((wideWidth - 320 - 1024) / 2)),
   );
   assert.equal(browser.bounds.width, 1024);
-  assert.equal(browser.bounds.height, 560);
+  assert.equal(browser.bounds.height, window.getContentSize()[1] - 88);
   assert.equal(overlays.debug.getBounds().x, 320);
   await evidence("ui-cleanup-wide.png");
   await click(shell, `[aria-label="Edit ${step.name}"]`);
