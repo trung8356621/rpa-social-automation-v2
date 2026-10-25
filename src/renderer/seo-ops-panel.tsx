@@ -211,7 +211,7 @@ export function SeoOpsSyncControls({
       applyRows(result.rows);
       const s = result.summary;
       const prefix = s && (s.blocked > 0 || s.failed > 0) ? "Sync hoàn tất một phần" : "Sync hoàn tất";
-      setMessage(s ? `${prefix}: ${s.backed_up} drafts backed up, ${s.published} releases published, ${s.unchanged} releases unchanged, ${s.blocked} publish blocked, ${s.reports} reports downloaded, ${s.failed} failed`
+      setMessage(s ? `${prefix}: ${s.published} releases published, ${s.downloaded} official releases downloaded, ${s.unchanged} releases unchanged, ${s.blocked} publish blocked, ${s.reports_downloaded} reports downloaded, ${s.failed} failed`
         : `Sync xong: ${result.results.length} mục`);
     } catch (e) {
       setMessage(mapSeoOpsAuthError(String((e as Error).message || e)));

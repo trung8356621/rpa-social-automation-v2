@@ -11,7 +11,6 @@ import {
   dialog,
   screen,
   clipboard,
-  net,
 } from "electron";
 import { mkdir, mkdtemp, rm, writeFile, readFile, stat } from "node:fs/promises";
 import os from "node:os";
@@ -70,10 +69,6 @@ import {
 import { createSeoOpsTokenStore } from "./seo-ops-token-store.js";
 import { createSeoOpsBackupScheduler } from "./seo-ops-backup-scheduler.js";
 import { collectScriptAssets, createSeoOpsSyncService } from "./seo-ops-sync.js";
-import {
-  createSeoOpsAutoSync,
-  isSeoOpsAutoSyncEnabled,
-} from "./seo-ops-auto-sync.js";
 import { createHash } from "node:crypto";
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
@@ -169,16 +164,8 @@ async function boot() {
     if (!seoOpsTokenStore.getToken()) return;
     draftBackup.request();
   });
-  const autoSyncEnabled = isSeoOpsAutoSyncEnabled();
-  const seoOpsAutoSync = createSeoOpsAutoSync({
-    enabled: autoSyncEnabled,
-    isAuthenticated: () => Boolean(seoOpsTokenStore.getToken()),
-    sync: (opts) => seoOpsSync.syncAll(opts),
-    log: (level, message) => {
-      if (level === "error" || level === "warn") logMainError(runDir, "seo-ops-auto-sync", new Error(message));
-      else logMainEvent(runDir, "seo-ops-auto-sync", { message });
-    },
-  });
+  // Official Script releases sync only through explicit Sync Now commands.
+  const autoSyncEnabled = false;
   const manualSeoOpsSync = async (
     command: "seoOpsSyncAll" | "seoOpsSyncFlow",
     options: { flowId?: string },
@@ -194,22 +181,6 @@ async function boot() {
     }
     return response;
   };
-  if (autoSyncEnabled) {
-    seoOpsAutoSync.start();
-    // Session restore: if token exists, verify then sync once (no keystroke spam).
-    void seoOpsSync.sessionState().then((session) => {
-      if (session.authenticated) {
-        seoOpsAutoSync.request({ reason: "session_restore", immediate: true });
-      }
-    }).catch(() => undefined);
-    // Online recovery via net.isOnline() polling (Electron has no net 'online' event).
-    let wasOnline = net.isOnline();
-    setInterval(() => {
-      const online = net.isOnline();
-      if (online && !wasOnline) seoOpsAutoSync.notifyOnline();
-      wasOnline = online;
-    }, 15_000);
-  }
   const browserSessions = new BrowserSessions(store);
   const scenarioGroups = new ScenarioGroups(store);
   const testLab = new TestLab(store, browserSessions);
@@ -1021,11 +992,7 @@ async function boot() {
         };
       case "seoOpsLogin": {
         isIdle();
-        const loginResult = await seoOpsSync.login(command.email, command.password);
-        if (loginResult.ok) {
-          seoOpsAutoSync.request({ reason: "login", immediate: true });
-        }
-        return loginResult;
+        return seoOpsSync.login(command.email, command.password);
       }
       case "seoOpsLogout":
         isIdle();
@@ -1033,7 +1000,7 @@ async function boot() {
       case "seoOpsSyncStatus":
         return {
           rows: await seoOpsSync.refreshStatusRows({
-            offlinePending: seoOpsAutoSync.getState().offlinePending,
+            offlinePending: false,
           }),
           meta: seoOpsSync.loadMeta(),
         };
@@ -1277,8 +1244,6 @@ async function boot() {
         if (uiPlayAllRunId) throw new Error("Đợi Play All kết thúc trước khi tạo Scenario.");
         armedTest = undefined;
         store.newFlow(command.name, browser.zoom);
-        const created = store.flow();
-        if (created) seoOpsAutoSync.request({ reason: "save", flowId: created.id });
         return state();
       }
       case "openFlow": {
@@ -1364,22 +1329,16 @@ async function boot() {
       case "variables": {
         isIdle();
         store.updateVariables(command.variables, command.values);
-        const flowAfterVars = store.flow();
-        if (flowAfterVars) seoOpsAutoSync.request({ reason: "save", flowId: flowAfterVars.id });
         return state();
       }
       case "organize": {
         isIdle();
         store.organize(command.groups, command.stepIds);
-        const flowAfterOrg = store.flow();
-        if (flowAfterOrg) seoOpsAutoSync.request({ reason: "save", flowId: flowAfterOrg.id });
         return state();
       }
       case "saveStep": {
         isIdle();
         store.saveStep(command.name, command.payload, command.id);
-        const flowAfterSave = store.flow();
-        if (flowAfterSave) seoOpsAutoSync.request({ reason: "save", flowId: flowAfterSave.id });
         return state();
       }
       case "scriptHealthScan":
@@ -1387,8 +1346,6 @@ async function boot() {
       case "selectVersion": {
         isIdle();
         store.selectVersion(command.id, command.version);
-        const flowAfterVersion = store.flow();
-        if (flowAfterVersion) seoOpsAutoSync.request({ reason: "save", flowId: flowAfterVersion.id });
         return state();
       }
       case "saveOverride": {
@@ -1399,8 +1356,6 @@ async function boot() {
           command.name,
           command.segment,
         );
-        const flowAfterOverride = store.flow();
-        if (flowAfterOverride) seoOpsAutoSync.request({ reason: "save", flowId: flowAfterOverride.id });
         return state();
       }
       case "reviewTest":

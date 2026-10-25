@@ -669,8 +669,6 @@ export function createSeoOpsSyncService(options: {
 
   async function syncAll(options?: { flowId?: string }) {
     if (!tokenStore.getToken()) throw new Error("SEO_OPS: cần đăng nhập trước khi sync");
-    let backupError: string | undefined;
-    try { await backupNow(); } catch (error) { backupError = String((error as Error).message || error); }
     const client = syncClient();
     const remote = await client.catalog();
     const remoteById = new Map(remote.map(row => [row.script_id, row]));
@@ -680,7 +678,6 @@ export function createSeoOpsSyncService(options: {
     const now = new Date().toISOString();
     const meta = loadMeta();
     const results: Array<{ script_id: string; action: string; ok: boolean; message?: string }> = [];
-    if (backupError) results.push({ script_id: "admin-backup", action: "backup", ok: false, message: backupError });
 
     // Incomplete Scripts are skipped individually — never block others / never publish.
     const publishable = refreshedLocal.filter((r) => !r.incomplete && r.publish_body);
@@ -712,11 +709,15 @@ export function createSeoOpsSyncService(options: {
     const plan: SyncPlan = { push_to_remote: [], pull_to_local: [], skip: [], conflicts: [] };
     for (const row of publishable) {
       const server = remoteById.get(row.script_id);
-      if (server && server.content_digest === row.content_digest && server.demo_status === "ready") {
+      if (server && server.content_digest.toLowerCase() === row.content_digest.toLowerCase() && server.demo_status === "ready") {
         plan.skip.push({ script_id: row.script_id, reason: "same_digest" });
       } else {
         plan.push_to_remote.push(toPlanRow(row));
       }
+    }
+    if (!options?.flowId) {
+      const localIds = new Set(refreshedLocal.map(row => row.script_id));
+      plan.pull_to_local.push(...remote.filter(row => !localIds.has(row.script_id)));
     }
 
     for (const row of plan.push_to_remote) {
@@ -730,6 +731,11 @@ export function createSeoOpsSyncService(options: {
         const published = await client.publish(full.publish_body);
         let ok = published.httpStatus < 300 && (published as { ok?: boolean }).ok !== false;
         let message = ok ? "pushed" : JSON.stringify((published as { errors?: string[] }).errors ?? published);
+        const responseDigest = (published as { release?: { content_digest?: string } }).release?.content_digest;
+        if (ok && responseDigest && responseDigest.toLowerCase() !== full.content_digest.toLowerCase()) {
+          ok = false;
+          message = `publish digest mismatch: expected ${full.content_digest}, received ${responseDigest}`;
+        }
         if (ok) {
           for (const asset of full.publish_body.manifest.assets) {
             const uploaded = await client.uploadAsset({ packageKey: full.package_key, version: full.version,
@@ -880,12 +886,12 @@ export function createSeoOpsSyncService(options: {
     const reports = await fetchReports();
     const rows = await refreshStatusRows();
     return { plan, results, rows, summary: {
-      backed_up: backupError ? 0 : refreshedLocal.length,
       published: results.filter(r => r.action === "push" && r.ok).length,
+      downloaded: results.filter(r => r.action === "pull" && r.ok).length,
       unchanged: results.filter(r => r.action === "unchanged").length,
       blocked: refreshedLocal.filter(r => r.incomplete).length,
       failed: results.filter(r => !r.ok).length,
-      reports: reports.length,
+      reports_downloaded: reports.length,
     } };
   }
 

@@ -66,6 +66,7 @@ describe("script-release", () => {
     assert.equal(body.manifest.variables[0].id, "v1");
     assert.equal(body.manifest.steps[0].variable_key, "text");
     assert.equal(body.manifest.steps[0].variableId, "v1");
+    assert.match(body.content_digest ?? "", /^[a-f0-9]{64}$/);
     assertScriptPublishBody(body);
   });
 

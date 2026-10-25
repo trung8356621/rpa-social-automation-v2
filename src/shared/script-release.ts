@@ -49,6 +49,8 @@ export type ScriptPublishBody = {
   manifest: ScriptReleaseManifest;
   dependencies: [];
   runtime_compatibility: { runner_min: string };
+  /** SHA-256 of the canonical release fields; excluded from its own digest input. */
+  content_digest?: string;
 };
 
 export type ScriptExportInput = {
@@ -371,6 +373,8 @@ export function buildScriptCatalogSnapshot(input: ScriptExportInput): ScriptCata
     };
   }
 
+  const contentDigest = computeScriptContentDigest(body);
+  body.content_digest = contentDigest;
   let publish_body: ScriptPublishBody | null = null;
   try {
     publish_body = assertScriptPublishBody(structuredClone(body));
@@ -383,7 +387,7 @@ export function buildScriptCatalogSnapshot(input: ScriptExportInput): ScriptCata
     package_key: body.package_key,
     name: body.name,
     version: body.version,
-    content_digest: computeScriptContentDigest(body),
+    content_digest: contentDigest,
     execution_digest: computeExecutionDigest(body.manifest),
     incomplete,
     incomplete_reasons: [...new Set(reasons)],
@@ -403,7 +407,9 @@ export function buildScriptPublishBody(input: ScriptExportInput): ScriptPublishB
     throw new Error(`SCRIPT_EXPORT: ${invalid[0]}`);
   }
   if (stepPayloads.length === 0) throw new Error("SCRIPT_EXPORT: steps required");
-  return assembleBody(input, stepPayloads);
+  const body = assembleBody(input, stepPayloads);
+  body.content_digest = computeScriptContentDigest(body);
+  return body;
 }
 
 export function assertScriptPublishBody(body: ScriptPublishBody) {
@@ -421,5 +427,10 @@ export function assertScriptPublishBody(body: ScriptPublishBody) {
   if (!v.test_run_id || !v.artifact_ref) throw new Error("SCRIPT_EXPORT: video demo incomplete");
   if (!v.reviewed) throw new Error("SCRIPT_EXPORT: video demo must be reviewed");
   if (!v.thumbnail_ref) throw new Error("SCRIPT_EXPORT: video demo thumbnail required");
+  const expectedDigest = computeScriptContentDigest(body);
+  if (body.content_digest && body.content_digest.toLowerCase() !== expectedDigest) {
+    throw new Error("SCRIPT_EXPORT: content_digest mismatch");
+  }
+  body.content_digest = expectedDigest;
   return body;
 }
