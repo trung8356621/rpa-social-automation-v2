@@ -2,7 +2,7 @@ import React, { useEffect, useState } from "react";
 import { UiPopover } from "./ui-popover";
 import type { AppPage, Command, ScenarioOrganization, State } from "../shared/contracts";
 import type { ScriptSyncRow } from "../shared/sync-status";
-import { SeoOpsSyncControls, syncBadge } from "./seo-ops-panel";
+import { SeoOpsSyncControls, scriptVersionLabel, syncBadge } from "./seo-ops-panel";
 import { ScriptHealthPanel } from "./script-health-panel";
 
 /** Primary Admin nav only — Variations / Widget / Workflow / Builds remain routable legacy, not listed. */
@@ -60,11 +60,11 @@ export function ScenariosPage({ state, name, setName, locked, open, create, sess
   const disabled = locked || working;
 
   useEffect(() => {
-    if (!invoke || !authenticated) return;
+    if (!invoke) return;
     void invoke<{ rows: ScriptSyncRow[] }>({ type: "seoOpsSyncStatus" })
       .then((r) => setSyncRows(r.rows))
       .catch(() => undefined);
-  }, [invoke, authenticated, state?.flows?.length]);
+  }, [invoke, authenticated, state?.flows]);
   function show(kind: "create" | "rename" | "delete" | "move" | "scenario-delete", id?: string, initial = "") {
     setValue(initial); setError(""); setDialog({ kind, id });
   }
@@ -183,12 +183,10 @@ export function ScenariosPage({ state, name, setName, locked, open, create, sess
                   {invalidPinned.length} Step cần sửa
                 </small>
               )}
-              <div className="scenario-version" aria-label={`Version ${flow.name}`}>
-                <b>Version</b>
-                <small className="sync-badge" title={syncRows.find(r => r.flow_id === flow.id || r.script_id === flow.id)?.demo_reason || syncRows.find(r => r.flow_id === flow.id || r.script_id === flow.id)?.message}>
-                  {syncBadge(syncRows, flow.id)}
-                </small>
-              </div>
+              <small className="script-version" aria-label={`Version ${flow.name}`}>{scriptVersionLabel(syncRows, flow.id)}</small>
+              <small className="sync-badge" title={syncRows.find(r => r.flow_id === flow.id || r.script_id === flow.id)?.demo_reason || syncRows.find(r => r.flow_id === flow.id || r.script_id === flow.id)?.message}>
+                {syncBadge(syncRows, flow.id)}
+              </small>
               <button disabled={disabled} onClick={() => open(flow.id)}>Mở Creator</button>
               <details><summary aria-label={`Menu Scenario ${flow.name}`}>...</summary><div className="scenario-menu">
                 <button disabled={disabled} onClick={() => show("move", flow.id, organization.membership[flow.id] ?? "")}>Move to Group</button>

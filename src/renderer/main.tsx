@@ -10,7 +10,7 @@ import { AppNavigation, ScenariosPage } from "./app-shell";
 import { BrowserSessionsPage, SessionSelector } from "./browser-sessions";
 import { TestLabPage, TestCaseEditor, CaseResultView, ExecutionErrorView, type CaseEditorHandle } from "./test-lab";
 import { Variables, Groups } from "./flow-controls";
-import { SeoOpsAuthPanel, syncBadge } from "./seo-ops-panel";
+import { SeoOpsAuthPanel, scriptVersionLabel, syncBadge } from "./seo-ops-panel";
 import type { ScriptSyncRow } from "../shared/sync-status";
 import React, { useCallback, useEffect, useRef, useState } from "react";
 import { createRoot } from "react-dom/client";
@@ -101,11 +101,11 @@ function Creator() {
     if (["scenarios", "browser-sessions", "test-lab", "settings", "variations", "widget-registry", "workflows", "builds-releases"].includes(appPage)) setMainPage(appPage as MainPage);
   }, [appPage]);
   useEffect(() => {
-    if (!shell || !seoOpsAuthenticated) { setScriptSyncRows([]); return; }
+    if (!shell) return;
     void window.creator.invoke({ type: "seoOpsSyncStatus" })
       .then(result => setScriptSyncRows((result as { rows: ScriptSyncRow[] }).rows))
       .catch(() => undefined);
-  }, [seoOpsAuthenticated, state?.flow?.id, state?.flow?.steps.length]);
+  }, [seoOpsAuthenticated, state?.flow?.id, state?.flow?.steps]);
   useEffect(() => {
     if (!shell) return;
     void window.creator.invoke({ type: "seoOpsGetSession" }).then((session) => {
@@ -481,22 +481,31 @@ function Creator() {
         : "",
     );
   }
+  const selectedBase = selected && (state?.steps.find(step => step.id === selected.id && step.version === selected.version) ?? selected);
   function payload(): Payload {
+    const base = selectedBase?.payload.action === action ? selectedBase.payload : undefined;
+    if (action === "SLEEP") return { action, ...(base?.sleepMs !== undefined ? { sleepMs: base.sleepMs } : {}) };
+    if (action === "SCROLL") return { action, deltaY: delta };
+    if (action === "TYPE_ONLY") return { action, variableId: variableId || undefined,
+      ...(!variableId && base?.text ? { text: base.text } : {}), inputMethod };
+    if (action === "QUICK_TAG") return { action, variableId, quickTagRows,
+      target: target ? { ...target, ocr: undefined, matchTo: "none" } : undefined };
+    if (action === "UPLOAD_FILE") return { action, variableId: variableId || undefined,
+      ...(!variableId && base?.files ? { files: base.files } : {}), target,
+      method: base?.method ?? "auto", threshold: base?.threshold ?? 0.96, timeoutMs: base?.timeoutMs ?? 3000 };
     return {
       action,
       ...(["TYPE_ONLY", "CLICK_AND_TYPE"].includes(action)
-        ? { variableId, inputMethod }
+        ? { variableId: variableId || undefined, ...(!variableId && base?.text ? { text: base.text } : {}), inputMethod }
         : {}),
-      ...(action === "SCROLL" ? { deltaY: delta } : {}),
-      ...(action === "UPLOAD_FILE" ? { variableId } : {}),
-      ...(action === "QUICK_TAG" ? { variableId, quickTagRows, target: target ? { ...target, ocr: undefined, matchTo: "none" as const } : undefined } : {}),
       ...([
         "CLICK_TARGET",
         "CLICK_AND_TYPE",
         "UPLOAD_FILE",
         "WAIT_VERIFY",
       ].includes(action)
-        ? { target: target ? { ...target, matchTo: effectiveMatchTo({ target }) } : target, method: "auto", threshold: 0.96, timeoutMs: 3000 }
+        ? { target: target ? { ...target, matchTo: effectiveMatchTo({ target }) } : target,
+          method: base?.method ?? "auto", threshold: base?.threshold ?? 0.96, timeoutMs: base?.timeoutMs ?? 3000 }
         : {}),
     };
   }
@@ -1018,17 +1027,10 @@ function Creator() {
     setMessage(`Đã lưu Base v${ref.version}; version cũ vẫn được giữ.`);
   }
   const expanded = shell ? editorExpanded : debugExpanded;
-  const selectedBase = selected && (state?.steps.find(step => step.id === selected.id && step.version === selected.version) ?? selected);
   const activePayload = overrideId
     ? state?.overrides.find((o) => o.id === overrideId)?.segment[0]
     : selectedBase?.payload;
-  function editableConfig(p: Payload) {
-    if (p.action === "SLEEP") {
-      return JSON.stringify([p.action]);
-    }
-    const target = p.target ? { ...p.target, matchTo: effectiveMatchTo(p) } : null;
-    return JSON.stringify([p.action, p.variableId ?? "", p.inputMethod ?? "keyboard", p.deltaY ?? -400, p.quickTagRows ?? null, target]);
-  }
+  function editableConfig(p: Payload) { return JSON.stringify(p); }
   const editorDirty = (ocrEdit !== undefined && ocrEdit.trim() !== target?.ocr?.text) || (selected
     ? name !== selectedBase?.name || editableConfig(payload()) !== editableConfig(selectedBase!.payload)
     : name !== "" || editableConfig(payload()) !== editableConfig({ action: "CLICK_TARGET" }));
@@ -1254,8 +1256,8 @@ function Creator() {
         <>
           <header>
             {workspaceTabs}
-            {state?.flow && <span className="sync-badge" aria-label="Scenario version" title={scriptSyncRows.find(row => row.flow_id === state.flow?.id)?.demo_reason || scriptSyncRows.find(row => row.flow_id === state.flow?.id)?.message}>
-              <b>Version:</b> {syncBadge(scriptSyncRows, state.flow.id)}
+            {state?.flow && <span className="script-version" aria-label="Scenario version" title={syncBadge(scriptSyncRows, state.flow.id)}>
+              {scriptVersionLabel(scriptSyncRows, state.flow.id)}
             </span>}
             {activeCaseTab && <button disabled={navigationLocked} onClick={() => navigateApp("test-case")}>Cấu hình Case</button>}
             <SessionSelector state={state} locked={locked || stepPlayback[activeStepId]?.status === "running"} select={selectSession} />

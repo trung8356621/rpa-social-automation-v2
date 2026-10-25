@@ -5,7 +5,7 @@ import { buildScriptPublishBody } from "../src/shared/script-release.js";
 import { importScriptRelease } from "../src/shared/script-sync.js";
 import { labelForStatus, statusFromPlanSides } from "../src/shared/sync-status.js";
 import type { Flow, Step } from "../src/shared/contracts.js";
-import { syncBadge } from "../src/renderer/seo-ops-panel.js";
+import { scriptVersionLabel, syncBadge } from "../src/renderer/seo-ops-panel.js";
 
 test("sync status labels cover required UI states", () => {
   for (const code of [
@@ -36,12 +36,17 @@ test("sync status labels cover required UI states", () => {
   );
 });
 
-test("Scenario version badge only shows acknowledged publication and precise draft/demo state", () => {
+test("Scenario version column stays compact and preserves legacy representation", () => {
   assert.equal(syncBadge([{ script_id: "new", flow_id: "new", package_key: "new", name: "New", status: "missing_demo",
-    draft_status: "blocked", demo_status: "missing" }], "new"), "Not published · Draft blocked · Missing demo");
+    draft_status: "blocked", demo_status: "missing" }], "new"), "Missing demo");
+  assert.equal(scriptVersionLabel([], "new"), "v1");
   assert.equal(syncBadge([{ script_id: "old", flow_id: "old", package_key: "old", name: "Old", status: "local_changes",
     published_version: "1.0.0", draft_status: "changed", draft_version: "1.1", demo_status: "outdated" }], "old"),
-  "Published v1 (legacy 1.0.0) · Draft v1.1 · Pending");
+  "Pending");
+  assert.equal(scriptVersionLabel([{ script_id: "old", flow_id: "old", package_key: "old", name: "Old", status: "local_changes",
+    published_version: "1.0.0", draft_status: "unchanged" }], "old"), "v1.0.0");
+  assert.equal(scriptVersionLabel([{ script_id: "old", flow_id: "old", package_key: "old", name: "Old", status: "local_changes",
+    published_version: "1", draft_status: "changed", draft_version: "1.1" }], "old"), "v1.1");
 });
 
 test("content digest stable for same publish body; video does not change execution digest", () => {

@@ -252,11 +252,12 @@ export function SeoOpsSyncControls({
 export function syncBadge(rows: ScriptSyncRow[], flowId: string): string {
   const row = rows.find((r) => r.flow_id === flowId || r.script_id === flowId);
   if (!row) return "—";
-  const rawPublished = row.published_version;
-  const legacy = rawPublished && /^([1-9][0-9]*)\.0\.0$/.exec(rawPublished);
-  const published = rawPublished ? `Published v${legacy ? legacy[1] : rawPublished}${legacy ? ` (legacy ${rawPublished})` : ""}` : "Not published";
-  const draft = row.draft_status === "unchanged" ? "No draft changes"
-    : row.draft_status === "blocked" ? "Draft blocked"
-      : row.draft_status === "new" ? "New draft" : `Draft v${row.draft_version ?? "modified"}`;
-  return `${published} · ${draft} · ${labelForStatus(row.status)}`;
+  return labelForStatus(row.status);
+}
+
+export function scriptVersionLabel(rows: ScriptSyncRow[], flowId: string): string {
+  const row = rows.find((r) => r.flow_id === flowId || r.script_id === flowId);
+  if (!row) return "v1";
+  if (row.draft_status === "changed" && row.draft_version) return `v${row.draft_version}`;
+  return `v${row.published_version || "1"}`;
 }

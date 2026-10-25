@@ -1399,5 +1399,4 @@ body[data-panel="shell"] .app-shell > header > .environment { flex-shrink: 0; }
 .seo-ops-sync-controls { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
 .seo-ops-sync-summary { width: 100%; font-size: 12px; }
 .sync-badge { color: #9ec9ff; min-width: 5.5rem; }
-.scenario-version { display: grid; min-width: 18rem; gap: 2px; }
-.scenario-version > b { color: #dce9f8; font-size: .72rem; text-transform: uppercase; letter-spacing: .06em; }
+.script-version { color: #dce9f8; min-width: 3.5rem; white-space: nowrap; font-variant-numeric: tabular-nums; }
