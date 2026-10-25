@@ -188,7 +188,7 @@ export function ScenariosPage({ state, name, setName, locked, open, create, sess
                 </small>
               )}
               <small className="script-version" aria-label={`Version ${flow.name}`}>{scriptVersionLabel(syncRows, flow.id)}</small>
-              <small className="sync-badge" title={syncRows.find(r => r.flow_id === flow.id || r.script_id === flow.id)?.demo_reason || syncRows.find(r => r.flow_id === flow.id || r.script_id === flow.id)?.message}>
+              <small className="sync-badge" title={syncRows.find(r => r.flow_id === flow.id || r.script_id === flow.id)?.message || syncRows.find(r => r.flow_id === flow.id || r.script_id === flow.id)?.demo_reason}>
                 {syncBadge(syncRows, flow.id)}
               </small>
               <button disabled={disabled} onClick={() => open(flow.id)}>Mở Creator</button>

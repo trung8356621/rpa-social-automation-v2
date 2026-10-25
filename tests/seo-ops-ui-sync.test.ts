@@ -3,7 +3,7 @@ import { test } from "node:test";
 import { computeExecutionDigest, computeScriptContentDigest } from "../src/shared/script-digest.js";
 import { buildScriptPublishBody } from "../src/shared/script-release.js";
 import { importScriptRelease } from "../src/shared/script-sync.js";
-import { labelForStatus, statusFromPlanSides } from "../src/shared/sync-status.js";
+import { labelForStatus, publishBlockerMessage, statusFromPlanSides } from "../src/shared/sync-status.js";
 import type { Flow, Step } from "../src/shared/contracts.js";
 import { scriptVersionLabel, seoOpsSyncAvailability, syncBadge } from "../src/renderer/seo-ops-panel.js";
 
@@ -34,6 +34,13 @@ test("sync status labels cover required UI states", () => {
     }),
     "conflict",
   );
+});
+
+test("publish blockers retain distinct exact reasons and resolutions", () => {
+  assert.match(publishBlockerMessage(["steps_required", "missing_demo"]), /No Steps.*Missing demo/);
+  assert.match(publishBlockerMessage(["SCRIPT_VERSION_METADATA_INCOMPLETE"]), /Legacy release metadata incomplete/);
+  assert.match(publishBlockerMessage(["missing_asset:target.png"]), /Missing OCR asset.*target\.png/);
+  assert.match(publishBlockerMessage(["VIDEO_DEMO: Script execution changed"]), /Test Lab/);
 });
 
 test("Sync and Restore availability follows verified SEO-OPS session, not publish eligibility", () => {

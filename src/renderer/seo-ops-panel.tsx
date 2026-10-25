@@ -210,7 +210,8 @@ export function SeoOpsSyncControls({
       }
       applyRows(result.rows);
       const s = result.summary;
-      setMessage(s ? `Sync xong: ${s.backed_up} draft backup, ${s.published} published, ${s.unchanged} unchanged, ${s.blocked} publish blocked, ${s.reports} reports, ${s.failed} failed`
+      const prefix = s && (s.blocked > 0 || s.failed > 0) ? "Sync hoàn tất một phần" : "Sync hoàn tất";
+      setMessage(s ? `${prefix}: ${s.backed_up} drafts backed up, ${s.published} releases published, ${s.unchanged} releases unchanged, ${s.blocked} publish blocked, ${s.reports} reports downloaded, ${s.failed} failed`
         : `Sync xong: ${result.results.length} mục`);
     } catch (e) {
       setMessage(mapSeoOpsAuthError(String((e as Error).message || e)));

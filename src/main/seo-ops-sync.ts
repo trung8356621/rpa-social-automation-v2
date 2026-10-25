@@ -22,6 +22,7 @@ import {
   type SyncPlan,
 } from "../shared/script-sync.js";
 import {
+  publishBlockerMessage,
   statusFromPlanSides,
   type ScriptSyncRow,
   type SyncStatusCode,
@@ -391,7 +392,7 @@ export function createSeoOpsSyncService(options: {
         const release = resolveScriptReleaseState({ local: stored, remote: remoteById.get(flow.id),
           currentExecutionDigest: probe.execution_digest || "" });
         if (!release.ok) {
-          out.push({ ...probe, incomplete: true, incomplete_reasons: [release.error], release_conflict: release.error,
+          out.push({ ...probe, incomplete: true, incomplete_reasons: [...new Set([release.error, ...probe.incomplete_reasons])], release_conflict: release.error,
             published_version: stored.version, draft_status: "blocked" });
           continue;
         }
@@ -516,9 +517,9 @@ export function createSeoOpsSyncService(options: {
       });
       const prev = meta.rows[id];
       const message = missingDemo
-        ? "Missing demo — mở Test Lab, Run, rồi Use as Script Demo"
+        ? publishBlockerMessage(l?.incomplete_reasons || [MISSING_DEMO_REASON])
         : incomplete
-          ? (l?.incomplete_reasons || []).slice(0, 3).join(", ") || "incomplete"
+          ? publishBlockerMessage(l?.incomplete_reasons || []) || "incomplete"
           : error && (l || r)
             ? error
             : prev?.message;
@@ -686,13 +687,12 @@ export function createSeoOpsSyncService(options: {
     for (const row of refreshedLocal.filter((r) => r.incomplete)) {
       const missingDemo = hasMissingDemoReason(row.incomplete_reasons || []);
       // Missing-demo Scripts are skipped once — never thrown as sync errors (no auto-retry storm).
+      const blockerMessage = publishBlockerMessage(row.incomplete_reasons || ["incomplete"]);
       results.push({
         script_id: row.script_id,
-        action: "skip",
+        action: "publish_blocked",
         ok: true,
-        message: missingDemo
-          ? "missing_demo — open Test Lab to create demo"
-          : (row.incomplete_reasons || ["incomplete"]).join(", "),
+        message: blockerMessage,
       });
       meta.rows[row.script_id] = {
         ...(meta.rows[row.script_id] ?? {
@@ -704,9 +704,7 @@ export function createSeoOpsSyncService(options: {
         status: missingDemo ? "missing_demo" : "incomplete_assets",
         last_sync_at: now,
         last_result: missingDemo ? "missing_demo" : "incomplete",
-        message: missingDemo
-          ? "Missing demo — mở Test Lab, Run, rồi Use as Script Demo"
-          : (row.incomplete_reasons || []).slice(0, 3).join(", "),
+        message: blockerMessage,
         incomplete: true,
       };
     }
@@ -864,7 +862,7 @@ export function createSeoOpsSyncService(options: {
     }
 
     for (const skip of plan.skip) {
-      results.push({ script_id: skip.script_id, action: "skip", ok: true, message: skip.reason });
+      results.push({ script_id: skip.script_id, action: "unchanged", ok: true, message: skip.reason });
     }
     for (const conflict of plan.conflicts) {
       results.push({
@@ -876,16 +874,15 @@ export function createSeoOpsSyncService(options: {
     }
 
     meta.last_sync_at = now;
-    meta.last_result = results.every((r) => r.ok || r.action === "conflict" || r.action === "skip")
-      ? "ok"
-      : "partial";
+    meta.last_result = results.some(r => !r.ok) ? "partial"
+      : results.some(r => r.action === "publish_blocked") ? "blocked" : "ok";
     saveMeta(meta);
     const reports = await fetchReports();
     const rows = await refreshStatusRows();
     return { plan, results, rows, summary: {
       backed_up: backupError ? 0 : refreshedLocal.length,
       published: results.filter(r => r.action === "push" && r.ok).length,
-      unchanged: results.filter(r => r.action === "skip").length,
+      unchanged: results.filter(r => r.action === "unchanged").length,
       blocked: refreshedLocal.filter(r => r.incomplete).length,
       failed: results.filter(r => !r.ok).length,
       reports: reports.length,

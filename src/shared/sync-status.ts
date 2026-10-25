@@ -51,6 +51,21 @@ export function labelForStatus(code: SyncStatusCode): string {
   return SYNC_STATUS_LABEL[code] ?? code;
 }
 
+export function publishBlockerMessage(reasons: string[]): string {
+  return [...new Set(reasons)].map(reason => {
+    if (reason === "missing_demo") return "Missing demo — mở Test Lab, Run, rồi Use as Script Demo";
+    if (reason === "steps_required") return "No Steps — thêm ít nhất một Step hợp lệ";
+    if (reason === "SCRIPT_VERSION_METADATA_INCOMPLETE")
+      return "Legacy release metadata incomplete — cần khôi phục digest/version metadata đã xác minh";
+    if (reason === "SCRIPT_VERSION_CONFLICT") return "Version conflict — local và SEO-OPS không cùng release history";
+    if (reason === "invalid_variable_ref") return "Invalid Script — sửa Variable reference trong Step";
+    if (reason.startsWith("missing_asset:")) return `Missing OCR asset — ${reason.slice("missing_asset:".length)}`;
+    if (/execution changed|Step versions changed/i.test(reason)) return `${reason} — chạy Test Lab lại cho Draft hiện tại`;
+    if (/VIDEO_DEMO/i.test(reason)) return `${reason} — kiểm tra lại Script Demo`;
+    return reason;
+  }).join("; ");
+}
+
 /** Derive UI status from a plan entry for one script id. */
 export function statusFromPlanSides(input: {
   hasLocal: boolean;

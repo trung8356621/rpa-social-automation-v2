@@ -142,6 +142,16 @@ test("missing_demo Script is skipped without blocking peers", () => {
   assert.equal(labelForStatus("missing_demo"), "Missing demo");
 });
 
+test("blocked publish is not counted as unchanged when remote catalog is empty", () => {
+  const results = [
+    { action: "publish_blocked", ok: true },
+    { action: "publish_blocked", ok: true },
+    { action: "unchanged", ok: true },
+  ];
+  assert.equal(results.filter(result => result.action === "unchanged").length, 1);
+  assert.equal(results.filter(result => result.action === "publish_blocked").length, 2);
+});
+
 test("same digest skips — no release churn", () => {
   const probe = buildScriptCatalogSnapshot({ flow: readyFlow, steps: [readyStep], version: "1.0.0" });
   const body = buildScriptPublishBody({

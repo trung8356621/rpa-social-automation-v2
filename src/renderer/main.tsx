@@ -1264,7 +1264,7 @@ function Creator() {
         <>
           <header>
             {workspaceTabs}
-            {state?.flow && <span className="script-version" aria-label="Scenario version" title={syncBadge(scriptSyncRows, state.flow.id)}>
+            {state?.flow && <span className="script-version" aria-label="Scenario version" title={scriptSyncRows.find(row => row.flow_id === state.flow?.id || row.script_id === state.flow?.id)?.message || syncBadge(scriptSyncRows, state.flow.id)}>
               {scriptVersionLabel(scriptSyncRows, state.flow.id)}
             </span>}
             {activeCaseTab && <button disabled={navigationLocked} onClick={() => navigateApp("test-case")}>Cấu hình Case</button>}
