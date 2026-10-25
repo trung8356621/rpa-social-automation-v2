@@ -179,7 +179,7 @@ async function boot() {
   });
   const manualSeoOpsSync = async (
     command: "seoOpsSyncAll" | "seoOpsSyncFlow",
-    options: { flowId?: string; version?: string },
+    options: { flowId?: string },
   ) => {
     const response = await executeManualSync(() => seoOpsSync.syncAll(options),
       (error, detail) => logMainError(runDir, "seo-ops-manual-sync", error, { command, flowId: options.flowId, diagnostic: detail }));
@@ -1037,10 +1037,10 @@ async function boot() {
         };
       case "seoOpsSyncAll":
         isIdle();
-        return manualSeoOpsSync(command.type, { version: command.version });
+        return manualSeoOpsSync(command.type, {});
       case "seoOpsSyncFlow":
         isIdle();
-        return manualSeoOpsSync(command.type, { flowId: command.flowId, version: command.version });
+        return manualSeoOpsSync(command.type, { flowId: command.flowId });
       case "seoOpsBackupInfo":
         isIdle(); return seoOpsSync.backupInfo();
       case "seoOpsRestore": {
