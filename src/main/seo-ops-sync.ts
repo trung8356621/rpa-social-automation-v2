@@ -39,6 +39,7 @@ import {
 import { validatePayload, type Store } from "./storage.js";
 import { createAdminBackup } from "./admin-backup.js";
 import { readSeoOpsJson } from "../shared/seo-ops-http.js";
+import { nextPublishedScriptVersion, parsePublishedScriptVersion } from "../shared/script-version.js";
 
 export type SeoOpsConfig = {
   baseUrl: string;
@@ -57,7 +58,26 @@ type LocalCatalogRow = LocalScriptRow & {
   flow_id: string;
   video_attachment?: VideoDemoAttachment;
   demo_status?: ScriptSyncRow["demo_status"];
+  demo_reason?: string;
 };
+
+export async function collectScriptAssets(flow: Flow, steps: Step[], assetDir: string): Promise<{
+  assets: Array<{ path: string; sha256: string; kind: string }>;
+  complete: boolean;
+  missing: string[];
+}> {
+  const missing: string[] = [], assets: Array<{ path: string; sha256: string; kind: string }> = [], seen = new Set<string>();
+  for (const ref of flow.steps) {
+    const asset = steps.find(step => step.id === ref.id && step.version === ref.version)?.payload.target?.asset;
+    if (!asset || seen.has(asset)) continue;
+    seen.add(asset);
+    try {
+      const buf = await readFile(path.join(assetDir, asset));
+      assets.push({ path: asset, sha256: createHash("sha256").update(buf).digest("hex"), kind: "roi" });
+    } catch { missing.push(asset); }
+  }
+  return { assets, complete: missing.length === 0, missing };
+}
 
 function toPlanRow(row: LocalScriptRow): LocalScriptRow {
   return {
@@ -163,34 +183,14 @@ export function createSeoOpsSyncService(options: {
     complete: boolean;
     missing: string[];
   }> {
-    const missing: string[] = [];
-    const assets: Array<{ path: string; sha256: string; kind: string }> = [];
-    const seen = new Set<string>();
-    for (const ref of flow.steps) {
-      const step = steps.find((s) => s.id === ref.id && s.version === ref.version);
-      const asset = step?.payload.target?.asset;
-      if (!asset || seen.has(asset)) continue;
-      seen.add(asset);
-      const file = path.join(assetDir, asset);
-      try {
-        await access(file);
-        const buf = await readFile(file);
-        assets.push({
-          path: asset,
-          sha256: createHash("sha256").update(buf).digest("hex"),
-          kind: "roi",
-        });
-      } catch {
-        missing.push(asset);
-      }
-    }
-    return { assets, complete: missing.length === 0, missing };
+    return collectScriptAssets(flow, steps, assetDir);
   }
 
   async function resolveVideoDemo(
     flow: Flow,
     version: string,
     executionDigest: string,
+    legacyExecutionDigest?: string,
   ): Promise<{ demo?: ScriptVideoDemo; attachment?: VideoDemoAttachment; errors: string[] }> {
     const errors: string[] = [];
     const raw = store.setting(`videoDemo:${flow.id}`) || store.setting(`videoDemo:${flow.id}:${version}`);
@@ -199,11 +199,22 @@ export function createSeoOpsSyncService(options: {
     try {
       attachment = JSON.parse(raw) as VideoDemoAttachment;
     } catch {
-      return { errors: [MISSING_DEMO_REASON] };
+      return { errors: ["VIDEO_DEMO: metadata is invalid JSON"] };
     }
     try {
       assertDemoBelongsToScript(attachment, flow.id);
-      assertExecutionDigestMatches(attachment, executionDigest);
+      try { assertExecutionDigestMatches(attachment, executionDigest); }
+      catch (error) {
+        // Creator versions before asset-aware attachment computed the same
+        // execution manifest with an empty asset catalog. Accept only that exact
+        // legacy digest; Step pins are still checked below.
+        if (!legacyExecutionDigest || attachment.executionDigest?.toLowerCase() !== legacyExecutionDigest.toLowerCase()) throw error;
+      }
+      if (attachment.scriptVersion) parsePublishedScriptVersion(attachment.scriptVersion);
+      const expected = flow.steps.map(ref => `${ref.id}:${ref.version}`).sort();
+      const actual = (attachment.stepVersions ?? []).map(ref => `${ref.id}:${ref.version}`).sort();
+      if (expected.length !== actual.length || expected.some((ref, index) => ref !== actual[index]))
+        throw new Error("VIDEO_DEMO: pinned Step versions changed — run Test Lab again");
     } catch (e) {
       return { errors: [String((e as Error).message || e)] };
     }
@@ -243,7 +254,7 @@ export function createSeoOpsSyncService(options: {
     }
   }
 
-  async function localRow(flow: Flow, version = "1.0.0"): Promise<LocalCatalogRow> {
+  async function localRow(flow: Flow, version = "1"): Promise<LocalCatalogRow> {
     const steps = flow.steps
       .map((ref) => {
         try {
@@ -256,8 +267,9 @@ export function createSeoOpsSyncService(options: {
     const { assets, complete, missing } = await collectLocalAssets(flow, steps);
     // Probe execution digest first (video metadata must not affect it).
     const probe = buildScriptCatalogSnapshot({ flow, steps, version, assets });
+    const legacyProbe = buildScriptCatalogSnapshot({ flow, steps, version, assets: [] });
     const hasStoredDemo = Boolean(store.setting(`videoDemo:${flow.id}`) || store.setting(`videoDemo:${flow.id}:${version}`));
-    const resolved = await resolveVideoDemo(flow, version, probe.execution_digest);
+    const resolved = await resolveVideoDemo(flow, version, probe.execution_digest, legacyProbe.execution_digest);
     const snap = buildScriptCatalogSnapshot({
       flow,
       steps,
@@ -265,7 +277,9 @@ export function createSeoOpsSyncService(options: {
       assets,
       videoDemo: resolved.demo,
     });
-    const reasons = [...snap.incomplete_reasons];
+    // The release builder only sees a ready demo. Preserve "missing" exclusively
+    // for no association; a stored but stale/broken association gets its precise error.
+    const reasons = snap.incomplete_reasons.filter(reason => !(hasStoredDemo && reason === MISSING_DEMO_REASON));
     if (
       store
         .invalidSteps()
@@ -281,10 +295,7 @@ export function createSeoOpsSyncService(options: {
       reasons.push(...missing.map((m) => `missing_asset:${m}`));
     }
     for (const e of resolved.errors) {
-      if (!reasons.includes(e)) reasons.push(e.startsWith("VIDEO_DEMO") ? e : e);
-      if (e === MISSING_DEMO_REASON || e.startsWith("VIDEO_DEMO")) {
-        if (!reasons.includes(MISSING_DEMO_REASON)) reasons.push(MISSING_DEMO_REASON);
-      }
+      if (!reasons.includes(e)) reasons.push(e);
     }
     const incomplete = reasons.length > 0 || snap.incomplete || !complete || !snap.publish_body;
     const lineageRaw = store.setting(`seoOpsLineage:${flow.id}`);
@@ -303,15 +314,17 @@ export function createSeoOpsSyncService(options: {
       incomplete,
       incomplete_reasons: [...new Set(reasons)],
       video_attachment: resolved.attachment,
-      demo_status: resolved.demo ? "ready" : hasStoredDemo ? (resolved.errors.some(error => /execution changed/i.test(error)) ? "outdated" : "error") : "missing",
+      demo_status: resolved.demo ? "ready" : hasStoredDemo
+        ? (resolved.errors.some(error => /execution changed|Step versions changed/i.test(error)) ? "outdated" : "error") : "missing",
+      demo_reason: resolved.errors[0],
     };
   }
 
-  async function buildLocalCatalog(): Promise<LocalCatalogRow[]> {
+  async function buildLocalCatalog(versions?: Map<string, string>): Promise<LocalCatalogRow[]> {
     const out: LocalCatalogRow[] = [];
     for (const flow of store.flows()) {
       try {
-        const version = store.setting(`seoOpsVersion:${flow.id}`) || "1.0.0";
+        const version = versions?.get(flow.id) || store.setting(`seoOpsVersion:${flow.id}`) || "1";
         out.push(await localRow(flow, version));
       } catch (e) {
         // Never let one broken Scenario crash the whole catalog.
@@ -319,7 +332,7 @@ export function createSeoOpsSyncService(options: {
           script_id: flow.id,
           flow_id: flow.id,
           package_key: flow.id,
-          version: "0.0.0",
+          version: "1",
           content_digest: "0".repeat(64),
           lineage: [],
           assets_complete: false,
@@ -380,23 +393,25 @@ export function createSeoOpsSyncService(options: {
 
   async function refreshStatusRows(options?: { offlinePending?: boolean }): Promise<ScriptSyncRow[]> {
     const meta = loadMeta();
-    const local = await buildLocalCatalog();
     let remote: LocalScriptRow[] = [];
     let plan: SyncPlan | null = null;
     let error: string | undefined;
-    // Plan/catalog use publishable rows only so incomplete Scripts never hit publish validation.
-    const planLocal = local.filter((r) => !r.incomplete && r.publish_body);
     if (tokenStore.getToken()) {
       try {
         remote = await syncClient().catalog();
-        plan = await syncClient().plan(planLocal.map(toPlanRow));
       } catch (e) {
         error = String((e as Error).message || e);
-        plan = planScriptSync(planLocal, remote);
       }
-    } else {
-      plan = planScriptSync(planLocal, []);
     }
+    const versions = new Map(remote.map(row => [row.script_id, row.version]));
+    const local = await buildLocalCatalog(versions);
+    // Plan/catalog use publishable rows only so incomplete Scripts never hit publish validation.
+    const planLocal = local.filter((r) => !r.incomplete && r.publish_body);
+    if (!error && tokenStore.getToken()) {
+      try { plan = await syncClient().plan(planLocal.map(toPlanRow)); }
+      catch (e) { error = String((e as Error).message || e); }
+    }
+    plan ??= planScriptSync(planLocal, remote);
 
     const conflictIds = new Set(plan.conflicts.map((c) => c.script_id));
     const pushIds = new Set(plan.push_to_remote.map((r) => r.script_id));
@@ -446,6 +461,9 @@ export function createSeoOpsSyncService(options: {
         message,
         incomplete,
         demo_status: l?.demo_status,
+        demo_reason: l?.demo_reason,
+        published_version: r?.version || store.setting(`seoOpsVersion:${id}`) || undefined,
+        draft_status: incomplete ? "blocked" : !r ? "new" : skipIds.has(id) ? "unchanged" : "changed",
       };
     });
 
@@ -585,8 +603,7 @@ export function createSeoOpsSyncService(options: {
       const currentVersion = server?.version ?? store.setting(`seoOpsVersion:${flow.id}`) ?? "1";
       const current = await localRow(flow, currentVersion);
       if (!server || current.content_digest !== server.content_digest) {
-        const parsed = Number.parseInt(server?.version ?? "0", 10);
-        const nextVersion = String(Number.isSafeInteger(parsed) && parsed >= 0 ? parsed + 1 : 1);
+        const nextVersion = nextPublishedScriptVersion(server?.version);
         refreshedLocal.push(await localRow(flow, nextVersion));
       } else {
         refreshedLocal.push(current);

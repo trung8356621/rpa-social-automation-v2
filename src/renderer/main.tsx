@@ -10,7 +10,8 @@ import { AppNavigation, ScenariosPage } from "./app-shell";
 import { BrowserSessionsPage, SessionSelector } from "./browser-sessions";
 import { TestLabPage, TestCaseEditor, CaseResultView, ExecutionErrorView, type CaseEditorHandle } from "./test-lab";
 import { Variables, Groups } from "./flow-controls";
-import { SeoOpsAuthPanel } from "./seo-ops-panel";
+import { SeoOpsAuthPanel, syncBadge } from "./seo-ops-panel";
+import type { ScriptSyncRow } from "../shared/sync-status";
 import React, { useCallback, useEffect, useRef, useState } from "react";
 import { createRoot } from "react-dom/client";
 import { unstable_batchedUpdates } from "react-dom";
@@ -91,6 +92,7 @@ function Creator() {
   const [state, setState] = useDraft<State>("state");
   const [seoOpsAuthenticated, setSeoOpsAuthenticated] = useState(false);
   const [seoOpsAutoSyncEnabled, setSeoOpsAutoSyncEnabled] = useState(false);
+  const [scriptSyncRows, setScriptSyncRows] = useState<ScriptSyncRow[]>([]);
   const [focusVariableId, setFocusVariableId] = useState<string>();
   const appPage = state?.appPage ?? "scenarios";
   const creatorVisible = appPage === "creator";
@@ -98,6 +100,12 @@ function Creator() {
   useEffect(() => {
     if (["scenarios", "browser-sessions", "test-lab", "settings", "variations", "widget-registry", "workflows", "builds-releases"].includes(appPage)) setMainPage(appPage as MainPage);
   }, [appPage]);
+  useEffect(() => {
+    if (!shell || !seoOpsAuthenticated) { setScriptSyncRows([]); return; }
+    void window.creator.invoke({ type: "seoOpsSyncStatus" })
+      .then(result => setScriptSyncRows((result as { rows: ScriptSyncRow[] }).rows))
+      .catch(() => undefined);
+  }, [seoOpsAuthenticated, state?.flow?.id, state?.flow?.steps.length]);
   useEffect(() => {
     if (!shell) return;
     void window.creator.invoke({ type: "seoOpsGetSession" }).then((session) => {
@@ -1246,6 +1254,9 @@ function Creator() {
         <>
           <header>
             {workspaceTabs}
+            {state?.flow && <span className="sync-badge" title={scriptSyncRows.find(row => row.flow_id === state.flow?.id)?.demo_reason || scriptSyncRows.find(row => row.flow_id === state.flow?.id)?.message}>
+              {syncBadge(scriptSyncRows, state.flow.id)}
+            </span>}
             {activeCaseTab && <button disabled={navigationLocked} onClick={() => navigateApp("test-case")}>Cấu hình Case</button>}
             <SessionSelector state={state} locked={locked || stepPlayback[activeStepId]?.status === "running"} select={selectSession} />
             <button

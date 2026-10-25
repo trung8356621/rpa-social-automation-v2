@@ -5,6 +5,8 @@ import os from "node:os";
 import path from "node:path";
 import { Store } from "../src/main/storage.js";
 import { applyAdminBackup, createAdminBackup, inspectAdminBackup } from "../src/main/admin-backup.js";
+import { decodeZip, encodeZip } from "../src/main/package-zip.js";
+import { createHash } from "node:crypto";
 
 test("Full Backup bundles Windows upload files, OCR and demo media, then restores usable paths", async () => {
   const sourceDir = await mkdtemp(path.join(os.tmpdir(), "rpa-backup-source-"));
@@ -105,4 +107,21 @@ test("Full Backup without external assets remains complete and independently res
     await applyAdminBackup(target, restoreDir, bundle.archive, bundle.sha256);
     assert.equal(target.flows()[0].name, "No assets");
   } finally { source.close(); target.close(); await rm(sourceDir, { recursive: true, force: true }); await rm(restoreDir, { recursive: true, force: true }); }
+});
+
+test("Full Backup import rejects a Scenario pin whose immutable Step version is absent", async () => {
+  const root = await mkdtemp(path.join(os.tmpdir(), "rpa-backup-pin-"));
+  const source = new Store(path.join(root, "creator.sqlite"));
+  try {
+    source.newFlow("Pinned", 1); source.saveStep("Wait", { action: "SLEEP", sleepMs: 1 });
+    const bundle = await createAdminBackup(source, root, "install-a", 4);
+    const files = decodeZip(bundle.archive);
+    const snapshot = JSON.parse(files["creator.json"].toString()) as { flows: Array<{ payload: string }> };
+    const flow = JSON.parse(snapshot.flows[0].payload); flow.steps[0].version = 999; snapshot.flows[0].payload = JSON.stringify(flow);
+    files["creator.json"] = Buffer.from(JSON.stringify(snapshot));
+    const checksums = JSON.parse(files["checksums.json"].toString()) as Record<string, string>;
+    checksums["creator.json"] = createHash("sha256").update(files["creator.json"]).digest("hex");
+    files["checksums.json"] = Buffer.from(JSON.stringify(checksums));
+    assert.throws(() => inspectAdminBackup(encodeZip(files)), /pins missing Step/);
+  } finally { source.close(); await rm(root, { recursive: true, force: true }); }
 });

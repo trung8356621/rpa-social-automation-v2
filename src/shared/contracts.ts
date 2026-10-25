@@ -317,6 +317,7 @@ export type Command =
       includeVideoDemo?: boolean;
     }
   | { type: "exportFullBackup" }
+  | { type: "importFullBackup"; token?: string; confirmed?: boolean }
   | { type: "seoOpsGetSession" }
   | { type: "seoOpsSetEndpoint"; baseUrl: string }
   | { type: "seoOpsLogin"; email: string; password: string }

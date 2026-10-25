@@ -185,10 +185,31 @@ export function inspectAdminBackup(archive: Buffer, expectedSha256?: string) {
   const manifest = JSON.parse(files["manifest.json"].toString("utf8")) as BackupManifest;
   if (manifest.complete !== true) throw new Error(`RESTORE_INCOMPLETE: ${JSON.stringify(manifest.missing ?? [])}`);
   if (!["settings", "flows", "steps", "overrides", "runs"].every(table => Array.isArray(snapshot[table]))) throw new Error("RESTORE_INVALID: SQLite relationships unavailable");
+  const stepVersions = new Set((snapshot.steps as Array<{ id?: string; version?: number; payload?: string }>).map(row => `${row.id}:${row.version}`));
+  const flowIds = new Set<string>();
+  for (const row of snapshot.flows as Array<{ id?: string; payload?: string }>) {
+    const flow = JSON.parse(String(row.payload ?? "{}")) as Flow;
+    if (!flow.id || flow.id !== row.id || flowIds.has(flow.id)) throw new Error(`RESTORE_INVALID: invalid or duplicate Scenario ${String(row.id ?? "")}`);
+    flowIds.add(flow.id);
+    for (const ref of flow.steps ?? []) if (!stepVersions.has(`${ref.id}:${ref.version}`))
+      throw new Error(`RESTORE_INVALID: ${flow.name || flow.id} pins missing Step ${ref.id} v${ref.version}`);
+  }
+  for (const row of snapshot.overrides as Array<{ step_id?: string; base_version?: number; payload?: string }>) {
+    const override = JSON.parse(String(row.payload ?? "{}")) as Override;
+    const stepId = override.stepId || String(row.step_id ?? ""), version = override.baseVersion ?? Number(row.base_version);
+    if (!stepVersions.has(`${stepId}:${version}`)) throw new Error(`RESTORE_INVALID: Override ${override.name || ""} references missing Step ${stepId} v${version}`);
+  }
   for (const binding of manifest.uploadBindings ?? []) if (!files[binding.archiveRef]) throw new Error(`RESTORE_ASSET_MISSING: ${binding.archiveRef}`);
   for (const row of snapshot.steps as Array<{ payload?: string }>) {
     const step = JSON.parse(String(row.payload ?? "{}")) as Step, asset = step.payload?.target?.asset;
     if (asset && !files[`targets/${asset}`]) throw new Error(`RESTORE_ASSET_MISSING: ${asset}`);
+  }
+  for (const row of snapshot.overrides as Array<{ payload?: string }>) {
+    const override = JSON.parse(String(row.payload ?? "{}")) as Override;
+    for (const payload of override.segment ?? []) {
+      const asset = payload.target?.asset;
+      if (asset && !files[`targets/${asset}`]) throw new Error(`RESTORE_ASSET_MISSING: ${asset}`);
+    }
   }
   for (const row of snapshot.settings as Array<{ key?: string; value?: string }>) {
     if (!String(row.key).startsWith("videoDemo:")) continue;

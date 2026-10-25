@@ -68,7 +68,7 @@ import {
   assertExecutionDigestMatches,
 } from "../shared/video-demo-policy.js";
 import { createSeoOpsTokenStore } from "./seo-ops-token-store.js";
-import { createSeoOpsSyncService } from "./seo-ops-sync.js";
+import { collectScriptAssets, createSeoOpsSyncService } from "./seo-ops-sync.js";
 import {
   createSeoOpsAutoSync,
   isSeoOpsAutoSyncEnabled,
@@ -148,6 +148,7 @@ async function boot() {
     return true;
   });
   const store = new Store(path.join(dataPath, "creator.sqlite"));
+  const pendingBackupImports = new Map<string, { archive: Buffer; sha256: string }>();
   const seoOpsSync = createSeoOpsSyncService({
     store,
     assetDir,
@@ -827,12 +828,14 @@ async function boot() {
         const flow = store.flows().find((f) => f.id === item.flowId);
         if (!flow) throw new Error("VIDEO_DEMO: Scenario/Script not found");
         const steps = flow.steps.map((ref) => store.step(ref.id, ref.version));
-        const scriptVersion = command.scriptVersion || store.setting(`seoOpsVersion:${flow.id}`) || "1.0.0";
+        const scriptVersion = command.scriptVersion || store.setting(`seoOpsVersion:${flow.id}`) || "1";
+        const { assets, complete, missing } = await collectScriptAssets(flow, steps, assetDir);
+        if (!complete) throw new Error(`VIDEO_DEMO: OCR assets missing — ${missing.join(", ")}`);
         const snap = buildScriptCatalogSnapshot({
           flow,
           steps,
           version: scriptVersion,
-          assets: [],
+          assets,
           videoDemo: undefined,
         });
         // Probe digest without demo requirement side-effects: recompute execution from assembled steps.
@@ -899,6 +902,36 @@ async function boot() {
         } catch (error) {
           logMainError(runDir, "backup-export", error);
           return { status: "failed", cancelled: false, message: "Không thể tạo hoặc xác minh Full Backup. Xem application log để biết chi tiết." };
+        }
+      }
+      case "importFullBackup": {
+        isIdle();
+        try {
+          if (!command.token) {
+            const selected = await dialog.showOpenDialog(window, { title: "Import Full Backup",
+              properties: ["openFile"], filters: [{ name: "RPA Full Backup", extensions: ["zip"] }] });
+            if (selected.canceled || !selected.filePaths[0]) return { status: "cancelled", cancelled: true };
+            const archive = await readFile(selected.filePaths[0]);
+            const checked = inspectAdminBackup(archive);
+            const token = randomUUID(); pendingBackupImports.clear();
+            pendingBackupImports.set(token, { archive, sha256: checked.sha256 });
+            return { status: "preview", token, counts: checked.manifest.counts,
+              hasExistingData: store.flows().length > 0 || store.steps().length > 0,
+              createdAt: checked.manifest.createdAt };
+          }
+          const pending = pendingBackupImports.get(command.token);
+          if (!pending) throw new Error("RESTORE_EXPIRED: hãy chọn lại file backup");
+          const hasExistingData = store.flows().length > 0 || store.steps().length > 0;
+          if (hasExistingData && command.confirmed !== true) return { status: "preview", token: command.token,
+            counts: inspectAdminBackup(pending.archive, pending.sha256).manifest.counts, hasExistingData, requiresConfirmation: true };
+          const applied = await applyAdminBackup(store, dataPath, pending.archive, pending.sha256);
+          pendingBackupImports.delete(command.token);
+          logMainEvent(runDir, "backup-import-restored", { counts: applied.manifest.counts, rollbackPath: applied.rollbackPath });
+          return { status: "restored", restored: true, counts: applied.manifest.counts,
+            rollbackPath: applied.rollbackPath, state: state() };
+        } catch (error) {
+          logMainError(runDir, "backup-import", error);
+          return { status: "failed", message: String((error as Error).message || error).replace(/^RESTORE_[A-Z_]+:\s*/, "") };
         }
       }
       case "exportScriptRelease": {

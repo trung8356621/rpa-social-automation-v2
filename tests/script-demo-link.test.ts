@@ -51,7 +51,10 @@ test("selected Test Run demo persists, survives newer runs, updates explicitly, 
     assert.equal((await service.refreshStatusRows()).find(row => row.script_id === flow.id)?.demo_status, "ready");
 
     const step2 = store.saveStep("Wait", { action: "SLEEP", sleepMs: 20 }, step1.id);
-    assert.equal((await service.refreshStatusRows()).find(row => row.script_id === flow.id)?.demo_status, "outdated");
+    const outdated = (await service.refreshStatusRows()).find(row => row.script_id === flow.id)!;
+    assert.equal(outdated.demo_status, "outdated");
+    assert.equal(outdated.status, "incomplete_assets", "an outdated stored demo must not be mislabeled missing_demo");
+    assert.doesNotMatch(outdated.message ?? "", /Missing demo/i);
     const changed = store.flow()!;
     const digest2 = buildScriptCatalogSnapshot({ flow: changed, steps: [step2], version: "1.0.0", assets: [] }).execution_digest;
     const second = attachVideoDemo({ scriptId: flow.id, scriptVersion: "1.0.0", caseId, testRunId: run2,
@@ -103,4 +106,25 @@ test("selected Test Run demo persists, survives newer runs, updates explicitly, 
     store.close();
     await rm(root, { recursive: true, force: true }).catch(() => {});
   }
+});
+
+test("legacy demos created before asset-aware attachment remain valid only with exact pins and legacy digest", async () => {
+  const root = await mkdtemp(path.join(os.tmpdir(), "creator-demo-assets-"));
+  const evidence = path.join(root, "test-runs"), assets = path.join(root, "targets");
+  const store = new Store(path.join(root, "creator.sqlite"));
+  try {
+    const roi = "44444444-4444-4444-4444-444444444444.png";
+    await mkdir(assets, { recursive: true }); await writeFile(path.join(assets, roi), "roi");
+    const flow = store.newFlow("Legacy asset demo", 1);
+    const step = store.saveStep("Click", { action: "CLICK_TARGET", target: { asset: roi, roi: { x: 0, y: 0, width: 10, height: 10 } } });
+    const current = store.flow()!, legacyDigest = buildScriptCatalogSnapshot({ flow: current, steps: [step], version: "1.0.0", assets: [] }).execution_digest;
+    const refs = await promoteScriptDemoFiles({ testRunsDir: evidence, flowId: flow.id, runId: run1,
+      ...(await (async () => { const dir = path.join(root, "source"); await mkdir(dir); const video = path.join(dir, "recording.webm"), thumbnail = path.join(dir, "recording-thumb.jpg");
+        await writeFile(video, "video"); await writeFile(thumbnail, "thumb"); return { videoSource: video, thumbnailSource: thumbnail }; })()) });
+    store.setSetting(`videoDemo:${flow.id}`, JSON.stringify(attachVideoDemo({ scriptId: flow.id, scriptVersion: "1.0.0", caseId,
+      testRunId: run1, executionDigest: legacyDigest, reviewed: true, ...refs, stepVersions: current.steps, selectedAt: new Date().toISOString() })));
+    const service = createSeoOpsSyncService({ store, assetDir: assets, testRunsDir: evidence, dataPath: root,
+      tokenStore: { getToken: () => null, setToken: () => {} } });
+    assert.equal((await service.refreshStatusRows()).find(row => row.script_id === flow.id)?.demo_status, "ready");
+  } finally { store.close(); await rm(root, { recursive: true, force: true }).catch(() => {}); }
 });

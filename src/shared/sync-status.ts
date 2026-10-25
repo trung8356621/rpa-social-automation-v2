@@ -41,6 +41,9 @@ export type ScriptSyncRow = {
   message?: string;
   incomplete?: boolean;
   demo_status?: "ready" | "missing" | "outdated" | "error";
+  demo_reason?: string;
+  published_version?: string;
+  draft_status?: "new" | "unchanged" | "changed" | "blocked";
 };
 
 export function labelForStatus(code: SyncStatusCode): string {

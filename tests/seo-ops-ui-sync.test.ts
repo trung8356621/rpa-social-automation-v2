@@ -5,6 +5,7 @@ import { buildScriptPublishBody } from "../src/shared/script-release.js";
 import { importScriptRelease } from "../src/shared/script-sync.js";
 import { labelForStatus, statusFromPlanSides } from "../src/shared/sync-status.js";
 import type { Flow, Step } from "../src/shared/contracts.js";
+import { syncBadge } from "../src/renderer/seo-ops-panel.js";
 
 test("sync status labels cover required UI states", () => {
   for (const code of [
@@ -33,6 +34,14 @@ test("sync status labels cover required UI states", () => {
     }),
     "conflict",
   );
+});
+
+test("Scenario version badge only shows acknowledged publication and precise draft/demo state", () => {
+  assert.equal(syncBadge([{ script_id: "new", flow_id: "new", package_key: "new", name: "New", status: "missing_demo",
+    draft_status: "blocked", demo_status: "missing" }], "new"), "Not published · Draft blocked · Missing demo");
+  assert.equal(syncBadge([{ script_id: "old", flow_id: "old", package_key: "old", name: "Old", status: "local_changes",
+    published_version: "1.0.0", draft_status: "changed", demo_status: "outdated" }], "old"),
+  "Published v1.0.0 · Draft changed · Demo outdated");
 });
 
 test("content digest stable for same publish body; video does not change execution digest", () => {

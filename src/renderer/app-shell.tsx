@@ -53,6 +53,8 @@ export function ScenariosPage({ state, name, setName, locked, open, create, sess
   const [working, setWorking] = useState(false);
   const [error, setError] = useState("");
   const [backupResult, setBackupResult] = useState<BackupResult>();
+  const [importResult, setImportResult] = useState<{ status: string; token?: string; message?: string;
+    counts?: BackupResult["counts"]; hasExistingData?: boolean; rollbackPath?: string }>();
   const [syncRows, setSyncRows] = useState<ScriptSyncRow[]>([]);
   const organization: ScenarioOrganization = state?.scenarioOrganization ?? { groups: [], membership: {}, ungroupedCollapsed: false };
   const disabled = locked || working;
@@ -96,6 +98,12 @@ export function ScenariosPage({ state, name, setName, locked, open, create, sess
           .catch(() => setBackupResult({ status: "failed", message: "Không thể tạo Full Backup. Xem application log để biết chi tiết." }))
           .finally(() => setWorking(false));
       }}>Export Full Backup (.zip)</button>
+      <button disabled={disabled || !invoke} onClick={() => {
+        if (!invoke) return; setWorking(true); setImportResult({ status: "working", message: "Đang kiểm tra backup…" });
+        void invoke<{ status: string; token?: string; message?: string; counts?: BackupResult["counts"]; hasExistingData?: boolean }>({ type: "importFullBackup" })
+          .then(setImportResult).catch(() => setImportResult({ status: "failed", message: "Không thể đọc Full Backup. Xem application log." }))
+          .finally(() => setWorking(false));
+      }}>Import Full Backup (.zip)</button>
       {sessionControl}
       {invoke && (
         <SeoOpsSyncControls
@@ -120,6 +128,24 @@ export function ScenariosPage({ state, name, setName, locked, open, create, sess
       }, {})).map(([reference, group]) => <li key={reference}><strong>{reference} → {group.paths.length} file thiếu</strong>
         {group.scenarioId && <button type="button" onClick={() => open(group.scenarioId!)}>Mở Scenario để sửa</button>}
         <details><summary>Xem đường dẫn</summary>{group.paths.map(file => <code key={file}>{file}</code>)}</details></li>)}</ul>}
+    </section>}
+    {importResult && importResult.status !== "cancelled" && <section className={`backup-result ${importResult.status}`} role={importResult.status === "failed" ? "alert" : "status"}>
+      <b>{importResult.status === "working" ? "Đang kiểm tra backup"
+        : importResult.status === "preview" ? "Backup hợp lệ — sẵn sàng khôi phục"
+          : importResult.status === "restored" ? "Đã khôi phục Full Backup" : "Import thất bại"}</b>
+      {importResult.message && <p>{importResult.message}</p>}
+      {importResult.counts && <p>{importResult.counts.scenarios} Scenario · {importResult.counts.stepVersions} Step versions · {importResult.counts.assets} assets</p>}
+      {importResult.status === "preview" && importResult.token && <><p>{importResult.hasExistingData
+        ? "Dữ liệu hiện tại sẽ được thay thế sau khi tạo rollback backup. Không merge dữ liệu."
+        : "Profile hiện tại trống. Một rollback backup vẫn sẽ được tạo trước khi restore."}</p>
+        <button className="primary" disabled={disabled} onClick={() => {
+          if (!invoke || !window.confirm("Khôi phục backup này? Dữ liệu hiện tại sẽ được thay thế và lưu rollback riêng.")) return;
+          setWorking(true); const token = importResult.token!; setImportResult({ ...importResult, status: "working", message: "Đang khôi phục…" });
+          void invoke<{ status: string; message?: string; counts?: BackupResult["counts"]; rollbackPath?: string }>({ type: "importFullBackup", token, confirmed: true })
+            .then(result => { setImportResult(result); if (result.status === "restored") window.location.reload(); })
+            .catch(() => setImportResult({ status: "failed", message: "Khôi phục thất bại. Dữ liệu rollback đã được giữ lại." }))
+            .finally(() => setWorking(false));
+        }}>Xác nhận khôi phục</button></>}
     </section>}
     {creating && <form className="scenario-create" onSubmit={event => { event.preventDefault(); create(); }}>
       <label>Tên Scenario mới<input aria-label="Tên flow mới" value={name} disabled={disabled}
@@ -157,7 +183,7 @@ export function ScenariosPage({ state, name, setName, locked, open, create, sess
                   {invalidPinned.length} Step cần sửa
                 </small>
               )}
-              <small className="sync-badge" title={syncRows.find(r => r.flow_id === flow.id || r.script_id === flow.id)?.message}>
+              <small className="sync-badge" title={syncRows.find(r => r.flow_id === flow.id || r.script_id === flow.id)?.demo_reason || syncRows.find(r => r.flow_id === flow.id || r.script_id === flow.id)?.message}>
                 {syncBadge(syncRows, flow.id)}
               </small>
               <button disabled={disabled} onClick={() => open(flow.id)}>Mở Creator</button>
