@@ -39,7 +39,8 @@ import {
 import { validatePayload, type Store } from "./storage.js";
 import { createAdminBackup } from "./admin-backup.js";
 import { readSeoOpsJson } from "../shared/seo-ops-http.js";
-import { nextPublishedScriptVersion, parsePublishedScriptVersion } from "../shared/script-version.js";
+import { parsePublishedScriptVersion } from "../shared/script-version.js";
+import { resolveScriptReleaseState, type StoredScriptRelease } from "../shared/script-release-state.js";
 
 export type SeoOpsConfig = {
   baseUrl: string;
@@ -59,6 +60,10 @@ type LocalCatalogRow = LocalScriptRow & {
   video_attachment?: VideoDemoAttachment;
   demo_status?: ScriptSyncRow["demo_status"];
   demo_reason?: string;
+  published_version?: string;
+  draft_status?: ScriptSyncRow["draft_status"];
+  draft_version?: string;
+  release_conflict?: string;
 };
 
 export async function collectScriptAssets(flow: Flow, steps: Step[], assetDir: string): Promise<{
@@ -176,6 +181,41 @@ export function createSeoOpsSyncService(options: {
 
   function saveMeta(meta: SyncMeta) {
     store.setSetting("seoOpsSyncMeta", JSON.stringify(meta));
+  }
+
+  function loadReleaseMeta(flowId: string): StoredScriptRelease {
+    let pending: StoredScriptRelease = {};
+    try { pending = JSON.parse(store.setting(`seoOpsPendingRelease:${flowId}`) || "{}") as StoredScriptRelease; }
+    catch { pending = {}; }
+    return {
+      version: store.setting(`seoOpsVersion:${flowId}`) || undefined,
+      contentDigest: store.setting(`seoOpsPublishedDigest:${flowId}`) || undefined,
+      executionDigest: store.setting(`seoOpsPublishedExecutionDigest:${flowId}`) || undefined,
+      pendingVersion: pending.pendingVersion,
+      pendingContentDigest: pending.pendingContentDigest,
+      pendingExecutionDigest: pending.pendingExecutionDigest,
+    };
+  }
+
+  function saveRecoveredReleaseMeta(flowId: string, meta: StoredScriptRelease) {
+    if (meta.version) store.setSetting(`seoOpsVersion:${flowId}`, meta.version);
+    if (meta.contentDigest) store.setSetting(`seoOpsPublishedDigest:${flowId}`, meta.contentDigest);
+    if (meta.executionDigest) store.setSetting(`seoOpsPublishedExecutionDigest:${flowId}`, meta.executionDigest);
+  }
+
+  function savePendingRelease(row: LocalCatalogRow) {
+    store.setSetting(`seoOpsPendingRelease:${row.flow_id}`, JSON.stringify({
+      pendingVersion: row.version,
+      pendingContentDigest: row.content_digest,
+      pendingExecutionDigest: row.execution_digest,
+    } satisfies StoredScriptRelease));
+  }
+
+  function completeRelease(row: LocalCatalogRow) {
+    store.setSetting(`seoOpsVersion:${row.flow_id}`, row.version);
+    store.setSetting(`seoOpsPublishedDigest:${row.flow_id}`, row.content_digest);
+    if (row.execution_digest) store.setSetting(`seoOpsPublishedExecutionDigest:${row.flow_id}`, row.execution_digest);
+    store.setSetting(`seoOpsPendingRelease:${row.flow_id}`, "{}");
   }
 
   async function collectLocalAssets(flow: Flow, steps: Step[]): Promise<{
@@ -320,12 +360,23 @@ export function createSeoOpsSyncService(options: {
     };
   }
 
-  async function buildLocalCatalog(versions?: Map<string, string>): Promise<LocalCatalogRow[]> {
+  async function buildLocalCatalog(remoteById = new Map<string, LocalScriptRow>()): Promise<LocalCatalogRow[]> {
     const out: LocalCatalogRow[] = [];
     for (const flow of store.flows()) {
       try {
-        const version = versions?.get(flow.id) || store.setting(`seoOpsVersion:${flow.id}`) || "1";
-        out.push(await localRow(flow, version));
+        const stored = loadReleaseMeta(flow.id);
+        const probe = await localRow(flow, stored.pendingVersion || stored.version || "1");
+        const release = resolveScriptReleaseState({ local: stored, remote: remoteById.get(flow.id),
+          currentExecutionDigest: probe.execution_digest || "" });
+        if (!release.ok) {
+          out.push({ ...probe, incomplete: true, incomplete_reasons: [release.error], release_conflict: release.error,
+            published_version: stored.version, draft_status: "blocked" });
+          continue;
+        }
+        if (release.adoptedRemote) saveRecoveredReleaseMeta(flow.id, release.local);
+        const row = release.targetVersion === probe.version ? probe : await localRow(flow, release.targetVersion);
+        out.push({ ...row, published_version: release.local.version, draft_status: release.draftStatus,
+          draft_version: release.draftVersion });
       } catch (e) {
         // Never let one broken Scenario crash the whole catalog.
         out.push({
@@ -403,8 +454,8 @@ export function createSeoOpsSyncService(options: {
         error = String((e as Error).message || e);
       }
     }
-    const versions = new Map(remote.map(row => [row.script_id, row.version]));
-    const local = await buildLocalCatalog(versions);
+    const remoteMap = new Map(remote.map(row => [row.script_id, row]));
+    const local = await buildLocalCatalog(remoteMap);
     // Plan/catalog use publishable rows only so incomplete Scripts never hit publish validation.
     const planLocal = local.filter((r) => !r.incomplete && r.publish_body);
     if (!error && tokenStore.getToken()) {
@@ -462,8 +513,9 @@ export function createSeoOpsSyncService(options: {
         incomplete,
         demo_status: l?.demo_status,
         demo_reason: l?.demo_reason,
-        published_version: r?.version || store.setting(`seoOpsVersion:${id}`) || undefined,
-        draft_status: incomplete ? "blocked" : !r ? "new" : skipIds.has(id) ? "unchanged" : "changed",
+        published_version: l?.published_version,
+        draft_status: l?.release_conflict ? "blocked" : l?.draft_status,
+        draft_version: l?.draft_version,
       };
     });
 
@@ -589,7 +641,7 @@ export function createSeoOpsSyncService(options: {
     };
   }
 
-  async function syncAll(options?: { flowId?: string; version?: string }) {
+  async function syncAll(options?: { flowId?: string }) {
     if (!tokenStore.getToken()) throw new Error("SEO_OPS: cần đăng nhập trước khi sync");
     let backupError: string | undefined;
     try { await backupNow(); } catch (error) { backupError = String((error as Error).message || error); }
@@ -597,18 +649,8 @@ export function createSeoOpsSyncService(options: {
     const remote = await client.catalog();
     const remoteById = new Map(remote.map(row => [row.script_id, row]));
     const selectedFlows = options?.flowId ? store.flows().filter(flow => flow.id === options.flowId) : store.flows();
-    const refreshedLocal: LocalCatalogRow[] = [];
-    for (const flow of selectedFlows) {
-      const server = remoteById.get(flow.id);
-      const currentVersion = server?.version ?? store.setting(`seoOpsVersion:${flow.id}`) ?? "1";
-      const current = await localRow(flow, currentVersion);
-      if (!server || current.content_digest !== server.content_digest) {
-        const nextVersion = nextPublishedScriptVersion(server?.version);
-        refreshedLocal.push(await localRow(flow, nextVersion));
-      } else {
-        refreshedLocal.push(current);
-      }
-    }
+    const selectedIds = new Set(selectedFlows.map(flow => flow.id));
+    const refreshedLocal = (await buildLocalCatalog(remoteById)).filter(row => selectedIds.has(row.flow_id));
     const now = new Date().toISOString();
     const meta = loadMeta();
     const results: Array<{ script_id: string; action: string; ok: boolean; message?: string }> = [];
@@ -661,6 +703,7 @@ export function createSeoOpsSyncService(options: {
           results.push({ script_id: row.script_id, action: "skip", ok: true, message: "incomplete — no publish body" });
           continue;
         }
+        savePendingRelease(full);
         const published = await client.publish(full.publish_body);
         let ok = published.httpStatus < 300 && (published as { ok?: boolean }).ok !== false;
         let message = ok ? "pushed" : JSON.stringify((published as { errors?: string[] }).errors ?? published);
@@ -699,7 +742,7 @@ export function createSeoOpsSyncService(options: {
           message,
         });
         if (ok) {
-          store.setSetting(`seoOpsVersion:${full.flow_id}`, full.version);
+          completeRelease(full);
           const lineage = JSON.parse(store.setting(`seoOpsLineage:${full.flow_id}`) || "[]") as string[];
           lineage.push(full.content_digest);
           store.setSetting(`seoOpsLineage:${full.flow_id}`, JSON.stringify(lineage.slice(-20)));

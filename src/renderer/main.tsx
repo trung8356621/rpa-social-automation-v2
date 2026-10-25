@@ -1254,8 +1254,8 @@ function Creator() {
         <>
           <header>
             {workspaceTabs}
-            {state?.flow && <span className="sync-badge" title={scriptSyncRows.find(row => row.flow_id === state.flow?.id)?.demo_reason || scriptSyncRows.find(row => row.flow_id === state.flow?.id)?.message}>
-              {syncBadge(scriptSyncRows, state.flow.id)}
+            {state?.flow && <span className="sync-badge" aria-label="Scenario version" title={scriptSyncRows.find(row => row.flow_id === state.flow?.id)?.demo_reason || scriptSyncRows.find(row => row.flow_id === state.flow?.id)?.message}>
+              <b>Version:</b> {syncBadge(scriptSyncRows, state.flow.id)}
             </span>}
             {activeCaseTab && <button disabled={navigationLocked} onClick={() => navigateApp("test-case")}>Cấu hình Case</button>}
             <SessionSelector state={state} locked={locked || stepPlayback[activeStepId]?.status === "running"} select={selectSession} />

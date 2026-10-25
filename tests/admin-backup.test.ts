@@ -53,6 +53,10 @@ test("Full Backup bundles Windows upload files, OCR and demo media, then restore
     source.saveStep("OCR", { action: "CLICK_TARGET", target: { asset: roi, roi: { x: 0, y: 0, width: 10, height: 10 } } }, ocrV1.id);
     source.selectVersion(ocrV1.id, 1);
     source.setSetting(`videoDemo:${flow.id}`, JSON.stringify({ artifactRef: "demos/flow/run/recording.webm", thumbnailRef: "demos/flow/run/recording-thumb.jpg" }));
+    source.setSetting(`seoOpsVersion:${flow.id}`, "2");
+    source.setSetting(`seoOpsPublishedDigest:${flow.id}`, "content-v2");
+    source.setSetting(`seoOpsPublishedExecutionDigest:${flow.id}`, "execution-v2");
+    source.setSetting(`seoOpsPendingRelease:${flow.id}`, JSON.stringify({ pendingVersion: "3", pendingExecutionDigest: "execution-v3" }));
     source.setSetting("password", "must-not-export");
     const dbBefore = await readFile(path.join(sourceDir, "creator.sqlite"));
     const imageBefore = await readFile(imageA);
@@ -79,6 +83,9 @@ test("Full Backup bundles Windows upload files, OCR and demo media, then restore
     assert.equal(await readFile(restoredFiles[1], "utf8"), "image-b");
     assert.equal(target.step(upload.id, upload.version).payload.variableId, "imgs");
     assert.equal(target.flow()!.steps.find(ref => ref.id === ocrV1.id)!.version, 1);
+    assert.equal(target.setting(`seoOpsVersion:${flow.id}`), "2", "restore preserves published generation");
+    assert.equal(target.setting(`seoOpsPublishedExecutionDigest:${flow.id}`), "execution-v2");
+    assert.match(target.setting(`seoOpsPendingRelease:${flow.id}`) ?? "", /"pendingVersion":"3"/);
     assert.equal(await readFile(path.join(restoreDir, "targets", roi), "utf8"), "roi");
     assert.equal(await readFile(path.join(restoreDir, "test-runs", "demos", "flow", "run", "recording.webm"), "utf8"), "video");
     assert.equal(await readFile(path.join(restoreDir, "test-runs", "demos", "flow", "run", "recording-thumb.jpg"), "utf8"), "thumb");

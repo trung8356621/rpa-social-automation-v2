@@ -88,7 +88,7 @@ test("selected Test Run demo persists, survives newer runs, updates explicitly, 
       throw new Error(`Unexpected test URL: ${address}`);
     };
     try {
-      const sync = await service.syncAll({ flowId: flow.id, version: "1.0.0" });
+      const sync = await service.syncAll({ flowId: flow.id });
       const push = sync.results.find(result => result.action === "push");
       assert.equal(push?.ok, false, "metadata publish must not count as success when video transfer fails");
       assert.equal(publishedVersion, "1", "Admin assigns version 1 without user input");

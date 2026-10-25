@@ -40,8 +40,8 @@ test("Scenario version badge only shows acknowledged publication and precise dra
   assert.equal(syncBadge([{ script_id: "new", flow_id: "new", package_key: "new", name: "New", status: "missing_demo",
     draft_status: "blocked", demo_status: "missing" }], "new"), "Not published · Draft blocked · Missing demo");
   assert.equal(syncBadge([{ script_id: "old", flow_id: "old", package_key: "old", name: "Old", status: "local_changes",
-    published_version: "1.0.0", draft_status: "changed", demo_status: "outdated" }], "old"),
-  "Published v1.0.0 · Draft changed · Demo outdated");
+    published_version: "1.0.0", draft_status: "changed", draft_version: "1.1", demo_status: "outdated" }], "old"),
+  "Published v1 (legacy 1.0.0) · Draft v1.1 · Pending");
 });
 
 test("content digest stable for same publish body; video does not change execution digest", () => {

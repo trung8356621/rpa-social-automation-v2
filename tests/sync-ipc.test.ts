@@ -9,7 +9,7 @@ const cloneableResult = () => ({
 });
 
 test("manual Sync IPC returns a structured-clone-compatible success payload", async () => {
-  assert.doesNotThrow(() => assertIpcSerializable({ type: "seoOpsSyncFlow", flowId: "script-1", version: "1.0.0" }));
+  assert.doesNotThrow(() => assertIpcSerializable({ type: "seoOpsSyncFlow", flowId: "script-1" }));
   const response = await executeManualSync(async () => cloneableResult());
   assert.equal(response.ok, true);
   assert.doesNotThrow(() => structuredClone(response));

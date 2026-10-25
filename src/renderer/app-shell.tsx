@@ -183,9 +183,12 @@ export function ScenariosPage({ state, name, setName, locked, open, create, sess
                   {invalidPinned.length} Step cần sửa
                 </small>
               )}
-              <small className="sync-badge" title={syncRows.find(r => r.flow_id === flow.id || r.script_id === flow.id)?.demo_reason || syncRows.find(r => r.flow_id === flow.id || r.script_id === flow.id)?.message}>
-                {syncBadge(syncRows, flow.id)}
-              </small>
+              <div className="scenario-version" aria-label={`Version ${flow.name}`}>
+                <b>Version</b>
+                <small className="sync-badge" title={syncRows.find(r => r.flow_id === flow.id || r.script_id === flow.id)?.demo_reason || syncRows.find(r => r.flow_id === flow.id || r.script_id === flow.id)?.message}>
+                  {syncBadge(syncRows, flow.id)}
+                </small>
+              </div>
               <button disabled={disabled} onClick={() => open(flow.id)}>Mở Creator</button>
               <details><summary aria-label={`Menu Scenario ${flow.name}`}>...</summary><div className="scenario-menu">
                 <button disabled={disabled} onClick={() => show("move", flow.id, organization.membership[flow.id] ?? "")}>Move to Group</button>
