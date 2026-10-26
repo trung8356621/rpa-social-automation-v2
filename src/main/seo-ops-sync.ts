@@ -1,5 +1,6 @@
 import { createHash, randomUUID } from "node:crypto";
-import { access, readFile } from "node:fs/promises";
+import { existsSync } from "node:fs";
+import { access, mkdir, readFile, rename, unlink, writeFile } from "node:fs/promises";
 import path from "node:path";
 import type { Flow, Step, ActionTag, ScriptRequest } from "../shared/contracts.js";
 import { slugify } from "../shared/flow-model.js";
@@ -108,8 +109,8 @@ export function createSeoOpsSyncService(options: {
   dataPath?: string;
 }) {
   const { store, assetDir, tokenStore } = options;
-  const testRunsDir = options.testRunsDir;
   const dataPath = options.dataPath;
+  const testRunsDir = options.testRunsDir || (dataPath ? path.join(dataPath, "test-runs") : undefined);
   const installationId = store.setting("seoOpsInstallationId") || randomUUID();
   if (!store.setting("seoOpsInstallationId")) store.setSetting("seoOpsInstallationId", installationId);
 
@@ -152,6 +153,95 @@ export function createSeoOpsSyncService(options: {
     return body;
   }
 
+  async function downloadAdminFile(
+    pathname: string,
+    targetPath: string,
+    expectedSha256?: string
+  ): Promise<{ sha256: string; bytes: number }> {
+    const token = tokenStore.getToken();
+    if (!token) throw new Error("unauthenticated");
+    const url = `${config().baseUrl}/api/v1/social-automation/rpa-admin${pathname}`;
+    const response = await fetch(url, {
+      redirect: "manual",
+      headers: {
+        Authorization: `Bearer ${token}`,
+        Accept: "application/json, video/*, image/*, application/octet-stream, */*",
+      },
+    });
+
+    if (!response.ok) {
+      let errDetail = "";
+      try {
+        const body = await readSeoOpsJson(response, "GET", url);
+        errDetail = Array.isArray(body.errors) ? (body.errors as string[]).join(", ") : String(body.errors ?? "");
+      } catch {
+        errDetail = await response.text().catch(() => "");
+      }
+      throw new Error(errDetail || `HTTP ${response.status}`);
+    }
+
+    const contentType = response.headers.get("content-type") || "";
+    let buf: Buffer;
+
+    if (contentType.includes("application/json")) {
+      const body = await readSeoOpsJson(response, "GET", url);
+      if (body.ok !== true) {
+        const errDetail = Array.isArray(body.errors) ? (body.errors as string[]).join(", ") : String(body.errors ?? "download_failed");
+        throw new Error(errDetail);
+      }
+      const rawBase64 = String(body.content_base64 || body.asset_base64 || "");
+      if (!rawBase64) {
+        throw new Error("missing content_base64 in response");
+      }
+      buf = Buffer.from(rawBase64, "base64");
+    } else {
+      const arrayBuffer = await response.arrayBuffer();
+      buf = Buffer.from(arrayBuffer);
+    }
+
+    if (buf.length === 0) {
+      throw new Error("file is empty");
+    }
+
+    const computedSha = createHash("sha256").update(buf).digest("hex").toLowerCase();
+    if (expectedSha256 && expectedSha256.toLowerCase() !== computedSha) {
+      throw new Error(`Checksum mismatch: expected ${expectedSha256}, got ${computedSha}`);
+    }
+
+    await mkdir(path.dirname(targetPath), { recursive: true });
+    const tempFile = `${targetPath}.tmp-${randomUUID()}`;
+    try {
+      await writeFile(tempFile, buf);
+      await rename(tempFile, targetPath);
+    } catch (e) {
+      await unlink(tempFile).catch(() => {});
+      throw e;
+    }
+
+    return { sha256: computedSha, bytes: buf.length };
+  }
+
+  async function ensureAdminFile(
+    pathname: string,
+    targetPath: string,
+    expectedSha256?: string
+  ): Promise<{ sha256: string; downloaded: boolean }> {
+    try {
+      const existing = await readFile(targetPath);
+      if (existing.length > 0) {
+        const existingSha = createHash("sha256").update(existing).digest("hex").toLowerCase();
+        if (!expectedSha256 || existingSha === expectedSha256.toLowerCase()) {
+          return { sha256: existingSha, downloaded: false };
+        }
+      }
+    } catch {
+      // file missing or unreadable, download
+    }
+
+    const result = await downloadAdminFile(pathname, targetPath, expectedSha256);
+    return { sha256: result.sha256, downloaded: true };
+  }
+
   let backupInFlight: Promise<Record<string, unknown>> | null = null;
   let backupInfoInFlight: Promise<Record<string, unknown>> | null = null;
   let backupGeneration = 0;
@@ -191,20 +281,307 @@ export function createSeoOpsSyncService(options: {
     const body = await adminApi("/backup/download", { method: "POST", body: JSON.stringify({}) });
     return { archive: Buffer.from(String(body.archive_base64), "base64"), sha256: String(body.sha256), backup: body.backup };
   }
-  async function syncActionTags(): Promise<{ ok: true; tags: ActionTag[]; count: number } | { ok: false; error: string }> {
+  async function syncActionTags(): Promise<
+    | { ok: true; tags: ActionTag[]; count: number; scriptsCount: number }
+    | { ok: false; error: string }
+  > {
     try {
       const token = tokenStore.getToken();
       if (!token) {
         return { ok: false, error: "Cần đăng nhập SEO-OPS tại Settings trước khi đồng bộ." };
       }
       const body = await adminApi("/action-tags");
-      if (body && Array.isArray((body as { action_tags?: unknown[] }).action_tags)) {
-        const tags = (body as { action_tags: ActionTag[] }).action_tags;
-        store.upsertActionTags(tags);
-        store.setSetting("seoOpsActionTags", JSON.stringify(tags));
-        return { ok: true, tags, count: tags.length };
+      if (!body || !Array.isArray((body as { action_tags?: unknown[] }).action_tags)) {
+        return { ok: false, error: "Dữ liệu trả về từ SEO-OPS không có danh sách Action Tags." };
       }
-      return { ok: false, error: "Dữ liệu trả về từ SEO-OPS không có danh sách Action Tags." };
+      const tags = (body as { action_tags: ActionTag[] }).action_tags;
+      store.upsertActionTags(tags);
+      store.setSetting("seoOpsActionTags", JSON.stringify(tags));
+
+      let activeScripts: Array<Record<string, unknown>> = [];
+      try {
+        const activeBody = await adminApi("/active-scripts");
+        if (activeBody && Array.isArray((activeBody as { active_scripts?: unknown[] }).active_scripts)) {
+          activeScripts = (activeBody as { active_scripts: Array<Record<string, unknown>> }).active_scripts;
+        }
+      } catch (err) {
+        const raw = err instanceof Error ? err.message : String(err);
+        return { ok: false, error: mapSeoOpsAuthError(raw) };
+      }
+
+      let activeByTag: Record<string, string> = {};
+      try {
+        activeByTag = JSON.parse(store.setting("activeScriptsByTag") || "{}");
+      } catch {
+        activeByTag = {};
+      }
+
+      const meta = loadMeta();
+      const now = new Date().toISOString();
+      let scriptsCount = 0;
+
+      for (const item of activeScripts) {
+        const release = item.release as Record<string, unknown> | undefined;
+        if (!release) continue;
+
+        const tagKey = String(item.action_tag_key ?? "");
+        const tagId = typeof item.action_tag_id === "number" ? item.action_tag_id : undefined;
+        const scriptId = String(item.script_id ?? item.package_key ?? "");
+        const version = String(item.version ?? "1");
+        const contentDigest = String(item.content_digest ?? "");
+        const executionDigest = String(item.execution_digest ?? "");
+        const packageKey = String(item.package_key ?? scriptId);
+        const name = String(item.name ?? release.name ?? scriptId);
+
+        if (!scriptId) continue;
+
+        const effectiveTestRunsDir = testRunsDir || (dataPath ? path.join(dataPath, "test-runs") : undefined);
+        const manifest = (release.manifest ?? {}) as Record<string, unknown>;
+        const videoDemoMeta = (manifest.video_demo ?? (item as Record<string, unknown>).video_demo) as Record<string, unknown> | undefined;
+
+        // RULE: An active script MUST have a demo video
+        if (!videoDemoMeta || typeof videoDemoMeta !== "object") {
+          throw new Error(`Đồng bộ Active Script "${name}" (${scriptId}) v${version} thất bại: Script Activate bắt buộc phải có Demo Video trên SEO-OPS.`);
+        }
+
+        // Check if matching flow already exists locally
+        const existingFlow = store.flows().find(f => f.id === scriptId)
+          ?? (tagKey ? store.flows().find(f => (f.actionTagKey === tagKey || (tagId !== undefined && f.actionTagId === tagId)) && f.id === activeByTag[tagKey]) : undefined);
+
+        if (existingFlow) {
+          const stored = loadReleaseMeta(existingFlow.id);
+          // Check if local demo video exists and matches checksum
+          let hasValidDemo = false;
+          if (effectiveTestRunsDir) {
+            const storedDemoRaw = store.setting(`videoDemo:${existingFlow.id}`) || store.setting(`videoDemo:${existingFlow.id}:${version}`);
+            if (storedDemoRaw) {
+              try {
+                const parsed = JSON.parse(storedDemoRaw) as VideoDemoAttachment;
+                if (parsed.artifactRef && parsed.thumbnailRef) {
+                  const vidPath = path.resolve(effectiveTestRunsDir, parsed.artifactRef);
+                  const thPath = path.resolve(effectiveTestRunsDir, parsed.thumbnailRef);
+                  const expectedVidSha = typeof videoDemoMeta.sha256 === "string" ? videoDemoMeta.sha256.toLowerCase() : undefined;
+                  if (existsSync(vidPath) && existsSync(thPath)) {
+                    if (!expectedVidSha || (parsed.sha256 && parsed.sha256.toLowerCase() === expectedVidSha)) {
+                      hasValidDemo = true;
+                    }
+                  }
+                }
+              } catch {}
+            }
+          }
+
+          // Idempotent check: if snapshot is unchanged AND local demo video is valid, do not rewrite or re-download
+          if (
+            stored.contentDigest &&
+            stored.contentDigest.toLowerCase() === contentDigest.toLowerCase() &&
+            stored.version === version &&
+            hasValidDemo
+          ) {
+            if (tagKey && !activeByTag[tagKey]) {
+              activeByTag[tagKey] = existingFlow.id;
+            }
+            scriptsCount++;
+            continue;
+          }
+
+          // Check if local flow has unsaved changes / edits ahead
+          const probe = await localRow(existingFlow, stored.pendingVersion || stored.version || "1");
+          const localChanged = Boolean(stored.version && stored.executionDigest && stored.executionDigest !== probe.execution_digest);
+          if (localChanged || stored.pendingVersion) {
+            // Do NOT overwrite script that user is editing or has unsaved changes
+            continue;
+          }
+        }
+
+        if (!effectiveTestRunsDir) {
+          throw new Error("VIDEO_DEMO: test-runs directory unavailable");
+        }
+
+        const runId = String(videoDemoMeta.test_run_id || "demo-run");
+        let rawArtifactRef = typeof videoDemoMeta.artifact_ref === "string" ? videoDemoMeta.artifact_ref : "";
+        if (!rawArtifactRef || rawArtifactRef.includes("..") || path.isAbsolute(rawArtifactRef)) {
+          rawArtifactRef = `demos/${scriptId}/${runId}/recording.webm`;
+        }
+        let rawThumbnailRef = typeof videoDemoMeta.thumbnail_ref === "string" ? videoDemoMeta.thumbnail_ref : "";
+        if (!rawThumbnailRef || rawThumbnailRef.includes("..") || path.isAbsolute(rawThumbnailRef)) {
+          rawThumbnailRef = `demos/${scriptId}/${runId}/recording-thumb.jpg`;
+        }
+
+        const videoAbsPath = path.resolve(effectiveTestRunsDir, rawArtifactRef);
+        const thumbAbsPath = path.resolve(effectiveTestRunsDir, rawThumbnailRef);
+        const resolvedTestRunsDir = path.resolve(effectiveTestRunsDir);
+
+        if (!videoAbsPath.startsWith(`${resolvedTestRunsDir}${path.sep}`) ||
+            !thumbAbsPath.startsWith(`${resolvedTestRunsDir}${path.sep}`)) {
+          throw new Error(`VIDEO_DEMO: Invalid media path reference for script "${name}" (${scriptId})`);
+        }
+
+        let videoSha = typeof videoDemoMeta.sha256 === "string" ? videoDemoMeta.sha256 : "";
+        let thumbSha = typeof videoDemoMeta.thumbnail_sha256 === "string" ? videoDemoMeta.thumbnail_sha256 : "";
+
+        try {
+          const vidRes = await ensureAdminFile(
+            `/scripts/video-demo?package_key=${encodeURIComponent(packageKey)}&version=${encodeURIComponent(version)}&kind=video_demo`,
+            videoAbsPath,
+            videoSha || undefined
+          );
+          videoSha = vidRes.sha256;
+        } catch (err) {
+          const msg = err instanceof Error ? err.message : String(err);
+          throw new Error(`Đồng bộ Demo Video cho Active Script "${name}" (${scriptId}) v${version} thất bại: ${msg}`);
+        }
+
+        try {
+          const thRes = await ensureAdminFile(
+            `/scripts/video-demo?package_key=${encodeURIComponent(packageKey)}&version=${encodeURIComponent(version)}&kind=thumbnail`,
+            thumbAbsPath,
+            thumbSha || undefined
+          );
+          thumbSha = thRes.sha256;
+        } catch (err) {
+          const msg = err instanceof Error ? err.message : String(err);
+          throw new Error(`Đồng bộ Thumbnail Demo cho Active Script "${name}" (${scriptId}) v${version} thất bại: ${msg}`);
+        }
+
+        // Download any declared assets from SEO-OPS if missing locally
+        const assets = Array.isArray(manifest.assets) ? manifest.assets : [];
+        for (const asset of assets) {
+          if (!asset || typeof asset !== "object") continue;
+          const a = asset as Record<string, unknown>;
+          const relPath = String(a.path ?? "");
+          if (!relPath) continue;
+          const absPath = path.join(assetDir, relPath);
+          try {
+            await access(absPath);
+          } catch {
+            try {
+              const dlRes = await adminApi(
+                `/scripts/asset?package_key=${encodeURIComponent(packageKey)}&version=${encodeURIComponent(version)}&asset_path=${encodeURIComponent(relPath)}`
+              );
+              if (dlRes && typeof dlRes.asset_base64 === "string") {
+                const buf = Buffer.from(dlRes.asset_base64, "base64");
+                await mkdir(path.dirname(absPath), { recursive: true });
+                await writeFile(absPath, buf);
+              }
+            } catch {
+              // asset download unavailable, proceed with metadata/steps
+            }
+          }
+        }
+
+        // Materialize release into Flow and Steps
+        const existingSteps = store.steps();
+        const materialized = materializeScriptRelease({
+          release: {
+            ...release,
+            name,
+            manifest: {
+              ...manifest,
+              script_id: scriptId,
+              action_tag_key: tagKey || manifest.action_tag_key,
+              action_tag_id: tagId,
+            },
+          },
+          existing: existingFlow ?? null,
+          existingSteps,
+          validatePayload,
+        });
+
+        if (!materialized.ok) {
+          // If conflict or invalid, do not break other scripts
+          continue;
+        }
+
+        store.db.exec("BEGIN");
+        try {
+          // Insert missing steps (never overwrite existing step@version)
+          for (const step of materialized.inserts) {
+            store.db
+              .prepare("INSERT INTO steps VALUES(?,?,?)")
+              .run(step.id, step.version, JSON.stringify(step));
+          }
+
+          const flowToSave: Flow = {
+            ...materialized.flow,
+            id: scriptId,
+            name,
+            actionTagKey: tagKey || materialized.flow.actionTagKey,
+            ...(tagId !== undefined ? { actionTagId: tagId } : {}),
+          };
+
+          store.saveFlow(flowToSave);
+          store.setSetting(`seoOpsVersion:${flowToSave.id}`, version);
+          if (contentDigest) {
+            store.setSetting(`seoOpsPublishedDigest:${flowToSave.id}`, contentDigest);
+          }
+          const flowSteps = flowToSave.steps
+            .map(ref => {
+              try { return store.step(ref.id, ref.version); } catch { return undefined; }
+            })
+            .filter((s): s is Step => Boolean(s));
+          const localProbe = buildScriptCatalogSnapshot({ flow: flowToSave, steps: flowSteps, version, assets: [] });
+          store.setSetting(`seoOpsPublishedExecutionDigest:${flowToSave.id}`, localProbe.execution_digest);
+
+          const attachment: VideoDemoAttachment = {
+            scriptId: flowToSave.id,
+            scriptVersion: version,
+            testRunId: runId,
+            caseId: flowToSave.id,
+            artifactRef: rawArtifactRef,
+            mime: "video/webm",
+            sha256: videoSha,
+            reviewed: true,
+            executionDigest: localProbe.execution_digest,
+            thumbnailRef: rawThumbnailRef,
+            thumbnailSha256: thumbSha,
+            stepVersions: flowToSave.steps.map(s => ({ id: s.id, version: s.version })),
+            selectedAt: now,
+          };
+
+          store.setSetting(`videoDemo:${flowToSave.id}`, JSON.stringify(attachment));
+          store.setSetting(`videoDemo:${flowToSave.id}:${version}`, JSON.stringify(attachment));
+
+          // Set as active script if tag has no active script or it's this flow
+          if (tagKey) {
+            const currentActive = activeByTag[tagKey];
+            if (!currentActive || currentActive === flowToSave.id || !store.flows().some(f => f.id === currentActive)) {
+              activeByTag[tagKey] = flowToSave.id;
+            }
+          }
+
+          store.db.exec("COMMIT");
+          scriptsCount++;
+
+          meta.rows[flowToSave.id] = {
+            script_id: flowToSave.id,
+            flow_id: flowToSave.id,
+            package_key: packageKey,
+            name: flowToSave.name,
+            local_version: version,
+            remote_version: version,
+            local_digest: contentDigest,
+            remote_digest: contentDigest,
+            status: "synced",
+            last_sync_at: now,
+            last_result: "synced",
+            published_version: version,
+          };
+        } catch (e) {
+          store.db.exec("ROLLBACK");
+          throw e;
+        }
+      }
+
+      store.setSetting("activeScriptsByTag", JSON.stringify(activeByTag));
+      saveMeta(meta);
+
+      return {
+        ok: true,
+        tags,
+        count: tags.length,
+        scriptsCount,
+      };
     } catch (e) {
       const rawMsg = e instanceof Error ? e.message : String(e);
       return { ok: false, error: mapSeoOpsAuthError(rawMsg) };

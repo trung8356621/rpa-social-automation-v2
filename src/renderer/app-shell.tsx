@@ -234,8 +234,12 @@ export function ScenariosPage({ state, name, setName, locked, open, create, quic
           onRows={setSyncRows}
           onSession={onSeoOpsSession}
           reconnect={reconnectSeoOps}
-          onSyncComplete={(tags) => {
-            if (onState && state) onState({ ...state, actionTags: tags });
+          onSyncComplete={(tags, nextState) => {
+            if (nextState && onState) {
+              onState(nextState);
+            } else if (onState && state) {
+              onState({ ...state, actionTags: tags });
+            }
           }}
         />
       )}

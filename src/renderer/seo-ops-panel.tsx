@@ -159,7 +159,7 @@ export function SeoOpsSyncControls({
   onRows?: (rows: ScriptSyncRow[]) => void;
   onSession?: (session: SeoOpsSessionState) => void;
   reconnect?: () => void;
-  onSyncComplete?: (tags: ActionTag[]) => void;
+  onSyncComplete?: (tags: ActionTag[], nextState?: State) => void;
 }) {
   const [busy, setBusy] = useState(false);
   const [message, setMessage] = useState("");
@@ -197,15 +197,18 @@ export function SeoOpsSyncControls({
         ok: boolean;
         count?: number;
         tags?: ActionTag[];
+        scriptsCount?: number;
         error?: string;
         state?: State;
       }>({ type: "seoOpsSyncActionTags" });
 
       if (res.ok) {
         const count = res.count ?? res.tags?.length ?? 0;
-        setMessage(`Đồng bộ thành công: ${count} Action Tag${count > 1 ? "s" : ""}`);
+        const scriptsCount = res.scriptsCount ?? 0;
+        const scriptMsg = scriptsCount > 0 ? `, ${scriptsCount} Active Script${scriptsCount > 1 ? "s" : ""}` : "";
+        setMessage(`Đồng bộ thành công: ${count} Action Tag${count > 1 ? "s" : ""}${scriptMsg}`);
         if (res.tags && onSyncComplete) {
-          onSyncComplete(res.tags);
+          onSyncComplete(res.tags, res.state);
         }
       } else {
         setMessage(`Đồng bộ thất bại: ${res.error || "Không thể lấy Action Tags"}`);
