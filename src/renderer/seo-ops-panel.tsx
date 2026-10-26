@@ -239,9 +239,6 @@ export function SeoOpsSyncControls({
 
   return (
     <div className="seo-ops-sync-controls">
-      <button disabled={!availability.enabled} title={availability.enabled ? undefined : availability.message} onClick={() => void runSync()}>
-        Sync now
-      </button>
       <button disabled={!availability.enabled} title={availability.enabled ? undefined : availability.message} onClick={() => void restoreBackup()}>
         Restore from SEO-OPS
       </button>

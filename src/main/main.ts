@@ -449,6 +449,10 @@ async function boot() {
     dataPath,
     actionTags: seoOpsSync.getCachedActionTags(),
     scriptRequests: seoOpsSync.getCachedScriptRequests(),
+    activeScriptsByTag: (() => {
+      try { return JSON.parse(store.setting("activeScriptsByTag") || "{}"); }
+      catch { return {}; }
+    })(),
   });
   const publishLayout = () => {
     for (const editor of editors)
@@ -1022,9 +1026,29 @@ async function boot() {
       case "seoOpsSyncAll":
         isIdle();
         return manualSeoOpsSync(command.type, {});
-      case "seoOpsSyncFlow":
+      case "seoOpsSyncFlow": {
         isIdle();
-        return manualSeoOpsSync(command.type, { flowId: command.flowId });
+        const syncResponse = await manualSeoOpsSync(command.type, { flowId: command.flowId });
+        if (syncResponse.ok) {
+          const syncedFlow = store.flows().find(f => f.id === command.flowId);
+          if (syncedFlow?.actionTagKey) {
+            try {
+              const current = JSON.parse(store.setting("activeScriptsByTag") || "{}") as Record<string, string>;
+              current[syncedFlow.actionTagKey] = syncedFlow.id;
+              store.setSetting("activeScriptsByTag", JSON.stringify(current));
+            } catch { /* ignore */ }
+          }
+        }
+        return syncResponse;
+      }
+      case "setActiveScript": {
+        isIdle();
+        let current: Record<string, string> = {};
+        try { current = JSON.parse(store.setting("activeScriptsByTag") || "{}"); } catch {}
+        current[command.tagKey] = command.flowId;
+        store.setSetting("activeScriptsByTag", JSON.stringify(current));
+        return { ok: true, activeScriptsByTag: current, state: state() };
+      }
       case "seoOpsBackupInfo":
         isIdle(); return seoOpsSync.backupInfo();
       case "seoOpsRestore": {
@@ -1288,7 +1312,9 @@ async function boot() {
         isIdle();
         if (uiPlayAllRunId) throw new Error("Đợi Play All kết thúc trước khi tạo Script.");
         armedTest = undefined;
-        store.newFlow(command.name, browser.zoom);
+        store.newFlow(command.name, browser.zoom, {
+          actionTagKey: command.actionTagKey,
+        });
         return state();
       }
       case "openFlow": {
@@ -1373,7 +1399,7 @@ async function boot() {
       }
       case "variables": {
         isIdle();
-        store.updateVariables(command.variables, command.values);
+        store.updateVariables(command.variables, command.values, command.placeholders);
         return state();
       }
       case "organize": {

@@ -1,5 +1,6 @@
 import type { V3Request } from "./admin-v3.js";
 import type { NetworkSettings, NetworkRunSettings } from "./network-mode.js";
+export type { ScriptReleaseManifest } from "./script-release.js";
 export type Rect = { x: number; y: number; width: number; height: number };
 export type MainPage = "scenarios" | "browser-sessions" | "test-lab" | "settings" | "variations" | "widget-registry" | "workflows" | "builds-releases";
 export type AppPage = MainPage | "creator" | "test-case" | "studio-run";
@@ -190,6 +191,7 @@ export type ScriptRequest = {
 export type Flow = {
   variables?: Variable[];
   defaultPattern?: { values: Record<string, string | string[] | number> };
+  placeholders?: Record<string, string | string[] | number>;
   groups?: StepGroup[];
   id: string;
   name: string;
@@ -351,6 +353,7 @@ export type State = {
   dataPath: string;
   actionTags?: ActionTag[];
   scriptRequests?: ScriptRequest[];
+  activeScriptsByTag?: Record<string, string>;
 };
 export type Command =
   | { type: "studio"; request: V3Request }
@@ -382,6 +385,7 @@ export type Command =
   | { type: "seoOpsSyncStatus" }
   | { type: "seoOpsSyncAll" }
   | { type: "seoOpsSyncFlow"; flowId: string }
+  | { type: "setActiveScript"; tagKey: string; flowId: string }
   | { type: "seoOpsBackupInfo" }
   | { type: "seoOpsRestore"; confirmed: boolean }
   | { type: "deleteScenario"; id: string; confirmed: boolean }
@@ -415,6 +419,7 @@ export type Command =
       type: "variables";
       variables: Variable[];
       values: Record<string, string | string[] | number>;
+      placeholders?: Record<string, string | string[] | number>;
     }
   | { type: "pointerReport" }
   | { type: "panel"; panel: "editor" | "debug"; expanded: boolean }
@@ -424,7 +429,7 @@ export type Command =
   | { type: "fixture" }
   | { type: "toggleFullscreen" }
   | { type: "environment"; zoom: number }
-  | { type: "newFlow"; name: string }
+  | { type: "newFlow"; name: string; actionTagKey?: string }
   | { type: "updateFlowMetadata"; actionTagKey?: string; resultType?: "status" | "collection"; collectionType?: string }
   | { type: "createScriptFromRequest"; requestId: string }
   | { type: "seoOpsGetActionTags" }

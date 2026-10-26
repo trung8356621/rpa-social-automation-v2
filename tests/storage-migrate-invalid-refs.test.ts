@@ -128,7 +128,8 @@ test("sync import preserves Variable id by key; Match To without OCR stays inval
   // Simulate materializeImport id selection.
   const existingByKey = new Map([["legacy_3", { id: priorId, key: "legacy_3", type: "text" as const }]]);
   const key = "legacy_3";
-  const id = String(undefined ?? existingByKey.get(key)?.id ?? `var-0-${key}`);
+  const rawId: string | undefined = undefined;
+  const id = String(rawId ?? existingByKey.get(key)?.id ?? `var-0-${key}`);
   assert.equal(id, priorId);
 
   const release = importScriptRelease({

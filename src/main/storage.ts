@@ -452,6 +452,7 @@ export class Store {
   updateVariables(
     variables: Variable[],
     values: Record<string, string | string[] | number>,
+    placeholders?: Record<string, string | string[] | number>,
   ) {
     const f = this.flow();
     if (!f) throw new Error("Create flow first");
@@ -479,6 +480,9 @@ export class Store {
         );
     f.variables = variables;
     f.defaultPattern = { values };
+    if (placeholders !== undefined) {
+      f.placeholders = placeholders;
+    }
     this.saveFlow(f);
     this.refreshInvalidStepRefs();
   }
@@ -560,6 +564,7 @@ export class Store {
       groups: [],
       variables: [],
       defaultPattern: { values: {} },
+      placeholders: {},
       ...(meta?.actionTagKey ? { actionTagKey: meta.actionTagKey } : {}),
       ...(meta?.scriptRequestId ? { scriptRequestId: meta.scriptRequestId } : {}),
       resultType: meta?.resultType ?? "status",

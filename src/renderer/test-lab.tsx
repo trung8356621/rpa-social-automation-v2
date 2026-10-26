@@ -1,5 +1,5 @@
 import React, { useEffect, useRef, useState } from "react";
-import type { Command, ExecutionError, State, TestCase, TestCaseConfig, VariableValues } from "../shared/contracts";
+import type { AppPage, Command, ExecutionError, State, TestCase, TestCaseConfig, VariableValues } from "../shared/contracts";
 import { validateVariables } from "../shared/flow-model";
 import { canUseAsScriptDemo } from "../shared/video-demo-policy";
 import { UiPopover } from "./ui-popover";
@@ -25,8 +25,9 @@ export function ExecutionErrorView({ error, stepName, onFix }: {
 }
 function initial(state: State): TestCaseConfig {
   const flow = state.flows[0], session = state.browserSessions?.find(s => s.id === state.activeBrowserSessionId);
+  const initialValues = structuredClone(flow?.placeholders && Object.keys(flow.placeholders).length > 0 ? flow.placeholders : flow?.defaultPattern?.values ?? {});
   return { name: "", flowId: flow?.id ?? "", sessionId: session?.id ?? "", startUrl: session?.lastUrl ?? "",
-    values: structuredClone(flow?.defaultPattern?.values ?? {}), recording: true, stepVersions: structuredClone(flow?.steps ?? []) };
+    values: initialValues, recording: true, stepVersions: structuredClone(flow?.steps ?? []) };
 }
 export function TestCaseEditor({ tabId, item, state, locked, report, saved, saving, run, fix, back }: {
   tabId: string; item?: TestCase; state: State; locked: boolean;
@@ -121,8 +122,12 @@ export function TestCaseEditor({ tabId, item, state, locked, report, saved, savi
                 refreshKey={fileCheckRevision}
                 onChange={picked => values({ ...config.values, [v.id]: v.type === "file" ? picked[0] ?? "" : picked })} />}</>}
         </label>)}
-        {flow && <button disabled={disabled} onClick={() => values(Object.fromEntries((flow.variables ?? []).map(v => [v.id,
-          config.values[v.id] ?? flow.defaultPattern?.values[v.id] ?? (v.type === "files" ? [] : "")])))}>Đồng bộ với template hiện tại</button>}
+        {flow && <div style={{ display: "flex", gap: 8, margin: "8px 0", flexWrap: "wrap" }}>
+          <button type="button" disabled={disabled} onClick={() => values(Object.fromEntries((flow.variables ?? []).map(v => [v.id,
+            config.values[v.id] ?? flow.defaultPattern?.values[v.id] ?? (v.type === "files" ? [] : "")])))}>Đồng bộ với Default Pattern</button>
+          <button type="button" disabled={disabled} onClick={() => values(Object.fromEntries((flow.variables ?? []).map(v => [v.id,
+            flow.placeholders?.[v.id] ?? flow.defaultPattern?.values[v.id] ?? (v.type === "files" ? [] : "")])))}>Điền từ Placeholders</button>
+        </div>}
         {error && <p role="alert">{error}</p>}
         <div className="case-actions"><button className="primary" disabled={disabled || !dirty} onClick={() => void save().catch(() => {})}>Lưu Case</button>
           <button disabled={disabled || dirty || !item} onClick={() => item && run(item.id)}>Run Test Case</button>
@@ -254,9 +259,10 @@ export function CaseResultView({ item, state, locked = false, runAgain, compact 
   </section>;
 }
 
-export function TestLabPage({ state, locked, update, open, run, canRun, create, canDelete }: {
+export function TestLabPage({ state, locked, update, open, run, canRun, create, canDelete, navigate }: {
   state?: State; locked: boolean; update: (command: Command) => Promise<void>;
   open: (id: string) => void; run: (id: string) => void; canRun: (id: string) => boolean; create: () => void; canDelete: (id: string) => boolean;
+  navigate?: (page: AppPage) => void;
 }) {
   const lab = state?.testLab ?? { groups: [], cases: [], ungroupedCollapsed: false };
   const [dialog, setDialog] = useState<{ kind: "create" | "rename" | "group-delete" | "delete" | "move"; id?: string; name?: string }>();
@@ -279,7 +285,28 @@ export function TestLabPage({ state, locked, update, open, run, canRun, create, 
       : { type: "testGroup", operation: dialog.kind === "create" ? "create" : dialog.kind === "rename" ? "update" : "delete",
         id: dialog.id, name: value, confirmed: true }, true);
   }
-  return <section className="app-page" aria-label="Test Lab"><div className="page-heading"><h1>Test Lab</h1>
+  return <section className="app-page" aria-label="Test Lab">
+    <div className="scripts-top-tabs" role="tablist">
+      <button
+        type="button"
+        role="tab"
+        aria-selected={false}
+        className="scripts-tab-btn"
+        onClick={() => navigate?.("scenarios")}
+      >
+        Scripts
+      </button>
+      <button
+        type="button"
+        role="tab"
+        aria-selected={true}
+        className="scripts-tab-btn active"
+        onClick={() => navigate?.("test-lab")}
+      >
+        Test Lab
+      </button>
+    </div>
+    <div className="page-heading"><h1>Test Lab</h1>
     <p>Mỗi Case dùng Script, Session, URL và bộ Values riêng. Mỗi lần Run tự quay Browser video.</p></div>
     <div className="scenario-toolbar"><button disabled={disabled} onClick={() => show("create")}>+ Test Group</button>
       <button className="primary" disabled={disabled || !state?.flows.length} onClick={create}>+ Test Case</button></div>

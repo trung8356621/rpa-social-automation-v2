@@ -77,7 +77,7 @@ test("local OCR reads low-contrast gray Vietnamese placeholder without normalize
     },
     { x: 0, y: 0, width: meta.width!, height: meta.height! },
   );
-  assert.equal(normalizeTargetText(match.text), normalizeTargetText(expected));
+  assert.equal(normalizeTargetText(match.text!), normalizeTargetText(expected));
 });
 test("blank/icon ROI returns no text and can remain image-only", async () => {
   const blank = await sharp({

@@ -23,18 +23,18 @@ test("TestRunEvidence.thumbnail prioritizes screencast frame and falls back to s
     await writeFile(path.join(runDir, "recording-thumb.jpg"), dummyJpg);
     await writeFile(path.join(runDir, "final.png"), dummyPng);
 
-    const thumb1 = await evidence.thumbnail(caseId, { runId, caseId });
+    const thumb1 = await evidence.thumbnail(caseId, { runId, caseId } as any);
     assert.equal(thumb1, `data:image/jpeg;base64,${dummyJpg.toString("base64")}`);
 
     // Case 2: recording-thumb.jpg removed -> falls back to final.png
     await rm(path.join(runDir, "recording-thumb.jpg"));
-    const thumb2 = await evidence.thumbnail(caseId, { runId, caseId });
+    const thumb2 = await evidence.thumbnail(caseId, { runId, caseId } as any);
     assert.equal(thumb2, `data:image/png;base64,${dummyPng.toString("base64")}`);
 
     // Case 3: Neither exists -> throws error
     await rm(path.join(runDir, "final.png"));
     await assert.rejects(
-      () => evidence.thumbnail(caseId, { runId, caseId }),
+      () => evidence.thumbnail(caseId, { runId, caseId } as any),
       /Không có thumbnail hoặc screenshot/
     );
   } finally {

@@ -1,15 +1,14 @@
 import React, { useEffect, useState } from "react";
 import { UiPopover } from "./ui-popover";
-import type { AppPage, Command, ScenarioOrganization, State } from "../shared/contracts";
+import type { AppPage, Command, Flow, State } from "../shared/contracts";
 import type { ScriptSyncRow } from "../shared/sync-status";
-import { SeoOpsSyncControls, getScenarioSyncBadge, scriptVersionLabel, syncBadge, type SeoOpsSessionState } from "./seo-ops-panel";
+import { SeoOpsSyncControls, scriptVersionLabel, type SeoOpsSessionState } from "./seo-ops-panel";
 import { ScriptHealthPanel } from "./script-health-panel";
 
-/** Primary Admin nav only — Variations / Widget / Workflow / Builds remain routable legacy, not listed. */
+/** Primary Admin nav only — Browser Sessions, Settings, and Scripts (with Test Lab inside Scripts). */
 const menus = [
   { page: "scenarios", label: "Scripts", color: "#68d6a6", path: "M4 4h6v6H4zM14 14h6v6h-6zM7 10v7h7M10 7h7v7" },
   { page: "browser-sessions", label: "Browser Sessions", color: "#75b9ff", path: "M21 12a9 9 0 1 1-18 0 9 9 0 0 1 18 0ZM3 12h18M12 3c5 5 5 13 0 18-5-5-5-13 0-18Z" },
-  { page: "test-lab", label: "Test Lab", color: "#f4ae67", path: "M9 3h6M10 3v7L4 19q-1 2 2 2h12q3 0 2-2l-6-9V3M7 15h10" },
   { page: "settings", label: "Settings", color: "#a8b2c2", path: "m9 3-1 3-3 1 1 3-2 2 2 2-1 3 3 1 1 3ZM15 12a3 3 0 1 1-6 0 3 3 0 0 1 6 0Z" },
 ] as const;
 
@@ -17,6 +16,7 @@ export function AppNavigation({ page, collapsed, locked, navigate, toggle }: {
   page: AppPage; collapsed: boolean; locked: boolean;
   navigate: (page: AppPage) => void; toggle: () => void;
 }) {
+  const activeNav = ["scenarios", "test-lab", "creator", "test-case"].includes(page) ? "scenarios" : page;
   return <div className={`app-sidebar${collapsed ? " collapsed" : ""}`}>
     <div className="app-sidebar-heading">
       {!collapsed && <b>RPA Social <small>V2</small></b>}
@@ -25,7 +25,7 @@ export function AppNavigation({ page, collapsed, locked, navigate, toggle }: {
     </div>
     <nav className="app-menu" aria-label="Điều hướng chính">
       {menus.map(item => <button key={item.page} disabled={locked} title={item.label}
-        aria-label={item.label} aria-current={(page === "creator" ? "scenarios" : page) === item.page ? "page" : undefined}
+        aria-label={item.label} aria-current={activeNav === item.page ? "page" : undefined}
         onClick={() => navigate(item.page)}>
         <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke={item.color}
           strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><path d={item.path} /></svg>
@@ -51,17 +51,17 @@ function ScenarioDemo({ flowId, state, invoke }: { flowId: string; state?: State
       if (!invoke) return;
       void invoke<string>({ type: "scenarioDemoMedia", flowId, media: "video" }).then(setVideo).catch(() => undefined);
     }}>{thumbnail ? <img src={thumbnail} alt="Script Demo thumbnail" /> : <span>Loading…</span>}</button>
-    <span className={`demo-status ${demo.status}`}>{demo.status === "ready" ? "Ready" : "Outdated"}</span>
-    {video && <UiPopover variant="modal" label="Script Demo" className="scenario-demo-preview" close={() => setVideo("")}>
+        {video && <UiPopover variant="modal" label="Script Demo" className="scenario-demo-preview" close={() => setVideo("")}>
       <div className="popover-heading"><b>Script Demo</b><button onClick={() => setVideo("")} aria-label="Đóng video">×</button></div>
       <video controls autoPlay={false} preload="metadata" src={video} />
     </UiPopover>}
   </>;
 }
 
-export function ScenariosPage({ state, name, setName, locked, open, create, quickAcceptance, sessionControl, update, invoke, seoOpsSession, autoSyncEnabled, onSeoOpsSession, reconnectSeoOps, onState }: {
+export function ScenariosPage({ state, name, setName, locked, open, create, quickAcceptance, sessionControl, update, invoke, seoOpsSession, autoSyncEnabled, onSeoOpsSession, reconnectSeoOps, onState, navigate }: {
   state?: State; name: string; setName: (name: string) => void; locked: boolean;
-  open: (id: string, focus?: { stepId: string; version: number }) => void; create: () => void;
+  open: (id: string, focus?: { stepId: string; version: number }) => void;
+  create: (actionTagKey?: string, customName?: string) => void;
   quickAcceptance: (id: string) => void;
   sessionControl?: React.ReactNode; update: (command: Command) => Promise<void>;
   invoke?: <T>(command: Command) => Promise<T>;
@@ -70,21 +70,31 @@ export function ScenariosPage({ state, name, setName, locked, open, create, quic
   onSeoOpsSession?: (session: SeoOpsSessionState) => void;
   reconnectSeoOps?: () => void;
   onState?: (state: State) => void;
+  navigate?: (page: AppPage) => void;
 }) {
   type BackupResult = { status: "working" | "verified" | "incomplete" | "cancelled" | "failed";
     message?: string; counts?: { scenarios: number; stepVersions: number; assets: number; missingFiles: number };
     missing?: Array<{ logicalReference: string; originalPath?: string; scenarioId?: string; variableKey?: string }> };
-  const [creating, setCreating] = useState(false);
-  const [dialog, setDialog] = useState<{ kind: "create" | "rename" | "delete" | "move" | "scenario-delete"; id?: string }>();
-  const [value, setValue] = useState("");
+  
+  const [dialog, setDialog] = useState<
+    | { kind: "create-script"; tagKey?: string }
+    | { kind: "delete-blocked"; flow: Flow; tagKey?: string }
+    | { kind: "confirm-delete"; flow: Flow }
+  >();
+  const [scriptNameInput, setScriptNameInput] = useState("");
+  const [selectedTagKey, setSelectedTagKey] = useState("");
+  const [collapsedTags, setCollapsedTags] = useState<Record<string, boolean>>({});
   const [working, setWorking] = useState(false);
   const [error, setError] = useState("");
   const [backupResult, setBackupResult] = useState<BackupResult>();
   const [importResult, setImportResult] = useState<{ status: string; token?: string; message?: string;
     counts?: BackupResult["counts"]; hasExistingData?: boolean; rollbackPath?: string }>();
   const [syncRows, setSyncRows] = useState<ScriptSyncRow[]>([]);
-  const organization: ScenarioOrganization = state?.scenarioOrganization ?? { groups: [], membership: {}, ungroupedCollapsed: false };
   const disabled = locked || working;
+
+  const actionTags = state?.actionTags ?? [];
+  const flows = state?.flows ?? [];
+  const activeScriptsByTag = state?.activeScriptsByTag ?? {};
 
   useEffect(() => {
     if (!invoke) return;
@@ -92,9 +102,7 @@ export function ScenariosPage({ state, name, setName, locked, open, create, quic
       .then((r) => setSyncRows(r.rows))
       .catch(() => undefined);
   }, [invoke, seoOpsSession?.authenticated, state?.flows]);
-  function show(kind: "create" | "rename" | "delete" | "move" | "scenario-delete", id?: string, initial = "") {
-    setValue(initial); setError(""); setDialog({ kind, id });
-  }
+
   async function apply(command: Command, close = false) {
     if (disabled) return;
     setWorking(true); setError("");
@@ -102,22 +110,107 @@ export function ScenariosPage({ state, name, setName, locked, open, create, quic
     catch (e) { setError(String(e)); }
     finally { setWorking(false); }
   }
-  function submit() {
-    if (!dialog) return;
-    const command: Command = dialog.kind === "create" ? { type: "createScenarioGroup", name: value }
-      : dialog.kind === "rename" ? { type: "updateScenarioGroup", id: dialog.id!, name: value }
-      : dialog.kind === "delete" ? { type: "deleteScenarioGroup", id: dialog.id!, confirmed: true }
-      : dialog.kind === "scenario-delete" ? { type: "deleteScenario", id: dialog.id!, confirmed: true }
-      : { type: "moveScenarioToGroup", flowId: dialog.id!, groupId: value || undefined };
-    void apply(command, true);
+
+  function handleStartCreate(tagKey?: string) {
+    setSelectedTagKey(tagKey ?? actionTags[0]?.tag_key ?? "");
+    setScriptNameInput("");
+    setError("");
+    setDialog({ kind: "create-script", tagKey });
   }
-  const groups = [...organization.groups, { id: "", name: "Chưa phân nhóm", collapsed: organization.ungroupedCollapsed }];
+
+  function submitCreateScript() {
+    if (!scriptNameInput.trim()) return;
+    create(selectedTagKey || undefined, scriptNameInput.trim());
+    setDialog(undefined);
+  }
+
+  function handleDeleteClick(flow: Flow, isActive: boolean, tagKey?: string) {
+    if (isActive) {
+      setDialog({ kind: "delete-blocked", flow, tagKey });
+      return;
+    }
+    setDialog({ kind: "confirm-delete", flow });
+  }
+
+  async function handleActivate(flow: Flow, tagKey?: string) {
+    if (disabled || !invoke) return;
+    setError("");
+
+    if (!flow.steps.length) {
+      setError("Không thể Activate: Script cần có ít nhất một Step hợp lệ.");
+      return;
+    }
+    const demo = state?.scenarioDemos?.[flow.id];
+    if (!demo || demo.status !== "ready") {
+      setError("Không thể Activate: Bắt buộc phải có Script Demo hợp lệ. Mở Test Lab, chạy Script và bấm Use as Script Demo trước.");
+      return;
+    }
+    const syncRow = syncRows.find(r => r.flow_id === flow.id || r.script_id === flow.id);
+    if (syncRow?.incomplete) {
+      setError(`Không thể Activate: ${syncRow.message || "Script chưa đủ assets để publish."}`);
+      return;
+    }
+    if (!seoOpsSession?.authenticated) {
+      setError("Cần đăng nhập SEO-OPS tại Settings trước khi Activate Script.");
+      return;
+    }
+
+    setWorking(true);
+    try {
+      const res = await invoke<{ ok: boolean; results?: Array<{ ok: boolean; action?: string; message?: string }>; error?: { message: string } }>({
+        type: "seoOpsSyncFlow",
+        flowId: flow.id,
+      });
+      const failedPush = res.results?.find(r => !r.ok && r.action === "push");
+      if (!res.ok || failedPush) {
+        const msg = res.error?.message || failedPush?.message || "SEO-OPS từ chối release.";
+        setError(`Activate thất bại: ${msg}. Script Active trước đó vẫn được giữ nguyên.`);
+        return;
+      }
+      if (tagKey) {
+        await invoke({ type: "setActiveScript", tagKey, flowId: flow.id });
+      }
+      const refreshed = await invoke<{ rows: ScriptSyncRow[] }>({ type: "seoOpsSyncStatus" });
+      setSyncRows(refreshed.rows);
+    } catch (err) {
+      setError(`Activate thất bại: ${String(err)}. Script Active trước đó vẫn được giữ nguyên.`);
+    } finally {
+      setWorking(false);
+    }
+  }
+
+  const unassignedFlows = flows.filter(f => !f.actionTagKey || !actionTags.some(t => t.tag_key === f.actionTagKey));
+
   return <section className="app-page scenarios-page" aria-label="Scripts">
-    <div className="page-heading"><small>RPA Social Automation V2</small><h1>Scripts</h1>
-      <p>Mở nhiều Script bằng tab. Bản nháp Editor được giữ riêng trong mỗi tab.</p></div>
+    <div className="scripts-top-tabs" role="tablist">
+      <button
+        type="button"
+        role="tab"
+        aria-selected={true}
+        className="scripts-tab-btn active"
+        onClick={() => navigate?.("scenarios")}
+      >
+        Scripts
+      </button>
+      <button
+        type="button"
+        role="tab"
+        aria-selected={false}
+        className="scripts-tab-btn"
+        onClick={() => navigate?.("test-lab")}
+      >
+        Test Lab
+      </button>
+    </div>
+
+    <div className="page-heading">
+      <small>RPA Social Automation V2</small>
+      <h1>Scripts</h1>
+      <p>Quản lý Script theo Action Tag. Mỗi Tag chỉ có tối đa một Script Active.</p>
+    </div>
+
     <div className="scenario-toolbar">
-      <button disabled={disabled} onClick={() => show("create")}>+ Group</button>
-      <button className="primary" disabled={disabled} onClick={() => setCreating(v => !v)}>+ Script</button>
+      <button className="primary" disabled={disabled} onClick={() => handleStartCreate()}>+ Script</button>
       <button className="primary" disabled={disabled || !invoke} onClick={() => {
         if (!invoke) return; setWorking(true); setBackupResult({ status: "working", message: "Đang đóng gói và xác minh Full Backup…" });
         void invoke<BackupResult>({ type: "exportFullBackup" })
@@ -144,6 +237,7 @@ export function ScenariosPage({ state, name, setName, locked, open, create, quic
         />
       )}
     </div>
+
     {backupResult && <section className={`backup-result ${backupResult.status}`} role={backupResult.status === "incomplete" || backupResult.status === "failed" ? "alert" : "status"}>
       <b>{backupResult.status === "working" ? "Đang export"
         : backupResult.status === "verified" ? "Full Backup đã được lưu và xác minh"
@@ -158,6 +252,7 @@ export function ScenariosPage({ state, name, setName, locked, open, create, quic
         {group.scenarioId && <button type="button" onClick={() => open(group.scenarioId!)}>Mở Script để sửa</button>}
         <details><summary>Xem đường dẫn</summary>{group.paths.map(file => <code key={file}>{file}</code>)}</details></li>)}</ul>}
     </section>}
+
     {importResult && importResult.status !== "cancelled" && <section className={`backup-result ${importResult.status}`} role={importResult.status === "failed" ? "alert" : "status"}>
       <b>{importResult.status === "working" ? "Đang kiểm tra backup"
         : importResult.status === "preview" ? "Backup hợp lệ — sẵn sàng khôi phục"
@@ -176,12 +271,9 @@ export function ScenariosPage({ state, name, setName, locked, open, create, quic
             .finally(() => setWorking(false));
         }}>Xác nhận khôi phục</button></>}
     </section>}
-    {creating && <form className="scenario-create" onSubmit={event => { event.preventDefault(); create(); }}>
-      <label>Tên Script mới<input aria-label="Tên flow mới" value={name} disabled={disabled}
-        onChange={event => setName(event.target.value)} /></label>
-      <button className="primary" disabled={disabled || !state || !name.trim()} type="submit">Tạo Script</button>
-    </form>}
-    {!dialog && error && <p role="alert">{error}</p>}
+
+    {error && <p role="alert" style={{ color: "#f87171", background: "rgba(248, 113, 113, 0.1)", padding: "8px 12px", borderRadius: 6, margin: "10px 0" }}>{error}</p>}
+
     {state?.scriptRequests && state.scriptRequests.length > 0 && (
       <section className="script-requests-panel" aria-label="Script Requests" style={{ marginBottom: 16, padding: "12px 16px", borderRadius: 8, border: "1px solid var(--border, #3a3f45)", background: "var(--card-bg, #202428)" }}>
         <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 8 }}>
@@ -207,7 +299,7 @@ export function ScenariosPage({ state, name, setName, locked, open, create, quic
                     className="primary"
                     disabled={disabled || !invoke}
                     onClick={() => {
-                      void invoke({ type: "createScriptFromRequest", requestId: req.request_id });
+                      if (invoke) void invoke({ type: "createScriptFromRequest", requestId: req.request_id });
                     }}
                     style={{ fontSize: 11, padding: "2px 8px" }}
                   >
@@ -220,59 +312,168 @@ export function ScenariosPage({ state, name, setName, locked, open, create, quic
         </div>
       </section>
     )}
+
+    {actionTags.length === 0 && (
+      <div className="empty-tags-box">
+        <h3 style={{ margin: "0 0 8px 0", color: "#e2e8f0" }}>Chưa có Action Tag từ SEO-OPS</h3>
+        <p style={{ margin: 0 }}>Action Tags được quản lý và định nghĩa từ SEO-OPS. Đăng nhập và đồng bộ SEO-OPS tại Settings để tải danh sách Tag và tạo Script.</p>
+      </div>
+    )}
+
     <div className="scenario-groups">
-      {groups.map(group => {
-        const flows = state?.flows.filter(f => {
-          const assigned = organization.membership[f.id];
-          return group.id ? assigned === group.id : !organization.groups.some(g => g.id === assigned);
-        }) ?? [];
-        return <section className="scenario-folder" key={group.id}>
-          <div className="scenario-folder-heading">
-            <button disabled={disabled} aria-expanded={!group.collapsed} onClick={() => void apply(group.id
-              ? { type: "updateScenarioGroup", id: group.id, collapsed: !group.collapsed }
-              : { type: "collapseUngroupedScenarios", collapsed: !group.collapsed })}>
-              {group.collapsed ? "▸" : "▾"} {group.name} <small>({flows.length})</small>
+      {actionTags.map(tag => {
+        const tagFlows = flows.filter(f => f.actionTagKey === tag.tag_key);
+        const assignedActiveId = activeScriptsByTag[tag.tag_key];
+        const activeFlow = assignedActiveId
+          ? tagFlows.find(f => f.id === assignedActiveId)
+          : tagFlows.find(f => {
+              const row = syncRows.find(r => r.flow_id === f.id || r.script_id === f.id);
+              return row?.status === "synced" || Boolean(row?.published_version);
+            });
+        const isCollapsed = Boolean(collapsedTags[tag.tag_key]);
+
+        return <section className="tag-group-folder" key={tag.tag_key}>
+          <div className="tag-folder-heading">
+            <button
+              className="tag-folder-toggle"
+              disabled={disabled}
+              aria-expanded={!isCollapsed}
+              onClick={() => setCollapsedTags(p => ({ ...p, [tag.tag_key]: !p[tag.tag_key] }))}
+            >
+              <span>{isCollapsed ? "▸" : "▾"}</span>
+              <code>{tag.tag_key}</code>
+              {tag.name && <span className="tag-folder-name">— {tag.name}</span>}
+              <span className="tag-folder-count">
+                ({tagFlows.length} Script{activeFlow ? ` · 1 Active` : ""})
+              </span>
             </button>
-            {group.id && <details><summary aria-label={`Menu Group ${group.name}`}>...</summary><div className="scenario-menu">
-              <button disabled={disabled} onClick={() => show("rename", group.id, group.name)}>Đổi tên</button>
-              <button disabled={disabled} onClick={() => show("delete", group.id)}>Xóa Group</button>
-            </div></details>}
+            <button
+              className="btn-new-script-tag"
+              disabled={disabled}
+              onClick={() => handleStartCreate(tag.tag_key)}
+              title={`Tạo Script mới trong tag ${tag.tag_key}`}
+            >
+              + Script
+            </button>
           </div>
-          {!group.collapsed && <div className="scenario-items">
-            {flows.map(flow => {
-              const invalidPinned = flow.steps.filter(ref =>
-                (state?.invalidSteps ?? []).some(r => r.stepId === ref.id && r.version === ref.version));
-              const syncInfo = getScenarioSyncBadge(syncRows, flow.id);
-              return <div className="scenario-item" key={flow.id}>
-              <div className="scenario-title-cell">
-                <button className="scenario-title" disabled={disabled} onClick={() => open(flow.id)} title={flow.name}>
-                  {flow.name}
-                </button>
-                <span className={`scenario-sync-badge sync-status-${syncInfo.statusKey}`} title={syncInfo.title} aria-label={`Sync: ${syncInfo.label}`}>
-                  {syncInfo.label}
-                </span>
-              </div>
-              <small>{flow.steps.length} Step</small>
-              <ScenarioDemo flowId={flow.id} state={state} invoke={invoke} />
-              {invalidPinned.length > 0 && (
-                <small className="hint" title={`${invalidPinned.length} pinned version lỗi — mở Script Health Check`}>
-                  {invalidPinned.length} Step cần sửa
-                </small>
-              )}
-              <small className="script-version" aria-label={`Version ${flow.name}`}>{scriptVersionLabel(syncRows, flow.id)}</small>
-              <button disabled={disabled} onClick={() => open(flow.id)}>Mở Creator</button>
-              <button className="scenario-acceptance" disabled={disabled} onClick={() => quickAcceptance(flow.id)}>Nghiệm thu</button>
-              <details><summary aria-label={`Menu Script ${flow.name}`}>...</summary><div className="scenario-menu">
-                <button disabled={disabled} onClick={() => show("move", flow.id, organization.membership[flow.id] ?? "")}>Move to Group</button>
-                <button disabled={disabled} onClick={() => show("scenario-delete", flow.id)}>Delete Script</button>
-              </div></details>
-            </div>;
-            })}
-            {!flows.length && <p className="page-empty">Chưa có Script trong nhóm.</p>}
-          </div>}
+
+          {!isCollapsed && (
+            <div className="scenario-items">
+              {tagFlows.map(flow => {
+                const isActive = Boolean(activeFlow && flow.id === activeFlow.id);
+                const demo = state?.scenarioDemos?.[flow.id];
+                const syncRow = syncRows.find(r => r.flow_id === flow.id || r.script_id === flow.id);
+                const isMissingDemo = syncRow?.status === "missing_demo" || !demo || demo.status !== "ready";
+                const invalidPinned = flow.steps.filter(ref =>
+                  (state?.invalidSteps ?? []).some(r => r.stepId === ref.id && r.version === ref.version));
+
+                return <div className="scenario-item" key={flow.id}>
+                  <div className="scenario-title-cell">
+                    <button className="scenario-title" disabled={disabled} onClick={() => open(flow.id)} title={flow.name}>
+                      {flow.name}
+                    </button>
+                    {isActive ? (
+                      <span className="script-badge badge-active" title="Script Active trên SEO-OPS">Active</span>
+                    ) : (
+                      <span className="script-badge badge-draft" title="Script Draft">Draft</span>
+                    )}
+                    {isMissingDemo && (
+                      <span className="script-badge badge-missing-demo" title="Chưa có Script Demo hợp lệ">Missing demo</span>
+                    )}
+                  </div>
+                  <small>{flow.steps.length} Step</small>
+                  <ScenarioDemo flowId={flow.id} state={state} invoke={invoke} />
+                  {invalidPinned.length > 0 && (
+                    <small className="hint" title={`${invalidPinned.length} pinned version lỗi — mở Script Health Check`}>
+                      {invalidPinned.length} Step cần sửa
+                    </small>
+                  )}
+                  <small className="script-version" aria-label={`Version ${flow.name}`}>{scriptVersionLabel(syncRows, flow.id)}</small>
+                  {!isActive && (
+                    <button
+                      className="btn-activate"
+                      disabled={disabled}
+                      onClick={() => void handleActivate(flow, tag.tag_key)}
+                      title="Publish release lên SEO-OPS và đặt làm Active Script"
+                    >
+                      Activate
+                    </button>
+                  )}
+                  <button disabled={disabled} onClick={() => open(flow.id)}>Mở Creator</button>
+                  <button className="scenario-acceptance" disabled={disabled} onClick={() => quickAcceptance(flow.id)}>Nghiệm thu</button>
+                  <button
+                    className="delete-script-btn"
+                    disabled={disabled}
+                    title={isActive ? "Không thể xóa Script Active" : "Xóa Script"}
+                    aria-label={`Xóa Script ${flow.name}`}
+                    onClick={() => handleDeleteClick(flow, isActive, tag.tag_key)}
+                  >
+                    <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+                      <polyline points="3 6 5 6 21 6" />
+                      <path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2" />
+                    </svg>
+                  </button>
+                </div>;
+              })}
+              {!tagFlows.length && <p className="page-empty" style={{ margin: "8px 0" }}>Chưa có Script trong Tag này. Bấm &quot;+ Script&quot; để tạo.</p>}
+            </div>
+          )}
         </section>;
       })}
+
+      {unassignedFlows.length > 0 && (
+        <section className="tag-group-folder" key="unassigned">
+          <div className="tag-folder-heading" style={{ background: "#202428" }}>
+            <button
+              className="tag-folder-toggle"
+              disabled={disabled}
+              aria-expanded={!collapsedTags["_unassigned_"]}
+              onClick={() => setCollapsedTags(p => ({ ...p, _unassigned_: !p._unassigned_ }))}
+            >
+              <span>{collapsedTags["_unassigned_"] ? "▸" : "▾"}</span>
+              <span style={{ color: "#a0aec0", fontWeight: 600 }}>Chưa gắn Tag</span>
+              <span className="tag-folder-count">({unassignedFlows.length} Script)</span>
+            </button>
+          </div>
+          {!collapsedTags["_unassigned_"] && (
+            <div className="scenario-items">
+              {unassignedFlows.map(flow => {
+                const demo = state?.scenarioDemos?.[flow.id];
+                const syncRow = syncRows.find(r => r.flow_id === flow.id || r.script_id === flow.id);
+                const isMissingDemo = syncRow?.status === "missing_demo" || !demo || demo.status !== "ready";
+                return <div className="scenario-item" key={flow.id}>
+                  <div className="scenario-title-cell">
+                    <button className="scenario-title" disabled={disabled} onClick={() => open(flow.id)} title={flow.name}>
+                      {flow.name}
+                    </button>
+                    <span className="script-badge badge-draft">Draft</span>
+                    {isMissingDemo && <span className="script-badge badge-missing-demo">Missing demo</span>}
+                  </div>
+                  <small>{flow.steps.length} Step</small>
+                  <ScenarioDemo flowId={flow.id} state={state} invoke={invoke} />
+                  <small className="script-version">{scriptVersionLabel(syncRows, flow.id)}</small>
+                  <button disabled={disabled} onClick={() => open(flow.id)}>Mở Creator</button>
+                  <button className="scenario-acceptance" disabled={disabled} onClick={() => quickAcceptance(flow.id)}>Nghiệm thu</button>
+                  <button
+                    className="delete-script-btn"
+                    disabled={disabled}
+                    title="Xóa Script"
+                    aria-label={`Xóa Script ${flow.name}`}
+                    onClick={() => handleDeleteClick(flow, false)}
+                  >
+                    <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+                      <polyline points="3 6 5 6 21 6" />
+                      <path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2" />
+                    </svg>
+                  </button>
+                </div>;
+              })}
+            </div>
+          )}
+        </section>
+      )}
     </div>
+
     {invoke && (
       <ScriptHealthPanel
         state={state}
@@ -282,21 +483,128 @@ export function ScenariosPage({ state, name, setName, locked, open, create, quic
         onPinned={(next) => onState?.(next)}
       />
     )}
-    {dialog && <UiPopover variant="modal" label={dialog.kind === "scenario-delete" ? "Delete Script" : "Scenario Group"} className="unsaved-confirm"
-      close={() => { if (!working) setDialog(undefined); }}>
-      <div className="popover-heading"><b>{dialog.kind === "scenario-delete" ? "Delete Script" : dialog.kind === "create" ? "Tạo Group" : dialog.kind === "rename" ? "Đổi tên Group" : dialog.kind === "delete" ? "Xóa Group" : "Move to Group"}</b>
-        <button disabled={working} onClick={() => setDialog(undefined)}>×</button></div>
-      {dialog.kind === "scenario-delete" ? <p>Xóa Script “{state?.flows.find(f => f.id === dialog.id)?.name}” cùng các Step/Version thuộc riêng Script này? Thao tác này không thể hoàn tác.</p>
-        : dialog.kind === "delete" ? <p>Xóa Group này? Các Script sẽ chuyển về Chưa phân nhóm, toàn bộ dữ liệu được giữ nguyên.</p>
-        : dialog.kind === "move" ? <label>Group<select value={value} disabled={working} onChange={e => setValue(e.target.value)}>
-          <option value="">Chưa phân nhóm</option>{organization.groups.map(g => <option key={g.id} value={g.id}>{g.name}</option>)}
-        </select></label>
-        : <label>Tên Group<input value={value} maxLength={80} disabled={working} onChange={e => setValue(e.target.value)} /></label>}
-      {error && <p role="alert">{error}</p>}
-      <div className="popover-footer"><button disabled={working} onClick={() => setDialog(undefined)}>Hủy</button>
-        <button className="primary" disabled={disabled || (["create", "rename"].includes(dialog.kind) && !value.trim())} onClick={submit}>
-          {dialog.kind === "scenario-delete" ? "Delete Script" : dialog.kind === "delete" ? "Xóa Group" : "Lưu"}</button></div>
-    </UiPopover>}
+
+    {dialog?.kind === "create-script" && (
+      <UiPopover
+        variant="modal"
+        label="Tạo Script mới"
+        className="unsaved-confirm"
+        close={() => setDialog(undefined)}
+      >
+        <div className="popover-heading">
+          <b>Tạo Script mới</b>
+          <button disabled={working} onClick={() => setDialog(undefined)}>×</button>
+        </div>
+        <div style={{ display: "grid", gap: 12, padding: "8px 0" }}>
+          {dialog.tagKey ? (
+            <div>
+              <small style={{ color: "#8c9ba8" }}>Thuộc Action Tag:</small>
+              <div style={{ marginTop: 4 }}>
+                <code style={{ color: "#68d6a6", fontSize: 13 }}>{dialog.tagKey}</code>
+              </div>
+            </div>
+          ) : actionTags.length > 0 ? (
+            <label>
+              Action Tag
+              <select
+                disabled={working}
+                value={selectedTagKey}
+                onChange={e => setSelectedTagKey(e.target.value)}
+                style={{ width: "100%", marginTop: 4 }}
+              >
+                {actionTags.map(t => (
+                  <option key={t.tag_key} value={t.tag_key}>{t.tag_key} {t.name ? `(${t.name})` : ""}</option>
+                ))}
+              </select>
+            </label>
+          ) : (
+            <p className="hint">Chưa có Tag từ SEO-OPS. Script sẽ được tạo ở trạng thái Chưa gắn Tag.</p>
+          )}
+
+          <label>
+            Tên Script
+            <input
+              autoFocus
+              value={scriptNameInput}
+              disabled={working}
+              maxLength={80}
+              placeholder="Ví dụ: Group Post v1"
+              onChange={e => setScriptNameInput(e.target.value)}
+              onKeyDown={e => { if (e.key === "Enter") submitCreateScript(); }}
+              style={{ width: "100%", marginTop: 4 }}
+            />
+          </label>
+        </div>
+        <div className="popover-footer">
+          <button disabled={working} onClick={() => setDialog(undefined)}>Hủy</button>
+          <button
+            className="primary"
+            disabled={disabled || !scriptNameInput.trim()}
+            onClick={submitCreateScript}
+          >
+            Tạo Script
+          </button>
+        </div>
+      </UiPopover>
+    )}
+
+    {dialog?.kind === "delete-blocked" && (
+      <UiPopover
+        variant="modal"
+        label="Không thể xóa Script Active"
+        className="unsaved-confirm"
+        close={() => setDialog(undefined)}
+      >
+        <div className="popover-heading">
+          <b style={{ color: "#f87171" }}>Không thể xóa Script Active</b>
+          <button onClick={() => setDialog(undefined)}>×</button>
+        </div>
+        <div style={{ padding: "8px 0" }}>
+          <p>
+            Script <strong>“{dialog.flow.name}”</strong> đang ở trạng thái <strong>Active</strong> trên SEO-OPS cho Tag <code>{dialog.tagKey}</code>.
+          </p>
+          <p style={{ color: "#9bb0c7", fontSize: 12 }}>
+            SEO-OPS yêu cầu duy trì release Script an toàn cho Automation. Để xóa Script này, bạn cần chuyển trạng thái Active sang một Script khác cùng Tag hoặc thu hồi release từ SEO-OPS.
+          </p>
+        </div>
+        <div className="popover-footer">
+          <button className="primary" onClick={() => setDialog(undefined)}>Đã hiểu</button>
+        </div>
+      </UiPopover>
+    )}
+
+    {dialog?.kind === "confirm-delete" && (
+      <UiPopover
+        variant="modal"
+        label="Xóa Script"
+        className="unsaved-confirm"
+        close={() => { if (!working) setDialog(undefined); }}
+      >
+        <div className="popover-heading">
+          <b>Xóa Script</b>
+          <button disabled={working} onClick={() => setDialog(undefined)}>×</button>
+        </div>
+        <div style={{ padding: "8px 0" }}>
+          <p>
+            Xóa Script <strong>“{dialog.flow.name}”</strong> cùng các Step/Version thuộc riêng Script này?
+          </p>
+          <p style={{ color: "#f87171", fontSize: 12 }}>
+            Thao tác này không thể hoàn tác.
+          </p>
+        </div>
+        <div className="popover-footer">
+          <button disabled={working} onClick={() => setDialog(undefined)}>Hủy</button>
+          <button
+            className="primary"
+            style={{ background: "#dc2626", borderColor: "#ef4444" }}
+            disabled={disabled}
+            onClick={() => void apply({ type: "deleteScenario", id: dialog.flow.id, confirmed: true }, true)}
+          >
+            Xác nhận xóa
+          </button>
+        </div>
+      </UiPopover>
+    )}
   </section>;
 }
 

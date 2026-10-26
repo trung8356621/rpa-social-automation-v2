@@ -34,6 +34,7 @@ import type {
   ExecutionError,
   State,
   Step,
+  StepVersionRef,
 } from "../shared/contracts";
 import { errorDestination } from "../shared/error-navigation";
 import "./style.css";
@@ -915,8 +916,8 @@ function Creator() {
     const destination = errorDestination(error);
     if (destination.kind === "variable") {
       setFocusVariableId(destination.variableId);
-      openFlow(flowId);
-    } else openFlow(flowId, { stepId: destination.stepId, version: destination.version });
+      openScenario(flowId);
+    } else openScenario(flowId, { stepId: destination.stepId, version: destination.version });
   }
   function caseSaved(tabId: string, item: TestCase, next: State) {
     setState(next);
@@ -972,19 +973,17 @@ function Creator() {
     return tab?.kind === "studio" ? studioEditors.current.get(id)?.dirty ?? false : tab?.kind === "test-case" ? caseEditors.current.get(id)?.dirty ?? false
       : id === activeTabId ? editorDirty : tabDrafts.current.get(id)?.dirty ?? false;
   }
-  function createScenario() {
+  function createScenario(actionTagKey?: string, customName?: string) {
     if (workspaceLock.current || pendingNavigationRef.current || busy || shot || ocrLoading) return;
     workspaceLock.current = true;
     void task(async () => {
       let created: State | undefined;
       try {
         captureActiveTab();
-        created = await invoke<State>({ type: "newFlow", name: flowName });
+        created = await invoke<State>({ type: "newFlow", name: customName ?? flowName, actionTagKey });
         await activateTab({ id: crypto.randomUUID(), kind: "creator", flowId: created.flow!.id,
           sessionId: created.activeBrowserSessionId });
       } catch (error) {
-        // newFlow selects its Flow immediately. If tab activation fails, restore
-        // the previous runtime context before the existing draft becomes editable.
         if (created) setState(state?.flow
           ? await invoke<State>({ type: "openFlow", id: state.flow.id }) : created);
         throw error;
@@ -1331,11 +1330,13 @@ function Creator() {
         onSeoOpsSession={session => { setSeoOpsSession(session); setSeoOpsAuthenticated(session.authenticated); }}
         reconnectSeoOps={() => navigateApp("settings")}
         onState={setState}
+        navigate={navigateApp}
         sessionControl={<SessionSelector state={state} locked={navigationLocked || stepPlayback[activeStepId]?.status === "running"} select={selectSession} />} />}
       {shell && appPage === "browser-sessions" && <BrowserSessionsPage state={state} locked={navigationLocked}
         update={updateBrowserSessions} open={openSession} />}
       {shell && appPage === "test-lab" && <TestLabPage state={state} locked={navigationLocked} update={updateWorkspace}
-        open={openCase} run={runCase} canRun={canRunCase} create={() => openCase()} canDelete={id => !tabsRef.current.some(t => t.caseId === id)} />}
+        open={openCase} run={runCase} canRun={canRunCase} create={() => openCase()} canDelete={id => !tabsRef.current.some(t => t.caseId === id)}
+        navigate={navigateApp} />}
       {shell && state && tabs.filter(tab => tab.kind === "test-case").map(tab => <div key={tab.id} className="case-editor-host"
         hidden={tab.id !== activeTabId || appPage !== "test-case"}>
         <TestCaseEditor tabId={tab.id} item={state.testLab?.cases.find(c => c.id === tab.caseId)} state={state}
@@ -1354,7 +1355,7 @@ function Creator() {
         <div className="page-heading"><h1>Settings</h1><p>Cấu hình local cho ứng dụng trên máy này.</p></div>
         <SeoOpsAuthPanel
           locked={navigationLocked}
-          invoke={async (command) => {
+          invoke={async <T,>(command: Command): Promise<T> => {
             const result = await invoke(command);
             if (command.type === "seoOpsLogin" || command.type === "seoOpsLogout" || command.type === "seoOpsGetSession" || command.type === "seoOpsSetEndpoint") {
               const session = command.type === "seoOpsGetSession" || command.type === "seoOpsSetEndpoint"
@@ -1364,7 +1365,7 @@ function Creator() {
               setSeoOpsAutoSyncEnabled(Boolean(session.autoSyncEnabled));
               setSeoOpsSession(session as SeoOpsSessionState);
             }
-            return result;
+            return result as T;
           }}
         />
         <NetworkSettings state={state} locked={navigationLocked} update={async command => setState(await invoke<State>(command))} />
@@ -1614,8 +1615,17 @@ function Creator() {
               <button role="tab" aria-selected={creatorSidebarTab === "tests"} onClick={() => setCreatorSidebarTab("tests")}>Tests</button>
             </div>}
             {!activeCaseTab && creatorSidebarTab === "tests" && state?.flow && <div className="scenario-tests-panel">
-              <div className="scenario-tests-heading"><b>Test Cases</b><button className="icon-button" title="Tạo Test Case" aria-label="Tạo Test Case" disabled={locked}
-                onClick={() => ensureScenarioCase(state.flow!.id)}>+</button></div>
+              <div className="scenario-tests-heading">
+                <b>Test Cases</b>
+                <div style={{ display: "flex", gap: 4 }}>
+                  <button className="icon-button" title="Mở Test Lab full view" aria-label="Mở Test Lab full view" disabled={locked}
+                    onClick={() => navigateApp("test-lab")}>
+                    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><path d="M15 3h6v6M10 14L21 3M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6" /></svg>
+                  </button>
+                  <button className="icon-button" title="Tạo Test Case" aria-label="Tạo Test Case" disabled={locked}
+                    onClick={() => ensureScenarioCase(state.flow!.id)}>+</button>
+                </div>
+              </div>
               {(state.testLab?.cases ?? []).filter(item => item.flowId === state.flow!.id).map(item => (
                 <ScenarioTestCaseCard
                   key={item.id}

@@ -1432,3 +1432,195 @@ body[data-panel="shell"] .app-shell > header > .environment { flex-shrink: 0; }
 .seo-ops-sync-summary { width: 100%; font-size: 12px; }
 .sync-badge { color: #9ec9ff; min-width: 5.5rem; }
 .script-version { color: #dce9f8; min-width: 3.5rem; white-space: nowrap; font-variant-numeric: tabular-nums; }
+
+/* Subpage nav tabs: [ Scripts ] [ Test Lab ] */
+.scripts-top-tabs {
+  display: inline-flex;
+  align-items: center;
+  background: #141b24;
+  padding: 3px;
+  border-radius: 8px;
+  border: 1px solid #2d3b4d;
+  margin-bottom: 16px;
+  gap: 4px;
+}
+.scripts-tab-btn {
+  background: transparent;
+  border: 0;
+  color: #8c9ba8;
+  padding: 6px 16px;
+  font-size: 13px;
+  font-weight: 500;
+  border-radius: 6px;
+  cursor: pointer;
+  transition: all 0.15s ease;
+}
+.scripts-tab-btn:hover {
+  color: #fff;
+  background: rgba(255, 255, 255, 0.05);
+}
+.scripts-tab-btn.active {
+  background: #253346;
+  color: #68d6a6;
+  font-weight: 600;
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.3);
+}
+
+/* Tag Groups in Scripts */
+.tag-group-folder {
+  border: 1px solid #2b394a;
+  border-radius: 8px;
+  background: #141d28;
+  margin-bottom: 14px;
+  overflow: hidden;
+}
+.tag-folder-heading {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 8px 12px;
+  background: #1a2533;
+  border-bottom: 1px solid #253344;
+}
+.tag-folder-toggle {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  background: transparent;
+  border: 0;
+  color: #fff;
+  font-size: 13px;
+  cursor: pointer;
+  text-align: left;
+}
+.tag-folder-toggle code {
+  color: #68d6a6;
+  font-size: 13px;
+  font-weight: 600;
+  background: rgba(104, 214, 166, 0.1);
+  padding: 2px 6px;
+  border-radius: 4px;
+}
+.tag-folder-name {
+  color: #a0aec0;
+  font-size: 12px;
+}
+.tag-folder-count {
+  color: #718096;
+  font-size: 11px;
+}
+.btn-new-script-tag {
+  background: #1f362c;
+  color: #68d6a6;
+  border: 1px solid #2d5a45;
+  padding: 4px 10px;
+  font-size: 11px;
+  border-radius: 5px;
+  cursor: pointer;
+}
+.btn-new-script-tag:hover {
+  background: #2a4c3e;
+}
+
+/* Script Status Badges: Active, Draft, Missing demo */
+.script-badge {
+  display: inline-flex;
+  align-items: center;
+  padding: 2px 8px;
+  border-radius: 4px;
+  font-size: 11px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+  white-space: nowrap;
+}
+.script-badge.badge-active {
+  background: #163b2c;
+  color: #34d399;
+  border: 1px solid #286b4f;
+}
+.script-badge.badge-draft {
+  background: #1e293b;
+  color: #94a3b8;
+  border: 1px solid #334155;
+}
+.script-badge.badge-missing-demo {
+  background: #3d2b14;
+  color: #f59e0b;
+  border: 1px solid #6b4c23;
+}
+.btn-activate {
+  background: #1a3328;
+  color: #34d399;
+  border: 1px solid #285d43;
+  padding: 4px 9px;
+  font-size: 11px;
+  font-weight: 500;
+  border-radius: 4px;
+  cursor: pointer;
+}
+.btn-activate:hover {
+  background: #234839;
+}
+.delete-script-btn {
+  color: #718096;
+  padding: 5px;
+  border-radius: 4px;
+  background: transparent;
+  border: 0;
+  cursor: pointer;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  line-height: 1;
+}
+.delete-script-btn:hover {
+  color: #f87171;
+  background: rgba(239, 68, 68, 0.12);
+}
+
+/* Variables Tabs & Placeholders */
+.variables-tab-bar {
+  display: inline-flex;
+  gap: 4px;
+  background: #10161f;
+  padding: 2px;
+  border-radius: 6px;
+  border: 1px solid #273545;
+  margin-left: 12px;
+}
+.variable-tab-btn {
+  background: transparent;
+  border: 0;
+  color: #8c9ba8;
+  padding: 3px 10px;
+  font-size: 11px;
+  border-radius: 4px;
+  cursor: pointer;
+}
+.variable-tab-btn.active {
+  background: #253346;
+  color: #68d6a6;
+  font-weight: 600;
+}
+.variable-type-tag {
+  color: #94a3b8;
+  font-size: 12px;
+  padding: 4px 8px;
+  background: #18222f;
+  border-radius: 4px;
+  border: 1px solid #28374a;
+  display: inline-flex;
+  align-items: center;
+}
+.variable-columns-placeholders, .variable-row-placeholder {
+  grid-template-columns: 160px 1fr !important;
+}
+.empty-tags-box {
+  padding: 32px 20px;
+  border: 1px dashed #3a4c68;
+  border-radius: 8px;
+  text-align: center;
+  color: #9bb0c7;
+  margin: 16px 0;
+}
