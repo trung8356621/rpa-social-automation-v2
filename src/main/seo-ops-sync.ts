@@ -11,6 +11,7 @@ import { materializeScriptRelease } from "../shared/script-materialize.js";
 import {
   createHttpSeoOpsAuthClient,
   assertRpaAdminRole,
+  mapSeoOpsAuthError,
   mapSeoOpsAuthErrors,
   type RpaAdminUser,
   type TokenStore,
@@ -136,7 +137,7 @@ export function createSeoOpsSyncService(options: {
 
   async function adminApi(pathname: string, init?: RequestInit) {
     const token = tokenStore.getToken();
-    if (!token) throw new Error("SEO_OPS: cần đăng nhập trước khi backup");
+    if (!token) throw new Error("unauthenticated");
     const url = `${config().baseUrl}/api/v1/social-automation/rpa-admin${pathname}`;
     const response = await fetch(url, {
       ...init,
@@ -144,7 +145,10 @@ export function createSeoOpsSyncService(options: {
       headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/json", ...(init?.headers ?? {}) },
     });
     const body = await readSeoOpsJson(response, init?.method ?? "GET", url);
-    if (!response.ok || body.ok !== true) throw new Error(`SEO_OPS_BACKUP: ${JSON.stringify(body.errors ?? response.status)}`);
+    if (!response.ok || body.ok !== true) {
+      const errList = Array.isArray(body.errors) ? (body.errors as string[]).join(", ") : String(body.errors ?? response.status);
+      throw new Error(errList || `HTTP ${response.status}`);
+    }
     return body;
   }
 
@@ -187,11 +191,32 @@ export function createSeoOpsSyncService(options: {
     const body = await adminApi("/backup/download", { method: "POST", body: JSON.stringify({}) });
     return { archive: Buffer.from(String(body.archive_base64), "base64"), sha256: String(body.sha256), backup: body.backup };
   }
+  async function syncActionTags(): Promise<{ ok: true; tags: ActionTag[]; count: number } | { ok: false; error: string }> {
+    try {
+      const token = tokenStore.getToken();
+      if (!token) {
+        return { ok: false, error: "Cần đăng nhập SEO-OPS tại Settings trước khi đồng bộ." };
+      }
+      const body = await adminApi("/action-tags");
+      if (body && Array.isArray((body as { action_tags?: unknown[] }).action_tags)) {
+        const tags = (body as { action_tags: ActionTag[] }).action_tags;
+        store.upsertActionTags(tags);
+        store.setSetting("seoOpsActionTags", JSON.stringify(tags));
+        return { ok: true, tags, count: tags.length };
+      }
+      return { ok: false, error: "Dữ liệu trả về từ SEO-OPS không có danh sách Action Tags." };
+    } catch (e) {
+      const rawMsg = e instanceof Error ? e.message : String(e);
+      return { ok: false, error: mapSeoOpsAuthError(rawMsg) };
+    }
+  }
+
   async function fetchActionTags(): Promise<ActionTag[]> {
     try {
       const body = await adminApi("/action-tags");
       if (body && Array.isArray((body as { action_tags?: unknown[] }).action_tags)) {
         const tags = (body as { action_tags: ActionTag[] }).action_tags;
+        store.upsertActionTags(tags);
         store.setSetting("seoOpsActionTags", JSON.stringify(tags));
         return tags;
       }
@@ -203,6 +228,8 @@ export function createSeoOpsSyncService(options: {
 
   function getCachedActionTags(): ActionTag[] {
     try {
+      const dbTags = store.actionTags();
+      if (dbTags.length > 0) return dbTags;
       return JSON.parse(store.setting("seoOpsActionTags") || "[]") as ActionTag[];
     } catch {
       return [];
@@ -1030,6 +1057,7 @@ export function createSeoOpsSyncService(options: {
     backupInfo,
     downloadBackup,
     fetchActionTags,
+    syncActionTags,
     getCachedActionTags,
     fetchScriptRequests,
     getCachedScriptRequests,

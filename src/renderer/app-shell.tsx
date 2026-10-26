@@ -234,6 +234,9 @@ export function ScenariosPage({ state, name, setName, locked, open, create, quic
           onRows={setSyncRows}
           onSession={onSeoOpsSession}
           reconnect={reconnectSeoOps}
+          onSyncComplete={(tags) => {
+            if (onState && state) onState({ ...state, actionTags: tags });
+          }}
         />
       )}
     </div>
@@ -322,7 +325,7 @@ export function ScenariosPage({ state, name, setName, locked, open, create, quic
 
     <div className="scenario-groups">
       {actionTags.map(tag => {
-        const tagFlows = flows.filter(f => f.actionTagKey === tag.tag_key);
+        const tagFlows = flows.filter(f => f.actionTagKey === tag.tag_key || (f.actionTagId !== undefined && f.actionTagId === tag.id));
         const assignedActiveId = activeScriptsByTag[tag.tag_key];
         const activeFlow = assignedActiveId
           ? tagFlows.find(f => f.id === assignedActiveId)
@@ -415,7 +418,7 @@ export function ScenariosPage({ state, name, setName, locked, open, create, quic
                   </button>
                 </div>;
               })}
-              {!tagFlows.length && <p className="page-empty" style={{ margin: "8px 0" }}>Chưa có Script trong Tag này. Bấm &quot;+ Script&quot; để tạo.</p>}
+              {!tagFlows.length && <p className="page-empty" style={{ margin: "8px 0" }}>Chưa có Script</p>}
             </div>
           )}
         </section>;

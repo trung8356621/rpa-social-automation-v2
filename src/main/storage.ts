@@ -14,6 +14,7 @@ import type {
   Payload,
   InvalidStepRef,
   PathInput,
+  ActionTag,
 } from "../shared/contracts.js";
 import {
   formatHumanStepError,
@@ -157,6 +158,24 @@ export class Store {
       CREATE TABLE IF NOT EXISTS steps(id TEXT NOT NULL,version INTEGER NOT NULL,payload TEXT NOT NULL,PRIMARY KEY(id,version));
       CREATE TABLE IF NOT EXISTS overrides(id TEXT PRIMARY KEY,step_id TEXT NOT NULL,base_version INTEGER NOT NULL,payload TEXT NOT NULL,FOREIGN KEY(step_id,base_version) REFERENCES steps(id,version));
       CREATE TABLE IF NOT EXISTS runs(id TEXT PRIMARY KEY,payload TEXT NOT NULL);
+      CREATE TABLE IF NOT EXISTS action_tags(
+        id INTEGER PRIMARY KEY,
+        tag_key TEXT NOT NULL UNIQUE,
+        site_key TEXT,
+        path_key TEXT,
+        action_key TEXT,
+        platform TEXT NOT NULL,
+        target TEXT NOT NULL,
+        action TEXT NOT NULL,
+        name TEXT NOT NULL,
+        description TEXT,
+        base_url TEXT,
+        url_pattern TEXT,
+        path_inputs TEXT,
+        linked_scripts_count INTEGER DEFAULT 0,
+        payload TEXT NOT NULL,
+        updated_at TEXT NOT NULL
+      );
       `);
     try {
       // Schema migration runs once. Business-data defects must not block reopen.
@@ -179,7 +198,7 @@ export class Store {
   onPersistentChange(listener: () => void) { this.persistentChange = listener; }
   private changed() { this.persistentChange?.(); }
   backupSnapshot() {
-    const tables = ["settings", "flows", "steps", "overrides", "runs"] as const;
+    const tables = ["settings", "flows", "steps", "overrides", "runs", "action_tags"] as const;
     return Object.fromEntries(tables.map(table => [table, this.db.prepare(`SELECT * FROM ${table} ORDER BY rowid`).all()]));
   }
   restoreSnapshot(snapshot: Record<string, unknown[]>) {
@@ -187,14 +206,86 @@ export class Store {
     if (!required.every(table => Array.isArray(snapshot[table]))) throw new Error("RESTORE_INVALID: missing SQLite tables");
     this.db.exec("BEGIN IMMEDIATE");
     try {
-      for (const table of ["overrides", "runs", "steps", "flows", "settings"]) this.db.exec(`DELETE FROM ${table}`);
+      for (const table of ["action_tags", "overrides", "runs", "steps", "flows", "settings"]) this.db.exec(`DELETE FROM ${table}`);
       for (const row of snapshot.settings as Array<{key:string;value:string}>) this.db.prepare("INSERT INTO settings VALUES(?,?)").run(row.key, row.value);
       for (const row of snapshot.flows as Array<{id:string;payload:string}>) this.db.prepare("INSERT INTO flows VALUES(?,?)").run(row.id, row.payload);
       for (const row of snapshot.steps as Array<{id:string;version:number;payload:string}>) this.db.prepare("INSERT INTO steps VALUES(?,?,?)").run(row.id, row.version, row.payload);
       for (const row of snapshot.overrides as Array<{id:string;step_id:string;base_version:number;payload:string}>) this.db.prepare("INSERT INTO overrides VALUES(?,?,?,?)").run(row.id, row.step_id, row.base_version, row.payload);
       for (const row of snapshot.runs as Array<{id:string;payload:string}>) this.db.prepare("INSERT INTO runs VALUES(?,?)").run(row.id, row.payload);
+      if (Array.isArray(snapshot.action_tags)) {
+        for (const row of snapshot.action_tags as Array<{id: number; tag_key: string; site_key?: string; path_key?: string; action_key?: string; platform: string; target: string; action: string; name: string; description?: string; base_url?: string; url_pattern?: string; path_inputs?: string; linked_scripts_count?: number; payload: string; updated_at: string}>) {
+          this.db.prepare("INSERT INTO action_tags VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)").run(
+            row.id, row.tag_key, row.site_key ?? null, row.path_key ?? null, row.action_key ?? null,
+            row.platform, row.target, row.action, row.name, row.description ?? null,
+            row.base_url ?? null, row.url_pattern ?? null, row.path_inputs ?? null,
+            row.linked_scripts_count ?? 0, row.payload, row.updated_at
+          );
+        }
+      }
       this.db.exec("COMMIT"); this.refreshInvalidStepRefs();
     } catch (error) { this.db.exec("ROLLBACK"); throw error; }
+  }
+  actionTags(): ActionTag[] {
+    const rows = this.db.prepare("SELECT payload FROM action_tags ORDER BY platform, target, action, id").all() as Array<{ payload: string }>;
+    return rows.map(r => JSON.parse(r.payload) as ActionTag);
+  }
+  actionTag(idOrKey: number | string): ActionTag | null {
+    const row = (typeof idOrKey === "number"
+      ? this.db.prepare("SELECT payload FROM action_tags WHERE id=?").get(idOrKey)
+      : this.db.prepare("SELECT payload FROM action_tags WHERE tag_key=?").get(idOrKey)) as { payload: string } | undefined;
+    return row ? (JSON.parse(row.payload) as ActionTag) : null;
+  }
+  upsertActionTags(tags: ActionTag[]): void {
+    const stmt = this.db.prepare(`
+      INSERT INTO action_tags (
+        id, tag_key, site_key, path_key, action_key, platform, target, action, name, description, base_url, url_pattern, path_inputs, linked_scripts_count, payload, updated_at
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      ON CONFLICT(id) DO UPDATE SET
+        tag_key = excluded.tag_key,
+        site_key = excluded.site_key,
+        path_key = excluded.path_key,
+        action_key = excluded.action_key,
+        platform = excluded.platform,
+        target = excluded.target,
+        action = excluded.action,
+        name = excluded.name,
+        description = excluded.description,
+        base_url = excluded.base_url,
+        url_pattern = excluded.url_pattern,
+        path_inputs = excluded.path_inputs,
+        linked_scripts_count = excluded.linked_scripts_count,
+        payload = excluded.payload,
+        updated_at = excluded.updated_at
+    `);
+    const now = new Date().toISOString();
+    this.db.exec("BEGIN IMMEDIATE");
+    try {
+      for (const t of tags) {
+        stmt.run(
+          t.id,
+          t.tag_key,
+          t.site_key ?? null,
+          t.path_key ?? null,
+          t.action_key ?? null,
+          t.platform,
+          t.target,
+          t.action,
+          t.name,
+          t.description ?? null,
+          t.base_url ?? null,
+          t.url_pattern ?? null,
+          t.path_inputs ? JSON.stringify(t.path_inputs) : null,
+          t.linked_scripts_count ?? 0,
+          JSON.stringify(t),
+          now,
+        );
+      }
+      this.db.exec("COMMIT");
+      this.changed();
+    } catch (e) {
+      this.db.exec("ROLLBACK");
+      throw e;
+    }
   }
   /** Read-only audit of every Scenario Step version. Never writes SQLite. */
   scanScriptHealth(): ScriptHealthReport {
@@ -548,6 +639,7 @@ export class Store {
     zoom: number,
     meta?: {
       id?: string;
+      actionTagId?: number;
       actionTagKey?: string;
       scriptRequestId?: string;
       resultType?: "status" | "collection";
@@ -565,6 +657,7 @@ export class Store {
       variables: [],
       defaultPattern: { values: {} },
       placeholders: {},
+      ...(meta?.actionTagId !== undefined ? { actionTagId: meta.actionTagId } : {}),
       ...(meta?.actionTagKey ? { actionTagKey: meta.actionTagKey } : {}),
       ...(meta?.scriptRequestId ? { scriptRequestId: meta.scriptRequestId } : {}),
       resultType: meta?.resultType ?? "status",
@@ -580,6 +673,7 @@ export class Store {
   updateFlowMeta(
     id: string,
     meta: {
+      actionTagId?: number;
       actionTagKey?: string;
       resultType?: "status" | "collection";
       collectionType?: string;
@@ -587,6 +681,7 @@ export class Store {
   ): Flow {
     const f = this.flows().find((flow) => flow.id === id);
     if (!f) throw new Error("Không tìm thấy Script.");
+    if (meta.actionTagId !== undefined) f.actionTagId = meta.actionTagId;
     if (meta.actionTagKey !== undefined) f.actionTagKey = meta.actionTagKey || undefined;
     if (meta.resultType !== undefined) f.resultType = meta.resultType;
     if (meta.collectionType !== undefined) f.collectionType = meta.collectionType || undefined;

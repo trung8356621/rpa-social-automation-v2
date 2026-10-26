@@ -447,7 +447,7 @@ async function boot() {
     focused: browser.view.webContents.isFocused(),
     visible: browser.visible && (overlays.page === "creator" || overlays.page === "studio-run"),
     dataPath,
-    actionTags: seoOpsSync.getCachedActionTags(),
+    actionTags: store.actionTags().length > 0 ? store.actionTags() : seoOpsSync.getCachedActionTags(),
     scriptRequests: seoOpsSync.getCachedScriptRequests(),
     activeScriptsByTag: (() => {
       try { return JSON.parse(store.setting("activeScriptsByTag") || "{}"); }
@@ -1286,8 +1286,15 @@ async function boot() {
       case "updateFlowMetadata": {
         isIdle();
         if (store.flow()) {
+          let actionTagId = command.actionTagId;
+          let actionTagKey = command.actionTagKey;
+          if (actionTagKey && actionTagId === undefined) {
+            const tag = store.actionTag(actionTagKey);
+            if (tag) actionTagId = tag.id;
+          }
           store.updateFlowMeta(store.flow()!.id, {
-            actionTagKey: command.actionTagKey,
+            actionTagKey,
+            actionTagId,
             resultType: command.resultType,
             collectionType: command.collectionType,
           });
@@ -1302,6 +1309,14 @@ async function boot() {
         overlays.page = "creator";
         return state();
       }
+      case "seoOpsSyncActionTags": {
+        isIdle();
+        const syncResult = await seoOpsSync.syncActionTags();
+        return {
+          ...syncResult,
+          state: state(),
+        };
+      }
       case "seoOpsGetActionTags": {
         return await seoOpsSync.fetchActionTags();
       }
@@ -1312,8 +1327,18 @@ async function boot() {
         isIdle();
         if (uiPlayAllRunId) throw new Error("Đợi Play All kết thúc trước khi tạo Script.");
         armedTest = undefined;
+        let actionTagId = command.actionTagId;
+        let actionTagKey = command.actionTagKey;
+        if (actionTagKey && actionTagId === undefined) {
+          const tag = store.actionTag(actionTagKey);
+          if (tag) actionTagId = tag.id;
+        } else if (actionTagId !== undefined && !actionTagKey) {
+          const tag = store.actionTag(actionTagId);
+          if (tag) actionTagKey = tag.tag_key;
+        }
         store.newFlow(command.name, browser.zoom, {
-          actionTagKey: command.actionTagKey,
+          actionTagKey,
+          actionTagId,
         });
         return state();
       }

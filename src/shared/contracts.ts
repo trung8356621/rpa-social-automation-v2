@@ -197,6 +197,7 @@ export type Flow = {
   name: string;
   zoom: number;
   steps: { id: string; version: number }[];
+  actionTagId?: number;
   actionTagKey?: string;
   scriptRequestId?: string;
   resultType?: "status" | "collection";
@@ -429,9 +430,10 @@ export type Command =
   | { type: "fixture" }
   | { type: "toggleFullscreen" }
   | { type: "environment"; zoom: number }
-  | { type: "newFlow"; name: string; actionTagKey?: string }
-  | { type: "updateFlowMetadata"; actionTagKey?: string; resultType?: "status" | "collection"; collectionType?: string }
+  | { type: "newFlow"; name: string; actionTagKey?: string; actionTagId?: number }
+  | { type: "updateFlowMetadata"; actionTagKey?: string; actionTagId?: number; resultType?: "status" | "collection"; collectionType?: string }
   | { type: "createScriptFromRequest"; requestId: string }
+  | { type: "seoOpsSyncActionTags" }
   | { type: "seoOpsGetActionTags" }
   | { type: "seoOpsGetScriptRequests" }
   | { type: "openFlow"; id: string }

@@ -33,7 +33,7 @@ export function mapSeoOpsAuthError(codeOrMessage: string): string {
     case "fetch_failed":
       return "Không kết nối được SEO-OPS.";
     default:
-      if (/failed to fetch|networkerror|econnrefused|enotfound|timed?\s*out/i.test(raw)) {
+      if (/fetch failed|failed to fetch|networkerror|econnrefused|enotfound|timed?\s*out/i.test(raw)) {
         return "Không kết nối được SEO-OPS.";
       }
       const rateLimit = /category=rate_limited(?:.*retry-after=(\d+))?/i.exec(raw);

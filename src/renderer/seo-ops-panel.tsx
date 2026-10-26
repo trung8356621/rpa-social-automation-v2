@@ -1,5 +1,5 @@
 import React, { useCallback, useEffect, useState } from "react";
-import type { Command } from "../shared/contracts";
+import type { ActionTag, Command, State } from "../shared/contracts";
 import { mapSeoOpsAuthError, mapSeoOpsAuthErrors } from "../shared/seo-ops-auth";
 import { labelForStatus, type ScriptSyncRow } from "../shared/sync-status";
 import type { ManualSyncResponse } from "../shared/sync-ipc";
@@ -149,6 +149,7 @@ export function SeoOpsSyncControls({
   onRows,
   onSession,
   reconnect,
+  onSyncComplete,
 }: {
   locked: boolean;
   session?: SeoOpsSessionState;
@@ -158,11 +159,11 @@ export function SeoOpsSyncControls({
   onRows?: (rows: ScriptSyncRow[]) => void;
   onSession?: (session: SeoOpsSessionState) => void;
   reconnect?: () => void;
+  onSyncComplete?: (tags: ActionTag[]) => void;
 }) {
   const [busy, setBusy] = useState(false);
   const [message, setMessage] = useState("");
   const [rows, setRows] = useState<ScriptSyncRow[]>([]);
-  const [backupLabel, setBackupLabel] = useState("");
   const [currentSession, setCurrentSession] = useState(session);
   const authenticated = Boolean(currentSession?.authenticated);
   const availability = seoOpsSyncAvailability(currentSession, locked, busy);
@@ -183,13 +184,41 @@ export function SeoOpsSyncControls({
     [onRows],
   );
 
-  useEffect(() => {
-    if (!authenticated) return;
-    const read = () => void invoke<{ backup?: unknown }>({ type: "seoOpsBackupInfo" })
-      .then(value => setBackupLabel(value.backup ? "Backed up" : "Backup pending"))
-      .catch(() => setBackupLabel("Backup failed"));
-    read();
-  }, [authenticated, invoke]);
+  async function runTagSync() {
+    if (!authenticated) {
+      setMessage("Cần đăng nhập SEO-OPS tại Settings trước khi đồng bộ.");
+      return;
+    }
+    if (locked || busy) return;
+    setBusy(true);
+    setMessage("");
+    try {
+      const res = await invoke<{
+        ok: boolean;
+        count?: number;
+        tags?: ActionTag[];
+        error?: string;
+        state?: State;
+      }>({ type: "seoOpsSyncActionTags" });
+
+      if (res.ok) {
+        const count = res.count ?? res.tags?.length ?? 0;
+        setMessage(`Đồng bộ thành công: ${count} Action Tag${count > 1 ? "s" : ""}`);
+        if (res.tags && onSyncComplete) {
+          onSyncComplete(res.tags);
+        }
+      } else {
+        setMessage(`Đồng bộ thất bại: ${res.error || "Không thể lấy Action Tags"}`);
+        if (/hết hạn|phiên|unauthenticated|token/i.test(res.error || "")) {
+          await refreshSession().catch(() => undefined);
+        }
+      }
+    } catch (e) {
+      setMessage(`Đồng bộ thất bại: ${mapSeoOpsAuthError(String((e as Error).message || e))}`);
+    } finally {
+      setBusy(false);
+    }
+  }
 
   async function runSync() {
     if (!authenticated) {
@@ -239,14 +268,17 @@ export function SeoOpsSyncControls({
 
   return (
     <div className="seo-ops-sync-controls">
-      <button disabled={!availability.enabled} title={availability.enabled ? undefined : availability.message} onClick={() => void restoreBackup()}>
-        Restore from SEO-OPS
+      <button
+        disabled={!availability.enabled || busy}
+        title={availability.enabled ? "Đồng bộ Action Tags từ SEO-OPS" : availability.message}
+        onClick={() => void runTagSync()}
+      >
+        {busy ? "Đang đồng bộ…" : "Đồng bộ"}
       </button>
       {!availability.enabled && <small role="status">{availability.message} {reconnect && !locked && !busy &&
         <button type="button" onClick={currentSession?.error && !/expired|hết hạn|unauthenticated/i.test(currentSession.error)
           ? () => void refreshSession() : reconnect}>{currentSession?.error ? "Kết nối lại" : "Mở Settings"}</button>}</small>}
       {message && <small>{message}</small>}
-      {backupLabel && <small>{backupLabel}</small>}
       {rows.length > 0 && (
         <details className="seo-ops-sync-summary">
           <summary>Diagnostics sync ({rows.length})</summary>
