@@ -3,8 +3,8 @@ import type { ScriptSyncRow } from "./sync-status.js";
 
 export type SyncActionResult = { script_id: string; action: string; ok: boolean; message?: string };
 export type SyncIpcDiagnostic = {
-  code: "IPC_SERIALIZATION" | "NETWORK_FAILURE" | "AUTHENTICATION_FAILURE" | "AUTHORIZATION_FAILURE" | "RATE_LIMITED" | "SERVER_ERROR" | "SERVICE_UNAVAILABLE" | "API_UNEXPECTED_RESPONSE" | "SYNC_FAILURE";
-  category: "ipc" | "network" | "authentication" | "authorization" | "rate_limited" | "server" | "service_unavailable" | "sync";
+  code: "IPC_SERIALIZATION" | "NETWORK_FAILURE" | "AUTHENTICATION_FAILURE" | "AUTHORIZATION_FAILURE" | "NOT_FOUND" | "CONFLICT" | "VALIDATION" | "TIMEOUT" | "RATE_LIMITED" | "SERVER_ERROR" | "SERVICE_UNAVAILABLE" | "API_UNEXPECTED_RESPONSE" | "SYNC_FAILURE";
+  category: "ipc" | "network" | "authentication" | "authorization" | "not_found" | "conflict" | "validation" | "timeout" | "rate_limited" | "server" | "service_unavailable" | "sync";
   message: string;
   technicalMessage: string;
   path?: string;
@@ -53,12 +53,20 @@ export function syncIpcDiagnostic(error: unknown): SyncIpcDiagnostic {
   const technicalMessage = error instanceof Error ? error.message : String(error);
   if (error instanceof IpcSerializationError || /could not be cloned|IPC_SERIALIZATION/i.test(technicalMessage))
     return { code: "IPC_SERIALIZATION", category: "ipc", message: "Dữ liệu Sync không thể chuyển về giao diện.", technicalMessage, path: error instanceof IpcSerializationError ? error.path : undefined };
+  if (/category=timeout|SEO_OPS_HTTP:.*category=timeout/i.test(technicalMessage))
+    return { code: "TIMEOUT", category: "timeout", message: "SEO-OPS không phản hồi kịp (timeout). Thử lại thủ công.", technicalMessage };
   if (/failed to fetch|networkerror|econnrefused|enotfound|timed?\s*out/i.test(technicalMessage))
     return { code: "NETWORK_FAILURE", category: "network", message: "Không kết nối được SEO-OPS.", technicalMessage };
   if (/forbidden|\b403\b|category=authorization/i.test(technicalMessage))
     return { code: "AUTHORIZATION_FAILURE", category: "authorization", message: "Tài khoản không có quyền sử dụng Social Automation.", technicalMessage };
-  if (/unauthenticated|unauthorized|\b401\b/i.test(technicalMessage))
+  if (/unauthenticated|unauthorized|\b401\b|category=authentication/i.test(technicalMessage))
     return { code: "AUTHENTICATION_FAILURE", category: "authentication", message: "Phiên đăng nhập SEO-OPS không hợp lệ hoặc không đủ quyền.", technicalMessage };
+  if (/category=not_found|\b404\b|not_found|package_not_found|script_not_found/i.test(technicalMessage))
+    return { code: "NOT_FOUND", category: "not_found", message: "Không tìm thấy Script/release trên SEO-OPS.", technicalMessage };
+  if (/category=conflict|\b409\b|version_digest_conflict|script_version_sequence_conflict|package_kind_conflict/i.test(technicalMessage))
+    return { code: "CONFLICT", category: "conflict", message: "Xung đột version/digest với SEO-OPS.", technicalMessage };
+  if (/category=validation|\b422\b/i.test(technicalMessage))
+    return { code: "VALIDATION", category: "validation", message: "Dữ liệu Script không hợp lệ (validation). Kiểm tra Steps/Variables/Demo.", technicalMessage };
   if (/category=rate_limited|\b429\b/i.test(technicalMessage)) {
     const retry = /retry-after=(\d+)/i.exec(technicalMessage)?.[1];
     return { code: "RATE_LIMITED", category: "rate_limited",

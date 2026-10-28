@@ -1,6 +1,7 @@
 import React, { useCallback, useEffect, useState } from "react";
 import type { ActionTag, Command, State } from "../shared/contracts";
 import { mapSeoOpsAuthError, mapSeoOpsAuthErrors } from "../shared/seo-ops-auth";
+import { SEO_OPS_DEFAULT_BASE_URL, SEO_OPS_PRODUCTION_BASE_URL, mapSeoOpsApiError } from "../shared/seo-ops-http";
 import { labelForStatus, type ScriptSyncRow } from "../shared/sync-status";
 import type { ManualSyncResponse } from "../shared/sync-ipc";
 
@@ -32,7 +33,7 @@ export function SeoOpsAuthPanel({
   invoke: <T>(command: Command) => Promise<T>;
 }) {
   const [session, setSession] = useState<SeoOpsSessionState>();
-  const [baseUrl, setBaseUrl] = useState("http://seo-ops.test");
+  const [baseUrl, setBaseUrl] = useState(SEO_OPS_DEFAULT_BASE_URL);
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
   const [busy, setBusy] = useState(false);
@@ -67,14 +68,14 @@ export function SeoOpsAuthPanel({
   return (
     <section className="seo-ops-auth" aria-label="SEO-OPS Login">
       <h2>SEO-OPS Account</h2>
-      <p>Đăng nhập bằng tài khoản SEO-OPS (`admin` / `owner`). Auto-sync hiện {session?.autoSyncEnabled ? "bật" : "tắt"}; manual Sync và Script local vẫn hoạt động.</p>
+      <p>Đăng nhập bằng tài khoản SEO-OPS (`admin` / `owner`). Production: <code>{SEO_OPS_PRODUCTION_BASE_URL}</code>. Auto-sync hiện {session?.autoSyncEnabled ? "bật" : "tắt"}; manual Sync Scripts / Tags và Script local vẫn hoạt động.</p>
       <label>
         Endpoint
         <input
           disabled={locked || busy}
           value={baseUrl}
           onChange={(e) => setBaseUrl(e.target.value)}
-          placeholder="http://seo-ops.test"
+          placeholder={SEO_OPS_PRODUCTION_BASE_URL}
         />
       </label>
       <button
@@ -242,9 +243,13 @@ export function SeoOpsSyncControls({
       }
       applyRows(result.rows);
       const s = result.summary;
-      const prefix = s && (s.blocked > 0 || s.failed > 0) ? "Sync hoàn tất một phần" : "Sync hoàn tất";
-      setMessage(s ? `${prefix}: ${s.published} releases published, ${s.downloaded} official releases downloaded, ${s.unchanged} releases unchanged, ${s.blocked} publish blocked, ${s.reports_downloaded} reports downloaded, ${s.failed} failed`
-        : `Sync xong: ${result.results.length} mục`);
+      const prefix = s && (s.blocked > 0 || s.failed > 0) ? "Sync Scripts hoàn tất một phần" : "Sync Scripts hoàn tất";
+      setMessage(s ? `${prefix}: ${s.published} published, ${s.downloaded} pulled, ${s.unchanged} unchanged, ${s.blocked} blocked, ${s.failed} failed`
+        : `Sync Scripts xong: ${result.results.length} mục`);
+      if (onSyncComplete) {
+        const tags = await invoke<ActionTag[]>({ type: "seoOpsGetActionTags" }).catch(() => undefined);
+        if (Array.isArray(tags)) onSyncComplete(tags);
+      }
     } catch (e) {
       setMessage(mapSeoOpsAuthError(String((e as Error).message || e)));
     } finally {
@@ -272,16 +277,24 @@ export function SeoOpsSyncControls({
   return (
     <div className="seo-ops-sync-controls">
       <button
+        className="primary"
+        disabled={!availability.enabled || busy}
+        title={availability.enabled ? "Publish/Sync Script catalog với SEO-OPS (plan + push/pull)" : availability.message}
+        onClick={() => void runSync()}
+      >
+        {busy ? "Đang Sync Scripts…" : "Sync Scripts"}
+      </button>
+      <button
         disabled={!availability.enabled || busy}
         title={availability.enabled ? "Đồng bộ Action Tags từ SEO-OPS" : availability.message}
         onClick={() => void runTagSync()}
       >
-        {busy ? "Đang đồng bộ…" : "Đồng bộ"}
+        {busy ? "Đang đồng bộ…" : "Đồng bộ Tags"}
       </button>
       {!availability.enabled && <small role="status">{availability.message} {reconnect && !locked && !busy &&
         <button type="button" onClick={currentSession?.error && !/expired|hết hạn|unauthenticated/i.test(currentSession.error)
           ? () => void refreshSession() : reconnect}>{currentSession?.error ? "Kết nối lại" : "Mở Settings"}</button>}</small>}
-      {message && <small>{message}</small>}
+      {message && <small role="status">{message}</small>}
       {rows.length > 0 && (
         <details className="seo-ops-sync-summary">
           <summary>Diagnostics sync ({rows.length})</summary>
@@ -289,7 +302,7 @@ export function SeoOpsSyncControls({
             {rows.map((row) => (
               <li key={row.script_id}>
                 <b>{row.name}</b> — {labelForStatus(row.status)}
-                {row.message ? ` · ${row.message}` : ""}
+                {row.message ? ` · ${mapSeoOpsApiError(row.message)}` : ""}
               </li>
             ))}
           </ul>

@@ -1,5 +1,5 @@
 /** SEO-OPS RPA Admin user session (admin|owner). Distinct from Runner service credentials. */
-import { readSeoOpsJson } from "./seo-ops-http.js";
+import { mapSeoOpsApiError, readSeoOpsJson, seoOpsFetch } from "./seo-ops-http.js";
 
 export type RpaAdminUser = {
   id: number;
@@ -13,39 +13,19 @@ export function mapSeoOpsAuthError(codeOrMessage: string): string {
   const raw = String(codeOrMessage || "").trim();
   const code = raw.split(/[,\s]+/)[0]?.toLowerCase() || "";
   switch (code) {
-    case "schema_unavailable":
-    case "package_registry_unavailable":
-      return "SEO-OPS chưa hoàn tất thiết lập database Social Automation.";
     case "invalid_credentials":
     case "credentials_required":
       return "Email hoặc mật khẩu không đúng.";
-    case "unauthenticated":
-    case "session_expired":
-    case "token_expired":
-      return "Phiên SEO-OPS đã hết hạn. Mở Settings để đăng nhập lại.";
-    case "forbidden":
-    case "role_staff_forbidden":
     case "role_forbidden":
     case "system_user_forbidden":
     case "user_blocked":
       return "Tài khoản không có quyền sử dụng RPA Admin.";
-    case "network_error":
-    case "fetch_failed":
-      return "Không kết nối được SEO-OPS.";
+    case "login_failed":
+    case "token_missing":
+      return "Đăng nhập SEO-OPS thất bại.";
     default:
-      if (/fetch failed|failed to fetch|networkerror|econnrefused|enotfound|timed?\s*out/i.test(raw)) {
-        return "Không kết nối được SEO-OPS.";
-      }
-      const rateLimit = /category=rate_limited(?:.*retry-after=(\d+))?/i.exec(raw);
-      if (rateLimit) return `SEO-OPS đang giới hạn yêu cầu.${rateLimit[1] ? ` Thử lại sau ${rateLimit[1]} giây.` : " Vui lòng thử lại sau."}`;
-      if (/category=service_unavailable|\b503\b/i.test(raw)) return "SEO-OPS tạm thời không khả dụng. Vui lòng thử lại sau.";
-      if (/category=server_error|\b5\d\d\b/i.test(raw)) return "SEO-OPS gặp lỗi máy chủ. Vui lòng thử lại sau.";
-      if (!raw || raw === "login_failed") return "Đăng nhập SEO-OPS thất bại.";
-      // Strip anything that looks like a token/SQL before surfacing.
-      if (/bearer\s+[a-z0-9_-]{20,}|select\s+.+\s+from|sqlstate/i.test(raw)) {
-        return "Đăng nhập SEO-OPS thất bại.";
-      }
-      return raw;
+      if (!raw) return "Đăng nhập SEO-OPS thất bại.";
+      return mapSeoOpsApiError(raw);
   }
 }
 
@@ -87,18 +67,17 @@ export function createHttpSeoOpsAuthClient(options: {
       // Never send or persist client-side user_id — server derives identity.
       let response: Response;
       try {
-        response = await fetchImpl(`${root}/login`, {
+        response = await seoOpsFetch(`${root}/login`, {
           method: "POST",
-          redirect: "manual",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({
             email,
             password,
             ...(clientLabel ? { client_label: clientLabel } : {}),
           }),
-        });
-      } catch {
-        return { ok: false, errors: ["network_error"] };
+        }, fetchImpl);
+      } catch (error) {
+        return { ok: false, errors: [/category=timeout/i.test(String((error as Error)?.message || error)) ? "timeout" : "network_error"] };
       }
       let json: Record<string, unknown>;
       try { json = await readSeoOpsJson(response, "POST", `${root}/login`); }
@@ -125,12 +104,11 @@ export function createHttpSeoOpsAuthClient(options: {
       if (!token) return { ok: false, errors: ["unauthenticated"] };
       let response: Response;
       try {
-        response = await fetchImpl(`${root}/session`, {
-          redirect: "manual",
+        response = await seoOpsFetch(`${root}/session`, {
           headers: { Authorization: `Bearer ${token}` },
-        });
-      } catch {
-        return { ok: false, errors: ["network_error"] };
+        }, fetchImpl);
+      } catch (error) {
+        return { ok: false, errors: [/category=timeout/i.test(String((error as Error)?.message || error)) ? "timeout" : "network_error"] };
       }
       let json: Record<string, unknown>;
       try { json = await readSeoOpsJson(response, "GET", `${root}/session`); }
@@ -156,14 +134,13 @@ export function createHttpSeoOpsAuthClient(options: {
       }
       let response: Response;
       try {
-        response = await fetchImpl(`${root}/logout`, {
+        response = await seoOpsFetch(`${root}/logout`, {
           method: "POST",
-          redirect: "manual",
           headers: { Authorization: `Bearer ${token}` },
-        });
-      } catch {
+        }, fetchImpl);
+      } catch (error) {
         options.tokenStore.setToken(null);
-        return { ok: false, errors: ["network_error"] };
+        return { ok: false, errors: [/category=timeout/i.test(String((error as Error)?.message || error)) ? "timeout" : "network_error"] };
       }
       options.tokenStore.setToken(null);
       let json: Record<string, unknown>;

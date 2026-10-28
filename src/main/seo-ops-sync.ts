@@ -42,7 +42,13 @@ import {
 } from "../shared/video-demo-policy.js";
 import { validatePayload, type Store } from "./storage.js";
 import { createAdminBackup } from "./admin-backup.js";
-import { readSeoOpsJson } from "../shared/seo-ops-http.js";
+import {
+  mapSeoOpsApiError,
+  mapSeoOpsApiErrors,
+  readSeoOpsJson,
+  seoOpsFetch,
+  SEO_OPS_DEFAULT_BASE_URL,
+} from "../shared/seo-ops-http.js";
 import { isLegacyPublishedScriptVersion, parsePublishedScriptVersion } from "../shared/script-version.js";
 import { resolveScriptReleaseState, type StoredScriptRelease } from "../shared/script-release-state.js";
 
@@ -116,7 +122,7 @@ export function createSeoOpsSyncService(options: {
 
   function config(): SeoOpsConfig {
     const raw = store.setting("seoOpsBaseUrl");
-    return { baseUrl: (raw || "http://seo-ops.test").replace(/\/$/, "") };
+    return { baseUrl: (raw || SEO_OPS_DEFAULT_BASE_URL).replace(/\/$/, "") };
   }
 
   function setConfig(baseUrl: string) {
@@ -140,14 +146,15 @@ export function createSeoOpsSyncService(options: {
     const token = tokenStore.getToken();
     if (!token) throw new Error("unauthenticated");
     const url = `${config().baseUrl}/api/v1/social-automation/rpa-admin${pathname}`;
-    const response = await fetch(url, {
+    const response = await seoOpsFetch(url, {
       ...init,
-      redirect: "manual",
       headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/json", ...(init?.headers ?? {}) },
     });
     const body = await readSeoOpsJson(response, init?.method ?? "GET", url);
     if (!response.ok || body.ok !== true) {
-      const errList = Array.isArray(body.errors) ? (body.errors as string[]).join(", ") : String(body.errors ?? response.status);
+      const errList = Array.isArray(body.errors)
+        ? mapSeoOpsApiErrors(body.errors as string[])
+        : mapSeoOpsApiError(String(body.errors ?? response.status));
       throw new Error(errList || `HTTP ${response.status}`);
     }
     return body;
@@ -161,8 +168,7 @@ export function createSeoOpsSyncService(options: {
     const token = tokenStore.getToken();
     if (!token) throw new Error("unauthenticated");
     const url = `${config().baseUrl}/api/v1/social-automation/rpa-admin${pathname}`;
-    const response = await fetch(url, {
-      redirect: "manual",
+    const response = await seoOpsFetch(url, {
       headers: {
         Authorization: `Bearer ${token}`,
         Accept: "application/json, video/*, image/*, application/octet-stream, */*",
@@ -247,6 +253,12 @@ export function createSeoOpsSyncService(options: {
   let backupGeneration = 0;
   let backedUpGeneration = -1;
   let lastBackupResult: Record<string, unknown> | null = null;
+  let syncAllInFlight: Promise<{
+    plan: SyncPlan;
+    results: Array<{ script_id: string; action: string; ok: boolean; message?: string }>;
+    rows: ScriptSyncRow[];
+    summary: { published: number; downloaded: number; unchanged: number; blocked: number; failed: number; reports_downloaded: number };
+  }> | null = null;
 
   async function performBackup() {
     const generation = backupGeneration;
@@ -1182,6 +1194,13 @@ export function createSeoOpsSyncService(options: {
 
   async function syncAll(options?: { flowId?: string }) {
     if (!tokenStore.getToken()) throw new Error("SEO_OPS: cần đăng nhập trước khi sync");
+    if (syncAllInFlight) throw new Error("SEO_OPS: sync đang chạy — không gửi request trùng");
+    const run = runSyncAll(options);
+    syncAllInFlight = run.finally(() => { syncAllInFlight = null; });
+    return syncAllInFlight;
+  }
+
+  async function runSyncAll(options?: { flowId?: string }) {
     const client = syncClient();
     const remote = await client.catalog();
     const remoteById = new Map(remote.map(row => [row.script_id, row]));
@@ -1241,10 +1260,23 @@ export function createSeoOpsSyncService(options: {
           continue;
         }
         savePendingRelease(full);
-        const published = await client.publish(full.publish_body);
-        let ok = published.httpStatus < 300 && (published as { ok?: boolean }).ok !== false;
-        let message = ok ? "pushed" : JSON.stringify((published as { errors?: string[] }).errors ?? published);
-        const responseDigest = (published as { release?: { content_digest?: string } }).release?.content_digest;
+        const published = await client.publish(full.publish_body) as {
+          httpStatus: number;
+          ok?: boolean;
+          outcome?: string;
+          errors?: string[];
+          release?: { content_digest?: string };
+        };
+        const outcome = String(published.outcome ?? "");
+        const publishErrors = Array.isArray(published.errors) ? published.errors : undefined;
+        let ok = published.httpStatus < 300 && published.ok !== false;
+        let message = ok
+          ? (outcome === "idempotent" ? "idempotent — cùng digest đã có trên SEO-OPS" : "pushed")
+          : mapSeoOpsApiErrors(publishErrors, `HTTP ${published.httpStatus}`);
+        if (!ok && (published.httpStatus === 409 || outcome === "conflict")) {
+          message = mapSeoOpsApiErrors(publishErrors, message);
+        }
+        const responseDigest = published.release?.content_digest;
         if (ok && responseDigest && responseDigest.toLowerCase() !== full.content_digest.toLowerCase()) {
           ok = false;
           message = `publish digest mismatch: expected ${full.content_digest}, received ${responseDigest}`;

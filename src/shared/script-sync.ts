@@ -1,5 +1,5 @@
 import type { ScriptPublishBody } from "./script-release.js";
-import { readSeoOpsJson } from "./seo-ops-http.js";
+import { mapSeoOpsApiErrors, readSeoOpsJson, seoOpsFetch } from "./seo-ops-http.js";
 import {
   assertScriptPublishBody,
   matchToRequiresMissingOcr,
@@ -201,15 +201,14 @@ export function createHttpScriptSyncClient(options: {
     const token = options.getToken();
     if (!token) throw new Error("SEO_OPS_SYNC: unauthenticated");
     const url = `${root}${path}`;
-    const response = await fetchImpl(url, {
+    const response = await seoOpsFetch(url, {
       ...init,
-      redirect: "manual",
       headers: {
         Authorization: `Bearer ${token}`,
         "Content-Type": "application/json",
         ...(init?.headers ?? {}),
       },
-    });
+    }, fetchImpl);
     const json = await readSeoOpsJson(response, init?.method ?? "GET", url);
     return { response, json };
   }
@@ -217,7 +216,12 @@ export function createHttpScriptSyncClient(options: {
   return {
     async catalog() {
       const { response, json } = await authed("/scripts");
-      if (!response.ok || !json.ok) throw new Error("SEO_OPS_SYNC: catalog failed");
+      if (!response.ok || !json.ok) {
+        throw new Error(mapSeoOpsApiErrors(
+          Array.isArray(json.errors) ? (json.errors as string[]) : undefined,
+          "SEO_OPS_SYNC: catalog failed",
+        ));
+      }
       return (json.scripts as LocalScriptRow[]) ?? [];
     },
     async plan(localScripts: LocalScriptRow[]) {
@@ -225,7 +229,12 @@ export function createHttpScriptSyncClient(options: {
         method: "POST",
         body: JSON.stringify({ local_scripts: localScripts }),
       });
-      if (!response.ok || !json.ok) throw new Error("SEO_OPS_SYNC: plan failed");
+      if (!response.ok || !json.ok) {
+        throw new Error(mapSeoOpsApiErrors(
+          Array.isArray(json.errors) ? (json.errors as string[]) : undefined,
+          "SEO_OPS_SYNC: plan failed",
+        ));
+      }
       return json.plan as SyncPlan;
     },
     async publish(body: ScriptPublishBody) {
@@ -260,15 +269,14 @@ export function createHttpScriptSyncClient(options: {
           payload.thumbnail_base64 = Buffer.from(input.thumbnailBinary).toString("base64");
           if (input.thumbnailSha256) payload.thumbnail_sha256 = input.thumbnailSha256;
         }
-        const res = await fetchImpl(url, {
+        const res = await seoOpsFetch(url, {
           method: "POST",
-          redirect: "manual",
           headers: {
             Authorization: `Bearer ${token}`,
             "Content-Type": "application/json",
           },
           body: JSON.stringify(payload),
-        });
+        }, fetchImpl);
         const body = await readSeoOpsJson(res, "POST", url);
         return { response: res, json: body };
       })();

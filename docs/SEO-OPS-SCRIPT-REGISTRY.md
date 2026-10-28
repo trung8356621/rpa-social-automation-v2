@@ -1,11 +1,14 @@
 # SEO-OPS Script Registry — RPA Admin contract
 
-Status: **UI + UNIT VERIFIED** (local). E2E / production integration / RPA Client **NOT RUN**.
+Status: **UI + UNIT VERIFIED** (local). Production endpoint reachable; authenticated E2E with owner credentials **NOT RUN** in this pass. RPA Client **NOT RUN**.
+
+Production API origin: `https://seo-ops.duckdns.org`  
+OpenAPI (requires SEO-OPS admin/owner session or RPA Admin Bearer): `/api/v1/social-automation/openapi.json` (alias `/social-automation/api-docs` also 401 without auth).
 
 Electron UI:
 
-- Settings → SEO-OPS login (endpoint + email/password + session restore via safeStorage).
-- Scenarios → Sync SEO-OPS (all / per-scenario) + status badges.
+- Settings → SEO-OPS login (endpoint + email/password + session restore via safeStorage). Placeholder gợi ý production URL; mặc định local `http://seo-ops.test` nếu chưa lưu.
+- Scripts → **Sync Scripts** (catalog/plan/publish/pull) + **Đồng bộ Tags** + status badges; Activate = sync một Script rồi set Active.
 - Local create/edit/test Script không yêu cầu login; chỉ sync yêu cầu phiên `admin`|`owner`.
 
 ## Auth (RPA Admin user)
