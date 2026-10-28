@@ -7,7 +7,7 @@ OpenAPI (requires SEO-OPS admin/owner session or RPA Admin Bearer): `/api/v1/soc
 
 Electron UI:
 
-- Settings → SEO-OPS login (endpoint + email/password + session restore via safeStorage). Placeholder gợi ý production URL; mặc định local `http://seo-ops.test` nếu chưa lưu.
+- Settings → SEO-OPS login (endpoint + email/password + session restore via safeStorage). Mặc định production `https://seo-ops.duckdns.org`; local/test endpoint chỉ dùng khi người dùng chủ động ghi đè.
 - Scripts → **Sync Scripts** (catalog/plan/publish/pull) + **Đồng bộ Tags** + status badges; Activate = sync một Script rồi set Active.
 - Local create/edit/test Script không yêu cầu login; chỉ sync yêu cầu phiên `admin`|`owner`.
 

@@ -16,6 +16,7 @@ import { buildScriptPublishBody } from "../src/shared/script-release.js";
 import { createHttpScriptSyncClient } from "../src/shared/script-sync.js";
 import { syncIpcDiagnostic } from "../src/shared/sync-ipc.js";
 import { attachVideoDemo, toScriptVideoDemo } from "../src/shared/video-demo.js";
+import { phpCompatibleJsonStringify } from "../src/shared/script-digest.js";
 
 test("HTTP status categories cover auth, conflict, validation, unavailable", () => {
   assert.equal(categorizeSeoOpsStatus(401), "authentication");
@@ -24,6 +25,10 @@ test("HTTP status categories cover auth, conflict, validation, unavailable", () 
   assert.equal(categorizeSeoOpsStatus(409), "conflict");
   assert.equal(categorizeSeoOpsStatus(422), "validation");
   assert.equal(categorizeSeoOpsStatus(503), "service_unavailable");
+});
+
+test("digest JSON matches Laravel associative decode for empty objects", () => {
+  assert.equal(phpCompatibleJsonStringify({ default_pattern: { values: {} } }), '{"default_pattern":{"values":[]}}');
 });
 
 test("publish/sync API error codes map to safe Vietnamese copy without secrets", () => {

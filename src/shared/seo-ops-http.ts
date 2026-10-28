@@ -3,8 +3,8 @@ export const SEO_OPS_REQUEST_TIMEOUT_MS = 30_000;
 /** Suggested production API origin for RPA Admin Settings (user still saves explicitly). */
 export const SEO_OPS_PRODUCTION_BASE_URL = "https://seo-ops.duckdns.org";
 
-/** Local Valet-style default when the user has never saved an endpoint. */
-export const SEO_OPS_DEFAULT_BASE_URL = "http://seo-ops.test";
+/** Production default shared by normal and test accounts unless the user explicitly overrides it. */
+export const SEO_OPS_DEFAULT_BASE_URL = SEO_OPS_PRODUCTION_BASE_URL;
 
 export type SeoOpsHttpCategory =
   | "authentication"
