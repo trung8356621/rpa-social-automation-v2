@@ -2,7 +2,11 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import { resolve } from "node:path";
-import { ScrollExtendGate, withTimeout } from "../src/shared/collectors/scroll-extend-gate.js";
+import {
+  ScrollExtendGate,
+  userFacingExtendError,
+  withTimeout,
+} from "../src/shared/collectors/scroll-extend-gate.js";
 import {
   isRoiEdgeAutoScrollArmed,
   shouldExtendFromPreviewScroll,
@@ -70,7 +74,7 @@ test("C2.5.1 ROI bottom/corner edge arms auto-scroll; right edge does not", () =
   );
 });
 
-test("C2.5.1 ScrollExtendGate serializes and coalesces overlapping requests", async () => {
+test("C2.5.3 ScrollExtendGate drops while busy — no coalesce chain", async () => {
   const gate = new ScrollExtendGate<number>();
   let active = 0;
   let maxActive = 0;
@@ -78,23 +82,54 @@ test("C2.5.1 ScrollExtendGate serializes and coalesces overlapping requests", as
   const run = async (delta: number, _signal: AbortSignal) => {
     active++;
     maxActive = Math.max(maxActive, active);
-    await new Promise((r) => setTimeout(r, 30));
+    await new Promise((r) => setTimeout(r, 40));
     runs.push(delta);
     active--;
     return delta;
   };
   const a = gate.request(100, run);
-  const b = gate.request(50, run);
-  const c = gate.request(25, run);
+  const b = await gate.request(50, run);
+  const c = await gate.request(25, run);
   const ra = await a;
-  const rb = await b;
-  const rc = await c;
   assert.equal(maxActive, 1);
-  assert.ok(ra === 100 || ra === 75);
-  assert.equal(rb, null);
-  assert.equal(rc, null);
-  assert.ok(runs.length >= 1);
-  assert.ok(runs.length <= 2);
+  assert.equal(ra, 100);
+  assert.equal(b, null);
+  assert.equal(c, null);
+  assert.deepEqual(runs, [100]);
+});
+
+test("C2.5.3 wheel debounce: five rapid schedules → one extend", async () => {
+  const gate = new ScrollExtendGate<number>(30);
+  const runs: number[] = [];
+  const run = async (delta: number) => {
+    runs.push(delta);
+    await new Promise((r) => setTimeout(r, 20));
+    return delta;
+  };
+  assert.equal(gate.scheduleWheelExtend(100, run), "debounced");
+  assert.equal(gate.scheduleWheelExtend(100, run), "debounced");
+  assert.equal(gate.scheduleWheelExtend(100, run), "debounced");
+  assert.equal(gate.scheduleWheelExtend(100, run), "debounced");
+  assert.equal(gate.scheduleWheelExtend(100, run), "debounced");
+  await new Promise((r) => setTimeout(r, 80));
+  assert.deepEqual(runs, [100]);
+});
+
+test("C2.5.3 wheel during busy → dropped_busy and no post-align chain", async () => {
+  const gate = new ScrollExtendGate<number>(20);
+  const runs: number[] = [];
+  const run = async (delta: number) => {
+    runs.push(delta);
+    await new Promise((r) => setTimeout(r, 60));
+    return delta;
+  };
+  const first = gate.request(10, run);
+  assert.equal(gate.busy, true);
+  assert.equal(gate.scheduleWheelExtend(99, run), "dropped_busy");
+  assert.equal(gate.scheduleWheelExtend(98, run), "dropped_busy");
+  await first;
+  await new Promise((r) => setTimeout(r, 50));
+  assert.deepEqual(runs, [10]);
 });
 
 test("C2.5.1 ScrollExtendGate cancel clears busy; new requests can run", async () => {
@@ -120,21 +155,35 @@ test("C2.5.1 withTimeout rejects and clears", async () => {
   );
 });
 
-test("C2.5.1 CaptureStep wires wheel, real preview scrollbar, edge auto-scroll, timeout", () => {
+test("C2.5.3 userFacingExtendError hides MAD/IPC/geometry jargon", () => {
+  assert.match(userFacingExtendError("align failed [ALIGN_FAILED] MAD 44.5"), /Không xác minh/);
+  assert.doesNotMatch(userFacingExtendError("align failed MAD 44.5"), /MAD|IPC|geometry/i);
+  assert.equal(userFacingExtendError("Extend cancelled."), "");
+});
+
+test("C2.5.3 CaptureStep gesture UX — no Scroll & append; debounce; progress; scroll continuity", () => {
   const capture = readFileSync(resolve("src/renderer/collectors/CaptureStep.tsx"), "utf8");
   const mainCtrl = readFileSync(resolve("src/main/collector-scroll-capture.ts"), "utf8");
   const css = readFileSync(resolve("src/renderer/style.css"), "utf8");
   assert.match(capture, /ScrollExtendGate/);
+  assert.match(capture, /scheduleWheelExtend/);
   assert.match(capture, /addEventListener\("wheel"/);
   assert.match(capture, /passive:\s*false/);
   assert.match(capture, /shouldExtendFromPreviewScroll/);
   assert.match(capture, /isRoiEdgeAutoScrollArmed/);
   assert.match(capture, /collector-capture-preview-scroll/);
-  assert.match(capture, /Preview scrollbar = pan accumulated PNG|pans the PNG/i);
+  assert.match(capture, /Đang mở rộng vùng chụp/);
+  assert.match(capture, /keepScrollTop/);
+  assert.match(capture, /userFacingExtendError/);
+  assert.doesNotMatch(capture, /Scroll & append/);
+  assert.doesNotMatch(capture, /scrollTop\s*=\s*el\.scrollHeight/);
+  assert.doesNotMatch(capture, /\bMAD\b|\bIPC\b|geometry \+/);
   assert.match(capture, /gateRef\.current\.cancel/);
   assert.match(capture, /extendTimeoutMs/);
   assert.match(mainCtrl, /extendTimeoutMs/);
   assert.match(css, /\.collector-capture-preview-scroll/);
+  assert.match(css, /\.collector-capture-extend-progress/);
   assert.doesNotMatch(capture, /tallPreview \?/);
   assert.equal(SCROLL_CAPTURE_LIMITS.extendTimeoutMs > 0, true);
+  assert.equal(SCROLL_CAPTURE_LIMITS.wheelDebounceMs, 200);
 });

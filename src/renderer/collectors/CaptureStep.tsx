@@ -6,7 +6,11 @@ import {
   captureLibraryCount,
   deleteCaptureItem,
 } from "../../shared/collectors/ops";
-import { ScrollExtendGate, withTimeout } from "../../shared/collectors/scroll-extend-gate";
+import {
+  ScrollExtendGate,
+  userFacingExtendError,
+  withTimeout,
+} from "../../shared/collectors/scroll-extend-gate";
 import {
   SCROLL_CAPTURE_LIMITS,
   isRoiEdgeAutoScrollArmed,
@@ -283,6 +287,8 @@ export function StepCaptureSamples({
     const session = sessionRef.current;
     if (!session) throw new Error("No scroll capture session.");
     if (!roiRef.current) throw new Error("Select an ROI before extending.");
+    const previewEl = previewScrollRef.current;
+    const keepScrollTop = previewEl?.scrollTop ?? 0;
     const next = await withTimeout(
       collectorScrollCaptureExtend(invoke, session.sessionId, deltaCssPx),
       SCROLL_CAPTURE_LIMITS.extendTimeoutMs,
@@ -292,11 +298,7 @@ export function StepCaptureSamples({
     if (signal.aborted) throw new Error("Extend cancelled.");
     applySessionToShot(next, shotRef.current);
     if (next.error || next.phase === "FAILED") {
-      const d = next.lastDiagnostics;
-      const detail = d
-        ? ` [${d.failureKind}] scroll ${d.scrollBefore?.toFixed?.(0) ?? d.scrollBefore}→${d.scrollAfter?.toFixed?.(0) ?? d.scrollAfter} (Δ${d.scrollDeltaCss?.toFixed?.(0) ?? d.scrollDeltaCss})`
-        : "";
-      throw new Error((next.error || "Extend failed — last valid image kept.") + detail);
+      throw new Error(next.error || "Extend failed — last valid image kept.");
     }
     const grown = growRoiForSession(next, roiRef.current, anchorRef.current);
     if (grown) {
@@ -312,47 +314,73 @@ export function StepCaptureSamples({
         setDrag(updated);
       }
     }
+    // Preserve viewing position — do not jump to bottom or reset to 0.
     requestAnimationFrame(() => {
       const el = previewScrollRef.current;
-      if (el) el.scrollTop = el.scrollHeight;
+      if (el) el.scrollTop = keepScrollTop;
     });
-    const diag = next.lastDiagnostics;
-    setMessage(
-      `Capturing browser · frames ${next.frameCount} · ${next.width}×${next.height}` +
-        (diag?.strategy ? ` · ${diag.strategy}` : "") +
-        (next.lastAlignScore != null ? ` · score ${next.lastAlignScore.toFixed(1)}` : "") +
-        ". Preview scrollbar pans the PNG; wheel-at-end / ROI edge / button capture new page content.",
-    );
+    setMessage(`Đã mở rộng · ${next.frameCount} khung · ${next.width}×${next.height}`);
     return next;
   }
 
-  async function requestExtend(deltaCssPx = SCROLL_CAPTURE_LIMITS.defaultScrollCssPx, reason: string) {
-    if (!invoke || locked || !frozen || !roiRef.current || !sessionRef.current) return;
-    const wasIdle = !gateRef.current.busy;
+  function beginExtendUi() {
     setError("");
-    if (wasIdle) {
-      setExtending(true);
-      setBusy(true);
-      setMessage(`Capturing browser content (${reason})… not preview pan.`);
-    }
+    setExtending(true);
+    setMessage("Đang mở rộng vùng chụp...");
+  }
+
+  function endExtendUi() {
+    if (!gateRef.current.busy) setExtending(false);
+  }
+
+  /** Immediate extend (ROI edge). Drops while busy — no post-align queue. */
+  async function requestExtend(deltaCssPx = SCROLL_CAPTURE_LIMITS.defaultScrollCssPx) {
+    if (!invoke || locked || !frozen || !roiRef.current || !sessionRef.current) return;
+    if (gateRef.current.busy) return;
+    beginExtendUi();
     try {
       await gateRef.current.request(deltaCssPx, runExtend);
     } catch (e) {
       const msg = e instanceof Error ? e.message : String(e);
-      if (!/cancelled/i.test(msg)) {
-        setError(msg);
-        setMessage("Extension stopped. Resize ROI, try again, Confirm current image, or Cancel.");
+      const friendly = userFacingExtendError(msg);
+      if (friendly) {
+        setError(friendly);
+        setMessage("Không mở rộng thêm được. Có thể Confirm ảnh hiện tại hoặc thử cuộn lại.");
       }
     } finally {
-      if (!gateRef.current.busy) {
-        setExtending(false);
-        setBusy(false);
-      }
+      endExtendUi();
     }
+  }
+
+  /** Wheel-at-end: debounced one-per-burst; wheels during busy are dropped. */
+  function scheduleWheelExtend(deltaCssPx = SCROLL_CAPTURE_LIMITS.defaultScrollCssPx) {
+    if (!invoke || locked || !frozen || !roiRef.current || !sessionRef.current) return;
+    gateRef.current.scheduleWheelExtend(
+      deltaCssPx,
+      async (d, signal) => {
+        beginExtendUi();
+        try {
+          return await runExtend(d, signal);
+        } catch (e) {
+          const msg = e instanceof Error ? e.message : String(e);
+          const friendly = userFacingExtendError(msg);
+          if (friendly) {
+            setError(friendly);
+            setMessage("Không mở rộng thêm được. Có thể Confirm ảnh hiện tại hoặc thử cuộn lại.");
+          }
+          throw e;
+        } finally {
+          endExtendUi();
+        }
+      },
+      beginExtendUi,
+    );
   }
 
   const requestExtendRef = useRef(requestExtend);
   requestExtendRef.current = requestExtend;
+  const scheduleWheelExtendRef = useRef(scheduleWheelExtend);
+  scheduleWheelExtendRef.current = scheduleWheelExtend;
 
   async function restoreBrowse(status: string) {
     if (!invoke) return;
@@ -419,7 +447,7 @@ export function StepCaptureSamples({
       setFrozen(true);
       publishHost();
       setMessage(
-        `Frame 1 · ${session.width}×${session.height}. Select ROI, then wheel / edge-drag / Scroll & append.`,
+        `Khung 1 · ${session.width}×${session.height}. Chọn vùng, rồi cuộn bánh xe hoặc kéo cạnh dưới để mở rộng.`,
       );
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e));
@@ -498,7 +526,7 @@ export function StepCaptureSamples({
       const now = Date.now();
       if (now - lastEdgeExtendAt.current >= SCROLL_CAPTURE_LIMITS.edgeAutoScrollMs) {
         lastEdgeExtendAt.current = now;
-        void requestExtendRef.current(SCROLL_CAPTURE_LIMITS.defaultScrollCssPx, "ROI edge");
+        void requestExtendRef.current(SCROLL_CAPTURE_LIMITS.defaultScrollCssPx);
       }
     }
   }
@@ -562,26 +590,27 @@ export function StepCaptureSamples({
         return;
       }
       if (action === "extend") {
-        void requestExtendRef.current(SCROLL_CAPTURE_LIMITS.defaultScrollCssPx, "mouse wheel");
+        // Preview already at end — debounce burst; do not pan further (no overscroll queue).
+        scheduleWheelExtendRef.current(SCROLL_CAPTURE_LIMITS.defaultScrollCssPx);
       }
     };
     surface.addEventListener("wheel", onWheel, { passive: false });
     return () => surface.removeEventListener("wheel", onWheel);
   }, [frozen, locked, hostClient, imageBox]);
 
-  // When the real preview scrollbar hits the end, hint (extend still via wheel/button/edge).
+  // Scrollbar navigates preview only — reaching bottom does NOT auto-extend.
   useEffect(() => {
     const el = previewScrollRef.current;
     if (!frozen || !el) return;
     const onScroll = () => {
-      if (!roiRef.current) return;
+      if (!roiRef.current || gateRef.current.busy) return;
       const atEnd =
         el.scrollTop + el.clientHeight >= el.scrollHeight - SCROLL_CAPTURE_LIMITS.previewEndEpsilonPx;
       if (atEnd) {
         setMessage((m) =>
-          m.includes("end of preview")
+          m.includes("cuộn bánh xe") || m.includes("Đang mở rộng")
             ? m
-            : "At end of preview PNG — wheel or Scroll & append to capture more page content.",
+            : "Đã tới cuối vùng đã chụp — cuộn bánh xe xuống để mở rộng thêm.",
         );
       }
     };
@@ -763,28 +792,13 @@ export function StepCaptureSamples({
             <div className="collector-capture-freeze-actions" role="region" aria-label="Capture confirmation">
               <small>
                 {roi && anchor
-                  ? `ROI ${roi.width}×${roi.height} anchored at ${anchor.x},${anchor.y}`
-                  : "Drag on the frozen frame to select a region"}
+                  ? `Vùng ${roi.width}×${roi.height} · neo ${anchor.x},${anchor.y}`
+                  : "Kéo trên khung đóng băng để chọn vùng"}
               </small>
               {roi && (
-                <>
-                  <button
-                    type="button"
-                    className="primary"
-                    disabled={locked || extending}
-                    onClick={() => void requestExtend(SCROLL_CAPTURE_LIMITS.defaultScrollCssPx, "button")}
-                  >
-                    {extending ? "Capturing…" : "Scroll & append"}
-                  </button>
-                  <small className="collector-capture-extend-hint">
-                    Preview scrollbar = pan accumulated PNG only. Wheel-at-end / ROI bottom-edge / this button =
-                    scroll the live page, capture, and append verified bands (geometry + stable regions).
-                    Failed aligns restore the page scroll so the next try stays in sync.
-                  </small>
-                  <button type="button" disabled={locked || extending} onClick={resetRoi}>
-                    Reset ROI
-                  </button>
-                </>
+                <button type="button" disabled={locked || extending} onClick={resetRoi}>
+                  Reset ROI
+                </button>
               )}
               <button
                 type="button"
@@ -872,6 +886,11 @@ export function StepCaptureSamples({
               )}
             </div>
           </div>
+          {extending && (
+            <div className="collector-capture-extend-progress" role="status" aria-live="polite">
+              Đang mở rộng vùng chụp...
+            </div>
+          )}
         </div>
       )}
 

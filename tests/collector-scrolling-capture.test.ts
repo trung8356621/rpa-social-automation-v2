@@ -217,9 +217,9 @@ test("C2.5 wiring: Collector IPC + Script Capture untouched + session isolation"
   assert.match(scriptUi, /setCropMode\(true\)/);
   assert.doesNotMatch(scriptUi, /collectorScrollCapture/);
   assert.match(adapter, /collectorScrollCaptureExtend/);
-  assert.match(capture, /Scroll & append/);
+  assert.doesNotMatch(capture, /Scroll & append/);
   assert.match(capture, /collector-capture-preview-scroll/);
-  assert.match(capture, /preview scrollbar pans the PNG|painted scrollbar is not interactive/i);
+  assert.match(capture, /scheduleWheelExtend|Đang mở rộng vùng chụp/);
   assert.match(controller, /lastViewportPng/);
   assert.match(controller, /alignExtendFrames/);
   assert.match(controller, /scrollBoundContainer|scrollNestedContainer/);

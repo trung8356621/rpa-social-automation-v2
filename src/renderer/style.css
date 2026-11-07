@@ -2603,18 +2603,26 @@ body[data-panel="shell"] .collector-capture-split > aside.collector-capture-tool
   overflow: auto;
   overscroll-behavior: contain;
   background: #0a1018;
-  /* Distinct from “Scroll & append” — this only pans the accumulated PNG preview. */
+  /* Interactive scrollbar pans accumulated capture only — does not auto-extend. */
   outline: 1px dashed #3d5a73;
   outline-offset: -2px;
 }
 .collector-capture-preview-canvas {
   margin: 0 auto;
 }
-.collector-capture-extend-hint {
-  display: block;
-  color: #9fb3c8;
-  font-size: 11px;
-  line-height: 1.35;
+.collector-capture-extend-progress {
+  position: absolute;
+  left: 10px;
+  bottom: 10px;
+  z-index: 5;
+  pointer-events: none;
+  padding: 6px 10px;
+  border-radius: 6px;
+  background: rgba(8, 16, 24, 0.82);
+  color: #e8eef5;
+  font-size: 12px;
+  line-height: 1.3;
+  box-shadow: 0 1px 4px rgba(0, 0, 0, 0.35);
 }
 .collector-roi-resize-handle {
   position: absolute;
