@@ -2158,6 +2158,22 @@ body[data-web-dev="true"] .ui-backdrop {
   overflow: auto;
   box-sizing: border-box;
 }
+/* The Creator shell uses absolute positioning for its own <aside>. Capture tools
+   are a grid child and must stay in the second column, outside Browser Core. */
+body[data-panel="shell"] .collector-capture-split > aside.collector-capture-tools {
+  position: relative;
+  top: auto;
+  left: auto;
+  right: auto;
+  bottom: auto;
+  width: 100%;
+  height: 100%;
+  min-height: 0;
+  max-height: 100%;
+  margin: 0;
+  padding: 8px;
+  overflow: auto;
+}
 .collector-capture-tools .collector-session-select,
 .collector-capture-tools .collector-session-select select {
   width: 100%;
@@ -2577,6 +2593,45 @@ body[data-web-dev="true"] .ui-backdrop {
   background: #68d6a633;
   pointer-events: none;
 }
+.collector-capture-freeze-tall {
+  display: flex;
+  flex-direction: column;
+}
+.collector-capture-preview-scroll {
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow: auto;
+  overscroll-behavior: contain;
+  background: #0a1018;
+  /* Distinct from “Scroll & append” — this only pans the accumulated PNG preview. */
+  outline: 1px dashed #3d5a73;
+  outline-offset: -2px;
+}
+.collector-capture-preview-canvas {
+  margin: 0 auto;
+}
+.collector-capture-extend-hint {
+  display: block;
+  color: #9fb3c8;
+  font-size: 11px;
+  line-height: 1.35;
+}
+.collector-roi-resize-handle {
+  position: absolute;
+  display: block;
+  width: 14px;
+  height: 14px;
+  border: 2px solid #092d2c;
+  border-radius: 4px;
+  background: #68d6a6;
+  box-shadow: 0 0 0 1px #fff9;
+  pointer-events: auto;
+  touch-action: none;
+}
+.collector-roi-resize-right { right: -8px; top: calc(50% - 7px); cursor: ew-resize; }
+.collector-roi-resize-bottom { bottom: -8px; left: calc(50% - 7px); cursor: ns-resize; }
+.collector-roi-resize-corner { right: -8px; bottom: -8px; cursor: nwse-resize; }
+.collector-roi-resize-handle:focus-visible { outline: 2px solid white; outline-offset: 2px; }
 .collector-review-confirm-bar {
   flex: 0 0 auto;
   position: sticky;

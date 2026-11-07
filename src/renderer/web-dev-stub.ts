@@ -119,6 +119,11 @@ async function handleCommand(command: Command): Promise<unknown> {
     case "crop":
     case "browserVisible":
     case "collectorBrowserHost":
+    case "collectorScrollCaptureBegin":
+    case "collectorScrollCaptureExtend":
+    case "collectorScrollCaptureMarkRoi":
+    case "collectorScrollCaptureConfirm":
+    case "collectorScrollCaptureCancel":
     case "targetImage":
     case "switchBrowserSession":
       throw new Error(

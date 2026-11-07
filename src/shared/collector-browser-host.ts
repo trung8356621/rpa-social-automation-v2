@@ -166,6 +166,27 @@ export function dragToCaptureRoi(
   return { x, y, width, height };
 }
 
+/** Resize only the right/bottom edges; the selected ROI's top-left never moves. */
+export function resizeCaptureRoi(
+  original: Rect,
+  edge: "right" | "bottom" | "corner",
+  pointerX: number,
+  pointerY: number,
+  imageWidth: number,
+  imageHeight: number,
+  minSize = 4,
+): Rect {
+  const maxWidth = Math.max(minSize, imageWidth - original.x);
+  const maxHeight = Math.max(minSize, imageHeight - original.y);
+  const clamp = (value: number, min: number, max: number) => Math.min(max, Math.max(min, Math.round(value)));
+  return {
+    x: original.x,
+    y: original.y,
+    width: edge === "bottom" ? original.width : clamp(pointerX - original.x, minSize, maxWidth),
+    height: edge === "right" ? original.height : clamp(pointerY - original.y, minSize, maxHeight),
+  };
+}
+
 /**
  * Crop extract rect in PNG pixels when Capture.width/height are image pixels
  * and the ROI was drawn in the same image space (1:1). Validates fit.

@@ -25,6 +25,7 @@ import { PointerTrace } from "./pointer-trace.js";
 import { ClickMarker } from "./click-marker.js";
 import { CreatorOverlays } from "./creator-overlays.js";
 import { BrowserCore } from "./browser-core.js";
+import { CollectorScrollCaptureController } from "./collector-scroll-capture.js";
 import { BrowserSessions } from "./browser-sessions.js";
 import { BrowserRecording } from "./browser-recording.js";
 import { TestRunEvidence } from "./test-run-evidence.js";
@@ -285,6 +286,7 @@ async function boot() {
     evidenceDir,
     browserSessions.get(activeSessionId).partition,
   );
+  const scrollCapture = new CollectorScrollCaptureController(browser, assetDir);
   const overlays = new CreatorOverlays(
     window,
     path.join(root, "preload/index.cjs"),
@@ -561,6 +563,7 @@ async function boot() {
       activeSessionId = id;
       browserSessions.select(id);
       captures.clear();
+      scrollCapture.cancelAll();
       browser.setZoom(browser.zoom);
       overlays.layout();
       publishLayout();
@@ -1239,6 +1242,7 @@ async function boot() {
           throw new Error("Invalid app page");
         overlays.setPage(command.page);
         if (command.page !== "creator") armedTest = undefined;
+        if (command.page !== "collectors") scrollCapture.cancelAll();
         window.webContents.focus();
         publishLayout();
         return state();
@@ -1322,6 +1326,7 @@ async function boot() {
       }
       case "navigate":
         isIdle();
+        scrollCapture.cancelAll();
         await browser.navigate(command.url);
         return state();
       case "fixture":
@@ -1642,6 +1647,43 @@ async function boot() {
         }
         publishLayout();
         return state();
+      }
+      case "collectorScrollCaptureBegin": {
+        isIdle();
+        if (overlays.page !== "collectors") {
+          throw new Error("Scrolling capture is Collector-only.");
+        }
+        return scrollCapture.begin({
+          captureId: command.captureId,
+          browserSessionId: activeSessionId,
+          url: browser.view.webContents.getURL(),
+        });
+      }
+      case "collectorScrollCaptureExtend": {
+        isIdle();
+        if (overlays.page !== "collectors") {
+          throw new Error("Scrolling capture is Collector-only.");
+        }
+        return scrollCapture.extend(command.sessionId, command.deltaY);
+      }
+      case "collectorScrollCaptureMarkRoi": {
+        isIdle();
+        if (overlays.page !== "collectors") {
+          throw new Error("Scrolling capture is Collector-only.");
+        }
+        return scrollCapture.markRoiSelected(command.sessionId);
+      }
+      case "collectorScrollCaptureConfirm": {
+        isIdle();
+        if (overlays.page !== "collectors") {
+          throw new Error("Scrolling capture is Collector-only.");
+        }
+        return scrollCapture.confirm(command.sessionId, command.roi);
+      }
+      case "collectorScrollCaptureCancel": {
+        isIdle();
+        scrollCapture.cancel(command.sessionId);
+        return { ok: true };
       }
       default:
         throw new Error("Command không hỗ trợ.");

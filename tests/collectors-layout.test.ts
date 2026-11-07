@@ -19,6 +19,13 @@ test("collector editor uses flex body regions instead of overlapping absolute Ve
   assert.doesNotMatch(versionPanel, /<aside[\s>]/);
 });
 
+test("C2.4 Capture sidebar overrides Creator's globally absolute aside", () => {
+  const capture = readFileSync(resolve("src/renderer/collectors/CaptureStep.tsx"), "utf8");
+  assert.match(css, /aside\s*\{\s*position:\s*absolute/s);
+  assert.match(css, /body\[data-panel="shell"\] \.collector-capture-split > aside\.collector-capture-tools\s*\{[^}]*position:\s*relative;[^}]*left:\s*auto;[^}]*width:\s*100%;[^}]*height:\s*100%;/s);
+  assert.match(capture, /<aside className="collector-capture-tools"/);
+});
+
 test("narrow viewports use intentional Versions drawer with backdrop", () => {
   assert.match(css, /\.collector-versions-drawer-layer/);
   assert.match(css, /\.collector-versions-backdrop/);

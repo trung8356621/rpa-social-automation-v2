@@ -1,0 +1,215 @@
+From b209899f628774e363da7859a67d80040bf4e66f Mon Sep 17 00:00:00 2001
+From: Codex <codex@openai.com>
+Date: Sat, 7 Nov 2026 14:57:50 +0700
+Subject: [PATCH] feat(collector): resize ROI from anchored top-left
+
+---
+ src/renderer/collectors/CaptureStep.tsx | 53 +++++++++++++++++++++----
+ src/renderer/style.css                  | 16 ++++++++
+ src/shared/collector-browser-host.ts    | 21 ++++++++++
+ tests/collector-browser-host.test.ts    | 10 +++++
+ 4 files changed, 93 insertions(+), 7 deletions(-)
+
+diff --git a/src/renderer/collectors/CaptureStep.tsx b/src/renderer/collectors/CaptureStep.tsx
+index aabdc0e..ac6ff71 100644
+--- a/src/renderer/collectors/CaptureStep.tsx
++++ b/src/renderer/collectors/CaptureStep.tsx
+@@ -14,6 +14,7 @@ import {
+   domRectToShellBounds,
+   dragToCaptureRoi,
+   fitCaptureImageInDisplay,
++  resizeCaptureRoi,
+ } from "../../shared/collector-browser-host";
+ import { readAdminUiZoom } from "../ui-zoom";
+ import {
+@@ -38,7 +39,9 @@ type Props = {
+   onSelectSession?: (id: string) => void;
+ };
+ 
+-type DragState = { startX: number; startY: number; currentX: number; currentY: number };
++type DragState =
++  | { kind: "select"; startX: number; startY: number; currentX: number; currentY: number }
++  | { kind: "resize"; edge: "right" | "bottom" | "corner"; original: Rect; currentX: number; currentY: number };
+ type HostClient = { left: number; top: number; width: number; height: number };
+ 
+ function CaptureLibraryDrawer({
+@@ -296,11 +299,19 @@ export function StepCaptureSamples({
+   }
+ 
+   function onPointerDown(e: React.PointerEvent) {
+-    if (locked || !frozen || !shot) return;
++    if (locked || !frozen || !shot || roi) return;
+     e.currentTarget.setPointerCapture(e.pointerId);
+     const p = pointerPos(e);
+     setRoi(undefined);
+-    setDrag({ startX: p.x, startY: p.y, currentX: p.x, currentY: p.y });
++    setDrag({ kind: "select", startX: p.x, startY: p.y, currentX: p.x, currentY: p.y });
++  }
++
++  function startResize(e: React.PointerEvent, edge: "right" | "bottom" | "corner") {
++    e.stopPropagation();
++    if (locked || !roi || !shot) return;
++    surfaceRef.current?.setPointerCapture(e.pointerId);
++    const p = pointerPos(e);
++    setDrag({ kind: "resize", edge, original: roi, currentX: p.x, currentY: p.y });
+   }
+ 
+   function onPointerMove(e: React.PointerEvent) {
+@@ -311,7 +322,9 @@ export function StepCaptureSamples({
+ 
+   function onPointerUp() {
+     if (!drag || !shot) return;
+-    const next = dragToCaptureRoi(drag.startX, drag.startY, drag.currentX, drag.currentY);
++    const next = drag.kind === "resize"
++      ? resizeCaptureRoi(drag.original, drag.edge, drag.currentX, drag.currentY, shot.width, shot.height)
++      : dragToCaptureRoi(drag.startX, drag.startY, drag.currentX, drag.currentY);
+     setDrag(undefined);
+     setRoi(next ?? undefined);
+   }
+@@ -355,12 +368,14 @@ export function StepCaptureSamples({
+   }
+ 
+   const liveRoi = drag
+-    ? {
++    ? drag.kind === "resize" && shot
++      ? resizeCaptureRoi(drag.original, drag.edge, drag.currentX, drag.currentY, shot.width, shot.height)
++      : drag.kind === "select" ? {
+         x: Math.min(drag.startX, drag.currentX),
+         y: Math.min(drag.startY, drag.currentY),
+         width: Math.abs(drag.currentX - drag.startX),
+         height: Math.abs(drag.currentY - drag.startY),
+-      }
++      } : roi
+     : roi;
+ 
+   if (!electron) {
+@@ -465,6 +480,11 @@ export function StepCaptureSamples({
+                   ? `ROI ${roi.width}×${roi.height} at ${roi.x},${roi.y}`
+                   : "Drag on the frozen frame to select a region"}
+               </small>
++              {roi && (
++                <button type="button" disabled={locked || busy} onClick={() => { setRoi(undefined); setDrag(undefined); }}>
++                  Reset ROI
++                </button>
++              )}
+               <button
+                 type="button"
+                 className="primary"
+@@ -531,7 +551,26 @@ export function StepCaptureSamples({
+                 width: (liveRoi.width / shot.width) * imageBox.width,
+                 height: (liveRoi.height / shot.height) * imageBox.height,
+               }}
+-            />
++            >
++              {roi && !locked && (["right", "bottom", "corner"] as const).map((edge) => (
++                <span
++                  key={edge}
++                  className={`collector-roi-resize-handle collector-roi-resize-${edge}`}
++                  role="button"
++                  tabIndex={0}
++                  aria-label={`Resize ROI ${edge} edge`}
++                  onPointerDown={(e) => startResize(e, edge)}
++                  onKeyDown={(e) => {
++                    if (!roi || !shot || !["ArrowLeft", "ArrowRight", "ArrowUp", "ArrowDown"].includes(e.key)) return;
++                    e.preventDefault();
++                    const delta = e.shiftKey ? 10 : 1;
++                    const dx = e.key === "ArrowRight" ? delta : e.key === "ArrowLeft" ? -delta : 0;
++                    const dy = e.key === "ArrowDown" ? delta : e.key === "ArrowUp" ? -delta : 0;
++                    setRoi(resizeCaptureRoi(roi, edge, roi.x + roi.width + dx, roi.y + roi.height + dy, shot.width, shot.height));
++                  }}
++                />
++              ))}
++            </div>
+           )}
+         </div>
+       )}
+diff --git a/src/renderer/style.css b/src/renderer/style.css
+index a72ca9f..b28ecc9 100644
+--- a/src/renderer/style.css
++++ b/src/renderer/style.css
+@@ -2593,6 +2593,22 @@ body[data-panel="shell"] .collector-capture-split > aside.collector-capture-tool
+   background: #68d6a633;
+   pointer-events: none;
+ }
++.collector-roi-resize-handle {
++  position: absolute;
++  display: block;
++  width: 14px;
++  height: 14px;
++  border: 2px solid #092d2c;
++  border-radius: 4px;
++  background: #68d6a6;
++  box-shadow: 0 0 0 1px #fff9;
++  pointer-events: auto;
++  touch-action: none;
++}
++.collector-roi-resize-right { right: -8px; top: calc(50% - 7px); cursor: ew-resize; }
++.collector-roi-resize-bottom { bottom: -8px; left: calc(50% - 7px); cursor: ns-resize; }
++.collector-roi-resize-corner { right: -8px; bottom: -8px; cursor: nwse-resize; }
++.collector-roi-resize-handle:focus-visible { outline: 2px solid white; outline-offset: 2px; }
+ .collector-review-confirm-bar {
+   flex: 0 0 auto;
+   position: sticky;
+diff --git a/src/shared/collector-browser-host.ts b/src/shared/collector-browser-host.ts
+index b5cd7fe..658faf0 100644
+--- a/src/shared/collector-browser-host.ts
++++ b/src/shared/collector-browser-host.ts
+@@ -166,6 +166,27 @@ export function dragToCaptureRoi(
+   return { x, y, width, height };
+ }
+ 
++/** Resize only the right/bottom edges; the selected ROI's top-left never moves. */
++export function resizeCaptureRoi(
++  original: Rect,
++  edge: "right" | "bottom" | "corner",
++  pointerX: number,
++  pointerY: number,
++  imageWidth: number,
++  imageHeight: number,
++  minSize = 4,
++): Rect {
++  const maxWidth = Math.max(minSize, imageWidth - original.x);
++  const maxHeight = Math.max(minSize, imageHeight - original.y);
++  const clamp = (value: number, min: number, max: number) => Math.min(max, Math.max(min, Math.round(value)));
++  return {
++    x: original.x,
++    y: original.y,
++    width: edge === "bottom" ? original.width : clamp(pointerX - original.x, minSize, maxWidth),
++    height: edge === "right" ? original.height : clamp(pointerY - original.y, minSize, maxHeight),
++  };
++}
++
+ /**
+  * Crop extract rect in PNG pixels when Capture.width/height are image pixels
+  * and the ROI was drawn in the same image space (1:1). Validates fit.
+diff --git a/tests/collector-browser-host.test.ts b/tests/collector-browser-host.test.ts
+index 306774a..031423f 100644
+--- a/tests/collector-browser-host.test.ts
++++ b/tests/collector-browser-host.test.ts
+@@ -11,6 +11,7 @@ import {
+   fitCaptureImageInDisplay,
+   nextCollectorCapturePhase,
+   resolveBrowserViewBounds,
++  resizeCaptureRoi,
+   shellBoundsToCssFixed,
+   shouldShowBrowserForPage,
+ } from "../src/shared/collector-browser-host.js";
+@@ -46,6 +47,15 @@ test("C2.2 browser visible only for Creator or active Collector Capture host", (
+   );
+ });
+ 
++test("Collector ROI resize locks top-left and clamps right/bottom edges", () => {
++  const origin = { x: 72, y: 120, width: 680, height: 267 };
++  assert.deepEqual(resizeCaptureRoi(origin, "right", 800, 10, 832, 420), { ...origin, width: 728 });
++  assert.deepEqual(resizeCaptureRoi(origin, "bottom", 0, 400, 832, 420), { ...origin, height: 280 });
++  assert.deepEqual(resizeCaptureRoi(origin, "corner", 9999, 9999, 832, 420), { x: 72, y: 120, width: 760, height: 300 });
++  assert.deepEqual(resizeCaptureRoi(origin, "corner", 0, 0, 832, 420), { x: 72, y: 120, width: 4, height: 4 });
++  assert.deepEqual(origin, { x: 72, y: 120, width: 680, height: 267 });
++});
++
+ test("C2.2 collectors use measured host bounds; Creator keeps workspaceLayout browser", () => {
+   const creator = { x: 208, y: 88, width: 1024, height: 560 };
+   const host = { x: 240, y: 160, width: 900, height: 480, active: true };
+-- 
+2.51.1
+

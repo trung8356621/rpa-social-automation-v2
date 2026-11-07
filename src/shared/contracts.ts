@@ -472,7 +472,13 @@ export type Command =
   | {
       type: "collectorBrowserHost";
       host: null | { x: number; y: number; width: number; height: number; active: boolean };
-    };
+    }
+  /** Collector scrolling capture — begin from an existing freeze captureId. */
+  | { type: "collectorScrollCaptureBegin"; captureId: string }
+  | { type: "collectorScrollCaptureExtend"; sessionId: string; deltaY?: number }
+  | { type: "collectorScrollCaptureMarkRoi"; sessionId: string }
+  | { type: "collectorScrollCaptureConfirm"; sessionId: string; roi: Rect }
+  | { type: "collectorScrollCaptureCancel"; sessionId: string };
 export const DRAFT_KEYS = [
   "variableId",
   "state",

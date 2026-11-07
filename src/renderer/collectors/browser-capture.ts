@@ -63,6 +63,62 @@ export async function collectorCropRoi(
   return invoke({ type: "crop", captureId, roi });
 }
 
+export type ScrollCaptureSession = {
+  sessionId: string;
+  phase: string;
+  width: number;
+  height: number;
+  frameCount: number;
+  dataUrl: string;
+  lastAlignScore?: number;
+  error?: string;
+  browserSessionId?: string;
+  url: string;
+};
+
+export async function collectorScrollCaptureBegin(
+  invoke: CollectorInvoke,
+  captureId: string,
+): Promise<ScrollCaptureSession> {
+  if (!isElectronBrowserCoreAvailable()) throw new Error(BROWSER_CORE_UNAVAILABLE);
+  return invoke({ type: "collectorScrollCaptureBegin", captureId });
+}
+
+export async function collectorScrollCaptureExtend(
+  invoke: CollectorInvoke,
+  sessionId: string,
+  deltaY?: number,
+): Promise<ScrollCaptureSession> {
+  if (!isElectronBrowserCoreAvailable()) throw new Error(BROWSER_CORE_UNAVAILABLE);
+  return invoke({ type: "collectorScrollCaptureExtend", sessionId, deltaY });
+}
+
+export async function collectorScrollCaptureMarkRoi(
+  invoke: CollectorInvoke,
+  sessionId: string,
+): Promise<ScrollCaptureSession> {
+  if (!isElectronBrowserCoreAvailable()) throw new Error(BROWSER_CORE_UNAVAILABLE);
+  return invoke({ type: "collectorScrollCaptureMarkRoi", sessionId });
+}
+
+export async function collectorScrollCaptureConfirm(
+  invoke: CollectorInvoke,
+  sessionId: string,
+  roi: Rect,
+): Promise<{ asset: string; roi: Rect; dataUrl: string; environment: { width: number; height: number; zoom: number } }> {
+  if (!isElectronBrowserCoreAvailable()) throw new Error(BROWSER_CORE_UNAVAILABLE);
+  if (roi.width < 4 || roi.height < 4) throw new Error("ROI too small (min 4×4 DIP).");
+  return invoke({ type: "collectorScrollCaptureConfirm", sessionId, roi });
+}
+
+export async function collectorScrollCaptureCancel(
+  invoke: CollectorInvoke,
+  sessionId: string,
+): Promise<void> {
+  if (!isElectronBrowserCoreAvailable()) return;
+  await invoke({ type: "collectorScrollCaptureCancel", sessionId });
+}
+
 export async function collectorLoadImageAsset(
   invoke: CollectorInvoke,
   asset: string,

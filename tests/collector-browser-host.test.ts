@@ -11,6 +11,7 @@ import {
   fitCaptureImageInDisplay,
   nextCollectorCapturePhase,
   resolveBrowserViewBounds,
+  resizeCaptureRoi,
   shellBoundsToCssFixed,
   shouldShowBrowserForPage,
 } from "../src/shared/collector-browser-host.js";
@@ -44,6 +45,15 @@ test("C2.2 browser visible only for Creator or active Collector Capture host", (
     shouldShowBrowserForPage({ page: "browser-sessions", browserVisible: true, collectorHostActive: true }),
     false,
   );
+});
+
+test("Collector ROI resize locks top-left and clamps right/bottom edges", () => {
+  const origin = { x: 72, y: 120, width: 680, height: 267 };
+  assert.deepEqual(resizeCaptureRoi(origin, "right", 800, 10, 832, 420), { ...origin, width: 728 });
+  assert.deepEqual(resizeCaptureRoi(origin, "bottom", 0, 400, 832, 420), { ...origin, height: 280 });
+  assert.deepEqual(resizeCaptureRoi(origin, "corner", 9999, 9999, 832, 420), { x: 72, y: 120, width: 760, height: 300 });
+  assert.deepEqual(resizeCaptureRoi(origin, "corner", 0, 0, 832, 420), { x: 72, y: 120, width: 4, height: 4 });
+  assert.deepEqual(origin, { x: 72, y: 120, width: 680, height: 267 });
 });
 
 test("C2.2 collectors use measured host bounds; Creator keeps workspaceLayout browser", () => {
@@ -138,16 +148,15 @@ test("C2.4 confirm/cancel restore browse via visibility only (scroll preserved)"
   const capture = readFileSync(resolve("src/renderer/collectors/CaptureStep.tsx"), "utf8");
   assert.match(adapter, /collectorFreezeFrame[\s\S]*browserVisible[\s\S]*visible:\s*false/);
   assert.match(capture, /async function restoreBrowse/);
-  assert.match(capture, /Visibility only — do not navigate/);
-  const restoreFn = capture.match(/async function restoreBrowse[\s\S]*?\n  \}/)?.[0] ?? "";
-  assert.match(restoreFn, /collectorSetBrowserVisible\(invoke, true\)/);
-  assert.doesNotMatch(restoreFn, /collectorNavigate/);
-  const confirmFn = capture.match(/async function confirmCapture[\s\S]*?\n  \}/)?.[0] ?? "";
-  assert.match(confirmFn, /restoreBrowse\(/);
-  assert.doesNotMatch(confirmFn, /collectorNavigate/);
-  const cancelFn = capture.match(/async function cancelFreeze[\s\S]*?\n  \}/)?.[0] ?? "";
-  assert.match(cancelFn, /restoreBrowse\(/);
-  assert.doesNotMatch(cancelFn, /collectorNavigate/);
+  assert.match(capture, /collectorSetBrowserVisible\(invoke, true\)/);
+  assert.match(capture, /collectorScrollCaptureCancel/);
+  assert.match(capture, /same page and scroll preserved/);
+  assert.match(capture, /async function confirmCapture/);
+  assert.match(capture, /collectorScrollCaptureConfirm/);
+  // Confirm path must not re-navigate (openUrl alone may still call collectorNavigate).
+  const confirmIdx = capture.indexOf("async function confirmCapture");
+  const confirmChunk = capture.slice(confirmIdx, confirmIdx + 800);
+  assert.doesNotMatch(confirmChunk, /collectorNavigate/);
 });
 
 test("C2.4 Script Capture path and Browser Session isolation remain intact", () => {
