@@ -8,6 +8,7 @@
     "build": "tsc -p tsconfig.main.json && vite build",
     "typecheck": "tsc --noEmit && tsc -p tsconfig.main.json --noEmit",
     "start": "npm run build && electron .",
+    "dev:web": "vite",
     "test": "tsx --test tests/*.test.ts",
     "test:browser": "npm run build && node scripts/browser-test.mjs",
     "diagnose:pointer": "npm run build && electron . --pointer-trace"

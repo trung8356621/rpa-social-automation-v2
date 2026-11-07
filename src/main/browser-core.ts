@@ -152,7 +152,8 @@ export class BrowserCore {
     this.visible = visible;
     this.view.setVisible(visible);
   }
-  async capture(): Promise<Capture> {
+  async capture(options?: { requireCanonical?: boolean }): Promise<Capture> {
+    const requireCanonical = options?.requireCanonical !== false;
     const wc = this.view.webContents;
     const zoom = wc.getZoomFactor();
     if (Math.abs(zoom - this.zoom) > 0.001)
@@ -188,7 +189,7 @@ export class BrowserCore {
     }
     if (!raw.length) throw new Error("Browser trả về ảnh rỗng.");
     const metadata = await sharp(raw).metadata();
-    assertCanonicalScreenshot(metadata.width, metadata.height);
+    if (requireCanonical) assertCanonicalScreenshot(metadata.width, metadata.height);
     const buffer = raw;
     const id = randomUUID();
     await mkdir(this.evidenceDir, { recursive: true });
@@ -196,10 +197,16 @@ export class BrowserCore {
     this.captures.set(id, buffer);
     if (this.captures.size > 12)
       this.captures.delete(this.captures.keys().next().value!);
+    const width = requireCanonical
+      ? this.bounds.width
+      : (metadata.width ?? this.bounds.width);
+    const height = requireCanonical
+      ? this.bounds.height
+      : (metadata.height ?? this.bounds.height);
     return {
       id,
-      width: this.bounds.width,
-      height: this.bounds.height,
+      width,
+      height,
       zoom,
       url: wc.getURL(),
       timestamp: new Date().toISOString(),

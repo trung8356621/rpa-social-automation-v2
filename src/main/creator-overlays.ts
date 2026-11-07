@@ -1,5 +1,10 @@
 import { WebContentsView, type BrowserWindow } from "electron";
 import type { BrowserCore } from "./browser-core.js";
+import {
+  resolveBrowserViewBounds,
+  shouldShowBrowserForPage,
+  type CollectorBrowserHost,
+} from "../shared/collector-browser-host.js";
 import { workspaceLayout } from "../shared/geometry.js";
 import type { AppPage } from "../shared/contracts.js";
 
@@ -11,7 +16,9 @@ export class CreatorOverlays {
   private visible = true;
   page: AppPage = "scenarios";
   sidebarCollapsed: boolean;
-  scroll = {left: 0, top: 0};
+  scroll = { left: 0, top: 0 };
+  /** Capture-step host from renderer; ignored outside collectors. */
+  collectorHost: CollectorBrowserHost | null = null;
   constructor(
     readonly window: BrowserWindow,
     preload: string,
@@ -42,6 +49,10 @@ export class CreatorOverlays {
   get debugOpen() {
     return this.expanded.debug;
   }
+  setCollectorHost(host: CollectorBrowserHost | null) {
+    this.collectorHost = host;
+    this.layout();
+  }
   layout() {
     const [width, height] = this.window.getContentSize();
     const bounds = workspaceLayout(
@@ -55,9 +66,19 @@ export class CreatorOverlays {
     const scrollLeft = Math.min(this.scroll.left, Math.max(0, bounds.minWidth - width));
     bounds.browser.x -= scrollLeft;
     bounds.browser.y -= this.scroll.top;
-    Object.assign(this.browser.bounds, bounds.browser);
-    this.browser.view.setBounds(bounds.browser);
-    this.browser.view.setVisible((this.page === "creator" || this.page === "studio-run") && this.browser.visible);
+    const browserBounds = resolveBrowserViewBounds({
+      page: this.page,
+      collectorHost: this.collectorHost,
+      creatorBrowser: bounds.browser,
+    });
+    Object.assign(this.browser.bounds, browserBounds);
+    this.browser.view.setBounds(browserBounds);
+    const show = shouldShowBrowserForPage({
+      page: this.page,
+      browserVisible: this.browser.visible,
+      collectorHostActive: Boolean(this.collectorHost?.active),
+    });
+    this.browser.view.setVisible(show);
     // Legacy diagnostics can inspect bounds, but no Debug surface is attached.
     this.debug.setBounds(bounds.debug);
     this.debug.setVisible(false);
@@ -89,6 +110,8 @@ export class CreatorOverlays {
   setPage(page: AppPage) {
     this.page = page;
     this.scroll = { left: 0, top: 0 };
+    // Leaving Collectors drops Capture host so Browser Core does not linger over other pages.
+    if (page !== "collectors") this.collectorHost = null;
     this.layout();
   }
   setSidebarCollapsed(collapsed: boolean) {

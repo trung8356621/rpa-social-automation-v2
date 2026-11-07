@@ -51,6 +51,7 @@ import {
   validateRect,
   validateZoom,
 } from "../shared/geometry.js";
+import { shouldShowBrowserForPage } from "../shared/collector-browser-host.js";
 import { effectiveMatchTo, matchToLabel, matchToLogLabel } from "../shared/match-to.js";
 import { DRAFT_KEYS } from "../shared/contracts.js";
 import type { Command, State, CaseResult, Step } from "../shared/contracts.js";
@@ -299,13 +300,52 @@ async function boot() {
   );
   if (selfTest) {
     registerFixtureWorkspace(window, overlays);
-    for (const wc of [
-      window.webContents,
-      ...overlays.views.map((v) => v.webContents),
-    ])
-      wc.on("console-message", (event) => {
-        if (event.level === "error") console.error("RENDERER", event.message);
-      });
+  }
+  // C2.1 startup diagnostics (no secrets). Opt-in via CREATOR_DEVTOOLS=1 or --diagnose-renderer.
+  const diagnoseRenderer =
+    selfTest ||
+    process.env.CREATOR_DEVTOOLS === "1" ||
+    process.argv.includes("--diagnose-renderer");
+  for (const wc of [
+    window.webContents,
+    ...overlays.views.map((v) => v.webContents),
+  ]) {
+    wc.on("console-message", (event) => {
+      const level = String(event.level);
+      const isError = level === "error" || level === "2" || Number(level) >= 2;
+      if (isError || diagnoseRenderer) {
+        console.error("RENDERER", level, event.message);
+      }
+    });
+    wc.on("did-fail-load", (_e, code, desc, url, isMainFrame) => {
+      if (isMainFrame || diagnoseRenderer) {
+        console.error("SHELL_DID_FAIL_LOAD", { code, desc, url, isMainFrame });
+      }
+    });
+    wc.on("render-process-gone", (_e, details) => {
+      console.error("SHELL_RENDER_PROCESS_GONE", details);
+    });
+  }
+  if (diagnoseRenderer) {
+    window.webContents.once("did-finish-load", () => {
+      window.webContents.openDevTools({ mode: "detach" });
+      void window.webContents
+        .executeJavaScript(
+          `(() => {
+            const root = document.getElementById('root');
+            const text = (root?.innerText || '').slice(0, 200);
+            return {
+              hasCreator: typeof window.creator?.invoke === 'function',
+              rootChildren: root?.childElementCount ?? -1,
+              hasScriptsNav: /Scripts/i.test(text),
+              hasCollectorsNav: /Collectors/i.test(text),
+              stubFlag: Boolean(window.__RPA_WEB_DEV__),
+            };
+          })()`,
+        )
+        .then((smoke) => console.info("SHELL_SMOKE", smoke))
+        .catch((error) => console.error("SHELL_SMOKE_FAILED", error));
+    });
   }
   const editors = [
     window.webContents,
@@ -391,6 +431,20 @@ async function boot() {
       event.preventDefault();
       window.setFullScreen(false);
     }
+    // Admin UI zoom chords: never apply to Browser Core. When the automation
+    // view is focused, swallow Ctrl/Cmd ±/0 so Chromium cannot desync browser.setZoom.
+    // Shell/editor renderers handle the same chords via installAdminUiZoomShortcuts.
+    const zoomMod = (input.control || input.meta) && !input.alt && !input.shift;
+    if (zoomMod) {
+      const k = input.key;
+      const isZoomChord =
+        k === "+" || k === "=" || k === "-" || k === "_" || k === "0" ||
+        input.code === "Equal" || input.code === "Minus" || input.code === "Digit0" ||
+        input.code === "NumpadAdd" || input.code === "NumpadSubtract" || input.code === "Numpad0";
+      if (isZoomChord && browser.view.webContents.isFocused()) {
+        event.preventDefault();
+      }
+    }
   };
   for (const editor of editors) editor.on("before-input-event", windowKeys);
   browser.onViewCreated(wc => {
@@ -445,7 +499,11 @@ async function boot() {
     zoom: browser.zoom,
     browserBounds: browser.bounds,
     focused: browser.view.webContents.isFocused(),
-    visible: browser.visible && (overlays.page === "creator" || overlays.page === "studio-run"),
+    visible: shouldShowBrowserForPage({
+      page: overlays.page,
+      browserVisible: browser.visible,
+      collectorHostActive: Boolean(overlays.collectorHost?.active),
+    }),
     dataPath,
     actionTags: store.actionTags().length > 0 ? store.actionTags() : seoOpsSync.getCachedActionTags(),
     scriptRequests: seoOpsSync.getCachedScriptRequests(),
@@ -1177,7 +1235,7 @@ async function boot() {
       case "appPage":
         isIdle();
         if (uiPlayAllRunId) throw new Error("Đợi Play All kết thúc trước khi chuyển màn hình.");
-        if (event.sender !== window.webContents || !["scenarios", "creator", "browser-sessions", "test-lab", "settings", "test-case", "variations", "widget-registry", "workflows", "builds-releases"].includes(command.page))
+        if (event.sender !== window.webContents || !["scenarios", "creator", "browser-sessions", "test-lab", "settings", "test-case", "variations", "widget-registry", "workflows", "builds-releases", "collectors", "collector-test-lab"].includes(command.page))
           throw new Error("Invalid app page");
         overlays.setPage(command.page);
         if (command.page !== "creator") armedTest = undefined;
@@ -1370,6 +1428,17 @@ async function boot() {
       }
       case "capture": {
         isIdle();
+        // Collectors use measured Capture host bounds (not Creator's fixed 1024×560).
+        if (overlays.page === "collectors") {
+          const image = await browser.capture({ requireCanonical: false });
+          captures.set(image.id, {
+            width: image.width,
+            height: image.height,
+            zoom: image.zoom,
+          });
+          if (captures.size > 12) captures.delete(captures.keys().next().value!);
+          return { ...image, bounds: { ...browser.bounds } };
+        }
         return withCanonicalViewport(async () => {
           const image = await browser.capture();
           captures.set(image.id, {
@@ -1539,15 +1608,41 @@ async function boot() {
         return;
       case "browserVisible":
         isIdle();
-        if (command.visible) overlays.layout();
         browser.setVisible(command.visible);
-        overlays.setVisible(command.visible);
+        // Overlays own page-specific show/hide (Creator vs Collector Capture host).
+        overlays.layout();
+        publishLayout();
         if (pointerTrace.enabled)
           pointerTrace.record({
             kind: "visibility",
             ...pointerTrace.snapshot(),
           });
         return state();
+      case "collectorBrowserHost": {
+        isIdle();
+        if (event.sender !== window.webContents) throw new Error("Invalid collector host sender");
+        const host = command.host;
+        if (host === null) {
+          overlays.setCollectorHost(null);
+        } else {
+          if (
+            ![host.x, host.y, host.width, host.height].every(Number.isFinite) ||
+            host.width < 4 ||
+            host.height < 4
+          ) {
+            throw new Error("Invalid collector browser host bounds.");
+          }
+          overlays.setCollectorHost({
+            x: Math.round(host.x),
+            y: Math.round(host.y),
+            width: Math.round(host.width),
+            height: Math.round(host.height),
+            active: Boolean(host.active),
+          });
+        }
+        publishLayout();
+        return state();
+      }
       default:
         throw new Error("Command không hỗ trợ.");
     }

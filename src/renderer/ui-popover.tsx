@@ -38,8 +38,15 @@ export function UiPopover({
     });
   useLayoutEffect(() => {
     const name = `creator-ui-overlay-${crypto.randomUUID()}`;
-    const overlay = window.open("about:blank", name, "popup=yes");
-    if (!overlay) { closeRef.current(); return; }
+    const preferInPage = Boolean(window.__RPA_WEB_DEV__);
+    const overlay = preferInPage ? null : window.open("about:blank", name, "popup=yes");
+    // Web-dev (and popup-blocked) use the same document so Collectors modals still work.
+    if (!overlay) {
+      setHost(window);
+      return () => {
+        if (returnFocus.current?.isConnected) returnFocus.current.focus();
+      };
+    }
     const doc = overlay.document;
     doc.title = label;
     const base = doc.createElement("base");

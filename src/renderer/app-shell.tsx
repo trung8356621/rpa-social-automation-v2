@@ -5,9 +5,10 @@ import type { ScriptSyncRow } from "../shared/sync-status";
 import { SeoOpsSyncControls, scriptVersionLabel, type SeoOpsSessionState } from "./seo-ops-panel";
 import { ScriptHealthPanel } from "./script-health-panel";
 
-/** Primary Admin nav only — Browser Sessions, Settings, and Scripts (with Test Lab inside Scripts). */
+/** Primary Admin nav — Scripts, Collectors, Browser Sessions, Settings. */
 const menus = [
   { page: "scenarios", label: "Scripts", color: "#68d6a6", path: "M4 4h6v6H4zM14 14h6v6h-6zM7 10v7h7M10 7h7v7" },
+  { page: "collectors", label: "Collectors", color: "#e0b35a", path: "M4 7h16M4 12h16M4 17h10M14 15l4 2-4 2v-4Z" },
   { page: "browser-sessions", label: "Browser Sessions", color: "#75b9ff", path: "M21 12a9 9 0 1 1-18 0 9 9 0 0 1 18 0ZM3 12h18M12 3c5 5 5 13 0 18-5-5-5-13 0-18Z" },
   { page: "settings", label: "Settings", color: "#a8b2c2", path: "m9 3-1 3-3 1 1 3-2 2 2 2-1 3 3 1 1 3ZM15 12a3 3 0 1 1-6 0 3 3 0 0 1 6 0Z" },
 ] as const;
@@ -16,7 +17,11 @@ export function AppNavigation({ page, collapsed, locked, navigate, toggle }: {
   page: AppPage; collapsed: boolean; locked: boolean;
   navigate: (page: AppPage) => void; toggle: () => void;
 }) {
-  const activeNav = ["scenarios", "test-lab", "creator", "test-case"].includes(page) ? "scenarios" : page;
+  const activeNav = ["scenarios", "test-lab", "creator", "test-case"].includes(page)
+    ? "scenarios"
+    : ["collectors", "collector-test-lab"].includes(page)
+      ? "collectors"
+      : page;
   return <div className={`app-sidebar${collapsed ? " collapsed" : ""}`}>
     <div className="app-sidebar-heading">
       {!collapsed && <b>RPA Social <small>V2</small></b>}

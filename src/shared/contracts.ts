@@ -2,7 +2,7 @@ import type { V3Request } from "./admin-v3.js";
 import type { NetworkSettings, NetworkRunSettings } from "./network-mode.js";
 export type { ScriptReleaseManifest } from "./script-release.js";
 export type Rect = { x: number; y: number; width: number; height: number };
-export type MainPage = "scenarios" | "browser-sessions" | "test-lab" | "settings" | "variations" | "widget-registry" | "workflows" | "builds-releases";
+export type MainPage = "scenarios" | "browser-sessions" | "test-lab" | "settings" | "variations" | "widget-registry" | "workflows" | "builds-releases" | "collectors" | "collector-test-lab";
 export type AppPage = MainPage | "creator" | "test-case" | "studio-run";
 export type VariableValues = Record<string, string | string[] | number>;
 export type CaseRunStatus = "RUNNING" | "PASS" | "BLOCKED" | "SKIPPED" | "ERROR" | "ACTION_SENT";
@@ -467,7 +467,12 @@ export type Command =
     }
   | { type: "armTest"; stepId: string; version: number; overrideId?: string }
   | { type: "disarmTest" }
-  | { type: "browserVisible"; visible: boolean };
+  | { type: "browserVisible"; visible: boolean }
+  /** Collector Capture workspace hole — null/inactive hides Browser Core on collectors pages. */
+  | {
+      type: "collectorBrowserHost";
+      host: null | { x: number; y: number; width: number; height: number; active: boolean };
+    };
 export const DRAFT_KEYS = [
   "variableId",
   "state",

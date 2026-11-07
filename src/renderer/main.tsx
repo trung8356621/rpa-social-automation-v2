@@ -9,6 +9,7 @@ import { NetworkSettings } from "./network-settings";
 import { AppNavigation, ScenariosPage } from "./app-shell";
 import { BrowserSessionsPage, SessionSelector } from "./browser-sessions";
 import { TestLabPage, TestCaseEditor, CaseResultView, ExecutionErrorView, type CaseEditorHandle } from "./test-lab";
+import { CollectorsPage } from "./collectors/CollectorsPage";
 import { Variables, Groups } from "./flow-controls";
 import { SeoOpsAuthPanel, scriptVersionLabel, syncBadge, type SeoOpsSessionState } from "./seo-ops-panel";
 import type { ScriptSyncRow } from "../shared/sync-status";
@@ -42,7 +43,9 @@ import { useDraft, captureEditorDraft, restoreEditorDraft, type EditorDraft } fr
 import { targetEnvironment } from "../shared/visual-environment";
 import { WEB_WIDTH, WEB_HEIGHT, workspaceLayout, APP_NAV_COLLAPSED, APP_NAV_EXPANDED } from "../shared/geometry";
 import { defaultNetworkSettings, NETWORK_LABELS } from "../shared/network-mode";
+import { installAdminUiZoomShortcuts } from "./ui-zoom";
 document.documentElement.style.setProperty("--web-height", `${WEB_HEIGHT}px`);
+installAdminUiZoomShortcuts();
 declare global {
   interface Window {
     creator: CreatorApi;
@@ -200,7 +203,7 @@ function Creator() {
   const creatorVisible = appPage === "creator";
   const activeCaseTab = tabs.find(t => t.id === activeTabId && t.kind === "test-case");
   useEffect(() => {
-    if (["scenarios", "browser-sessions", "test-lab", "settings", "variations", "widget-registry", "workflows", "builds-releases"].includes(appPage)) setMainPage(appPage as MainPage);
+    if (["scenarios", "browser-sessions", "test-lab", "settings", "variations", "widget-registry", "workflows", "builds-releases", "collectors", "collector-test-lab"].includes(appPage)) setMainPage(appPage as MainPage);
   }, [appPage]);
   useEffect(() => {
     if (!shell || !creatorVisible) return;
@@ -810,7 +813,7 @@ function Creator() {
   async function changeAppPage(page: AppPage) {
     const next = await invoke<State>({ type: "appPage", page });
     setState(next);
-    if (["scenarios", "browser-sessions", "test-lab", "settings", "variations", "widget-registry", "workflows", "builds-releases"].includes(page)) setMainPage(page as MainPage);
+    if (["scenarios", "browser-sessions", "test-lab", "settings", "variations", "widget-registry", "workflows", "builds-releases", "collectors", "collector-test-lab"].includes(page)) setMainPage(page as MainPage);
     setPageError("");
     window.scrollTo({ left: 0, top: 0 });
   }
@@ -1337,6 +1340,16 @@ function Creator() {
       {shell && appPage === "test-lab" && <TestLabPage state={state} locked={navigationLocked} update={updateWorkspace}
         open={openCase} run={runCase} canRun={canRunCase} create={() => openCase()} canDelete={id => !tabsRef.current.some(t => t.caseId === id)}
         navigate={navigateApp} />}
+      {shell && (appPage === "collectors" || appPage === "collector-test-lab") && (
+        <CollectorsPage
+          page={appPage}
+          locked={navigationLocked}
+          navigate={navigateApp}
+          invoke={invoke}
+          state={state}
+          onSelectSession={(id) => void selectSession(id)}
+        />
+      )}
       {shell && state && tabs.filter(tab => tab.kind === "test-case").map(tab => <div key={tab.id} className="case-editor-host"
         hidden={tab.id !== activeTabId || appPage !== "test-case"}>
         <TestCaseEditor tabId={tab.id} item={state.testLab?.cases.find(c => c.id === tab.caseId)} state={state}

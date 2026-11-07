@@ -1,0 +1,294 @@
+import React, { useEffect, useMemo, useState } from "react";
+import { WIZARD_STEPS, saveAsVersion, stepValidationErrors } from "../../shared/collectors/ops";
+import type { CollectorDraft, WizardStepId } from "../../shared/collectors/types";
+import type { State } from "../../shared/contracts";
+import { VersionPanel } from "./VersionPanel";
+import { StepCaptureSamples } from "./CaptureStep";
+import { StepReviewMapping } from "./ReviewMappingStep";
+import { StepDiscovery, StepValidation } from "./wizard-steps";
+import type { CollectorInvoke } from "./browser-capture";
+
+type Props = {
+  initial: CollectorDraft;
+  locked: boolean;
+  classifications: string[];
+  storageWarnings?: string[];
+  onSave: (draft: CollectorDraft) => void;
+  onClose: () => void;
+  onAddClassification: (label: string) => void;
+  invoke?: CollectorInvoke;
+  state?: State | null;
+  onSelectSession?: (id: string) => void;
+};
+
+const WARN_DISMISS_KEY = "rpa.collectors.prototype.warnDismissed";
+
+function useVersionsDrawerMode() {
+  const [drawer, setDrawer] = useState(
+    () => typeof window !== "undefined" && window.matchMedia("(max-width: 1100px)").matches,
+  );
+  useEffect(() => {
+    const mq = window.matchMedia("(max-width: 1100px)");
+    const sync = () => setDrawer(mq.matches);
+    sync();
+    mq.addEventListener("change", sync);
+    return () => mq.removeEventListener("change", sync);
+  }, []);
+  return drawer;
+}
+
+export function CollectorEditor({
+  initial,
+  locked,
+  classifications: _classifications,
+  storageWarnings = [],
+  onSave,
+  onClose,
+  onAddClassification: _onAddClassification,
+  invoke,
+  state,
+  onSelectSession,
+}: Props) {
+  const [draft, setDraft] = useState<CollectorDraft>(initial);
+  const [errors, setErrors] = useState<string[]>([]);
+  const [savedFlash, setSavedFlash] = useState("");
+  const [versionsOpen, setVersionsOpen] = useState(false);
+  const [warnDismissed, setWarnDismissed] = useState(() => {
+    try {
+      return sessionStorage.getItem(WARN_DISMISS_KEY) === "1";
+    } catch {
+      return false;
+    }
+  });
+  const drawerMode = useVersionsDrawerMode();
+  const currentStep = useMemo(
+    () => WIZARD_STEPS.find((s) => s.id === draft.wizardStep) ?? WIZARD_STEPS[0]!,
+    [draft.wizardStep],
+  );
+  const metaLabel = [
+    draft.platformLabel || "platform unset",
+    draft.classification || "classification unset",
+    draft.strategy || "strategy unset",
+  ].join(" · ");
+
+  useEffect(() => {
+    setDraft({
+      ...initial,
+      captures: initial.captures ?? [],
+      captureAudits: initial.captureAudits ?? [],
+      schemaRevision: initial.schemaRevision ?? 1,
+      variants: initial.variants ?? [],
+      auditActions: initial.auditActions ?? [],
+    });
+  }, [initial.id]);
+
+  useEffect(() => {
+    if (draft.wizardStep === 1 || draft.wizardStep === 2 || drawerMode) setVersionsOpen(false);
+    else setVersionsOpen(true);
+  }, [drawerMode, draft.wizardStep]);
+
+  function patch(next: CollectorDraft) {
+    setDraft(next);
+    setErrors([]);
+  }
+
+  function goto(step: WizardStepId, validateCurrent = false) {
+    if (validateCurrent && step > draft.wizardStep) {
+      const currentErrors = stepValidationErrors(draft, draft.wizardStep);
+      if (currentErrors.length) {
+        setErrors(currentErrors);
+        return;
+      }
+    }
+    setErrors([]);
+    setDraft((d) => ({ ...d, wizardStep: step, dirty: true }));
+  }
+
+  function save() {
+    const next = saveAsVersion(draft);
+    setDraft(next);
+    onSave(next);
+    setSavedFlash(`Saved ${next.versions[next.versions.length - 1]?.label ?? "version"}`);
+    setTimeout(() => setSavedFlash(""), 2000);
+  }
+
+  function dismissWarnings() {
+    setWarnDismissed(true);
+    try {
+      sessionStorage.setItem(WARN_DISMISS_KEY, "1");
+    } catch {
+      /* ignore */
+    }
+  }
+
+  const versionsPanel = (
+    <VersionPanel
+      draft={draft}
+      locked={locked}
+      onChange={patch}
+      onSave={save}
+      onClose={drawerMode ? () => setVersionsOpen(false) : undefined}
+    />
+  );
+
+  const showStorageWarn = !warnDismissed && storageWarnings.length > 0;
+
+  return (
+    <section
+      className={`collector-editor${versionsOpen ? " versions-open" : " versions-closed"}${drawerMode ? " versions-drawer-mode" : ""}`}
+      aria-label="Collector Rule Editor"
+      data-versions-open={versionsOpen ? "true" : "false"}
+    >
+      <div className="collector-editor-chrome">
+        {showStorageWarn && (
+          <div className="collector-banner warn collector-banner-compact" role="status">
+            <span className="collector-banner-text" title={storageWarnings.join(" · ")}>
+              Storage: {storageWarnings[0]}
+              {storageWarnings.length > 1 ? ` (+${storageWarnings.length - 1})` : ""}
+            </span>
+            <button type="button" className="collector-banner-dismiss" onClick={dismissWarnings}>
+              Dismiss
+            </button>
+          </div>
+        )}
+
+        <div className="collector-editor-row1">
+          <button
+            type="button"
+            className="collector-back-btn"
+            disabled={locked}
+            onClick={onClose}
+            aria-label="Back to Collectors"
+            title="Back to Collectors"
+          >
+            ←
+          </button>
+          <h1 className="collector-editor-name" title={draft.name}>
+            {draft.name}
+            {draft.dirty ? " ●" : ""}
+          </h1>
+          <span className="collector-current-step" aria-live="polite">
+            {currentStep.id}. {currentStep.short}
+          </span>
+          <details className="collector-meta-details">
+            <summary title={metaLabel}>Details</summary>
+            <div className="collector-meta-popover">
+              <div><small>Platform</small><b>{draft.platformLabel || "unset"}</b></div>
+              <div><small>Classification</small><b>{draft.classification || "unset"}</b></div>
+              <div><small>Strategy</small><b>{draft.strategy || "unset"}</b></div>
+              <div><small>Mode</small><b>Prototype wizard</b></div>
+            </div>
+          </details>
+          <div className="collector-editor-actions">
+            <button
+              type="button"
+              disabled={locked}
+              aria-expanded={versionsOpen}
+              aria-controls="collector-versions-panel"
+              onClick={() => setVersionsOpen((v) => !v)}
+            >
+              {versionsOpen ? "Hide Versions" : "Versions"}
+            </button>
+            <button className="primary" disabled={locked} onClick={save}>Save</button>
+            {savedFlash && <small role="status">{savedFlash}</small>}
+          </div>
+        </div>
+
+        <ol className="collector-wizard-progress" aria-label="Wizard progress">
+          {WIZARD_STEPS.map((step) => (
+            <li key={step.id}>
+              <button
+                type="button"
+                disabled={locked}
+                aria-current={draft.wizardStep === step.id ? "step" : undefined}
+                className={draft.wizardStep === step.id ? "active" : draft.wizardStep > step.id ? "done" : ""}
+                onClick={() => goto(step.id)}
+              >
+                <span>{step.id}</span>
+                {step.short}
+              </button>
+            </li>
+          ))}
+        </ol>
+
+        {!!errors.length && (
+          <div className="collector-banner warn collector-banner-compact" role="alert">
+            <span className="collector-banner-text">{errors.join(" · ")}</span>
+          </div>
+        )}
+      </div>
+
+      <div className="collector-editor-body">
+        <div className="collector-wizard-main">
+          <div className="collector-wizard-stage">
+            {draft.wizardStep === 1 && (
+              <StepCaptureSamples
+                draft={draft}
+                locked={locked}
+                onChange={patch}
+                invoke={invoke}
+                state={state}
+                onSelectSession={onSelectSession}
+              />
+            )}
+            {draft.wizardStep === 2 && (
+              <StepReviewMapping
+                draft={draft}
+                locked={locked}
+                onChange={patch}
+                invoke={invoke}
+              />
+            )}
+            {draft.wizardStep === 3 && <StepDiscovery draft={draft} locked={locked} onChange={patch} />}
+            {draft.wizardStep === 4 && (
+              <StepValidation
+                draft={draft}
+                locked={locked}
+                onChange={patch}
+                onGotoStep={(step) => goto(step)}
+              />
+            )}
+          </div>
+          <div className="collector-wizard-nav">
+            <button
+              type="button"
+              disabled={locked || draft.wizardStep === 1}
+              onClick={() => goto((draft.wizardStep - 1) as WizardStepId)}
+            >
+              Back
+            </button>
+            <button type="button" className="primary" disabled={locked} onClick={save}>Save</button>
+            <button
+              type="button"
+              disabled={locked || draft.wizardStep === 4}
+              className="primary"
+              onClick={() => goto((draft.wizardStep + 1) as WizardStepId, true)}
+            >
+              Next
+            </button>
+          </div>
+        </div>
+
+        {!drawerMode && versionsOpen && (
+          <div id="collector-versions-panel" className="collector-versions-slot">
+            {versionsPanel}
+          </div>
+        )}
+      </div>
+
+      {drawerMode && versionsOpen && (
+        <div className="collector-versions-drawer-layer" role="presentation">
+          <button
+            type="button"
+            className="collector-versions-backdrop"
+            aria-label="Close Versions"
+            onClick={() => setVersionsOpen(false)}
+          />
+          <div id="collector-versions-panel" className="collector-versions-drawer" role="dialog" aria-modal="true" aria-label="Collector versions">
+            {versionsPanel}
+          </div>
+        </div>
+      )}
+    </section>
+  );
+}

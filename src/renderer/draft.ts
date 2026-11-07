@@ -6,11 +6,14 @@ import type { DraftKey } from "../shared/contracts";
 
 const cache = new Map<string, { revision: number; value: unknown }>();
 const listeners = new Map<string, Set<() => void>>();
-window.creator.onDraft((key, entry) => {
-  if (entry.revision <= (cache.get(key)?.revision ?? -1)) return;
-  cache.set(key, entry);
-  listeners.get(key)?.forEach((notify) => notify());
-});
+// Web-dev HMR can re-evaluate this module before the stub re-installs.
+if (window.creator?.onDraft) {
+  window.creator.onDraft((key, entry) => {
+    if (entry.revision <= (cache.get(key)?.revision ?? -1)) return;
+    cache.set(key, entry);
+    listeners.get(key)?.forEach((notify) => notify());
+  });
+}
 export function useDraft<T>(
   key: DraftKey,
   initial: T,

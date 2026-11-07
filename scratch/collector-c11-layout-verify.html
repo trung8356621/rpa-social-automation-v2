@@ -1,0 +1,104 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <title>Collector C1.1 Layout Verify</title>
+  <style>
+    :root { --app-nav-width: 196px; }
+    * { box-sizing: border-box; }
+    body { margin: 0; font: 13px/1.4 "Segoe UI", sans-serif; background: #0f1720; color: #dce9f8; }
+    .app-sidebar {
+      position: fixed; inset: 0 auto 0 0; width: var(--app-nav-width); z-index: 25;
+      background: #101820; border-right: 1px solid #304359; padding: 12px;
+    }
+    .app-sidebar b { display: block; margin-bottom: 12px; }
+    .app-sidebar button {
+      display: block; width: 100%; text-align: left; margin: 4px 0; padding: 10px;
+      background: #22394e; border: 1px solid #45627a; color: #dce9f8; border-radius: 6px;
+    }
+    .app-sidebar button[aria-current="page"] { border-color: #e0b35a; }
+    .workspace-page-strip { margin-left: var(--app-nav-width); height: 36px; background: #142238; border-bottom: 1px solid #304359; }
+    .app-page.collectors-page {
+      position: relative; z-index: 1;
+      margin-left: var(--app-nav-width);
+      width: calc(100% - var(--app-nav-width));
+      max-width: calc(100vw - var(--app-nav-width));
+      height: calc(100vh - 36px);
+      overflow: hidden;
+      padding: 16px 20px;
+      background: #0f1720;
+    }
+    .collector-editor { height: 100%; display: flex; flex-direction: column; min-width: 0; overflow: hidden; }
+    .collector-editor-top { display: flex; justify-content: space-between; gap: 12px; margin-bottom: 10px; }
+    .collector-wizard-progress { display: flex; flex-wrap: wrap; gap: 6px; list-style: none; margin: 0 0 10px; padding: 0; }
+    .collector-wizard-progress button { padding: 6px 10px; border-radius: 6px; background: #182636; border: 1px solid #3a4c68; color: #dce9f8; }
+    .collector-wizard-progress button.active { border-color: #68d6a6; }
+    .collector-editor-body { flex: 1; min-height: 0; display: grid; grid-template-columns: 1fr 260px; gap: 12px; overflow: hidden; }
+    .collector-wizard-main { overflow: auto; border: 1px solid #2b394a; border-radius: 8px; padding: 12px; background: #141d28; }
+    .collector-version-panel { overflow: auto; border: 1px solid #2b394a; border-radius: 8px; padding: 12px; background: #141d28; }
+    .banner { background: #2e2416; border: 1px solid #a67c3a; color: #f0d9a8; padding: 8px; border-radius: 6px; margin-bottom: 10px; }
+    .probe {
+      position: absolute; left: 0; top: 80px; width: var(--app-nav-width); height: 24px;
+      background: rgba(255,0,0,0.35); pointer-events: none; font-size: 10px; color: #fff; display: grid; place-items: center;
+    }
+    .content-edge {
+      border-left: 3px solid #68d6a6; padding-left: 8px; margin-bottom: 8px;
+    }
+  </style>
+</head>
+<body>
+  <div class="app-sidebar" aria-label="sidebar">
+    <b>RPA Social <small>V2</small></b>
+    <button>Scripts</button>
+    <button aria-current="page">Collectors</button>
+    <button>Browser Sessions</button>
+    <button>Settings</button>
+  </div>
+  <div class="probe">SIDEBAR ZONE</div>
+  <div class="workspace-page-strip"></div>
+  <section class="app-page collectors-page" id="editor">
+    <div class="collector-editor">
+      <div class="collector-editor-top">
+        <div>
+          <button>← Back to Collectors</button>
+          <h1 style="margin:8px 0 4px;font-size:22px">Layout Verify Collector</h1>
+          <p style="color:#90a5bf;margin:0">platform unset · classification unset · strategy unset</p>
+        </div>
+        <button style="background:#146d76;border:1px solid #328c95;color:#fff;padding:8px 12px;border-radius:5px">Save Draft</button>
+      </div>
+      <ol class="collector-wizard-progress">
+        <li><button class="active">1 Capture</button></li>
+        <li><button>2 Review</button></li>
+        <li><button>3 A · Vars</button></li>
+        <li><button>4 Sample B</button></li>
+        <li><button>5 C · Parent</button></li>
+        <li><button>6 Discovery</button></li>
+        <li><button>7 Validation</button></li>
+      </ol>
+      <div class="collector-editor-body">
+        <div class="collector-wizard-main">
+          <div class="content-edge"><b>Editor content starts after sidebar</b></div>
+          <div class="banner">Simulated capture — not live Facebook. Content must not render under sidebar.</div>
+          <p id="metrics"></p>
+          <div style="height:240px;border:1px dashed #45627a;border-radius:8px;display:grid;place-items:center;color:#90a5bf">Mock capture surface</div>
+          <div style="margin-top:12px;display:flex;gap:8px">
+            <button>Back</button>
+            <button style="background:#146d76;border:1px solid #328c95;color:#fff;padding:8px 12px;border-radius:5px">Save Draft</button>
+            <button style="background:#146d76;border:1px solid #328c95;color:#fff;padding:8px 12px;border-radius:5px">Next</button>
+          </div>
+        </div>
+        <aside class="collector-version-panel"><h3>Versions</h3><p style="color:#90a5bf">Panel scrolls independently.</p></aside>
+      </div>
+    </div>
+  </section>
+  <script>
+    const editor = document.getElementById("editor");
+    const rect = editor.getBoundingClientRect();
+    const nav = parseFloat(getComputedStyle(document.documentElement).getPropertyValue("--app-nav-width"));
+    const ok = Math.abs(rect.left - nav) < 1 && rect.left >= nav - 0.5;
+    document.getElementById("metrics").textContent =
+      `left=${rect.left.toFixed(1)} nav=${nav} width=${rect.width.toFixed(1)} overlapFixed=${ok}`;
+    document.title = ok ? "PASS layout" : "FAIL layout";
+  </script>
+</body>
+</html>
