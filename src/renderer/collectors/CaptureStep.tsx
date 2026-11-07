@@ -292,13 +292,16 @@ export function StepCaptureSamples({
     if (signal.aborted) throw new Error("Extend cancelled.");
     applySessionToShot(next, shotRef.current);
     if (next.error || next.phase === "FAILED") {
-      throw new Error(next.error || "Extend failed — last valid image kept.");
+      const d = next.lastDiagnostics;
+      const detail = d
+        ? ` [${d.failureKind}] scroll ${d.scrollBefore?.toFixed?.(0) ?? d.scrollBefore}→${d.scrollAfter?.toFixed?.(0) ?? d.scrollAfter} (Δ${d.scrollDeltaCss?.toFixed?.(0) ?? d.scrollDeltaCss})`
+        : "";
+      throw new Error((next.error || "Extend failed — last valid image kept.") + detail);
     }
     const grown = growRoiForSession(next, roiRef.current, anchorRef.current);
     if (grown) {
       setRoi(grown);
       roiRef.current = grown;
-      // Keep in-progress resize anchored to top-left while height may grow.
       const d = dragRef.current;
       if (d?.kind === "resize") {
         const updated: DragState = {
@@ -313,10 +316,12 @@ export function StepCaptureSamples({
       const el = previewScrollRef.current;
       if (el) el.scrollTop = el.scrollHeight;
     });
+    const diag = next.lastDiagnostics;
     setMessage(
-      `Frames ${next.frameCount} · ${next.width}×${next.height}` +
-        (next.lastAlignScore != null ? ` · align MAD ${next.lastAlignScore.toFixed(1)}` : "") +
-        ". Wheel / edge-drag / Scroll & append extend the page; preview scrollbar pans the PNG only.",
+      `Capturing browser · frames ${next.frameCount} · ${next.width}×${next.height}` +
+        (diag?.strategy ? ` · ${diag.strategy}` : "") +
+        (next.lastAlignScore != null ? ` · score ${next.lastAlignScore.toFixed(1)}` : "") +
+        ". Preview scrollbar pans the PNG; wheel-at-end / ROI edge / button capture new page content.",
     );
     return next;
   }
@@ -328,7 +333,7 @@ export function StepCaptureSamples({
     if (wasIdle) {
       setExtending(true);
       setBusy(true);
-      setMessage(`Extending (${reason})…`);
+      setMessage(`Capturing browser content (${reason})… not preview pan.`);
     }
     try {
       await gateRef.current.request(deltaCssPx, runExtend);
@@ -769,11 +774,12 @@ export function StepCaptureSamples({
                     disabled={locked || extending}
                     onClick={() => void requestExtend(SCROLL_CAPTURE_LIMITS.defaultScrollCssPx, "button")}
                   >
-                    {extending ? "Aligning…" : "Scroll & append"}
+                    {extending ? "Capturing…" : "Scroll & append"}
                   </button>
                   <small className="collector-capture-extend-hint">
-                    Wheel at preview end, ROI bottom-edge drag, or this button extends the page via Browser Core IPC.
-                    The real preview scrollbar only pans the accumulated PNG — Facebook’s painted scrollbar is not interactive.
+                    Preview scrollbar = pan accumulated PNG only. Wheel-at-end / ROI bottom-edge / this button =
+                    scroll the live page, capture, and append verified bands (geometry + stable regions).
+                    Failed aligns restore the page scroll so the next try stays in sync.
                   </small>
                   <button type="button" disabled={locked || extending} onClick={resetRoi}>
                     Reset ROI

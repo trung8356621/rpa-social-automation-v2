@@ -221,8 +221,9 @@ test("C2.5 wiring: Collector IPC + Script Capture untouched + session isolation"
   assert.match(capture, /collector-capture-preview-scroll/);
   assert.match(capture, /preview scrollbar pans the PNG|painted scrollbar is not interactive/i);
   assert.match(controller, /lastViewportPng/);
-  assert.match(controller, /alignVerticalFrames/);
-  assert.match(controller, /scrollNestedContainer/);
+  assert.match(controller, /alignExtendFrames/);
+  assert.match(controller, /scrollBoundContainer|scrollNestedContainer/);
   assert.match(controller, /cancelAll/);
+  assert.match(controller, /verifiedScrollTop|restoreVerified/);
   assert.doesNotMatch(controller, /localStorage/);
 });

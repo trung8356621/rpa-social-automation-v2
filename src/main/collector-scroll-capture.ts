@@ -6,9 +6,11 @@ import type { BrowserCore } from "./browser-core.js";
 import type { Rect } from "../shared/contracts.js";
 import {
   SCROLL_CAPTURE_LIMITS,
-  alignVerticalFrames,
+  alignExtendFrames,
   assertWithinScrollCaptureLimits,
   type AlignResult,
+  type ExtendDiagnostics,
+  type ExtendFailureKind,
   type ScrollCapturePhase,
 } from "../shared/collectors/scrolling-capture.js";
 import { validateRect } from "../shared/geometry.js";
@@ -26,6 +28,7 @@ export type ScrollCaptureSessionPublic = {
   error?: string;
   browserSessionId?: string;
   url: string;
+  lastDiagnostics?: ExtendDiagnostics;
 };
 
 type InternalSession = {
@@ -35,14 +38,32 @@ type InternalSession = {
   url: string;
   width: number;
   height: number;
-  /** Accumulated PNG buffer (not cropped). */
   png: Buffer;
-  /** Last viewport PNG — alignment always uses consecutive viewports, not the tall canvas. */
   lastViewportPng: Buffer;
   lastViewportHeight: number;
   frameCount: number;
   lastAlignScore?: number;
   error?: string;
+  /** Bound scroll container token in the page isolated world. */
+  containerId: string;
+  /** Last verified scrollTop for this container (CSS px). */
+  verifiedScrollTop: number;
+  extendGeneration: number;
+  lastDiagnostics?: ExtendDiagnostics;
+};
+
+type ScrollProbe = {
+  moved: boolean;
+  deltaCss: number;
+  reason: string;
+  scrollBefore: number;
+  scrollAfter: number;
+  scrollHeight: number;
+  clientHeight: number;
+  clientWidth: number;
+  containerId: string;
+  containerOk: boolean;
+  containerReplaced: boolean;
 };
 
 async function toGray(png: Buffer): Promise<{ width: number; height: number; gray: Uint8Array }> {
@@ -62,7 +83,6 @@ async function stitchAppend(
   const nextH = nextMeta.height ?? 0;
   if (!width || !prevH || !nextH) throw new Error("Invalid stitch dimensions.");
 
-  // Skip sticky + overlap from next; append only verified new rows.
   const skipTop = align.stickyPx + align.overlapPx;
   const sliceH = nextH - skipTop;
   if (sliceH < 1) throw new Error("No new rows to append after overlap removal.");
@@ -91,59 +111,117 @@ async function stitchAppend(
   return { png, width, height };
 }
 
-/** Probe nested scroll container (Facebook feed) and scroll by CSS px — works while view is hidden. */
-export async function scrollNestedContainer(
+function logDiag(d: ExtendDiagnostics) {
+  // Structured, no screenshot bytes / credentials.
+  console.info("[collector-scroll-capture]", JSON.stringify(d));
+}
+
+/** Bind or reuse the session scroll container; scroll by CSS px while view may be hidden. */
+export async function scrollBoundContainer(
   browser: BrowserCore,
-  deltaCssPx: number,
-): Promise<{ moved: boolean; deltaCss: number; reason: string }> {
-  const delta = Math.max(-2000, Math.min(2000, Math.round(deltaCssPx)));
+  opts: { containerId: string; deltaCssPx: number; mode: "scroll" | "restore"; targetScrollTop?: number },
+): Promise<ScrollProbe> {
+  const delta = Math.max(-2000, Math.min(2000, Math.round(opts.deltaCssPx)));
+  const target = opts.targetScrollTop;
   const wc = browser.view.webContents;
   const result = await wc.executeJavaScriptInIsolatedWorld(SCROLL_WORLD, [
     {
       code: `(() => {
+        const STORE = '__rpaCollectorScrollCapture';
         const visible = (el) => {
           const r = el.getBoundingClientRect(), style = getComputedStyle(el);
           return r.width > 0 && r.height > 0 && r.bottom > 0 && r.top < innerHeight &&
             r.right > 0 && r.left < innerWidth && style.visibility !== 'hidden' && style.display !== 'none';
         };
-        const dialogs = [...document.querySelectorAll('[role="dialog"], [aria-modal="true"], dialog[open]')].filter(visible);
-        const modal = dialogs.at(-1) || null;
-        const root = document.scrollingElement;
-        const scope = modal || document.body;
-        const ancestors = [];
-        if (modal) {
-          for (let el = modal.parentElement; el && el !== document.body && el !== root; el = el.parentElement)
-            ancestors.push(el);
-        }
-        const candidates = [scope, ...ancestors, ...scope.querySelectorAll('*')].filter(el =>
-          visible(el) && el.clientHeight > 100 && el.scrollHeight > el.clientHeight + 1 &&
-          /auto|scroll/.test(getComputedStyle(el).overflowY));
-        const active = document.activeElement;
-        const focused = candidates.filter(el => active !== document.body && el.contains(active));
-        const pool = focused.length ? focused : candidates;
-        pool.sort((a, b) => {
-          const area = (el) => {
-            const r = el.getBoundingClientRect();
-            return Math.max(0, Math.min(innerHeight, r.bottom) - Math.max(0, r.top)) *
-              Math.max(0, Math.min(innerWidth, r.right) - Math.max(0, r.left));
+        const pickContainer = () => {
+          const dialogs = [...document.querySelectorAll('[role="dialog"], [aria-modal="true"], dialog[open]')].filter(visible);
+          const modal = dialogs.at(-1) || null;
+          const root = document.scrollingElement;
+          const scope = modal || document.body;
+          const ancestors = [];
+          if (modal) {
+            for (let el = modal.parentElement; el && el !== document.body && el !== root; el = el.parentElement)
+              ancestors.push(el);
+          }
+          const candidates = [scope, ...ancestors, ...scope.querySelectorAll('*')].filter(el =>
+            visible(el) && el.clientHeight > 100 && el.scrollHeight > el.clientHeight + 1 &&
+            /auto|scroll/.test(getComputedStyle(el).overflowY));
+          const active = document.activeElement;
+          const focused = candidates.filter(el => active !== document.body && el.contains(active));
+          const pool = focused.length ? focused : candidates;
+          pool.sort((a, b) => {
+            const area = (el) => {
+              const r = el.getBoundingClientRect();
+              return Math.max(0, Math.min(innerHeight, r.bottom) - Math.max(0, r.top)) *
+                Math.max(0, Math.min(innerWidth, r.right) - Math.max(0, r.left));
+            };
+            return area(b) - area(a);
+          });
+          return pool[0] || (!modal ? root : null);
+        };
+        let store = globalThis[STORE];
+        if (!store || store.id !== ${JSON.stringify(opts.containerId)}) {
+          const el = pickContainer();
+          if (!el) {
+            return {
+              moved: false, deltaCss: 0, reason: 'NO_SCROLL_CONTAINER',
+              scrollBefore: 0, scrollAfter: 0, scrollHeight: 0, clientHeight: 0, clientWidth: 0,
+              containerId: ${JSON.stringify(opts.containerId)}, containerOk: false, containerReplaced: true,
+            };
+          }
+          store = globalThis[STORE] = {
+            id: ${JSON.stringify(opts.containerId)},
+            el,
+            tag: el.tagName,
+            className: (el.className && String(el.className).slice(0, 80)) || '',
           };
-          return area(b) - area(a);
-        });
-        const el = pool[0] || (!modal ? root : null);
-        if (!el) return { moved: false, deltaCss: 0, reason: 'NO_SCROLL_CONTAINER' };
+        }
+        const el = store.el;
+        if (!el || !el.isConnected || !visible(el) || !(el.scrollHeight > el.clientHeight + 1)) {
+          delete globalThis[STORE];
+          return {
+            moved: false, deltaCss: 0, reason: 'CONTAINER_REPLACED',
+            scrollBefore: 0, scrollAfter: 0, scrollHeight: 0, clientHeight: 0, clientWidth: 0,
+            containerId: ${JSON.stringify(opts.containerId)}, containerOk: false, containerReplaced: true,
+          };
+        }
         const before = el.scrollTop;
         const max = Math.max(0, el.scrollHeight - el.clientHeight);
-        const target = Math.max(0, Math.min(max, before + ${delta}));
-        el.scrollTo({ top: target, behavior: 'instant' });
-        const after = el.scrollTop;
+        let after = before;
+        if (${JSON.stringify(opts.mode)} === 'restore') {
+          const t = Math.max(0, Math.min(max, ${target == null ? "before" : Number(target)}));
+          el.scrollTo({ top: t, behavior: 'instant' });
+          after = el.scrollTop;
+          return {
+            moved: Math.abs(after - before) > 0.5,
+            deltaCss: after - before,
+            reason: Math.abs(after - t) <= 1.5 ? 'RESTORED' : 'RESTORE_IMPRECISE',
+            scrollBefore: before,
+            scrollAfter: after,
+            scrollHeight: el.scrollHeight,
+            clientHeight: el.clientHeight,
+            clientWidth: el.clientWidth || innerWidth,
+            containerId: store.id,
+            containerOk: true,
+            containerReplaced: false,
+          };
+        }
+        const dest = Math.max(0, Math.min(max, before + ${delta}));
+        el.scrollTo({ top: dest, behavior: 'instant' });
+        after = el.scrollTop;
         const moved = Math.abs(after - before) > 0.5;
         return {
           moved,
           deltaCss: after - before,
-          reason: !moved ? (Math.abs(target - before) < 0.5 ? 'SCROLL_BOUNDARY' : 'SCROLL_STALLED') : 'SCROLLED',
-          scrollTop: after,
+          reason: !moved ? (Math.abs(dest - before) < 0.5 ? 'SCROLL_BOUNDARY' : 'SCROLL_STALLED') : 'SCROLLED',
+          scrollBefore: before,
+          scrollAfter: after,
           scrollHeight: el.scrollHeight,
           clientHeight: el.clientHeight,
+          clientWidth: el.clientWidth || innerWidth,
+          containerId: store.id,
+          containerOk: true,
+          containerReplaced: false,
         };
       })()`,
     },
@@ -152,6 +230,14 @@ export async function scrollNestedContainer(
     moved: Boolean(result?.moved),
     deltaCss: Number(result?.deltaCss) || 0,
     reason: String(result?.reason || "UNKNOWN"),
+    scrollBefore: Number(result?.scrollBefore) || 0,
+    scrollAfter: Number(result?.scrollAfter) || 0,
+    scrollHeight: Number(result?.scrollHeight) || 0,
+    clientHeight: Number(result?.clientHeight) || 0,
+    clientWidth: Number(result?.clientWidth) || 0,
+    containerId: String(result?.containerId || opts.containerId),
+    containerOk: Boolean(result?.containerOk),
+    containerReplaced: Boolean(result?.containerReplaced),
   };
 }
 
@@ -179,10 +265,39 @@ export class CollectorScrollCaptureController {
       error: s.error,
       browserSessionId: s.browserSessionId,
       url: s.url,
+      lastDiagnostics: s.lastDiagnostics,
     };
   }
 
-  /** Start from an existing BrowserCore capture buffer (first freeze frame). */
+  private fail(
+    s: InternalSession,
+    kind: ExtendFailureKind,
+    message: string,
+    partial?: Partial<ExtendDiagnostics>,
+  ): ScrollCaptureSessionPublic {
+    s.phase = "FAILED";
+    s.error = message;
+    s.lastDiagnostics = {
+      sessionId: s.id,
+      containerId: s.containerId,
+      scrollBefore: partial?.scrollBefore ?? s.verifiedScrollTop,
+      scrollAfter: partial?.scrollAfter ?? s.verifiedScrollTop,
+      scrollDeltaCss: partial?.scrollDeltaCss ?? 0,
+      viewportCssWidth: partial?.viewportCssWidth ?? 0,
+      viewportCssHeight: partial?.viewportCssHeight ?? 0,
+      screenshotWidth: partial?.screenshotWidth ?? s.width,
+      screenshotHeight: partial?.screenshotHeight ?? s.lastViewportHeight,
+      strategy: partial?.strategy ?? "none",
+      score: partial?.score,
+      expectedShiftPx: partial?.expectedShiftPx,
+      accepted: false,
+      failureKind: kind,
+      message,
+    };
+    logDiag(s.lastDiagnostics);
+    return this.pub(s);
+  }
+
   async begin(opts: {
     captureId: string;
     browserSessionId?: string;
@@ -200,6 +315,17 @@ export class CollectorScrollCaptureController {
       bufferBytes: png.byteLength,
     });
     if (limit) throw new Error(limit.message);
+    const containerId = randomUUID();
+    // Bind scroll container (delta 0) and record verified scrollTop without advancing content.
+    const bind = await scrollBoundContainer(this.browser, {
+      containerId,
+      deltaCssPx: 0,
+      mode: "scroll",
+    });
+    if (!bind.containerOk) {
+      throw new Error("No scrollable container found for Capture extend. Open the feed and try again.");
+    }
+
     const session: InternalSession = {
       id: randomUUID(),
       phase: "INITIAL_FRAME",
@@ -211,6 +337,9 @@ export class CollectorScrollCaptureController {
       lastViewportPng: png,
       lastViewportHeight: height,
       frameCount: 1,
+      containerId,
+      verifiedScrollTop: bind.scrollAfter,
+      extendGeneration: 0,
     };
     this.sessions.set(session.id, session);
     return this.pub(session);
@@ -241,11 +370,12 @@ export class CollectorScrollCaptureController {
     }
     s.phase = "EXTENDING";
     s.error = undefined;
+    const gen = ++s.extendGeneration;
 
     let timer: ReturnType<typeof setTimeout> | undefined;
     try {
-      return await Promise.race([
-        this.extendBody(s, scrollDelta),
+      const result = await Promise.race([
+        this.extendBody(s, scrollDelta, gen),
         new Promise<never>((_, reject) => {
           timer = setTimeout(
             () => reject(new Error(
@@ -255,10 +385,27 @@ export class CollectorScrollCaptureController {
           );
         }),
       ]);
+      return result;
     } catch (error) {
-      if (s.phase === "EXTENDING") {
-        s.phase = "FAILED";
-        s.error = error instanceof Error ? error.message : String(error);
+      // Invalidate late mutations from a timed-out body.
+      s.extendGeneration++;
+      if (this.sessions.get(sessionId) === s) {
+        // Best-effort restore verified scroll after timeout.
+        try {
+          await scrollBoundContainer(this.browser, {
+            containerId: s.containerId,
+            deltaCssPx: 0,
+            mode: "restore",
+            targetScrollTop: s.verifiedScrollTop,
+          });
+        } catch {
+          /* ignore */
+        }
+        return this.fail(
+          s,
+          "TIMEOUT",
+          error instanceof Error ? error.message : String(error),
+        );
       }
       return this.pub(s);
     } finally {
@@ -266,9 +413,14 @@ export class CollectorScrollCaptureController {
     }
   }
 
+  private stillCurrent(s: InternalSession, gen: number): boolean {
+    return this.sessions.get(s.id) === s && s.extendGeneration === gen;
+  }
+
   private async extendBody(
     s: InternalSession,
     scrollDelta: number,
+    gen: number,
   ): Promise<ScrollCaptureSessionPublic> {
     const limitBefore = assertWithinScrollCaptureLimits({
       frameCount: s.frameCount + 1,
@@ -277,43 +429,94 @@ export class CollectorScrollCaptureController {
       bufferBytes: s.png.byteLength,
     });
     if (limitBefore) {
-      s.phase = "FAILED";
-      s.error = limitBefore.message;
-      return this.pub(s);
+      return this.fail(s, "LIMIT", limitBefore.message);
     }
 
-    const scroll = await scrollNestedContainer(this.browser, scrollDelta);
+    const scroll = await scrollBoundContainer(this.browser, {
+      containerId: s.containerId,
+      deltaCssPx: scrollDelta,
+      mode: "scroll",
+    });
+    if (!this.stillCurrent(s, gen)) return this.pub(s);
+
+    if (scroll.containerReplaced || !scroll.containerOk) {
+      return this.fail(s, "CONTAINER_REPLACED", "Scroll container was replaced or became invalid. Select ROI again after re-capture.", {
+        scrollBefore: scroll.scrollBefore,
+        scrollAfter: scroll.scrollAfter,
+        scrollDeltaCss: scroll.deltaCss,
+        viewportCssWidth: scroll.clientWidth,
+        viewportCssHeight: scroll.clientHeight,
+      });
+    }
+
     if (!scroll.moved) {
-      s.phase = "FAILED";
-      s.error =
+      return this.fail(
+        s,
+        "BROWSER_SCROLL_FAILED",
         scroll.reason === "SCROLL_BOUNDARY"
           ? "Reached scroll boundary — no new content."
-          : `Scroll did not move (${scroll.reason}). Last valid image kept.`;
-      return this.pub(s);
+          : `Browser scroll failed (${scroll.reason}). Last valid image kept.`,
+        {
+          scrollBefore: scroll.scrollBefore,
+          scrollAfter: scroll.scrollAfter,
+          scrollDeltaCss: scroll.deltaCss,
+          viewportCssWidth: scroll.clientWidth,
+          viewportCssHeight: scroll.clientHeight,
+        },
+      );
     }
 
     await sleep(SCROLL_CAPTURE_LIMITS.settleMs);
+    if (!this.stillCurrent(s, gen)) return this.pub(s);
 
-    // Capture next viewport while native view may still be hidden (CDP surface).
     const nextCapture = await this.browser.capture({ requireCanonical: false });
+    if (!this.stillCurrent(s, gen)) return this.pub(s);
     const nextPng = this.browser.captureBuffer(nextCapture.id);
+
+    const diagBase = {
+      scrollBefore: scroll.scrollBefore,
+      scrollAfter: scroll.scrollAfter,
+      scrollDeltaCss: scroll.deltaCss,
+      viewportCssWidth: scroll.clientWidth,
+      viewportCssHeight: scroll.clientHeight || s.lastViewportHeight,
+      screenshotWidth: nextCapture.width,
+      screenshotHeight: nextCapture.height,
+    };
+
     if (nextCapture.width !== s.width) {
-      s.phase = "FAILED";
-      s.error = `Viewport width changed (${s.width}→${nextCapture.width}); abort extend.`;
-      return this.pub(s);
+      await this.restoreVerified(s);
+      return this.fail(s, "LAYOUT_SHIFT", `Viewport width changed (${s.width}→${nextCapture.width}); scroll restored.`, diagBase);
     }
 
     const prevGray = await toGray(s.lastViewportPng);
     const nextGray = await toGray(nextPng);
-    const align = alignVerticalFrames(prevGray, nextGray);
+    const align = alignExtendFrames({
+      prev: prevGray,
+      next: nextGray,
+      scrollDeltaCss: scroll.deltaCss,
+      viewportCssHeight: scroll.clientHeight || prevGray.height,
+    });
+
     if (!align.ok) {
-      s.phase = "FAILED";
-      s.error = align.message;
-      s.lastAlignScore = align.score;
-      return this.pub(s);
+      await this.restoreVerified(s);
+      if (!this.stillCurrent(s, gen)) return this.pub(s);
+      const kind: ExtendFailureKind =
+        align.reason === "NO_NEW_CONTENT"
+          ? "SCREENSHOT_UNCHANGED"
+          : align.reason === "LAYOUT_SHIFT"
+            ? "LAYOUT_SHIFT"
+            : "ALIGN_FAILED";
+      return this.fail(s, kind, align.message, {
+        ...diagBase,
+        score: align.score,
+        expectedShiftPx: align.expectedShiftPx,
+        strategy: "none",
+      });
     }
 
     const stitched = await stitchAppend(s.png, nextPng, align);
+    if (!this.stillCurrent(s, gen)) return this.pub(s);
+
     const memLimit = assertWithinScrollCaptureLimits({
       frameCount: s.frameCount + 1,
       width: stitched.width,
@@ -321,9 +524,8 @@ export class CollectorScrollCaptureController {
       bufferBytes: stitched.png.byteLength,
     });
     if (memLimit) {
-      s.phase = "FAILED";
-      s.error = memLimit.message;
-      return this.pub(s);
+      await this.restoreVerified(s);
+      return this.fail(s, "LIMIT", memLimit.message, diagBase);
     }
 
     s.png = stitched.png;
@@ -333,9 +535,38 @@ export class CollectorScrollCaptureController {
     s.lastViewportHeight = nextCapture.height;
     s.frameCount += 1;
     s.lastAlignScore = align.score;
+    s.verifiedScrollTop = scroll.scrollAfter;
     s.phase = "READY";
     s.error = undefined;
+    s.lastDiagnostics = {
+      sessionId: s.id,
+      containerId: s.containerId,
+      ...diagBase,
+      strategy: align.strategy,
+      score: align.score,
+      expectedShiftPx: align.expectedShiftPx,
+      accepted: true,
+      failureKind: "SUCCESS",
+      message: `Appended ${align.newContentPx}px via ${align.strategy} (score ${align.score.toFixed(1)}).`,
+    };
+    logDiag(s.lastDiagnostics);
     return this.pub(s);
+  }
+
+  private async restoreVerified(s: InternalSession) {
+    try {
+      const restored = await scrollBoundContainer(this.browser, {
+        containerId: s.containerId,
+        deltaCssPx: 0,
+        mode: "restore",
+        targetScrollTop: s.verifiedScrollTop,
+      });
+      if (restored.containerOk && Math.abs(restored.scrollAfter - s.verifiedScrollTop) <= 2) {
+        s.verifiedScrollTop = restored.scrollAfter;
+      }
+    } catch {
+      /* keep prior verifiedScrollTop */
+    }
   }
 
   async confirm(
@@ -372,6 +603,7 @@ export class CollectorScrollCaptureController {
   cancel(sessionId: string) {
     const s = this.sessions.get(sessionId);
     if (s) {
+      s.extendGeneration++;
       s.phase = "CANCELLED";
       this.sessions.delete(sessionId);
     }
@@ -395,3 +627,12 @@ export class CollectorScrollCaptureController {
     return s;
   }
 }
+
+/** @deprecated use scrollBoundContainer — kept name for older imports in tests if any */
+export const scrollNestedContainer = async (
+  browser: BrowserCore,
+  deltaCssPx: number,
+) => {
+  const id = randomUUID();
+  return scrollBoundContainer(browser, { containerId: id, deltaCssPx, mode: "scroll" });
+};

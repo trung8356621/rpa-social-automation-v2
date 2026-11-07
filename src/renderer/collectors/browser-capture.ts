@@ -74,6 +74,16 @@ export type ScrollCaptureSession = {
   error?: string;
   browserSessionId?: string;
   url: string;
+  lastDiagnostics?: {
+    failureKind: string;
+    message: string;
+    strategy?: string;
+    score?: number;
+    scrollBefore?: number;
+    scrollAfter?: number;
+    scrollDeltaCss?: number;
+    accepted?: boolean;
+  };
 };
 
 export async function collectorScrollCaptureBegin(

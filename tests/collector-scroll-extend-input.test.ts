@@ -130,7 +130,7 @@ test("C2.5.1 CaptureStep wires wheel, real preview scrollbar, edge auto-scroll, 
   assert.match(capture, /shouldExtendFromPreviewScroll/);
   assert.match(capture, /isRoiEdgeAutoScrollArmed/);
   assert.match(capture, /collector-capture-preview-scroll/);
-  assert.match(capture, /painted scrollbar is not interactive/);
+  assert.match(capture, /Preview scrollbar = pan accumulated PNG|pans the PNG/i);
   assert.match(capture, /gateRef\.current\.cancel/);
   assert.match(capture, /extendTimeoutMs/);
   assert.match(mainCtrl, /extendTimeoutMs/);

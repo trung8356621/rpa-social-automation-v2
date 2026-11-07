@@ -35,10 +35,19 @@ export const SCROLL_CAPTURE_LIMITS = Object.freeze({
   settleMs: 450,
   minOverlapPx: 24,
   maxStickyPx: 180,
-  /** Mean absolute difference (0–255); above → ALIGN_FAILED. */
+  /** Strict MAD for near-identical bands (sticky / unchanged screenshot). */
   maxMad: 22,
+  /**
+   * Robust per-row median MAD for geometry-verified overlap.
+   * Higher than maxMad because FB video/animation dirties some rows; geometry must agree.
+   */
+  robustMad: 48,
+  /** Fraction of overlap rows that must stay under maxMad when geometry is used. */
+  minStableRowFraction: 0.28,
   defaultScrollCssPx: 280,
   minNewContentPx: 8,
+  /** Allowed mismatch between CSS→px expected shift and optional pixel refine (px). */
+  geometryRefineTolPx: 18,
   /** Renderer/main bound for one extend (scroll+capture+align+stitch). */
   extendTimeoutMs: 12_000,
   /** Min ms between ROI-edge auto-extend requests. */
@@ -59,7 +68,6 @@ export function shouldExtendFromPreviewScroll(opts: {
 }): "preview" | "extend" | "ignore" {
   const eps = opts.epsilonPx ?? SCROLL_CAPTURE_LIMITS.previewEndEpsilonPx;
   if (!(opts.deltaY > 0)) {
-    // Scroll up — only pan preview (never reverse-extend).
     return opts.scrollTop > 0 ? "preview" : "ignore";
   }
   const atEnd = opts.scrollTop + opts.clientHeight >= opts.scrollHeight - eps;
@@ -84,16 +92,22 @@ export type AlignFailureReason =
   | "EMPTY"
   | "NO_NEW_CONTENT"
   | "ALIGN_FAILED"
+  | "LAYOUT_SHIFT"
   | "LIMIT_FRAMES"
   | "LIMIT_HEIGHT"
   | "LIMIT_MEMORY";
 
+export type AlignStrategy = "geometry+stable" | "geometry" | "pixel";
+
 export type AlignOk = {
   ok: true;
+  strategy: AlignStrategy;
   overlapPx: number;
   stickyPx: number;
   newContentPx: number;
   score: number;
+  expectedShiftPx: number;
+  stableRowFraction: number;
 };
 
 export type AlignFail = {
@@ -101,9 +115,39 @@ export type AlignFail = {
   reason: AlignFailureReason;
   score?: number;
   message: string;
+  expectedShiftPx?: number;
 };
 
 export type AlignResult = AlignOk | AlignFail;
+
+export type ExtendFailureKind =
+  | "BROWSER_SCROLL_FAILED"
+  | "SCREENSHOT_UNCHANGED"
+  | "ALIGN_FAILED"
+  | "CONTAINER_REPLACED"
+  | "LAYOUT_SHIFT"
+  | "LIMIT"
+  | "TIMEOUT"
+  | "SUCCESS";
+
+/** Structured extend diagnostics — no screenshot bytes / secrets. */
+export type ExtendDiagnostics = {
+  sessionId: string;
+  containerId: string;
+  scrollBefore: number;
+  scrollAfter: number;
+  scrollDeltaCss: number;
+  viewportCssWidth: number;
+  viewportCssHeight: number;
+  screenshotWidth: number;
+  screenshotHeight: number;
+  strategy?: AlignStrategy | "none";
+  score?: number;
+  expectedShiftPx?: number;
+  accepted: boolean;
+  failureKind: ExtendFailureKind;
+  message: string;
+};
 
 export function nextScrollCapturePhase(
   phase: ScrollCapturePhase,
@@ -148,6 +192,8 @@ export function applyImmutableAnchorRoi(
   };
 }
 
+export type GrayFrame = { width: number; height: number; gray: Uint8Array };
+
 function rowSlice(
   gray: Uint8Array,
   width: number,
@@ -184,17 +230,45 @@ function madRows(
   return n ? sum / n : Number.POSITIVE_INFINITY;
 }
 
+function rowMadList(
+  a: Uint8Array,
+  b: Uint8Array,
+  width: number,
+  aRow0: number,
+  bRow0: number,
+  rows: number,
+  col0: number,
+  col1: number,
+): number[] {
+  const out: number[] = [];
+  const cols = col1 - col0;
+  if (rows <= 0 || cols <= 0) return out;
+  for (let r = 0; r < rows; r++) {
+    const ra = rowSlice(a, width, aRow0 + r, col0, col1);
+    const rb = rowSlice(b, width, bRow0 + r, col0, col1);
+    let sum = 0;
+    for (let c = 0; c < cols; c++) sum += Math.abs(ra[c]! - rb[c]!);
+    out.push(sum / cols);
+  }
+  return out;
+}
+
+function median(values: number[]): number {
+  if (!values.length) return Number.POSITIVE_INFINITY;
+  const s = [...values].sort((a, b) => a - b);
+  const mid = Math.floor(s.length / 2);
+  return s.length % 2 ? s[mid]! : (s[mid - 1]! + s[mid]!) / 2;
+}
+
 /** Detect sticky/fixed top band that is unchanged between consecutive frames. */
 export function detectStickyTopPx(
-  prev: { width: number; height: number; gray: Uint8Array },
-  next: { width: number; height: number; gray: Uint8Array },
+  prev: GrayFrame,
+  next: GrayFrame,
   maxSticky: number = SCROLL_CAPTURE_LIMITS.maxStickyPx,
-  maxMad: number = SCROLL_CAPTURE_LIMITS.maxMad,
 ): number {
   if (prev.width !== next.width || prev.height < 8 || next.height < 8) return 0;
   const limit = Math.min(maxSticky, Math.floor(Math.min(prev.height, next.height) * 0.35));
   let sticky = 0;
-  // Grow only while each newly added band is nearly identical (avoids diluting MAD).
   for (let h = 2; h <= limit; h += 2) {
     const band = madRows(prev.gray, next.gray, prev.width, h - 2, h - 2, 2, 0, prev.width);
     if (band <= 1) sticky = h;
@@ -203,13 +277,204 @@ export function detectStickyTopPx(
   return sticky;
 }
 
+/** Map CSS scroll delta into screenshot pixels using viewport CSS height ↔ screenshot height. */
+export function cssDeltaToScreenshotPx(
+  scrollDeltaCss: number,
+  viewportCssHeight: number,
+  screenshotHeight: number,
+): number {
+  if (!(viewportCssHeight > 0) || !(screenshotHeight > 0) || !Number.isFinite(scrollDeltaCss)) return 0;
+  return Math.round((scrollDeltaCss * screenshotHeight) / viewportCssHeight);
+}
+
+export type StableOverlapStats = {
+  medianMad: number;
+  meanMad: number;
+  stableRowFraction: number;
+};
+
+/** Score overlap using side columns + row median (tolerant of center video animation). */
+export function scoreOverlapRobust(
+  prev: GrayFrame,
+  next: GrayFrame,
+  stickyPx: number,
+  overlapPx: number,
+  strictMad = SCROLL_CAPTURE_LIMITS.maxMad,
+): StableOverlapStats {
+  const contentPrevH = prev.height - stickyPx;
+  const aRow0 = stickyPx + contentPrevH - overlapPx;
+  const bRow0 = stickyPx;
+  if (overlapPx < 4 || aRow0 < stickyPx || bRow0 < 0) {
+    return { medianMad: Number.POSITIVE_INFINITY, meanMad: Number.POSITIVE_INFINITY, stableRowFraction: 0 };
+  }
+  const w = prev.width;
+  const left0 = Math.floor(w * 0.04);
+  const left1 = Math.floor(w * 0.22);
+  const right0 = Math.floor(w * 0.78);
+  const right1 = Math.floor(w * 0.96);
+  const left = rowMadList(prev.gray, next.gray, w, aRow0, bRow0, overlapPx, left0, left1);
+  const right = rowMadList(prev.gray, next.gray, w, aRow0, bRow0, overlapPx, right0, right1);
+  const rows = left.map((v, i) => (v + (right[i] ?? v)) / 2);
+  const meanMad = rows.reduce((s, v) => s + v, 0) / (rows.length || 1);
+  const medianMad = median(rows);
+  const stable = rows.filter((v) => v <= strictMad).length;
+  return {
+    medianMad,
+    meanMad,
+    stableRowFraction: rows.length ? stable / rows.length : 0,
+  };
+}
+
 /**
- * Align next viewport under prev using overlap search on grayscale bytes.
- * Does not trust requested scroll deltas — image evidence only.
+ * Primary aligner: trust measured scroll displacement + scale, verify with stable side regions.
+ * Falls back to pixel search only when geometry is unavailable (delta≈0 already handled upstream).
+ */
+export function alignExtendFrames(opts: {
+  prev: GrayFrame;
+  next: GrayFrame;
+  scrollDeltaCss: number;
+  viewportCssHeight: number;
+  minOverlap?: number;
+  minNewContent?: number;
+  robustMad?: number;
+  minStableRowFraction?: number;
+}): AlignResult {
+  const { prev, next } = opts;
+  if (!prev.width || !prev.height || !next.width || !next.height) {
+    return { ok: false, reason: "EMPTY", message: "Empty frame — cannot align." };
+  }
+  if (prev.width !== next.width) {
+    return {
+      ok: false,
+      reason: "WIDTH_MISMATCH",
+      message: `Viewport width changed (${prev.width}→${next.width}); abort extend.`,
+    };
+  }
+  if (prev.height !== next.height) {
+    return {
+      ok: false,
+      reason: "LAYOUT_SHIFT",
+      message: `Screenshot height changed (${prev.height}→${next.height}); abort extend.`,
+    };
+  }
+
+  const minOverlap = opts.minOverlap ?? SCROLL_CAPTURE_LIMITS.minOverlapPx;
+  const minNew = opts.minNewContent ?? SCROLL_CAPTURE_LIMITS.minNewContentPx;
+  const robustMad = opts.robustMad ?? SCROLL_CAPTURE_LIMITS.robustMad;
+  const minStable = opts.minStableRowFraction ?? SCROLL_CAPTURE_LIMITS.minStableRowFraction;
+  const col0 = Math.floor(prev.width * 0.08);
+  const col1 = Math.floor(prev.width * 0.92);
+
+  const fullMad = madRows(prev.gray, next.gray, prev.width, 0, 0, prev.height, col0, col1);
+  if (fullMad <= SCROLL_CAPTURE_LIMITS.maxMad * 0.5) {
+    return {
+      ok: false,
+      reason: "NO_NEW_CONTENT",
+      score: fullMad,
+      message: "Screenshot unchanged after scroll — no new content to append.",
+    };
+  }
+
+  const stickyPx = detectStickyTopPx(prev, next);
+  const contentH = prev.height - stickyPx;
+  if (contentH < minOverlap + minNew) {
+    return {
+      ok: false,
+      reason: "ALIGN_FAILED",
+      message: "Not enough content below sticky header to align.",
+    };
+  }
+
+  const expectedShiftPx = cssDeltaToScreenshotPx(
+    opts.scrollDeltaCss,
+    opts.viewportCssHeight,
+    prev.height,
+  );
+  if (expectedShiftPx < minNew) {
+    return {
+      ok: false,
+      reason: "NO_NEW_CONTENT",
+      expectedShiftPx,
+      message: "Measured scroll displacement too small after scale conversion.",
+    };
+  }
+  if (expectedShiftPx > contentH - minOverlap) {
+    return {
+      ok: false,
+      reason: "LAYOUT_SHIFT",
+      expectedShiftPx,
+      message: "Scroll displacement exceeds viewport content — possible layout reflow.",
+    };
+  }
+
+  const overlapPx = contentH - expectedShiftPx;
+  const stats = scoreOverlapRobust(prev, next, stickyPx, overlapPx);
+  const geometryOk =
+    stats.medianMad <= robustMad &&
+    (stats.stableRowFraction >= minStable || stats.medianMad <= SCROLL_CAPTURE_LIMITS.maxMad * 1.5);
+
+  if (geometryOk) {
+    return {
+      ok: true,
+      strategy: stats.stableRowFraction >= minStable ? "geometry+stable" : "geometry",
+      overlapPx,
+      stickyPx,
+      newContentPx: expectedShiftPx,
+      score: stats.medianMad,
+      expectedShiftPx,
+      stableRowFraction: stats.stableRowFraction,
+    };
+  }
+
+  // Optional refine: search near expected shift (±tol) for better stable score — still geometry-anchored.
+  const tol = SCROLL_CAPTURE_LIMITS.geometryRefineTolPx;
+  let best = { shift: expectedShiftPx, stats, overlap: overlapPx };
+  for (let shift = expectedShiftPx - tol; shift <= expectedShiftPx + tol; shift++) {
+    if (shift < minNew || shift > contentH - minOverlap) continue;
+    const o = contentH - shift;
+    const s = scoreOverlapRobust(prev, next, stickyPx, o);
+    if (
+      s.medianMad < best.stats.medianMad - 0.5 ||
+      (Math.abs(s.medianMad - best.stats.medianMad) <= 0.5 && s.stableRowFraction > best.stats.stableRowFraction)
+    ) {
+      best = { shift, stats: s, overlap: o };
+    }
+  }
+  if (
+    best.stats.medianMad <= robustMad &&
+    (best.stats.stableRowFraction >= minStable || best.stats.medianMad <= SCROLL_CAPTURE_LIMITS.maxMad * 1.5)
+  ) {
+    return {
+      ok: true,
+      strategy: "geometry+stable",
+      overlapPx: best.overlap,
+      stickyPx,
+      newContentPx: best.shift,
+      score: best.stats.medianMad,
+      expectedShiftPx,
+      stableRowFraction: best.stats.stableRowFraction,
+    };
+  }
+
+  return {
+    ok: false,
+    reason: "ALIGN_FAILED",
+    score: best.stats.medianMad,
+    expectedShiftPx,
+    message:
+      `Could not verify scroll geometry (median side-MAD ${best.stats.medianMad.toFixed(1)}, ` +
+      `stable rows ${(best.stats.stableRowFraction * 100).toFixed(0)}%). ` +
+      `Animated video may dominate the frame. Last valid image kept; scroll restored.`,
+  };
+}
+
+/**
+ * Legacy pixel-only aligner retained for static fixtures / regression.
+ * Prefer alignExtendFrames for Facebook runtime.
  */
 export function alignVerticalFrames(
-  prev: { width: number; height: number; gray: Uint8Array },
-  next: { width: number; height: number; gray: Uint8Array },
+  prev: GrayFrame,
+  next: GrayFrame,
   opts?: {
     minOverlap?: number;
     maxSticky?: number;
@@ -242,8 +507,7 @@ export function alignVerticalFrames(
       message: "Scroll produced no new content (boundary or stalled).",
     };
   }
-
-  const stickyPx = detectStickyTopPx(prev, next, opts?.maxSticky, maxMad);
+  const stickyPx = detectStickyTopPx(prev, next, opts?.maxSticky);
   const contentPrevH = prev.height - stickyPx;
   const contentNextH = next.height - stickyPx;
   if (contentPrevH < minOverlap || contentNextH < minOverlap) {
@@ -253,11 +517,9 @@ export function alignVerticalFrames(
       message: "Not enough content below sticky header to align.",
     };
   }
-
   const maxOverlap = Math.min(contentPrevH, contentNextH, Math.floor(Math.min(prev.height, next.height) * 0.9));
   let bestOverlap = 0;
   let bestScore = Number.POSITIVE_INFINITY;
-
   for (let overlap = minOverlap; overlap <= maxOverlap; overlap += 1) {
     const score = madRows(
       prev.gray,
@@ -269,13 +531,11 @@ export function alignVerticalFrames(
       col0,
       col1,
     );
-    // Prefer larger overlap when scores tie (more shared content removed).
     if (score < bestScore - 0.05 || (Math.abs(score - bestScore) <= 0.05 && overlap > bestOverlap)) {
       bestScore = score;
       bestOverlap = overlap;
     }
   }
-
   if (!(bestOverlap >= minOverlap) || !(bestScore <= maxMad)) {
     return {
       ok: false,
@@ -284,7 +544,6 @@ export function alignVerticalFrames(
       message: `Could not verify overlap (best MAD ${bestScore.toFixed(1)} > ${maxMad}). Last valid image kept.`,
     };
   }
-
   const newContentPx = next.height - stickyPx - bestOverlap;
   if (newContentPx < minNew) {
     return {
@@ -294,13 +553,15 @@ export function alignVerticalFrames(
       message: "Scroll produced no new content (boundary or stalled).",
     };
   }
-
   return {
     ok: true,
+    strategy: "pixel",
     overlapPx: bestOverlap,
     stickyPx,
     newContentPx,
     score: bestScore,
+    expectedShiftPx: newContentPx,
+    stableRowFraction: 1,
   };
 }
 
