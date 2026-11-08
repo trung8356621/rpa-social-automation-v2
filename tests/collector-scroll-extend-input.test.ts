@@ -161,12 +161,73 @@ test("C2.5.3 userFacingExtendError hides MAD/IPC/geometry jargon", () => {
   assert.equal(userFacingExtendError("Extend cancelled."), "");
 });
 
+test("C2.5.5 gate onIdle fires after busy clears — success / failure / cancel", async () => {
+  const gate = new ScrollExtendGate<number>(5);
+  const events: string[] = [];
+  gate.setLifecycle({
+    onBusy: () => {
+      assert.equal(gate.busy, true);
+      events.push("busy");
+    },
+    onIdle: (ev) => {
+      assert.equal(gate.busy, false);
+      events.push(ev.ok ? `idle:ok:${ev.value}` : ev.cancelled ? "idle:cancel" : "idle:err");
+    },
+  });
+
+  await gate.request(1, async () => 42);
+  assert.deepEqual(events, ["busy", "idle:ok:42"]);
+
+  events.length = 0;
+  await assert.rejects(() => gate.request(1, async () => {
+    throw new Error("align failed");
+  }));
+  assert.deepEqual(events, ["busy", "idle:err"]);
+
+  events.length = 0;
+  const p = gate.request(1, async (_d, signal) => {
+    await new Promise((r) => setTimeout(r, 60));
+    if (signal.aborted) throw new Error("Extend cancelled.");
+    return 9;
+  });
+  gate.cancel();
+  await p.catch(() => undefined);
+  assert.ok(events.includes("busy"));
+  assert.ok(events.includes("idle:cancel"));
+  assert.equal(gate.busy, false);
+});
+
+test("C2.5.5 wheel path unlocks after settle (no stuck busy from endExtendUi race)", async () => {
+  const gate = new ScrollExtendGate<string>(15);
+  let idleBusy: boolean | null = null;
+  let uiLocked = false;
+  gate.setLifecycle({
+    onBusy: () => {
+      uiLocked = true;
+    },
+    onIdle: () => {
+      idleBusy = gate.busy;
+      uiLocked = false;
+    },
+  });
+  gate.scheduleWheelExtend(10, async () => {
+    await new Promise((r) => setTimeout(r, 20));
+    return "done";
+  });
+  await new Promise((r) => setTimeout(r, 80));
+  assert.equal(idleBusy, false);
+  assert.equal(uiLocked, false);
+  assert.equal(gate.busy, false);
+});
+
 test("C2.5.3 CaptureStep gesture UX — no Scroll & append; debounce; progress; scroll continuity", () => {
   const capture = readFileSync(resolve("src/renderer/collectors/CaptureStep.tsx"), "utf8");
   const mainCtrl = readFileSync(resolve("src/main/collector-scroll-capture.ts"), "utf8");
   const css = readFileSync(resolve("src/renderer/style.css"), "utf8");
   assert.match(capture, /ScrollExtendGate/);
   assert.match(capture, /scheduleWheelExtend/);
+  assert.match(capture, /setLifecycle/);
+  assert.match(capture, /onIdle/);
   assert.match(capture, /addEventListener\("wheel"/);
   assert.match(capture, /passive:\s*false/);
   assert.match(capture, /shouldExtendFromPreviewScroll/);
@@ -175,9 +236,13 @@ test("C2.5.3 CaptureStep gesture UX — no Scroll & append; debounce; progress; 
   assert.match(capture, /Đang mở rộng vùng chụp/);
   assert.match(capture, /keepScrollTop/);
   assert.match(capture, /userFacingExtendError/);
+  assert.match(capture, /extendEpochRef/);
+  assert.match(capture, /roiRef\.current/);
   assert.doesNotMatch(capture, /Scroll & append/);
+  assert.doesNotMatch(capture, /endExtendUi/);
   assert.doesNotMatch(capture, /scrollTop\s*=\s*el\.scrollHeight/);
   assert.doesNotMatch(capture, /growRoiForSession/);
+  assert.doesNotMatch(capture, /preview_up/);
   assert.doesNotMatch(capture, /\bMAD\b|\bIPC\b|geometry \+/);
   assert.match(capture, /gateRef\.current\.cancel/);
   assert.match(capture, /extendTimeoutMs/);

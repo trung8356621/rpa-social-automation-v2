@@ -191,6 +191,8 @@ export function StepCaptureSamples({
   const imageBoxRef = useRef<{ width: number; height: number } | null>(null);
   const lastPointerClientRef = useRef<{ x: number; y: number } | null>(null);
   const edgeNavRafRef = useRef<number | null>(null);
+  /** Bumped on cancel so in-flight runExtend cannot mutate after abort. */
+  const extendEpochRef = useRef(0);
 
   dragRef.current = drag;
   sessionRef.current = scrollSession;
@@ -292,6 +294,7 @@ export function StepCaptureSamples({
     }
   }
 
+  /** Pointer-driven ROI update only (image coords). Does not touch preview scroll. */
   function applyPointerToResizeDrag(clientX: number, clientY: number) {
     const d = dragRef.current;
     if (!d || d.kind !== "resize") return;
@@ -299,7 +302,6 @@ export function StepCaptureSamples({
     const next: DragState = { ...d, currentX: p.x, currentY: p.y };
     dragRef.current = next;
     setDrag(next);
-    // Live-commit height/width to roiRef (anchor immutable) so Confirm/extend see intent.
     const { width: iw, height: ih } = imageSizeRef.current;
     if (iw > 0 && ih > 0 && anchorRef.current) {
       const live = resizeCaptureRoi(d.original, d.edge, p.x, p.y, iw, ih);
@@ -309,6 +311,11 @@ export function StepCaptureSamples({
     }
   }
 
+  /**
+   * Held-edge loop: viewport scroll / browser extend only.
+   * Remaps ROI after preview_down scroll so the bottom edge tracks the held pointer.
+   * Never auto-scrolls upward (avoids fighting pointer shrink).
+   */
   function tickEdgeNav() {
     edgeNavRafRef.current = null;
     const d = dragRef.current;
@@ -326,13 +333,11 @@ export function StepCaptureSamples({
       clientHeight: el.clientHeight,
       scrollHeight: el.scrollHeight,
     });
-    const step = edgePreviewScrollStep();
     if (action === "preview_down") {
-      el.scrollTop = Math.min(el.scrollHeight - el.clientHeight, el.scrollTop + step);
-      applyPointerToResizeDrag(ptr.x, ptr.y);
-    } else if (action === "preview_up") {
-      // Navigate preview only — remapping pointer updates ROI from user hold position.
-      el.scrollTop = Math.max(0, el.scrollTop - step);
+      el.scrollTop = Math.min(
+        el.scrollHeight - el.clientHeight,
+        el.scrollTop + edgePreviewScrollStep(),
+      );
       applyPointerToResizeDrag(ptr.x, ptr.y);
     } else if (action === "browser_extend") {
       const now = Date.now();
@@ -341,6 +346,7 @@ export function StepCaptureSamples({
         void requestExtendRef.current(SCROLL_CAPTURE_LIMITS.defaultScrollCssPx);
       }
     }
+    // action === "none": leave ROI to onPointerMove; do not remount from timer.
 
     edgeNavRafRef.current = requestAnimationFrame(tickEdgeNav);
   }
@@ -355,6 +361,7 @@ export function StepCaptureSamples({
     const session = sessionRef.current;
     if (!session) throw new Error("No scroll capture session.");
     if (!roiRef.current) throw new Error("Select an ROI before extending.");
+    const epoch = extendEpochRef.current;
     const previewEl = previewScrollRef.current;
     const keepScrollTop = previewEl?.scrollTop ?? 0;
     const resizing = dragRef.current?.kind === "resize";
@@ -364,91 +371,78 @@ export function StepCaptureSamples({
       `Scroll extend timed out after ${SCROLL_CAPTURE_LIMITS.extendTimeoutMs}ms. Last valid image kept.`,
       signal,
     );
-    if (signal.aborted) throw new Error("Extend cancelled.");
+    if (signal.aborted || epoch !== extendEpochRef.current) {
+      throw new Error("Extend cancelled.");
+    }
     applySessionToShot(next, shotRef.current);
     if (next.error || next.phase === "FAILED") {
       throw new Error(next.error || "Extend failed — last valid image kept.");
     }
-    // Never auto-grow ROI to accumulated bottom — clamp only; anchor stays immutable.
     const anchor = anchorRef.current;
     const prevRoi = roiRef.current;
     if (anchor && prevRoi) {
       const clamped = clampRoiToImage(prevRoi, anchor, next.width, next.height);
       roiRef.current = clamped;
       setRoi(clamped);
-      const d = dragRef.current;
-      if (d?.kind === "resize") {
-        // Keep resize `original` as the pre-gesture rect (anchor + sizes at drag start).
-        // Remap live pointer into the taller image after stitch.
-        const ptr = lastPointerClientRef.current;
-        if (ptr) applyPointerToResizeDrag(ptr.x, ptr.y);
+      if (resizing && lastPointerClientRef.current) {
+        applyPointerToResizeDrag(lastPointerClientRef.current.x, lastPointerClientRef.current.y);
       }
     }
     requestAnimationFrame(() => {
+      if (epoch !== extendEpochRef.current) return;
       const el = previewScrollRef.current;
       if (!el) return;
-      // During held-edge resize, edge loop owns scroll; otherwise preserve view.
       if (!resizing) el.scrollTop = keepScrollTop;
       else if (lastPointerClientRef.current) {
         applyPointerToResizeDrag(lastPointerClientRef.current.x, lastPointerClientRef.current.y);
       }
     });
-    setMessage(`Đã mở rộng · ${next.frameCount} khung · ${next.width}×${next.height}`);
     return next;
   }
 
-  function beginExtendUi() {
-    setError("");
-    setExtending(true);
-    setMessage("Đang mở rộng vùng chụp...");
-  }
-
-  function endExtendUi() {
-    if (!gateRef.current.busy) setExtending(false);
-  }
+  // Gate is the sole owner of extending lock — unlock only via onIdle (after busy cleared).
+  useEffect(() => {
+    gateRef.current.setLifecycle({
+      onBusy: () => {
+        setError("");
+        setExtending(true);
+        setMessage("Đang mở rộng vùng chụp...");
+      },
+      onIdle: (ev) => {
+        setExtending(false);
+        if (ev.ok) {
+          setMessage(`Đã mở rộng · ${ev.value.frameCount} khung · ${ev.value.width}×${ev.value.height}`);
+          return;
+        }
+        if (ev.cancelled) return;
+        const msg = ev.error instanceof Error ? ev.error.message : String(ev.error ?? "");
+        const friendly = userFacingExtendError(msg);
+        if (friendly) {
+          setError(friendly);
+          setMessage("Không mở rộng thêm được. Có thể Confirm ảnh hiện tại hoặc thử cuộn lại.");
+        }
+      },
+    });
+    return () => {
+      gateRef.current.setLifecycle({});
+    };
+  }, []);
 
   /** Immediate extend (ROI edge). Drops while busy — no post-align queue. */
   async function requestExtend(deltaCssPx = SCROLL_CAPTURE_LIMITS.defaultScrollCssPx) {
     if (!invoke || locked || !frozen || !roiRef.current || !sessionRef.current) return;
     if (gateRef.current.busy) return;
-    beginExtendUi();
     try {
       await gateRef.current.request(deltaCssPx, runExtend);
-    } catch (e) {
-      const msg = e instanceof Error ? e.message : String(e);
-      const friendly = userFacingExtendError(msg);
-      if (friendly) {
-        setError(friendly);
-        setMessage("Không mở rộng thêm được. Có thể Confirm ảnh hiện tại hoặc thử cuộn lại.");
-      }
-    } finally {
-      endExtendUi();
+    } catch {
+      /* onIdle already unlocked UI and mapped the error */
     }
   }
 
   /** Wheel-at-end: debounced one-per-burst; wheels during busy are dropped. */
   function scheduleWheelExtend(deltaCssPx = SCROLL_CAPTURE_LIMITS.defaultScrollCssPx) {
     if (!invoke || locked || !frozen || !roiRef.current || !sessionRef.current) return;
-    gateRef.current.scheduleWheelExtend(
-      deltaCssPx,
-      async (d, signal) => {
-        beginExtendUi();
-        try {
-          return await runExtend(d, signal);
-        } catch (e) {
-          const msg = e instanceof Error ? e.message : String(e);
-          const friendly = userFacingExtendError(msg);
-          if (friendly) {
-            setError(friendly);
-            setMessage("Không mở rộng thêm được. Có thể Confirm ảnh hiện tại hoặc thử cuộn lại.");
-          }
-          throw e;
-        } finally {
-          endExtendUi();
-        }
-      },
-      beginExtendUi,
-    );
+    gateRef.current.scheduleWheelExtend(deltaCssPx, runExtend);
   }
 
   const requestExtendRef = useRef(requestExtend);
@@ -459,6 +453,7 @@ export function StepCaptureSamples({
   async function restoreBrowse(status: string) {
     if (!invoke) return;
     stopEdgeNavLoop();
+    extendEpochRef.current += 1;
     gateRef.current.cancel();
     setExtending(false);
     dragRef.current = undefined;
@@ -643,15 +638,18 @@ export function StepCaptureSamples({
   }
 
   function onPointerUp() {
+    stopEdgeNavLoop();
     const d = dragRef.current;
-    if (!d || !imageWidth || !imageHeight) {
-      stopEdgeNavLoop();
+    if (!d || !imageWidth || !imageHeight) return;
+    // Resize: commit live roiRef (updated during drag) — never recompute from stale current*.
+    if (d.kind === "resize") {
+      const live =
+        roiRef.current ??
+        resizeCaptureRoi(d.original, d.edge, d.currentX, d.currentY, imageWidth, imageHeight);
+      void commitRoi(live);
       return;
     }
-    const next = d.kind === "resize"
-      ? resizeCaptureRoi(d.original, d.edge, d.currentX, d.currentY, imageWidth, imageHeight)
-      : dragToCaptureRoi(d.startX, d.startY, d.currentX, d.currentY);
-    void commitRoi(next ?? undefined);
+    void commitRoi(dragToCaptureRoi(d.startX, d.startY, d.currentX, d.currentY) ?? undefined);
   }
 
   // Passive:false wheel — preview pan / extend. Ignored while ROI resize is active.
@@ -707,6 +705,8 @@ export function StepCaptureSamples({
 
   async function confirmCapture() {
     if (!invoke || !sessionRef.current || !roiRef.current || !anchorRef.current || locked || busy) return;
+    if (gateRef.current.busy || extending) return;
+    extendEpochRef.current += 1;
     gateRef.current.cancel();
     setExtending(false);
     setBusy(true);
@@ -745,6 +745,8 @@ export function StepCaptureSamples({
 
   async function cancelFreeze() {
     if (!invoke) return;
+    stopEdgeNavLoop();
+    extendEpochRef.current += 1;
     gateRef.current.cancel();
     setExtending(false);
     setBusy(true);

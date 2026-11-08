@@ -25,7 +25,8 @@ export type PreviewScrollerGeom = {
   scrollTop: number;
 };
 
-export type EdgeNavAction = "none" | "preview_down" | "preview_up" | "browser_extend";
+/** C2.5.5: no preview_up — upward resize is pointer-owned; auto-scroll only expands downward. */
+export type EdgeNavAction = "none" | "preview_down" | "browser_extend";
 
 export function scrolledCanvasDisplay(
   scroller: PreviewScrollerGeom,
@@ -100,9 +101,7 @@ export function resizeEdgeNavAction(opts: {
     const atEnd = opts.scrollTop + opts.clientHeight >= opts.scrollHeight - eps;
     return atEnd ? "browser_extend" : "preview_down";
   }
-  if (opts.pointerClientY <= opts.viewportTop + zone && opts.scrollTop > 0) {
-    return "preview_up";
-  }
+  // Near top: do not auto-scroll — competing with upward pointer shrink causes jitter.
   return "none";
 }
 

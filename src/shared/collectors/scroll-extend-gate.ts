@@ -4,11 +4,23 @@ export type ExtendRunner<T> = (deltaCssPx: number, signal: AbortSignal) => Promi
 
 export type GateRequestResult = "started" | "dropped_busy" | "debounced";
 
+/** Fired after the gate has fully transitioned to idle (running === false). */
+export type GateIdleEvent<T> =
+  | { ok: true; value: T }
+  | { ok: false; error: unknown; cancelled?: boolean };
+
+export type GateLifecycle<T> = {
+  /** Called when an extend actually starts (running already true). */
+  onBusy?: () => void;
+  /** Called only after running is cleared — safe to unlock Confirm / clear progress. */
+  onIdle?: (event: GateIdleEvent<T>) => void;
+};
+
 /**
  * Serializes scrolling-capture extend requests.
  *
- * C2.5.3: while an extend is running, additional requests are DROPPED
- * (not queued). Wheel bursts are debounced so one gesture → one extend.
+ * C2.5.5: gate owns busy/idle lifecycle. UI must unlock from onIdle, never by
+ * inspecting busy from inside the runner (busy is still true until run returns).
  */
 export class ScrollExtendGate<T> {
   private running = false;
@@ -17,6 +29,7 @@ export class ScrollExtendGate<T> {
   private wheelTimer: ReturnType<typeof setTimeout> | null = null;
   private wheelPendingDelta: number | null = null;
   private wheelDebounceMs: number;
+  private lifecycle: GateLifecycle<T> = {};
 
   constructor(wheelDebounceMs: number = SCROLL_CAPTURE_LIMITS.wheelDebounceMs) {
     this.wheelDebounceMs = wheelDebounceMs;
@@ -26,16 +39,24 @@ export class ScrollExtendGate<T> {
     return this.running;
   }
 
+  setLifecycle(lifecycle: GateLifecycle<T>): void {
+    this.lifecycle = lifecycle ?? {};
+  }
+
   setWheelDebounceMs(ms: number) {
     if (Number.isFinite(ms) && ms >= 0) this.wheelDebounceMs = ms;
   }
 
   cancel(): void {
     this.clearWheelDebounce();
+    const wasRunning = this.running;
     this.generation += 1;
     this.abort?.abort();
     this.abort = null;
     this.running = false;
+    if (wasRunning) {
+      this.lifecycle.onIdle?.({ ok: false, error: new Error("Extend cancelled."), cancelled: true });
+    }
   }
 
   private clearWheelDebounce() {
@@ -56,11 +77,7 @@ export class ScrollExtendGate<T> {
    * Wheel-at-end: debounce gesture burst, then at most one extend.
    * Wheels during an active extend are ignored (no post-align chain).
    */
-  scheduleWheelExtend(
-    deltaCssPx: number,
-    run: ExtendRunner<T>,
-    onStarted?: () => void,
-  ): GateRequestResult {
+  scheduleWheelExtend(deltaCssPx: number, run: ExtendRunner<T>): GateRequestResult {
     if (this.running) {
       this.clearWheelDebounce();
       return "dropped_busy";
@@ -73,7 +90,6 @@ export class ScrollExtendGate<T> {
       const pending = this.wheelPendingDelta;
       this.wheelPendingDelta = null;
       if (pending == null || this.running) return;
-      onStarted?.();
       void this.runOnce(pending, run).catch(() => undefined);
     }, this.wheelDebounceMs);
     return "debounced";
@@ -86,14 +102,31 @@ export class ScrollExtendGate<T> {
     const gen = this.generation;
     this.abort = new AbortController();
     const signal = this.abort.signal;
+    this.lifecycle.onBusy?.();
+    let value: T | undefined;
+    let error: unknown;
+    let succeeded = false;
     try {
-      const last = await run(delta, signal);
+      value = await run(delta, signal);
       if (gen !== this.generation) return null;
-      return last;
+      succeeded = true;
+      return value;
+    } catch (e) {
+      error = e;
+      if (gen !== this.generation) return null;
+      throw e;
     } finally {
       if (gen === this.generation) {
         this.running = false;
         this.abort = null;
+        // Notify AFTER idle so UI unlock never races with busy===true inside the runner.
+        if (succeeded && value !== undefined) {
+          this.lifecycle.onIdle?.({ ok: true, value });
+        } else if (error !== undefined) {
+          this.lifecycle.onIdle?.({ ok: false, error });
+        } else {
+          this.lifecycle.onIdle?.({ ok: false, error: new Error("Extend cancelled."), cancelled: true });
+        }
       }
     }
   }
@@ -138,6 +171,5 @@ export function userFacingExtendError(raw: string): string {
     return "Không xác minh được vùng mới. Ảnh hiện tại được giữ — thử cuộn lại.";
   }
   if (s.includes("cancelled")) return "";
-  // Strip diagnostic suffixes like [ALIGN_FAILED] scroll …
   return raw.replace(/\s*\[[A-Z_]+\][\s\S]*$/, "").trim() || "Không mở rộng được vùng chụp. Thử lại.";
 }

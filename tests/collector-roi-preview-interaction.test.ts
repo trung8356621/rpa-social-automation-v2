@@ -109,7 +109,8 @@ test("C2.5.4 held bottom edge: preview_down then browser_extend at content end",
       scrollHeight: 1200,
       zonePx: 28,
     }),
-    "preview_up",
+    "none",
+    "upward/top zone must not auto-scroll (C2.5.5 jitter)",
   );
   assert.equal(
     resizeEdgeNavAction({
