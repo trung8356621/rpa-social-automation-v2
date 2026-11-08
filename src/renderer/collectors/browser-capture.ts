@@ -162,6 +162,7 @@ export function roiToSampleRoi(
 export async function collectorOcrAsset(
   invoke: CollectorInvoke,
   asset: string,
+  crop?: Rect,
 ): Promise<OcrResult> {
   if (!isElectronBrowserCoreAvailable()) {
     throw new Error(BROWSER_CORE_UNAVAILABLE);
@@ -170,7 +171,7 @@ export async function collectorOcrAsset(
   if (!/^[a-f0-9-]+\.png$/i.test(cleanAsset)) {
     throw new Error("Invalid image asset filename for OCR.");
   }
-  return invoke<OcrResult>({ type: "ocrTarget", asset: cleanAsset });
+  return invoke<OcrResult>({ type: "ocrTarget", asset: cleanAsset, crop });
 }
 
 export async function collectorInspectDom(

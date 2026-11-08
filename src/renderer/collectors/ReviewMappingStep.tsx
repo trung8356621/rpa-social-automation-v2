@@ -1,4 +1,4 @@
-import React, { useCallback, useEffect, useMemo, useState } from "react";
+import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { cryptoRandomId, previewSrc, sampleById } from "../../shared/collectors/fixtures";
 import {
   applyAuditActionAndAdvance,
@@ -27,9 +27,11 @@ import {
 import {
   createCollectorRegion,
   matchLearnedRegions,
-  findVerifiedPostContainer,
-  extractDynamicHtmlFromContainer,
   denormalizeGeometry,
+  normalizeGeometry,
+  verifyAnchorGroups,
+  normalizeCollectorRegions,
+  deriveReferenceCropFromAnchors,
 } from "../../shared/collectors/regions";
 import type {
   CaptureAuditStatus,
@@ -38,19 +40,17 @@ import type {
   CollectorRegionRole,
   CollectorRegionType,
   CollectorVariable,
-  DynamicHtmlExtractionResult,
   LayoutContextKind,
-  VerifiedPostContainer,
 } from "../../shared/collectors/types";
 import { isRealCapture } from "../../shared/collectors/types";
 import type { OcrResult, OcrSegment, Rect } from "../../shared/contracts";
 import {
-  collectorInspectDom,
   collectorLoadImageAsset,
   collectorOcrAsset,
   isElectronBrowserCoreAvailable,
   type CollectorInvoke,
 } from "./browser-capture";
+import { UiPopover } from "../ui-popover";
 
 const STATUS_LABEL: Record<CaptureAuditStatus, string> = {
   unreviewed: "Unreviewed",
@@ -110,27 +110,38 @@ export function StepReviewMapping({ draft, locked, onChange, invoke }: Props) {
     height: active?.roi?.height || 600,
   });
 
-  // C2.8 — Internal Review Mode: "regions" vs "fields"
-  const [reviewMode, setReviewMode] = useState<"regions" | "fields">("regions");
-  const [layoutContext, setLayoutContext] = useState<LayoutContextKind>(draft.layoutContext || "FEED_ITEM");
+  // C2.8.1 — Sequential Step 2 Stages: 2A (Region Teaching) -> 2B (Field Mapping)
+  const [step2Stage, setStep2Stage] = useState<"regions" | "fields">("regions");
+  // FEED_ITEM / POST_DETAIL is frozen: maintained in data/state but UI selector is hidden
+  const [layoutContext] = useState<LayoutContextKind>(draft.layoutContext || "FEED_ITEM");
+
+  // C2.8.1 — Region Teaching explicit interaction modes: VIEW | DRAW | EDIT
+  const [regionInteractionMode, setRegionInteractionMode] = useState<"view" | "draw" | "edit">("view");
   const [selectedRegionId, setSelectedRegionId] = useState<string>();
 
-  // Region drawing state
+  // Pointer drag drawing state
   const [isDrawing, setIsDrawing] = useState(false);
   const [drawStart, setDrawStart] = useState<{ x: number; y: number } | null>(null);
   const [drawCurrent, setDrawCurrent] = useState<{ x: number; y: number } | null>(null);
+  const [creationError, setCreationError] = useState<string>();
+
+  // Region editor dock state
   const [newRegionBox, setNewRegionBox] = useState<Rect | null>(null);
-  const [newRegionType, setNewRegionType] = useState<CollectorRegionType>("STATIC");
+  const [newRegionType, setNewRegionType] = useState<CollectorRegionType>("BEGIN");
+  const [newRegionGroupTag, setNewRegionGroupTag] = useState<string>("post-main");
   const [newRegionRole, setNewRegionRole] = useState<CollectorRegionRole>("header");
   const [newRegionLabel, setNewRegionLabel] = useState("");
   const [newRegionVars, setNewRegionVars] = useState<string[]>([]);
   const [newRegionOcrText, setNewRegionOcrText] = useState("");
 
-  // DOM container verification & dynamic extraction state
-  const [domLoading, setDomLoading] = useState(false);
-  const [domError, setDomError] = useState<string>();
-  const [verifiedContainer, setVerifiedContainer] = useState<VerifiedPostContainer | null>(active?.postContainer ?? null);
-  const [dynamicExtraction, setDynamicExtraction] = useState<DynamicHtmlExtractionResult | null>(active?.dynamicExtraction ?? null);
+  // Edit mode drag/resize state
+  const [resizingHandle, setResizingHandle] = useState<"nw" | "ne" | "sw" | "se" | null>(null);
+  const [resizeStart, setResizeStart] = useState<{ x: number; y: number; initialBox: Rect } | null>(null);
+
+  // Safe region deletion confirmation state
+  const [regionPendingDelete, setRegionPendingDelete] = useState<CollectorRegion | null>(null);
+
+  const imageContainerRef = useRef<HTMLDivElement>(null);
 
   const excludedItems = useMemo(
     () => captures.filter((c) => auditForCapture(draft, c.id).status === "excluded"),
@@ -141,7 +152,7 @@ export function StepReviewMapping({ draft, locked, onChange, invoke }: Props) {
     if (!activeId) return;
     if (draft.activeReviewCaptureId === activeId) return;
     onChange({ ...draft, activeReviewCaptureId: activeId });
-    // eslint-disable-next-line react-hooks/exhaustive-deps -- sync active id once when captures change
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [activeId, captures.length]);
 
   const schemaStale = Boolean(
@@ -153,8 +164,14 @@ export function StepReviewMapping({ draft, locked, onChange, invoke }: Props) {
   function selectCapture(id: string) {
     setCompletionNote(undefined);
     setConfirmError(undefined);
+    setCreationError(undefined);
     setExcludeOpen(false);
     setSelectedSegmentId(undefined);
+    setSelectedRegionId(undefined);
+    setNewRegionBox(null);
+    setIsDrawing(false);
+    setDrawStart(null);
+    setDrawCurrent(null);
     onChange({ ...draft, activeReviewCaptureId: id, dirty: true });
   }
 
@@ -202,28 +219,89 @@ export function StepReviewMapping({ draft, locked, onChange, invoke }: Props) {
     onChange(next);
   }
 
+
+
+  const activeRegions = useMemo(() => {
+    if (!active) return [];
+    return regionsForCapture(draft, active.id);
+  }, [draft, active?.id]);
+
+  const selectedRegion = useMemo(() => {
+    if (!selectedRegionId) return undefined;
+    return activeRegions.find((r) => r.id === selectedRegionId);
+  }, [activeRegions, selectedRegionId]);
+
+  const groupAnalysis = useMemo(() => {
+    return verifyAnchorGroups(activeRegions);
+  }, [activeRegions]);
+
+  const referenceCrop = useMemo(() => {
+    return deriveReferenceCropFromAnchors(activeRegions, imageDims.width, imageDims.height);
+  }, [activeRegions, imageDims.width, imageDims.height]);
+
+  const deletionWarning = useMemo(() => {
+    if (!regionPendingDelete) return null;
+    const tag = regionPendingDelete.groupTag || "default";
+    if (regionPendingDelete.type === "BEGIN") {
+      const hasOtherBegin = activeRegions.some(
+        (r) => r.id !== regionPendingDelete.id && r.type === "BEGIN" && (r.groupTag || "default") === tag,
+      );
+      if (!hasOtherBegin) {
+        return `Deleting this anchor will leave group "${tag}" without a BEGIN anchor, preventing crop derivation in Stage 2B.`;
+      }
+    } else if (regionPendingDelete.type === "END") {
+      const hasOtherEnd = activeRegions.some(
+        (r) => r.id !== regionPendingDelete.id && r.type === "END" && (r.groupTag || "default") === tag,
+      );
+      if (!hasOtherEnd) {
+        return `Deleting this anchor will leave group "${tag}" without an END anchor, preventing crop derivation in Stage 2B.`;
+      }
+    }
+    return null;
+  }, [regionPendingDelete, activeRegions]);
+
   const runOcr = useCallback(
     async (force = false) => {
       if (!active || ocrLoading) return;
       if (active.ocr && !force) return;
+
+      const activeRegs = regionsForCapture(draft, active.id);
+      const refCrop = deriveReferenceCropFromAnchors(activeRegs, imageDims.width, imageDims.height);
+
+      if (!refCrop) {
+        setOcrError(
+          "Anchor group configuration incomplete. Configure paired BEGIN and END anchors in Stage 2A to derive reference crop bounds for OCR.",
+        );
+        return;
+      }
+
+      const crop = refCrop.crop;
+      if (!crop || crop.width <= 0 || crop.height <= 0) {
+        setOcrError(
+          "Derived reference crop has invalid bounds. Reconfigure BEGIN and END anchors in Stage 2A.",
+        );
+        return;
+      }
 
       setOcrLoading(true);
       setOcrError(undefined);
       try {
         let result: OcrResult;
         if (active.imageAsset && invoke && isElectronBrowserCoreAvailable()) {
-          result = await collectorOcrAsset(invoke, active.imageAsset);
+          result = await collectorOcrAsset(invoke, active.imageAsset, crop);
         } else {
+          const left = Math.round(crop.x);
+          const top = Math.round(crop.y);
           result = {
-            text: "Người tham gia ẩn danh\n6 tháng 11 lúc 23:03\nDạ em đang học CNTT và muốn hỏi về lộ trình...\n29 bình luận\n40 lượt thích",
+            text: "Dạ em đang học CNTT và muốn hỏi về lộ trình...\n29 bình luận\n40 lượt thích",
             confidence: 91,
             language: "vie+eng",
+            cropOffset: { x: left, y: top },
+            containerCrop: crop,
             segments: [
-              { id: "0", text: "Người tham gia ẩn danh", kind: "line", confidence: 95, bbox: { x: 60, y: 30, width: 240, height: 26 } },
-              { id: "1", text: "6 tháng 11 lúc 23:03", kind: "line", confidence: 92, bbox: { x: 60, y: 64, width: 190, height: 20 } },
-              { id: "2", text: "Dạ em đang học CNTT và muốn hỏi về lộ trình...", kind: "line", confidence: 94, bbox: { x: 60, y: 110, width: 500, height: 75 } },
-              { id: "3", text: "29", kind: "word", confidence: 88, bbox: { x: 60, y: 220, width: 35, height: 20 } },
-              { id: "4", text: "40", kind: "word", confidence: 87, bbox: { x: 140, y: 220, width: 35, height: 20 } },
+              { id: "0", text: "Dạ em đang học CNTT và muốn hỏi về lộ trình...", kind: "line", confidence: 94, bbox: { x: left + 20, y: top + 40, width: Math.min(500, Math.max(100, crop.width - 40)), height: 75 } },
+              { id: "1", text: "29", kind: "word", confidence: 88, bbox: { x: left + 20, y: top + 140, width: 35, height: 20 } },
+              { id: "2", text: "40", kind: "word", confidence: 87, bbox: { x: left + 80, y: top + 140, width: 35, height: 20 } },
             ],
           };
         }
@@ -258,10 +336,11 @@ export function StepReviewMapping({ draft, locked, onChange, invoke }: Props) {
 
   useEffect(() => {
     if (!active) return;
-    if (!active.ocr) {
+    const refCrop = deriveReferenceCropFromAnchors(activeRegions, imageDims.width, imageDims.height);
+    if (step2Stage === "fields" && !active.ocr && refCrop) {
       void runOcr(false);
     }
-  }, [active?.id, active?.ocr, runOcr]);
+  }, [active?.id, active?.ocr, activeRegions, imageDims.width, imageDims.height, step2Stage, runOcr]);
 
   const activeSegments = useMemo(() => {
     if (!active?.ocr) return [];
@@ -350,69 +429,136 @@ export function StepReviewMapping({ draft, locked, onChange, invoke }: Props) {
     onChange(markValidationOutdated({ ...draft, variables, dirty: true }));
   }
 
-  const activeRegions = useMemo(() => {
-    if (!active) return [];
-    return regionsForCapture(draft, active.id);
-  }, [draft, active?.id]);
-
-  const selectedRegion = useMemo(() => {
-    if (!selectedRegionId) return undefined;
-    return activeRegions.find((r) => r.id === selectedRegionId);
-  }, [activeRegions, selectedRegionId]);
-
-  function handleMouseDown(e: React.MouseEvent<HTMLDivElement>) {
-    if (reviewMode !== "regions" || locked) return;
+  // Pointer coordinate calculation helper
+  function getCoordsFromPointer(e: React.PointerEvent<HTMLDivElement>) {
     const rect = e.currentTarget.getBoundingClientRect();
-    const x = Math.max(0, Math.min(imageDims.width, ((e.clientX - rect.left) / rect.width) * imageDims.width));
-    const y = Math.max(0, Math.min(imageDims.height, ((e.clientY - rect.top) / rect.height) * imageDims.height));
-    setIsDrawing(true);
-    setDrawStart({ x, y });
-    setDrawCurrent({ x, y });
-    setNewRegionBox(null);
+    const normX = Math.max(0, Math.min(1, (e.clientX - rect.left) / rect.width));
+    const normY = Math.max(0, Math.min(1, (e.clientY - rect.top) / rect.height));
+    return {
+      x: Math.round(normX * imageDims.width),
+      y: Math.round(normY * imageDims.height),
+    };
   }
 
-  function handleMouseMove(e: React.MouseEvent<HTMLDivElement>) {
-    if (!isDrawing || !drawStart) return;
-    const rect = e.currentTarget.getBoundingClientRect();
-    const x = Math.max(0, Math.min(imageDims.width, ((e.clientX - rect.left) / rect.width) * imageDims.width));
-    const y = Math.max(0, Math.min(imageDims.height, ((e.clientY - rect.top) / rect.height) * imageDims.height));
-    setDrawCurrent({ x, y });
-  }
+  // DRAW MODE: Pointer Drag handlers
+  function handlePointerDown(e: React.PointerEvent<HTMLDivElement>) {
+    if (step2Stage !== "regions" || locked) return;
 
-  function handleMouseUp() {
-    if (!isDrawing || !drawStart || !drawCurrent) {
-      setIsDrawing(false);
-      return;
+    if (regionInteractionMode === "draw") {
+      e.preventDefault();
+      e.stopPropagation();
+      try {
+        (e.currentTarget as HTMLElement).setPointerCapture(e.pointerId);
+      } catch {}
+      const coords = getCoordsFromPointer(e);
+      setIsDrawing(true);
+      setDrawStart(coords);
+      setDrawCurrent(coords);
+      setNewRegionBox(null);
+      setCreationError(undefined);
     }
-    setIsDrawing(false);
-    const x = Math.round(Math.min(drawStart.x, drawCurrent.x));
-    const y = Math.round(Math.min(drawStart.y, drawCurrent.y));
-    const width = Math.round(Math.abs(drawCurrent.x - drawStart.x));
-    const height = Math.round(Math.abs(drawCurrent.y - drawStart.y));
+  }
 
-    if (width >= 20 && height >= 15) {
+  function handlePointerMove(e: React.PointerEvent<HTMLDivElement>) {
+    if (step2Stage !== "regions" || locked) return;
+
+    if (isDrawing && drawStart) {
+      e.preventDefault();
+      e.stopPropagation();
+      const coords = getCoordsFromPointer(e);
+      setDrawCurrent(coords);
+    } else if (resizingHandle && resizeStart && selectedRegion) {
+      e.preventDefault();
+      e.stopPropagation();
+      const coords = getCoordsFromPointer(e);
+      const dx = coords.x - resizeStart.x;
+      const dy = coords.y - resizeStart.y;
+      const b = resizeStart.initialBox;
+      let nextBox = { ...b };
+
+      if (resizingHandle === "se") {
+        nextBox.width = Math.max(10, b.width + dx);
+        nextBox.height = Math.max(10, b.height + dy);
+      } else if (resizingHandle === "sw") {
+        const w = Math.max(10, b.width - dx);
+        nextBox.x = b.x + (b.width - w);
+        nextBox.width = w;
+        nextBox.height = Math.max(10, b.height + dy);
+      } else if (resizingHandle === "ne") {
+        nextBox.width = Math.max(10, b.width + dx);
+        const h = Math.max(10, b.height - dy);
+        nextBox.y = b.y + (b.height - h);
+        nextBox.height = h;
+      } else if (resizingHandle === "nw") {
+        const w = Math.max(10, b.width - dx);
+        const h = Math.max(10, b.height - dy);
+        nextBox.x = b.x + (b.width - w);
+        nextBox.y = b.y + (b.height - h);
+        nextBox.width = w;
+        nextBox.height = h;
+      }
+
+      handleUpdateRegionGeometry(selectedRegion.id, nextBox);
+    }
+  }
+
+  function handlePointerUp(e: React.PointerEvent<HTMLDivElement>) {
+    if (step2Stage !== "regions") return;
+
+    if (isDrawing && drawStart && drawCurrent) {
+      try {
+        (e.currentTarget as HTMLElement).releasePointerCapture(e.pointerId);
+      } catch {}
+      setIsDrawing(false);
+
+      const x = Math.round(Math.min(drawStart.x, drawCurrent.x));
+      const y = Math.round(Math.min(drawStart.y, drawCurrent.y));
+      const width = Math.round(Math.abs(drawCurrent.x - drawStart.x));
+      const height = Math.round(Math.abs(drawCurrent.y - drawStart.y));
+
+      setDrawStart(null);
+      setDrawCurrent(null);
+
+      // Validate dimensions: reject only tiny invalid gesture (< 8px) with clear feedback
+      if (width < 8 || height < 8) {
+        setCreationError("Region selection too small (< 8px). Drag a larger box on the screenshot to define an anchor.");
+        setNewRegionBox(null);
+        return;
+      }
+
+      // Valid region creation
       const box = { x, y, width, height };
       setNewRegionBox(box);
-      const isTop = y < imageDims.height * 0.35;
-      const isBottom = y > imageDims.height * 0.65;
-      setNewRegionType(isTop || isBottom ? "STATIC" : "DYNAMIC");
-      setNewRegionRole(isTop ? "header" : isBottom ? "footer" : "content");
-      setNewRegionLabel(isTop ? "Header Anchor" : isBottom ? "Footer Anchor" : "Dynamic Post Body");
+      setCreationError(undefined);
+
+      const defaultTag = "post-main";
+      const hasBegin = activeRegions.some((r) => r.type === "BEGIN" && (r.groupTag || "default") === defaultTag);
+      const isTop = y < imageDims.height * 0.45;
+      const suggestedType: CollectorRegionType = !hasBegin || isTop ? "BEGIN" : "END";
+      setNewRegionType(suggestedType);
+      setNewRegionGroupTag(defaultTag);
+      setNewRegionRole(suggestedType === "BEGIN" ? "header" : "footer");
+      setNewRegionLabel(suggestedType === "BEGIN" ? `${defaultTag} Begin` : `${defaultTag} End`);
       setNewRegionVars([]);
       setNewRegionOcrText("");
+    } else {
+      setIsDrawing(false);
+      setDrawStart(null);
+      setDrawCurrent(null);
     }
-    setDrawStart(null);
-    setDrawCurrent(null);
+
+    if (resizingHandle) {
+      setResizingHandle(null);
+      setResizeStart(null);
+    }
   }
 
-  function handleCreateRegionFromOcr(seg: OcrSegment, type: CollectorRegionType = "STATIC", role: CollectorRegionRole = "header") {
-    if (!active) return;
-    setNewRegionBox(seg.bbox);
-    setNewRegionType(type);
-    setNewRegionRole(role);
-    setNewRegionLabel(role === "header" ? "Header Anchor" : role === "footer" ? "Footer Anchor" : "Dynamic Content");
-    setNewRegionOcrText(seg.text);
-    setNewRegionVars([]);
+  function handlePointerCancel() {
+    setIsDrawing(false);
+    setDrawStart(null);
+    setDrawCurrent(null);
+    setResizingHandle(null);
+    setResizeStart(null);
   }
 
   function handleSaveRegion() {
@@ -420,7 +566,8 @@ export function StepReviewMapping({ draft, locked, onChange, invoke }: Props) {
     const region = createCollectorRegion({
       captureItemId: active.id,
       type: newRegionType,
-      label: newRegionLabel,
+      label: newRegionLabel.trim(),
+      groupTag: newRegionType !== "FREE" ? newRegionGroupTag.trim() || "default" : undefined,
       role: newRegionRole,
       box: newRegionBox,
       imageWidth: imageDims.width,
@@ -431,6 +578,21 @@ export function StepReviewMapping({ draft, locked, onChange, invoke }: Props) {
     onChange(addRegionToDraft(draft, region));
     setNewRegionBox(null);
     setSelectedRegionId(region.id);
+    setRegionInteractionMode("view");
+    setCreationError(undefined);
+  }
+
+  function handleUpdateRegionProps(regionId: string, patch: Partial<CollectorRegion>) {
+    const updated = updateRegionInDraft(draft, regionId, patch);
+    onChange(updated);
+  }
+
+  function handleUpdateRegionGeometry(regionId: string, box: Rect) {
+    const updated = updateRegionInDraft(draft, regionId, {
+      originalRoi: box,
+      geometry: normalizeGeometry(box, imageDims.width, imageDims.height),
+    });
+    onChange(updated);
   }
 
   function handleConfirmRegion(id: string) {
@@ -442,62 +604,7 @@ export function StepReviewMapping({ draft, locked, onChange, invoke }: Props) {
     if (selectedRegionId === id) setSelectedRegionId(undefined);
   }
 
-  async function handleVerifyPostContainer() {
-    if (!active) return;
-    setDomLoading(true);
-    setDomError(undefined);
-    try {
-      let snapshot = active.domSnapshot;
-      if (!snapshot && invoke && isElectronBrowserCoreAvailable()) {
-        snapshot = await collectorInspectDom(invoke, active.captureUrl, layoutContext);
-      }
-      if (!snapshot) {
-        snapshot = {
-          url: active.captureUrl || "https://facebook.com/group/feed",
-          capturedAt: active.capturedAt || new Date().toISOString(),
-          viewport: { width: imageDims.width, height: imageDims.height, scrollX: 0, scrollY: 0, dpr: 1 },
-          elements: (active.ocr?.segments ?? []).map((s, idx) => ({
-            id: `elem_${idx}`,
-            tagName: s.kind === "block" ? "DIV" : "SPAN",
-            rect: s.bbox,
-            textSnippet: s.text,
-            attributes: {},
-            childrenIds: [],
-            depth: s.kind === "block" ? 3 : 4,
-            isArticleOrCard: s.kind === "block" && s.bbox.height > 100,
-          })),
-        };
-      }
 
-      const activeRegs = regionsForCapture(draft, active.id);
-      const container = findVerifiedPostContainer(
-        activeRegs,
-        snapshot,
-        imageDims.width,
-        imageDims.height,
-        layoutContext,
-        active.roi,
-      );
-
-      const extraction = container.containerId
-        ? extractDynamicHtmlFromContainer(container, snapshot, activeRegs)
-        : null;
-
-      setVerifiedContainer(container);
-      setDynamicExtraction(extraction);
-
-      const nextCaptures = (draft.captures ?? []).map((c) =>
-        c.id === active.id
-          ? { ...c, postContainer: container, dynamicExtraction: extraction ?? undefined, domSnapshot: snapshot, layoutContext }
-          : c,
-      );
-      onChange({ ...draft, captures: nextCaptures, dirty: true });
-    } catch (err) {
-      setDomError(String(err));
-    } finally {
-      setDomLoading(false);
-    }
-  }
 
   function handleApplyLearnedAnchors() {
     if (!active || isTeaching) return;
@@ -525,9 +632,24 @@ export function StepReviewMapping({ draft, locked, onChange, invoke }: Props) {
     onChange(nextDraft);
   }
 
+  // Audit Confirmation Gate
   function runAuditAction(action: "confirm" | "needs_attention" | "exclude") {
     if (!active) return;
     setConfirmError(undefined);
+
+    // GATE: Region confirmation vs Capture Audit separation
+    // Prevent falsely confirming capture whose required Region Teaching work is incomplete
+    if (action === "confirm") {
+      const activeStaticAnchors = activeRegions.filter(
+        (r) => r.type === "BEGIN" || r.type === "END" || r.type === "STATIC" || r.type === "FREE",
+      );
+      if (isTeaching && activeStaticAnchors.length === 0) {
+        setConfirmError(
+          "Confirm blocked — Region Teaching incomplete. Define and verify at least one STATIC anchor before confirming audit.",
+        );
+        return;
+      }
+    }
 
     let nextDraft = draft;
     if (action === "confirm") {
@@ -631,6 +753,7 @@ export function StepReviewMapping({ draft, locked, onChange, invoke }: Props) {
 
   return (
     <div className="collector-step collector-review-step">
+      {/* Top Toolbar: Navigation & Sequential Stage Indicator */}
       <div className="collector-review-toolbar">
         <button type="button" disabled={locked || activeIndex <= 0} onClick={() => goRelative(-1)}>
           ← Prev
@@ -646,6 +769,26 @@ export function StepReviewMapping({ draft, locked, onChange, invoke }: Props) {
           Item {activeIndex + 1}/{captures.length}
           {isTeaching ? " · Teaching" : " · Simulated match"}
         </span>
+
+        {/* Sequential Stages: 2A Region Teaching ➔ 2B Field Mapping */}
+        <div className="collector-stage-indicator" role="tablist" aria-label="Review stages">
+          <button
+            type="button"
+            className={`collector-stage-pill ${step2Stage === "regions" ? "active" : ""}`}
+            onClick={() => setStep2Stage("regions")}
+          >
+            <span className="stage-num">2A</span> Region Teaching
+          </button>
+          <span className="collector-stage-arrow">➔</span>
+          <button
+            type="button"
+            className={`collector-stage-pill ${step2Stage === "fields" ? "active" : ""}`}
+            onClick={() => setStep2Stage("fields")}
+          >
+            <span className="stage-num">2B</span> Field Mapping
+          </button>
+        </div>
+
         {excludedItems.length > 0 && (
           <button type="button" disabled={locked} onClick={() => setQuarantineOpen((v) => !v)}>
             Quarantine ({excludedItems.length})
@@ -658,6 +801,9 @@ export function StepReviewMapping({ draft, locked, onChange, invoke }: Props) {
       )}
       {confirmError && (
         <p className="collector-banner warn" role="alert">{confirmError}</p>
+      )}
+      {creationError && (
+        <p className="collector-banner warn" role="alert">{creationError}</p>
       )}
       {schemaStale && active && (
         <p className="collector-banner warn" role="status">
@@ -730,61 +876,68 @@ export function StepReviewMapping({ draft, locked, onChange, invoke }: Props) {
           {/* Left Pane (~68%) — Screenshot & Overlay */}
           <div className="collector-review-image-pane" aria-label="Sample Data & OCR Mapping">
             <div className="collector-mapping-toolbar" style={{ marginBottom: "6px", flexWrap: "wrap", gap: "8px", alignItems: "center" }}>
-              {/* Internal Mode Toggle: DOM Regions vs OCR Fields */}
-              <div className="collector-mode-toggle" role="group" aria-label="Review mode">
-                <button
-                  type="button"
-                  className={reviewMode === "regions" ? "active" : ""}
-                  onClick={() => setReviewMode("regions")}
-                >
-                  DOM Regions
-                </button>
-                <button
-                  type="button"
-                  className={reviewMode === "fields" ? "active" : ""}
-                  onClick={() => setReviewMode("fields")}
-                >
-                  OCR Fields
-                </button>
-              </div>
-
-              {reviewMode === "regions" && (
-                <>
-                  <div className="collector-level-toggle" role="group" aria-label="Layout context">
-                    <button
-                      type="button"
-                      className={layoutContext === "FEED_ITEM" ? "active" : ""}
-                      onClick={() => {
-                        setLayoutContext("FEED_ITEM");
-                        onChange({ ...draft, layoutContext: "FEED_ITEM" });
-                      }}
-                    >
-                      Feed Item
-                    </button>
-                    <button
-                      type="button"
-                      className={layoutContext === "POST_DETAIL" ? "active" : ""}
-                      onClick={() => {
-                        setLayoutContext("POST_DETAIL");
-                        onChange({ ...draft, layoutContext: "POST_DETAIL" });
-                      }}
-                    >
-                      Post Detail
-                    </button>
-                  </div>
+              {/* STAGE 2A Toolbar: Explicit VIEW / DRAW / EDIT Modes */}
+              {step2Stage === "regions" && (
+                <div className="collector-mode-toggle" role="group" aria-label="Region interaction mode">
                   <button
                     type="button"
-                    className="primary"
-                    disabled={locked || domLoading}
-                    onClick={() => void handleVerifyPostContainer()}
+                    className={regionInteractionMode === "view" ? "active" : ""}
+                    onClick={() => {
+                      setRegionInteractionMode("view");
+                      setIsDrawing(false);
+                      setDrawStart(null);
+                      setDrawCurrent(null);
+                      setCreationError(undefined);
+                    }}
+                    title="Normal navigation & scrolling"
                   >
-                    {domLoading ? "Verifying DOM..." : "Verify Post Container"}
+                    🔍 VIEW
                   </button>
-                </>
+                  <button
+                    type="button"
+                    className={regionInteractionMode === "draw" ? "active" : ""}
+                    onClick={() => {
+                      setRegionInteractionMode("draw");
+                      setSelectedRegionId(undefined);
+                      setDrawStart(null);
+                      setDrawCurrent(null);
+                      setCreationError(undefined);
+                    }}
+                    title="Drag on screenshot to draw an anchor rectangle"
+                  >
+                    ✏️ DRAW
+                  </button>
+                  <button
+                    type="button"
+                    className={regionInteractionMode === "edit" ? "active" : ""}
+                    disabled={activeRegions.length === 0}
+                    onClick={() => {
+                      setRegionInteractionMode("edit");
+                      if (!selectedRegionId && activeRegions.length > 0) {
+                        setSelectedRegionId(activeRegions[0].id);
+                      }
+                      setIsDrawing(false);
+                      setDrawStart(null);
+                      setDrawCurrent(null);
+                      setCreationError(undefined);
+                    }}
+                    title="Move or resize selected region"
+                  >
+                    📐 EDIT
+                  </button>
+                </div>
               )}
 
-              {reviewMode === "fields" && (
+              {/* STAGE 2B Toolbar: OCR Word/Line/Block + Search */}
+              {step2Stage === "fields" && (
                 <>
+                  <button
+                    type="button"
+                    onClick={() => setStep2Stage("regions")}
+                    title="Return to Region Teaching"
+                  >
+                    ← Back to Regions
+                  </button>
                   <div className="collector-level-toggle" role="group" aria-label="OCR grouping level">
                     {(["block", "line", "word"] as OcrGroupingLevel[]).map((lvl) => (
                       <button
@@ -821,17 +974,23 @@ export function StepReviewMapping({ draft, locked, onChange, invoke }: Props) {
                   </div>
                 </>
               )}
-              <span className="hint" style={{ fontSize: "11px", color: "#7f93ab" }}>Sample Data</span>
+
+              <span className="hint" style={{ fontSize: "11px", color: "#7f93ab", marginLeft: "auto" }}>Sample Data</span>
             </div>
 
             <div className="collector-review-image-frame">
               {previewSrcUrl ? (
                 <div
-                  className="collector-review-image-container"
-                  onMouseDown={handleMouseDown}
-                  onMouseMove={handleMouseMove}
-                  onMouseUp={handleMouseUp}
-                  style={{ cursor: reviewMode === "regions" ? "crosshair" : "default" }}
+                  ref={imageContainerRef}
+                  className={`collector-review-image-container mode-${regionInteractionMode}`}
+                  onPointerDown={handlePointerDown}
+                  onPointerMove={handlePointerMove}
+                  onPointerUp={handlePointerUp}
+                  onPointerCancel={handlePointerCancel}
+                  style={{
+                    touchAction: regionInteractionMode === "draw" ? "none" : "auto",
+                    userSelect: "none",
+                  }}
                 >
                   <img
                     src={previewSrcUrl}
@@ -840,6 +999,14 @@ export function StepReviewMapping({ draft, locked, onChange, invoke }: Props) {
                         ? `Real capture #${activeIndex + 1}`
                         : `Capture #${activeIndex + 1} mock preview`
                     }
+                    draggable={false}
+                    style={{
+                      userSelect: "none",
+                      pointerEvents: "none",
+                      display: "block",
+                      width: "100%",
+                      height: "auto",
+                    }}
                     onLoad={(e) => {
                       const img = e.currentTarget;
                       setImageDims({
@@ -849,12 +1016,50 @@ export function StepReviewMapping({ draft, locked, onChange, invoke }: Props) {
                     }}
                   />
 
-                  {/* Regions Overlay (in "regions" mode) */}
-                  {reviewMode === "regions" && (
-                    <div className="collector-ocr-overlay" style={{ pointerEvents: isDrawing ? "none" : "auto" }}>
-                      {/* Active regions */}
+                  {/* Reference Crop Boundary Highlight derived from visual anchors */}
+                  {step2Stage === "fields" && referenceCrop && (
+                    <div
+                      className="collector-container-highlight"
+                      style={{
+                        position: "absolute",
+                        left: `${(referenceCrop.crop.x / imageDims.width) * 100}%`,
+                        top: `${(referenceCrop.crop.y / imageDims.height) * 100}%`,
+                        width: `${(referenceCrop.crop.width / imageDims.width) * 100}%`,
+                        height: `${(referenceCrop.crop.height / imageDims.height) * 100}%`,
+                        border: "2px dashed #10b981",
+                        background: "rgba(16, 185, 129, 0.08)",
+                        pointerEvents: "none",
+                        zIndex: 2,
+                      }}
+                    >
+                      <span
+                        style={{
+                          position: "absolute",
+                          top: "2px",
+                          left: "2px",
+                          fontSize: "10px",
+                          fontWeight: "bold",
+                          background: "#059669",
+                          color: "#fff",
+                          padding: "1px 5px",
+                          borderRadius: "3px",
+                        }}
+                      >
+                        REFERENCE CROP: {referenceCrop.groupTag} [{referenceCrop.crop.width}×{referenceCrop.crop.height}]
+                      </span>
+                    </div>
+                  )}
+
+                  {/* STAGE 2A — Regions Overlay */}
+                  {step2Stage === "regions" && (
+                    <div
+                      className="collector-ocr-overlay"
+                      style={{ pointerEvents: regionInteractionMode === "draw" && isDrawing ? "none" : "auto" }}
+                    >
+                      {/* Active defined regions */}
                       {activeRegions.map((r) => {
                         const isSelected = selectedRegionId === r.id;
+                        const originalBox = denormalizeGeometry(r.geometry, imageDims.width, imageDims.height);
                         return (
                           <div
                             key={r.id}
@@ -866,6 +1071,7 @@ export function StepReviewMapping({ draft, locked, onChange, invoke }: Props) {
                               height: `${r.geometry.relH * 100}%`,
                             }}
                             onClick={(e) => {
+                              if (regionInteractionMode === "draw") return;
                               e.stopPropagation();
                               setSelectedRegionId(r.id);
                               setNewRegionBox(null);
@@ -873,13 +1079,55 @@ export function StepReviewMapping({ draft, locked, onChange, invoke }: Props) {
                             title={`${r.label} (${r.type} · ${r.role || "region"})`}
                           >
                             <span className={`collector-region-tag ${r.type.toLowerCase()}`}>
-                              {r.role ? `${r.role.toUpperCase()} (${r.type})` : r.type}
+                              {r.type === "FREE" ? "FREE" : `${r.type}${r.groupTag ? ` · ${r.groupTag}` : ""}`}
                             </span>
+
+                            {/* Resize handles in EDIT mode */}
+                            {isSelected && regionInteractionMode === "edit" && (
+                              <>
+                                <div
+                                  className="collector-resize-handle nw"
+                                  onPointerDown={(e) => {
+                                    e.stopPropagation();
+                                    setResizingHandle("nw");
+                                    const coords = getCoordsFromPointer(e);
+                                    setResizeStart({ x: coords.x, y: coords.y, initialBox: originalBox });
+                                  }}
+                                />
+                                <div
+                                  className="collector-resize-handle ne"
+                                  onPointerDown={(e) => {
+                                    e.stopPropagation();
+                                    setResizingHandle("ne");
+                                    const coords = getCoordsFromPointer(e);
+                                    setResizeStart({ x: coords.x, y: coords.y, initialBox: originalBox });
+                                  }}
+                                />
+                                <div
+                                  className="collector-resize-handle sw"
+                                  onPointerDown={(e) => {
+                                    e.stopPropagation();
+                                    setResizingHandle("sw");
+                                    const coords = getCoordsFromPointer(e);
+                                    setResizeStart({ x: coords.x, y: coords.y, initialBox: originalBox });
+                                  }}
+                                />
+                                <div
+                                  className="collector-resize-handle se"
+                                  onPointerDown={(e) => {
+                                    e.stopPropagation();
+                                    setResizingHandle("se");
+                                    const coords = getCoordsFromPointer(e);
+                                    setResizeStart({ x: coords.x, y: coords.y, initialBox: originalBox });
+                                  }}
+                                />
+                              </>
+                            )}
                           </div>
                         );
                       })}
 
-                      {/* Current drawing rectangle */}
+                      {/* Live dragging rectangle */}
                       {isDrawing && drawStart && drawCurrent && (
                         <div
                           className="collector-region-box drawing"
@@ -892,42 +1140,27 @@ export function StepReviewMapping({ draft, locked, onChange, invoke }: Props) {
                         />
                       )}
 
-                      {/* Subtle OCR boxes in regions mode to allow clicking OCR blocks into anchors */}
-                      {!isDrawing &&
-                        activeSegments.map((s) => {
-                          const w = Math.max(1, imageDims.width);
-                          const h = Math.max(1, imageDims.height);
-                          return (
-                            <div
-                              key={s.id}
-                              className="collector-ocr-box"
-                              style={{
-                                position: "absolute",
-                                left: `${(s.bbox.x / w) * 100}%`,
-                                top: `${(s.bbox.y / h) * 100}%`,
-                                width: `${(s.bbox.width / w) * 100}%`,
-                                height: `${(s.bbox.height / h) * 100}%`,
-                                opacity: 0.35,
-                              }}
-                              onClick={(e) => {
-                                e.stopPropagation();
-                                const isTop = s.bbox.y < imageDims.height * 0.35;
-                                const isBottom = s.bbox.y > imageDims.height * 0.65;
-                                handleCreateRegionFromOcr(
-                                  s,
-                                  isTop || isBottom ? "STATIC" : "DYNAMIC",
-                                  isTop ? "header" : isBottom ? "footer" : "content",
-                                );
-                              }}
-                              title={`Click to create region from "${s.text.slice(0, 30)}"`}
-                            />
-                          );
-                        })}
+                      {/* Pending confirmed new region box */}
+                      {!isDrawing && newRegionBox && (
+                        <div
+                          className={`collector-region-box ${newRegionType.toLowerCase()} selected`}
+                          style={{
+                            left: `${(newRegionBox.x / imageDims.width) * 100}%`,
+                            top: `${(newRegionBox.y / imageDims.height) * 100}%`,
+                            width: `${(newRegionBox.width / imageDims.width) * 100}%`,
+                            height: `${(newRegionBox.height / imageDims.height) * 100}%`,
+                          }}
+                        >
+                          <span className={`collector-region-tag ${newRegionType.toLowerCase()}`}>
+                            NEW {newRegionType}
+                          </span>
+                        </div>
+                      )}
                     </div>
                   )}
 
-                  {/* OCR Fields Overlay (in "fields" mode) */}
-                  {reviewMode === "fields" && active.ocr && (
+                  {/* STAGE 2B — OCR Field Mapping Overlay */}
+                  {step2Stage === "fields" && active.ocr && (
                     <div className="collector-ocr-overlay">
                       {activeSegments.map((s) => {
                         const mappedVar = getMappedVariableForSegment(s);
@@ -965,12 +1198,12 @@ export function StepReviewMapping({ draft, locked, onChange, invoke }: Props) {
               )}
             </div>
 
-            {/* Docked inspectors below the screenshot */}
-            {reviewMode === "regions" && newRegionBox && (
+            {/* STAGE 2A — Docked Region Editor (New Region Creation) */}
+            {step2Stage === "regions" && newRegionBox && (
               <div className="collector-selected-segment-dock">
                 <div className="collector-dock-head">
                   <div style={{ display: "flex", gap: "8px", alignItems: "center" }}>
-                    <b>Define New Region</b>
+                    <b>Define Region Anchor</b>
                     <small style={{ color: "#7f93ab" }}>
                       [{newRegionBox.width}×{newRegionBox.height} at x:{newRegionBox.x}, y:{newRegionBox.y}]
                     </small>
@@ -982,26 +1215,44 @@ export function StepReviewMapping({ draft, locked, onChange, invoke }: Props) {
                     <b>Type:</b>
                     <select
                       value={newRegionType}
-                      onChange={(e) => setNewRegionType(e.target.value as CollectorRegionType)}
+                      onChange={(e) => {
+                        const t = e.target.value as CollectorRegionType;
+                        setNewRegionType(t);
+                        if (t === "BEGIN") {
+                          setNewRegionRole("header");
+                          setNewRegionLabel(newRegionGroupTag ? `${newRegionGroupTag} Begin` : "Begin Anchor");
+                        } else if (t === "END") {
+                          setNewRegionRole("footer");
+                          setNewRegionLabel(newRegionGroupTag ? `${newRegionGroupTag} End` : "End Anchor");
+                        } else {
+                          setNewRegionRole("custom");
+                          setNewRegionLabel("Free Region");
+                        }
+                      }}
                     >
-                      <option value="STATIC">STATIC ANCHOR</option>
-                      <option value="DYNAMIC">DYNAMIC SCOPE</option>
+                      <option value="BEGIN">BEGIN ANCHOR</option>
+                      <option value="END">END ANCHOR</option>
+                      <option value="FREE">FREE REGION</option>
                     </select>
                   </label>
-                  <label style={{ display: "flex", gap: "4px", alignItems: "center", fontSize: "11px" }}>
-                    <b>Role:</b>
-                    <select
-                      value={newRegionRole}
-                      onChange={(e) => setNewRegionRole(e.target.value as CollectorRegionRole)}
-                    >
-                      <option value="header">Header</option>
-                      <option value="footer">Footer</option>
-                      <option value="content">Content Body</option>
-                      <option value="actions">Actions</option>
-                      <option value="custom">Custom</option>
-                    </select>
-                  </label>
-                  <label style={{ display: "flex", gap: "4px", alignItems: "center", fontSize: "11px", flex: 1 }}>
+                  {newRegionType !== "FREE" && (
+                    <label style={{ display: "flex", gap: "4px", alignItems: "center", fontSize: "11px" }}>
+                      <b>Group Tag:</b>
+                      <input
+                        type="text"
+                        value={newRegionGroupTag}
+                        placeholder="e.g. post-main"
+                        onChange={(e) => {
+                          const tag = e.target.value;
+                          setNewRegionGroupTag(tag);
+                          if (newRegionType === "BEGIN") setNewRegionLabel(`${tag} Begin`);
+                          if (newRegionType === "END") setNewRegionLabel(`${tag} End`);
+                        }}
+                        style={{ width: "110px", padding: "2px 6px", fontSize: "11px" }}
+                      />
+                    </label>
+                  )}
+                  <label style={{ display: "flex", gap: "4px", alignItems: "center", fontSize: "11px", flex: 1, minWidth: "150px" }}>
                     <b>Label:</b>
                     <input
                       type="text"
@@ -1012,29 +1263,37 @@ export function StepReviewMapping({ draft, locked, onChange, invoke }: Props) {
                     />
                   </label>
                 </div>
+
+                {/* Candidate Variable Checkbox UI — Compact Responsive Grid */}
                 {draft.variables.length > 0 && (
-                  <div style={{ marginTop: "4px", display: "flex", gap: "8px", alignItems: "center", flexWrap: "wrap" }}>
+                  <div style={{ marginTop: "6px" }}>
                     <small style={{ color: "#7f93ab" }}>Candidate Variables:</small>
-                    {draft.variables.map((v) => {
-                      const checked = newRegionVars.includes(v.key);
-                      return (
-                        <label key={v.id} style={{ fontSize: "11px", display: "inline-flex", gap: "3px" }}>
-                          <input
-                            type="checkbox"
-                            checked={checked}
-                            onChange={() =>
-                              setNewRegionVars((prev) =>
-                                checked ? prev.filter((k) => k !== v.key) : [...prev, v.key],
-                              )
-                            }
-                          />
-                          {v.label}
-                        </label>
-                      );
-                    })}
+                    <div className="collector-var-checkbox-grid">
+                      {draft.variables.map((v) => {
+                        const checked = newRegionVars.includes(v.key);
+                        return (
+                          <label
+                            key={v.id}
+                            className={`collector-var-checkbox-item ${checked ? "checked" : ""}`}
+                            title={`${v.label} (${v.key})`}
+                          >
+                            <input
+                              type="checkbox"
+                              checked={checked}
+                              onChange={() =>
+                                setNewRegionVars((prev) =>
+                                  checked ? prev.filter((k) => k !== v.key) : [...prev, v.key],
+                                )
+                              }
+                            />
+                            <span>{v.label}</span>
+                          </label>
+                        );
+                      })}
+                    </div>
                   </div>
                 )}
-                <div style={{ display: "flex", gap: "6px", marginTop: "6px" }}>
+                <div style={{ display: "flex", gap: "6px", marginTop: "8px" }}>
                   <button type="button" className="primary" onClick={handleSaveRegion}>
                     Save Region
                   </button>
@@ -1045,13 +1304,19 @@ export function StepReviewMapping({ draft, locked, onChange, invoke }: Props) {
               </div>
             )}
 
-            {reviewMode === "regions" && !newRegionBox && selectedRegion && (
+            {/* STAGE 2A — Selected Region Editor in Dock (Requirement 2) */}
+            {step2Stage === "regions" && !newRegionBox && selectedRegion && (
               <div className="collector-selected-segment-dock">
                 <div className="collector-dock-head">
                   <div style={{ display: "flex", gap: "6px", alignItems: "center" }}>
-                    <span className={`script-badge ${selectedRegion.type === "STATIC" ? "badge-active" : "badge-draft"}`}>
-                      {selectedRegion.type} · {selectedRegion.role?.toUpperCase()}
+                    <span className={`script-badge ${selectedRegion.type === "BEGIN" ? "badge-active" : selectedRegion.type === "END" ? "badge-draft" : ""}`}>
+                      {selectedRegion.type}
                     </span>
+                    {selectedRegion.groupTag && (
+                      <span className="collector-group-badge">
+                        Group: {selectedRegion.groupTag}
+                      </span>
+                    )}
                     <b>{selectedRegion.label}</b>
                     <small style={{ color: "#7f93ab" }}>
                       [relX: {Math.round(selectedRegion.geometry.relX * 100)}%, relY: {Math.round(selectedRegion.geometry.relY * 100)}%]
@@ -1059,23 +1324,108 @@ export function StepReviewMapping({ draft, locked, onChange, invoke }: Props) {
                   </div>
                   <button type="button" className="close-btn" onClick={() => setSelectedRegionId(undefined)}>✕</button>
                 </div>
-                {selectedRegion.candidateVariableKeys.length > 0 && (
-                  <div style={{ fontSize: "11px", color: "#9fb3c8" }}>
-                    Variables: {selectedRegion.candidateVariableKeys.join(", ")}
+
+                {/* Editable Properties Grid: Type, Group Tag, Label */}
+                <div className="collector-region-edit-grid">
+                  <div className="collector-region-edit-row">
+                    <label>
+                      <b>Type:</b>
+                      <select
+                        value={selectedRegion.type}
+                        onChange={(e) => {
+                          const nextType = e.target.value as CollectorRegionType;
+                          handleUpdateRegionProps(selectedRegion.id, {
+                            type: nextType,
+                            groupTag: nextType === "FREE" ? undefined : (selectedRegion.groupTag || "post-main"),
+                            role: nextType === "BEGIN" ? "header" : nextType === "END" ? "footer" : "custom",
+                          });
+                        }}
+                      >
+                        <option value="BEGIN">BEGIN ANCHOR</option>
+                        <option value="END">END ANCHOR</option>
+                        <option value="FREE">FREE REGION</option>
+                        {selectedRegion.type === "STATIC" && <option value="STATIC">STATIC (Legacy)</option>}
+                        {selectedRegion.type === "DYNAMIC" && <option value="DYNAMIC">DYNAMIC (Legacy)</option>}
+                      </select>
+                    </label>
+
+                    {selectedRegion.type !== "FREE" && (
+                      <label>
+                        <b>Group Tag:</b>
+                        <input
+                          type="text"
+                          value={selectedRegion.groupTag ?? ""}
+                          placeholder="e.g. post-main"
+                          onChange={(e) =>
+                            handleUpdateRegionProps(selectedRegion.id, {
+                              groupTag: e.target.value.trim() || undefined,
+                            })
+                          }
+                          style={{ width: "110px", padding: "2px 6px", fontSize: "11px" }}
+                        />
+                      </label>
+                    )}
+
+                    <label style={{ flex: 1, minWidth: "150px" }}>
+                      <b>Label:</b>
+                      <input
+                        type="text"
+                        value={selectedRegion.label}
+                        onChange={(e) =>
+                          handleUpdateRegionProps(selectedRegion.id, { label: e.target.value })
+                        }
+                        style={{ flex: 1, padding: "2px 6px", fontSize: "11px" }}
+                      />
+                    </label>
                   </div>
-                )}
-                {selectedRegion.evidence && (
-                  <span className="collector-evidence-badge">
-                    Evidence: {selectedRegion.evidence}
-                  </span>
-                )}
-                <div style={{ display: "flex", gap: "6px", marginTop: "6px" }}>
+
+                  {/* Candidate Variables Checkbox Grid (Requirement 3) */}
+                  {draft.variables.length > 0 && (
+                    <div>
+                      <small style={{ color: "#7f93ab" }}>Candidate Variables:</small>
+                      <div className="collector-var-checkbox-grid">
+                        {draft.variables.map((v) => {
+                          const checked = selectedRegion.candidateVariableKeys.includes(v.key);
+                          return (
+                            <label
+                              key={v.id}
+                              className={`collector-var-checkbox-item ${checked ? "checked" : ""}`}
+                              title={`${v.label} (${v.key})`}
+                            >
+                              <input
+                                type="checkbox"
+                                checked={checked}
+                                onChange={() => {
+                                  const nextKeys = checked
+                                    ? selectedRegion.candidateVariableKeys.filter((k) => k !== v.key)
+                                    : [...selectedRegion.candidateVariableKeys, v.key];
+                                  handleUpdateRegionProps(selectedRegion.id, {
+                                    candidateVariableKeys: nextKeys,
+                                  });
+                                }}
+                              />
+                              <span>{v.label}</span>
+                            </label>
+                          );
+                        })}
+                      </div>
+                    </div>
+                  )}
+
+                  {selectedRegion.evidence && (
+                    <span className="collector-evidence-badge">
+                      Evidence: {selectedRegion.evidence}
+                    </span>
+                  )}
+                </div>
+
+                <div style={{ display: "flex", gap: "6px", marginTop: "8px" }}>
                   {!selectedRegion.confirmed && (
                     <button type="button" className="primary" onClick={() => handleConfirmRegion(selectedRegion.id)}>
                       Confirm Anchor
                     </button>
                   )}
-                  <button type="button" onClick={() => handleDeleteRegion(selectedRegion.id)}>
+                  <button type="button" onClick={() => setRegionPendingDelete(selectedRegion)}>
                     Delete Region
                   </button>
                   <button type="button" onClick={() => setSelectedRegionId(undefined)}>
@@ -1085,14 +1435,17 @@ export function StepReviewMapping({ draft, locked, onChange, invoke }: Props) {
               </div>
             )}
 
-            {reviewMode === "regions" && !newRegionBox && !selectedRegion && (
+            {/* STAGE 2A — Dock Placeholder */}
+            {step2Stage === "regions" && !newRegionBox && !selectedRegion && (
               <div className="collector-dock-placeholder">
-                <span>Drag mouse on the screenshot to define a <b>STATIC</b> anchor or <b>DYNAMIC</b> content scope. Or click any OCR text block.</span>
+                <span>
+                  Switch to <b>DRAW (✏️)</b> to drag an anchor rectangle on the screenshot, or select an existing region in <b>VIEW (🔍)</b> / <b>EDIT (📐)</b> mode.
+                </span>
               </div>
             )}
 
-            {/* In "fields" mode: Existing OCR Selected Segment Dock */}
-            {reviewMode === "fields" && (
+            {/* STAGE 2B — Docked Selected OCR Segment */}
+            {step2Stage === "fields" && (
               selectedSegment ? (
                 <div className="collector-selected-segment-dock">
                   <div className="collector-dock-head">
@@ -1135,13 +1488,6 @@ export function StepReviewMapping({ draft, locked, onChange, invoke }: Props) {
                         + Create Variable
                       </button>
                     )}
-                    <button
-                      type="button"
-                      disabled={locked}
-                      onClick={() => handleCreateRegionFromOcr(selectedSegment, "STATIC", "header")}
-                    >
-                      + Make Static Anchor
-                    </button>
                     {draft.variables.length > 0 && (
                       <div style={{ display: "flex", gap: "4px", alignItems: "center", flex: 1 }}>
                         <select
@@ -1195,23 +1541,24 @@ export function StepReviewMapping({ draft, locked, onChange, invoke }: Props) {
 
             <small className="collector-mock-preview-label" style={{ marginTop: "4px" }}>
               {realCapture
-                ? `Real Browser Core capture · screenshot + ${reviewMode === "regions" ? "DOM region bounds" : "OCR overlay"}`
-                : `Mock preview · screenshot + ${reviewMode === "regions" ? "DOM region bounds" : "OCR overlay"}`}
+                ? `Real Browser Core capture · screenshot + ${step2Stage === "regions" ? "DOM region bounds" : "OCR overlay"}`
+                : `Mock preview · screenshot + ${step2Stage === "regions" ? "DOM region bounds" : "OCR overlay"}`}
             </small>
           </div>
 
           {/* Right Pane (~32%) */}
           <div className="collector-review-editor-pane" aria-label="Variables & Mappings">
-            {reviewMode === "regions" ? (
+            {/* STAGE 2A — Region Teaching Sidebar */}
+            {step2Stage === "regions" ? (
               <>
                 <div className="collector-mapping-toolbar">
-                  <b>Visual &amp; DOM Regions</b>
+                  <b>Region Teaching (2A)</b>
                   {!isTeaching && (
                     <button
                       type="button"
                       disabled={locked}
                       onClick={handleApplyLearnedAnchors}
-                      title="Apply confirmed static anchors from teaching reference"
+                      title="Apply confirmed anchors from teaching reference"
                     >
                       Apply Learned Anchors
                     </button>
@@ -1220,19 +1567,19 @@ export function StepReviewMapping({ draft, locked, onChange, invoke }: Props) {
 
                 {isTeaching ? (
                   <p className="collector-banner ok" role="status">
-                    Image #1 — Manual Teaching Reference. Define STATIC anchors (e.g. Header, Footer) and DYNAMIC content scopes.
+                    Teaching Reference: Draw <b>BEGIN</b> and <b>END</b> anchors with matching group tags on the screenshot to discover the post container.
                   </p>
                 ) : (
                   <p className="collector-banner" role="status">
-                    Image #{activeIndex + 1} — Matching learned static anchors across examples.
+                    Matching learned anchor groups across examples.
                   </p>
                 )}
 
-                {/* Region list */}
-                <div className="collector-variable-list" style={{ maxHeight: "260px" }}>
+                {/* Section A: Defined Region List */}
+                <div className="collector-variable-list" style={{ maxHeight: "250px" }}>
                   {activeRegions.length === 0 ? (
                     <div className="empty-tags-box" style={{ padding: "12px", textAlign: "center" }}>
-                      No regions defined yet. Drag on the screenshot to create a region or click an OCR block.
+                      No regions defined. Switch to DRAW (✏️) to draw an anchor on the screenshot.
                     </div>
                   ) : (
                     activeRegions.map((r) => {
@@ -1241,9 +1588,14 @@ export function StepReviewMapping({ draft, locked, onChange, invoke }: Props) {
                         <div key={r.id} className={`collector-region-card ${r.type.toLowerCase()} ${isSel ? "selected" : ""}`}>
                           <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
                             <div style={{ display: "flex", gap: "6px", alignItems: "center" }}>
-                              <span className={`script-badge ${r.type === "STATIC" ? "badge-active" : "badge-draft"}`}>
+                              <span className={`script-badge ${r.type === "BEGIN" ? "badge-active" : r.type === "END" ? "badge-draft" : ""}`}>
                                 {r.type}
                               </span>
+                              {r.groupTag && (
+                                <span className="collector-group-badge">
+                                  Group: {r.groupTag}
+                                </span>
+                              )}
                               <b>{r.label}</b>
                             </div>
                             <small style={{ color: "#7f93ab" }}>{r.role || "region"}</small>
@@ -1256,21 +1608,25 @@ export function StepReviewMapping({ draft, locked, onChange, invoke }: Props) {
                               Variables: {r.candidateVariableKeys.join(", ")}
                             </div>
                           )}
-                          {r.evidence && (
-                            <span className="collector-evidence-badge">
-                              {r.evidence}
-                            </span>
-                          )}
                           <div style={{ display: "flex", gap: "6px", marginTop: "4px" }}>
                             {!r.confirmed && (
                               <button type="button" className="primary" onClick={() => handleConfirmRegion(r.id)}>
-                                Confirm
+                                Confirm Anchor
                               </button>
                             )}
                             {r.confirmed && (
                               <span className="script-badge badge-active">Confirmed</span>
                             )}
-                            <button type="button" onClick={() => handleDeleteRegion(r.id)}>
+                            <button
+                              type="button"
+                              onClick={() => {
+                                setSelectedRegionId(r.id);
+                                setRegionInteractionMode("edit");
+                              }}
+                            >
+                              Edit
+                            </button>
+                            <button type="button" onClick={() => setRegionPendingDelete(r)}>
                               Delete
                             </button>
                           </div>
@@ -1280,62 +1636,61 @@ export function StepReviewMapping({ draft, locked, onChange, invoke }: Props) {
                   )}
                 </div>
 
-                {/* Post Container Verification & Dynamic HTML Output */}
-                <div className={`collector-container-card ${verifiedContainer?.containerId ? "verified" : verifiedContainer?.rejectionReason ? "rejected" : "needs_attention"}`}>
-                  <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
-                    <b>Post Container Verification</b>
-                    <span className={`script-badge ${verifiedContainer?.containerId ? "badge-active" : "badge-draft"}`}>
-                      {verifiedContainer?.containerId ? "Verified" : verifiedContainer?.rejectionReason ? "Rejected" : "Unverified"}
-                    </span>
-                  </div>
-
-                  {domError && <div className="collector-banner warn">{domError}</div>}
-
-                  {verifiedContainer?.containerId ? (
-                    <>
-                      <div style={{ fontSize: "12px", color: "#68d6a6" }}>
-                        Container: <code>&lt;{verifiedContainer.selector}&gt;</code> (Confidence: {verifiedContainer.confidence}%)
-                      </div>
-                      <ul style={{ margin: "2px 0 6px 16px", padding: 0, fontSize: "11px", color: "#9fb3c8" }}>
-                        {verifiedContainer.evidence.map((ev, i) => <li key={i}>{ev}</li>)}
-                      </ul>
-                      {dynamicExtraction && (
-                        <div style={{ background: "#090e15", padding: "6px", borderRadius: "4px", border: "1px solid #1f2c3d" }}>
-                          <b style={{ fontSize: "11px", color: "#68d6a6" }}>Extracted Dynamic Subtree:</b>
-                          <div style={{ fontSize: "11px", marginTop: "4px", color: "#fff" }}>
-                            {dynamicExtraction.extractedText?.slice(0, 150) || "No text"}
+                {/* Section B: Anchor Group Status Summary */}
+                {(() => {
+                  const groupAnalysis = verifyAnchorGroups(activeRegions);
+                  if (activeRegions.length === 0) return null;
+                  return (
+                    <div className="collector-group-summary">
+                      <b>Anchor Groups ({groupAnalysis.groups.size}):</b>
+                      {Array.from(groupAnalysis.groups.entries()).map(([tag, g]) => {
+                        const isComplete = Boolean(g.begin && g.end && !g.error);
+                        return (
+                          <div key={tag} className="collector-group-summary-item">
+                            <span>
+                              <b>Group &quot;{tag}&quot;</b>: {g.begin ? "BEGIN ✓" : "BEGIN ✗"} · {g.end ? "END ✓" : "END ✗"}
+                            </span>
+                            <span className={`script-badge ${isComplete ? "badge-active" : "badge-draft"}`}>
+                              {isComplete ? "Ready" : "Incomplete"}
+                            </span>
                           </div>
-                          <div style={{ fontSize: "10px", color: "#7f93ab", marginTop: "4px" }}>
-                            Media: {dynamicExtraction.mediaUrls?.length ?? 0} · Links: {dynamicExtraction.linkPreviews?.length ?? 0}
-                            {dynamicExtraction.hasCollapsedText && " · (Collapsed 'See more' detected)"}
-                          </div>
+                        );
+                      })}
+                      {groupAnalysis.freeRegions.length > 0 && (
+                        <div style={{ fontSize: "10px", color: "#94a3b8" }}>
+                          FREE regions: {groupAnalysis.freeRegions.length} (independent)
                         </div>
                       )}
-                    </>
-                  ) : (
-                    <>
-                      <p className="hint">
-                        {verifiedContainer?.rejectionReason
-                          ? `Rejection: ${verifiedContainer.rejectionReason}`
-                          : "Define static anchors (Header, Footer) and click below to verify the single-post DOM container."}
-                      </p>
-                      <button
-                        type="button"
-                        className="primary"
-                        disabled={locked || domLoading}
-                        onClick={() => void handleVerifyPostContainer()}
-                      >
-                        {domLoading ? "Verifying DOM..." : "Verify Post Container & Dynamic HTML"}
-                      </button>
-                    </>
-                  )}
-                </div>
+                      {groupAnalysis.errors.length > 0 && (
+                        <div style={{ color: "#f87171", fontSize: "10px", marginTop: "2px" }}>
+                          {groupAnalysis.errors[0]}
+                        </div>
+                      )}
+                    </div>
+                  );
+                })()}
+
+                {/* Sequential Stage Navigation */}
+                <button
+                  type="button"
+                  className="primary"
+                  style={{ width: "100%", marginTop: "10px" }}
+                  disabled={locked || !groupAnalysis.valid}
+                  onClick={() => setStep2Stage("fields")}
+                  title={
+                    groupAnalysis.valid
+                      ? "Advance to OCR Field Mapping"
+                      : "Configure at least one complete anchor group (paired BEGIN and END) to continue"
+                  }
+                >
+                  Continue to Field Mapping →
+                </button>
               </>
             ) : (
-              /* Fields Mode: Existing Variables list */
+              /* STAGE 2B — Field Mapping Sidebar */
               <>
                 <div className="collector-mapping-toolbar">
-                  <b>Variables</b>
+                  <b>Field Mapping (2B)</b>
                   {isTeaching && (
                     <button type="button" disabled={locked} onClick={addVariable}>
                       + Variable
@@ -1354,13 +1709,42 @@ export function StepReviewMapping({ draft, locked, onChange, invoke }: Props) {
                     </button>
                   )}
                 </div>
+
+                {/* Screenshot Reference Crop Status for Scoped OCR */}
+                {!referenceCrop ? (
+                  <div className="collector-banner warn" role="alert" style={{ display: "flex", flexDirection: "column", gap: "6px" }}>
+                    <span>
+                      <b>Anchor group configuration incomplete:</b> Configure paired BEGIN and END anchors in Stage 2A to derive reference crop bounds for OCR.
+                    </span>
+                    <button type="button" className="primary" onClick={() => setStep2Stage("regions")} style={{ alignSelf: "flex-start" }}>
+                      ← Return to Stage 2A (Region Teaching)
+                    </button>
+                  </div>
+                ) : (
+                  <div style={{ background: "#091420", padding: "8px", borderRadius: "4px", border: "1px solid #1e3a5f", marginBottom: "8px" }}>
+                    <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+                      <b style={{ fontSize: "11px", color: "#38bdf8" }}>Reference Crop ({referenceCrop.groupTag})</b>
+                      <button
+                        type="button"
+                        disabled={locked || ocrLoading}
+                        onClick={() => void runOcr(true)}
+                        style={{ fontSize: "10px", padding: "2px 8px" }}
+                      >
+                        {ocrLoading ? "Running OCR..." : "Re-run Scoped OCR"}
+                      </button>
+                    </div>
+                    <small style={{ color: "#7f93ab", display: "block", marginTop: "2px" }}>
+                      Crop Bounds: {referenceCrop.crop.width}×{referenceCrop.crop.height} at [{referenceCrop.crop.x}, {referenceCrop.crop.y}] ({referenceCrop.source === "legacy_static" ? "Legacy Static" : "Anchor Group"})
+                    </small>
+                  </div>
+                )}
                 {isTeaching ? (
                   <p className="collector-banner ok" role="status">
-                    Image #1 — Manual Teaching Reference. Click OCR blocks on the screenshot to assign variables.
+                    Teaching Reference: Click OCR blocks on screenshot to map to Variables.
                   </p>
                 ) : (
                   <p className="collector-banner" role="status">
-                    Image #{activeIndex + 1} — Rules learned from confirmed reference are applied. Confirm or correct exceptions.
+                    Rules learned from confirmed reference are applied. Confirm or correct exceptions.
                   </p>
                 )}
                 {audit.note && audit.status !== "excluded" && (
@@ -1552,6 +1936,7 @@ export function StepReviewMapping({ draft, locked, onChange, invoke }: Props) {
               </>
             )}
 
+            {/* Bottom Audit Bar: Confirm Audit, Mark Needs Attention, Exclude Item */}
             <div className="collector-review-confirm-bar">
               <button
                 type="button"
@@ -1639,6 +2024,61 @@ export function StepReviewMapping({ draft, locked, onChange, invoke }: Props) {
             )}
           </div>
         </div>
+      )}
+
+      {/* Safe Region Deletion Confirmation Popover Modal */}
+      {regionPendingDelete && (
+        <UiPopover
+          variant="modal"
+          label="Delete Region Anchor"
+          className="unsaved-confirm"
+          close={() => setRegionPendingDelete(null)}
+        >
+          <div className="popover-heading">
+            <b>Delete Region Anchor?</b>
+            <button type="button" onClick={() => setRegionPendingDelete(null)}>×</button>
+          </div>
+          <div style={{ padding: "8px 0" }}>
+            <p style={{ margin: "0 0 8px" }}>
+              Are you sure you want to delete region <b>{regionPendingDelete.label}</b>?
+            </p>
+            <div style={{ fontSize: "12px", color: "#9fb3c8", display: "flex", gap: "6px", alignItems: "center", marginBottom: "8px" }}>
+              <span className={`script-badge ${regionPendingDelete.type === "BEGIN" ? "badge-active" : regionPendingDelete.type === "END" ? "badge-draft" : ""}`}>
+                {regionPendingDelete.type}
+              </span>
+              {regionPendingDelete.groupTag && (
+                <span className="collector-group-badge">
+                  Group: {regionPendingDelete.groupTag}
+                </span>
+              )}
+            </div>
+            {deletionWarning && (
+              <div className="collector-banner warn" style={{ fontSize: "11px", margin: "6px 0" }}>
+                <b>Warning:</b> {deletionWarning}
+              </div>
+            )}
+          </div>
+          <div className="popover-footer" style={{ display: "flex", justifyContent: "flex-end", gap: "8px" }}>
+            <button
+              type="button"
+              autoFocus
+              onClick={() => setRegionPendingDelete(null)}
+            >
+              Cancel
+            </button>
+            <button
+              type="button"
+              className="primary"
+              style={{ background: "#dc2626", borderColor: "#b91c1c" }}
+              onClick={() => {
+                handleDeleteRegion(regionPendingDelete.id);
+                setRegionPendingDelete(null);
+              }}
+            >
+              Delete Region
+            </button>
+          </div>
+        </UiPopover>
       )}
     </div>
   );

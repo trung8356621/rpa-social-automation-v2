@@ -78,10 +78,45 @@ export function calculateIoU(a: Rect, b: Rect): number {
 // 2. REGION CRUD & TEACHING MODEL
 // ---------------------------------------------------------------------------
 
+function defaultLabelForType(type: CollectorRegionType, groupTag?: string): string {
+  switch (type) {
+    case "BEGIN":
+      return groupTag ? `${groupTag} Begin` : "Begin Anchor";
+    case "END":
+      return groupTag ? `${groupTag} End` : "End Anchor";
+    case "FREE":
+      return "Free Region";
+    case "STATIC":
+      return "Static Anchor";
+    case "DYNAMIC":
+      return "Dynamic Content";
+    default:
+      return "Region";
+  }
+}
+
+function defaultRoleForType(type: CollectorRegionType): CollectorRegionRole {
+  switch (type) {
+    case "BEGIN":
+      return "header";
+    case "END":
+      return "footer";
+    case "FREE":
+      return "custom";
+    case "STATIC":
+      return "header";
+    case "DYNAMIC":
+      return "content";
+    default:
+      return "custom";
+  }
+}
+
 export function createCollectorRegion(opts: {
   captureItemId: string;
   type: CollectorRegionType;
   label: string;
+  groupTag?: string;
   role?: CollectorRegionRole;
   box: Rect;
   imageWidth: number;
@@ -92,12 +127,21 @@ export function createCollectorRegion(opts: {
   ocrConfidence?: number;
 }): CollectorRegion {
   const now = new Date().toISOString();
+  const rawTag = opts.groupTag?.trim();
+  const groupTag =
+    opts.type === "BEGIN" || opts.type === "END"
+      ? rawTag || "default"
+      : opts.type === "FREE"
+        ? undefined
+        : rawTag || undefined;
+
   return {
     id: cryptoRandomId(),
     captureItemId: opts.captureItemId,
     type: opts.type,
-    label: opts.label.trim() || (opts.type === "STATIC" ? "Static Anchor" : "Dynamic Content"),
-    role: opts.role ?? (opts.type === "STATIC" ? "header" : "content"),
+    label: opts.label.trim() || defaultLabelForType(opts.type, groupTag),
+    role: opts.role ?? defaultRoleForType(opts.type),
+    groupTag,
     geometry: normalizeGeometry(opts.box, opts.imageWidth, opts.imageHeight),
     originalRoi: opts.box,
     candidateVariableKeys: opts.candidateVariableKeys ?? [],
@@ -112,6 +156,236 @@ export function createCollectorRegion(opts: {
     createdAt: now,
     updatedAt: now,
   };
+}
+
+export function normalizeCollectorRegion(r: CollectorRegion): CollectorRegion {
+  if (r.type === "BEGIN" || r.type === "END") {
+    return {
+      ...r,
+      groupTag: r.groupTag?.trim() || "default",
+    };
+  }
+  if (r.type === "FREE") {
+    return {
+      ...r,
+      groupTag: undefined,
+    };
+  }
+  if (r.type === "STATIC") {
+    if (r.role === "footer" || r.label.toLowerCase().includes("footer") || r.label.toLowerCase().includes("end")) {
+      return {
+        ...r,
+        type: "END",
+        groupTag: r.groupTag?.trim() || "default",
+      };
+    }
+    if (r.role === "header" || r.label.toLowerCase().includes("header") || r.label.toLowerCase().includes("begin")) {
+      return {
+        ...r,
+        type: "BEGIN",
+        groupTag: r.groupTag?.trim() || "default",
+      };
+    }
+    return {
+      ...r,
+      type: "FREE",
+      groupTag: undefined,
+    };
+  }
+  if (r.type === "DYNAMIC") {
+    return {
+      ...r,
+      type: "FREE",
+      groupTag: undefined,
+    };
+  }
+  return r;
+}
+
+export function normalizeCollectorRegions(regions: CollectorRegion[]): CollectorRegion[] {
+  return (regions ?? []).map(normalizeCollectorRegion);
+}
+
+export type AnchorGroupVerificationResult = {
+  valid: boolean;
+  errors: string[];
+  groups: Map<
+    string,
+    {
+      groupTag: string;
+      begin?: CollectorRegion;
+      end?: CollectorRegion;
+      allRegions: CollectorRegion[];
+      error?: string;
+    }
+  >;
+  freeRegions: CollectorRegion[];
+};
+
+export function verifyAnchorGroups(
+  rawRegions: CollectorRegion[],
+): AnchorGroupVerificationResult {
+  const groups = new Map<
+    string,
+    {
+      groupTag: string;
+      begin?: CollectorRegion;
+      end?: CollectorRegion;
+      allRegions: CollectorRegion[];
+      error?: string;
+    }
+  >();
+  const freeRegions: CollectorRegion[] = [];
+  const errors: string[] = [];
+
+  for (const r of rawRegions) {
+    if (r.type === "FREE") {
+      freeRegions.push(r);
+      continue;
+    }
+    if (r.type === "DYNAMIC") {
+      freeRegions.push(r);
+      continue;
+    }
+
+    const tag = (r.groupTag ?? (r.type === "STATIC" ? "default" : "")).trim() || "default";
+
+    let entry = groups.get(tag);
+    if (!entry) {
+      entry = { groupTag: tag, allRegions: [] };
+      groups.set(tag, entry);
+    }
+    entry.allRegions.push(r);
+
+    const isBegin =
+      r.type === "BEGIN" ||
+      (r.type === "STATIC" && (r.role === "header" || r.label.toLowerCase().includes("header")));
+    const isEnd =
+      r.type === "END" ||
+      (r.type === "STATIC" && (r.role === "footer" || r.label.toLowerCase().includes("footer")));
+
+    if (isBegin) {
+      if (entry.begin) {
+        const err = `Group "${tag}" is ambiguous: multiple BEGIN anchors defined.`;
+        entry.error = err;
+        if (!errors.includes(err)) errors.push(err);
+      } else {
+        entry.begin = r;
+      }
+    } else if (isEnd) {
+      if (entry.end) {
+        const err = `Group "${tag}" is ambiguous: multiple END anchors defined.`;
+        entry.error = err;
+        if (!errors.includes(err)) errors.push(err);
+      } else {
+        entry.end = r;
+      }
+    } else if (r.type === "STATIC") {
+      if (!entry.begin) {
+        entry.begin = r;
+      } else if (!entry.end) {
+        entry.end = r;
+      }
+    }
+  }
+
+  for (const [tag, g] of groups.entries()) {
+    if (!g.begin) {
+      const err = `Group "${tag}" is incomplete: missing BEGIN anchor.`;
+      g.error = g.error ? `${g.error} ${err}` : err;
+      if (!errors.includes(err)) errors.push(err);
+    }
+    if (!g.end) {
+      const err = `Group "${tag}" is incomplete: missing END anchor.`;
+      g.error = g.error ? `${g.error} ${err}` : err;
+      if (!errors.includes(err)) errors.push(err);
+    }
+  }
+
+  if (groups.size === 0 && rawRegions.length > 0) {
+    errors.push(
+      "No anchor groups defined. Create paired BEGIN and END anchors with matching group tags to discover post containers.",
+    );
+  }
+
+  return {
+    valid: errors.length === 0 && groups.size > 0,
+    errors,
+    groups,
+    freeRegions,
+  };
+}
+
+export type DerivedReferenceCrop = {
+  crop: Rect;
+  groupTag: string;
+  source: "anchor_group" | "legacy_static";
+};
+
+/**
+ * Derive screenshot crop bounds directly from configured visual anchors.
+ * Completely decoupled from live DOM verification.
+ */
+export function deriveReferenceCropFromAnchors(
+  rawRegions: CollectorRegion[],
+  imageWidth: number,
+  imageHeight: number,
+  targetGroupTag?: string,
+): DerivedReferenceCrop | null {
+  const w = Math.max(1, imageWidth);
+  const h = Math.max(1, imageHeight);
+  const analysis = verifyAnchorGroups(rawRegions);
+
+  // 1. Complete anchor group matching
+  const candidateGroups = targetGroupTag
+    ? [analysis.groups.get(targetGroupTag)].filter(Boolean)
+    : Array.from(analysis.groups.values());
+
+  for (const group of candidateGroups) {
+    if (group && group.begin && group.end) {
+      const bBox = denormalizeGeometry(group.begin.geometry, w, h);
+      const eBox = denormalizeGeometry(group.end.geometry, w, h);
+      const minX = Math.max(0, Math.min(bBox.x, eBox.x));
+      const minY = Math.max(0, Math.min(bBox.y, eBox.y));
+      const maxX = Math.min(w, Math.max(bBox.x + bBox.width, eBox.x + eBox.width));
+      const maxY = Math.min(h, Math.max(bBox.y + bBox.height, eBox.y + eBox.height));
+      const width = Math.max(1, maxX - minX);
+      const height = Math.max(1, maxY - minY);
+      const isLegacy = group.begin.type === "STATIC" && group.end.type === "STATIC";
+      return {
+        crop: { x: minX, y: minY, width, height },
+        groupTag: group.groupTag,
+        source: isLegacy ? "legacy_static" : "anchor_group",
+      };
+    }
+  }
+
+  // 2. Fallback: Legacy STATIC regions
+  const staticRegions = rawRegions.filter((r) => r.type === "STATIC");
+  if (staticRegions.length > 0) {
+    let minX = w;
+    let minY = h;
+    let maxX = 0;
+    let maxY = 0;
+    for (const r of staticRegions) {
+      const box = denormalizeGeometry(r.geometry, w, h);
+      minX = Math.min(minX, box.x);
+      minY = Math.min(minY, box.y);
+      maxX = Math.max(maxX, box.x + box.width);
+      maxY = Math.max(maxY, box.y + box.height);
+    }
+    const cropX = Math.max(0, Math.min(w - 1, minX));
+    const cropY = Math.max(0, Math.min(h - 1, minY));
+    const cropW = Math.max(1, Math.min(w - cropX, maxX - cropX));
+    const cropH = Math.max(1, Math.min(h - cropY, maxY - cropY));
+    return {
+      crop: { x: cropX, y: cropY, width: cropW, height: cropH },
+      groupTag: "legacy",
+      source: "legacy_static",
+    };
+  }
+
+  return null;
 }
 
 // ---------------------------------------------------------------------------
@@ -129,14 +403,16 @@ export function matchLearnedRegions(
   imageWidth: number = 800,
   imageHeight: number = 1000,
 ): CollectorRegion[] {
-  // Filter only confirmed STATIC regions from teaching references
-  const confirmedStatic = referenceRegions.filter((r) => r.type === "STATIC" && r.confirmed);
-  if (!confirmedStatic.length) return [];
+  // Filter confirmed anchors from teaching references (BEGIN, END, FREE, STATIC)
+  const confirmedAnchors = referenceRegions.filter(
+    (r) => (r.type === "BEGIN" || r.type === "END" || r.type === "FREE" || r.type === "STATIC") && r.confirmed,
+  );
+  if (!confirmedAnchors.length) return [];
 
-  // Group confirmed references by role or label
+  // Group confirmed references by tag+type or role or label
   const roleGroups = new Map<string, CollectorRegion[]>();
-  for (const r of confirmedStatic) {
-    const key = r.role || r.label;
+  for (const r of confirmedAnchors) {
+    const key = `${r.type}_${r.groupTag || ""}_${r.role || r.label}`;
     const group = roleGroups.get(key) ?? [];
     group.push(r);
     roleGroups.set(key, group);
@@ -171,16 +447,17 @@ export function matchLearnedRegions(
     proposedRegions.push({
       id: cryptoRandomId(),
       captureItemId: targetCaptureId,
-      type: "STATIC",
+      type: latestRef.type,
       label: latestRef.label,
       role: latestRef.role,
+      groupTag: latestRef.groupTag,
       geometry: { ...geom },
       originalRoi: denormalizeGeometry(geom, imageWidth, imageHeight),
       candidateVariableKeys: [...latestRef.candidateVariableKeys],
       confirmed: false,
       simulatedProposal: true,
       confidence,
-      evidence: `Learned static anchor (${key}) matched with ${confidence}% confidence${
+      evidence: `Learned anchor (${latestRef.type}${latestRef.groupTag ? `:${latestRef.groupTag}` : ""}) matched with ${confidence}% confidence${
         textEvidence ? ` [${textEvidence}]` : ""
       }.`,
       relationships: latestRef.relationships ? [...latestRef.relationships] : [],
@@ -412,13 +689,88 @@ export function findVerifiedPostContainer(
     elementMap.set(el.id, el);
   }
 
-  // 1. Identify Header and Footer static regions
-  const headerRegion = staticRegions.find(
-    (r) => r.type === "STATIC" && (r.role === "header" || r.label.toLowerCase().includes("header")),
+  const scaleX = snapshot.viewport?.width ? imageWidth / snapshot.viewport.width : 1;
+  const scaleY = snapshot.viewport?.height ? imageHeight / snapshot.viewport.height : 1;
+  const offsetX = imageRoi ? imageRoi.x : 0;
+  const offsetY = imageRoi ? imageRoi.y : 0;
+
+  let currentGroupTag: string | undefined;
+  let headerRegion: CollectorRegion | undefined;
+  let footerRegion: CollectorRegion | undefined;
+
+  const hasModernOrGrouped = staticRegions.some(
+    (r) => r.type === "BEGIN" || r.type === "END" || r.type === "FREE" || Boolean(r.groupTag),
   );
-  const footerRegion = staticRegions.find(
-    (r) => r.type === "STATIC" && (r.role === "footer" || r.label.toLowerCase().includes("footer")),
-  );
+
+  if (hasModernOrGrouped) {
+    const analysis = verifyAnchorGroups(staticRegions);
+    if (analysis.errors.length > 0) {
+      return {
+        containerId: "",
+        tagName: "",
+        selector: "",
+        layoutContext,
+        confidence: 0,
+        evidence: analysis.errors,
+        headerMatched: false,
+        footerMatched: false,
+        isNestedSharedPost: false,
+        rejectionReason: analysis.errors[0],
+      };
+    }
+    if (analysis.groups.size === 0) {
+      return {
+        containerId: "",
+        tagName: "",
+        selector: "",
+        layoutContext,
+        confidence: 0,
+        evidence: [
+          "No anchor groups defined. Create paired BEGIN and END anchors with matching group tags to discover post containers.",
+        ],
+        headerMatched: false,
+        footerMatched: false,
+        isNestedSharedPost: false,
+        rejectionReason:
+          "No anchor groups defined. Create paired BEGIN and END anchors with matching group tags to discover post containers.",
+      };
+    }
+
+    const [tag, entry] = Array.from(analysis.groups.entries())[0]!;
+    currentGroupTag = tag;
+    headerRegion = entry.begin;
+    footerRegion = entry.end;
+  } else {
+    // Legacy STATIC anchors fallback (e.g. from existing test fixtures)
+    const staticList = staticRegions.filter((r) => r.type === "STATIC");
+    if (staticList.length === 0) {
+      return {
+        containerId: "",
+        tagName: "",
+        selector: "",
+        layoutContext,
+        confidence: 0,
+        evidence: [
+          "No anchor groups defined. Create paired BEGIN and END anchors with matching group tags to discover post containers.",
+        ],
+        headerMatched: false,
+        footerMatched: false,
+        isNestedSharedPost: false,
+        rejectionReason:
+          "No anchor groups defined. Create paired BEGIN and END anchors with matching group tags to discover post containers.",
+      };
+    }
+    headerRegion =
+      staticList.find(
+        (r) => r.role === "header" || r.label.toLowerCase().includes("header"),
+      ) ?? staticList[0];
+    footerRegion =
+      staticList.find(
+        (r) =>
+          r !== headerRegion &&
+          (r.role === "footer" || r.label.toLowerCase().includes("footer")),
+      ) ?? (staticList.length > 1 && staticList[1] !== headerRegion ? staticList[1] : undefined);
+  }
 
   // 2. Map visual regions to DOM elements
   const headerMatch = headerRegion
@@ -448,6 +800,7 @@ export function findVerifiedPostContainer(
         footerMatched: true,
         isNestedSharedPost: false,
         rejectionReason: "Inverted header/footer ordering",
+        groupTag: currentGroupTag,
       };
     }
 
@@ -465,6 +818,7 @@ export function findVerifiedPostContainer(
         footerMatched: true,
         isNestedSharedPost: false,
         rejectionReason: "Disjoint DOM subtrees",
+        groupTag: currentGroupTag,
       };
     }
 
@@ -491,6 +845,7 @@ export function findVerifiedPostContainer(
         footerMatched: true,
         isNestedSharedPost: false,
         rejectionReason: "Cross-post mismatch (broad feed ancestor)",
+        groupTag: currentGroupTag,
       };
     }
 
@@ -519,6 +874,7 @@ export function findVerifiedPostContainer(
         footerMatched: true,
         isNestedSharedPost: false,
         rejectionReason: "Encloses multiple post cards",
+        groupTag: currentGroupTag,
       };
     }
 
@@ -533,6 +889,13 @@ export function findVerifiedPostContainer(
       : lca.className
         ? `${lca.tagName.toLowerCase()}.${lca.className.split(/\s+/)[0]}`
         : lca.tagName.toLowerCase();
+
+    const containerRect: Rect = {
+      x: Math.max(0, Math.round((lca.rect.x - offsetX) * scaleX)),
+      y: Math.max(0, Math.round((lca.rect.y - offsetY) * scaleY)),
+      width: Math.max(1, Math.min(imageWidth, Math.round(lca.rect.width * scaleX))),
+      height: Math.max(1, Math.min(imageHeight, Math.round(lca.rect.height * scaleY))),
+    };
 
     return {
       containerId: lca.id,
@@ -549,6 +912,8 @@ export function findVerifiedPostContainer(
       footerMatched: true,
       isNestedSharedPost,
       outerHtmlSnippet: lca.outerHtmlSnippet,
+      groupTag: currentGroupTag,
+      rect: containerRect,
     };
   }
 
@@ -582,6 +947,13 @@ export function findVerifiedPostContainer(
           ? `${candidateCard.tagName.toLowerCase()}.${candidateCard.className.split(/\s+/)[0]}`
           : candidateCard.tagName.toLowerCase();
 
+      const containerRect: Rect = {
+        x: Math.max(0, Math.round((candidateCard.rect.x - offsetX) * scaleX)),
+        y: Math.max(0, Math.round((candidateCard.rect.y - offsetY) * scaleY)),
+        width: Math.max(1, Math.min(imageWidth, Math.round(candidateCard.rect.width * scaleX))),
+        height: Math.max(1, Math.min(imageHeight, Math.round(candidateCard.rect.height * scaleY))),
+      };
+
       return {
         containerId: candidateCard.id,
         tagName: candidateCard.tagName,
@@ -596,6 +968,8 @@ export function findVerifiedPostContainer(
         footerMatched: false,
         isNestedSharedPost: false,
         outerHtmlSnippet: candidateCard.outerHtmlSnippet,
+        groupTag: currentGroupTag,
+        rect: containerRect,
       };
     }
 
@@ -612,6 +986,7 @@ export function findVerifiedPostContainer(
       footerMatched: false,
       isNestedSharedPost: false,
       rejectionReason: "Ambiguous container boundary without footer",
+      groupTag: currentGroupTag,
     };
   }
 
@@ -627,6 +1002,7 @@ export function findVerifiedPostContainer(
     footerMatched: false,
     isNestedSharedPost: false,
     rejectionReason: "No static anchors matched",
+    groupTag: currentGroupTag,
   };
 }
 

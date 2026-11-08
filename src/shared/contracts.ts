@@ -87,6 +87,8 @@ export type OcrResult = {
   confidence: number;
   segments: OcrSegment[];
   language: "vie+eng";
+  cropOffset?: { x: number; y: number };
+  containerCrop?: Rect;
 };
 export type VisualEnvironment = { width: number; height: number; zoom: number };
 export type VisualTarget = {
@@ -438,7 +440,7 @@ export type Command =
   | { type: "seoOpsGetScriptRequests" }
   | { type: "openFlow"; id: string }
   | { type: "targetImage"; asset: string }
-  | { type: "ocrTarget"; asset: string }
+  | { type: "ocrTarget"; asset: string; crop?: Rect }
   | { type: "capture" }
   | { type: "pickUploadFiles" }
   | { type: "validateUploadFiles"; files?: unknown; unresolved?: boolean }

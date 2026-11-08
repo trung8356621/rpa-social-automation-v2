@@ -2664,7 +2664,56 @@ body[data-panel="shell"] .collector-capture-split > aside.collector-capture-tool
   flex-direction: column;
   gap: 8px;
 }
-/* C2.8 — Static / Dynamic Region Architecture & DOM Discovery Styles */
+/* C2.8 & C2.8.1 — Review Stages & Region Teaching UX */
+.collector-stage-indicator {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  background: #0d1520;
+  padding: 2px 6px;
+  border-radius: 8px;
+  border: 1px solid #2b394a;
+}
+.collector-stage-pill {
+  border: 1px solid transparent;
+  background: transparent;
+  color: #9fb3c8;
+  font-size: 11px;
+  font-weight: 600;
+  padding: 3px 8px;
+  border-radius: 5px;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  transition: all 0.15s ease;
+}
+.collector-stage-pill:hover {
+  background: #1a2535;
+  color: #f0f6fc;
+}
+.collector-stage-pill.active {
+  background: #1e3a5f;
+  color: #60a5fa;
+  border-color: #2563eb;
+}
+.collector-stage-pill .stage-num {
+  display: inline-block;
+  padding: 1px 4px;
+  font-size: 10px;
+  border-radius: 3px;
+  background: #2563eb;
+  color: #fff;
+  font-weight: 700;
+}
+.collector-stage-pill.active .stage-num {
+  background: #3b82f6;
+}
+.collector-stage-arrow {
+  color: #4b6282;
+  font-size: 11px;
+}
+
 .collector-mode-toggle {
   display: inline-flex;
   border: 1px solid #3b5068;
@@ -2680,17 +2729,43 @@ body[data-panel="shell"] .collector-capture-split > aside.collector-capture-tool
   background: transparent;
   color: #9fb3c8;
   cursor: pointer;
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  transition: all 0.15s ease;
+}
+.collector-mode-toggle button:hover {
+  background: #1a2535;
+  color: #f0f6fc;
 }
 .collector-mode-toggle button.active {
   background: #2563eb;
   color: #fff;
 }
+.collector-mode-toggle button:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+
+.collector-review-image-container.mode-draw {
+  cursor: crosshair;
+  user-select: none;
+  -webkit-user-select: none;
+  touch-action: none;
+}
+.collector-review-image-container.mode-view {
+  cursor: default;
+}
+.collector-review-image-container.mode-edit {
+  cursor: default;
+}
+
 .collector-region-box {
   position: absolute;
   box-sizing: border-box;
   cursor: pointer;
   pointer-events: auto;
-  transition: all 0.15s ease-in-out;
+  transition: box-shadow 0.15s ease-in-out;
   z-index: 15;
 }
 .collector-region-box.static {
@@ -2709,13 +2784,39 @@ body[data-panel="shell"] .collector-capture-split > aside.collector-capture-tool
 }
 .collector-region-box.selected {
   outline: 2px solid #60a5fa;
-  box-shadow: 0 0 8px rgba(96, 165, 250, 0.7);
+  box-shadow: 0 0 10px rgba(96, 165, 250, 0.8);
   z-index: 25;
 }
 .collector-region-box.drawing {
   border: 2px dashed #f59e0b;
   background: rgba(245, 158, 11, 0.2);
   pointer-events: none;
+  z-index: 30;
+}
+
+.collector-resize-handle {
+  position: absolute;
+  width: 8px;
+  height: 8px;
+  background: #60a5fa;
+  border: 1px solid #fff;
+  border-radius: 2px;
+  z-index: 35;
+  box-sizing: border-box;
+}
+.collector-resize-handle.nw { top: -4px; left: -4px; cursor: nwse-resize; }
+.collector-resize-handle.ne { top: -4px; right: -4px; cursor: nesw-resize; }
+.collector-resize-handle.sw { bottom: -4px; left: -4px; cursor: nesw-resize; }
+.collector-resize-handle.se { bottom: -4px; right: -4px; cursor: nwse-resize; }
+
+.collector-container-highlight {
+  position: absolute;
+  box-sizing: border-box;
+  border: 2px solid #10b981;
+  background: rgba(16, 185, 129, 0.1);
+  pointer-events: none;
+  z-index: 10;
+  border-radius: 4px;
 }
 .collector-region-tag {
   position: absolute;
@@ -2729,6 +2830,15 @@ body[data-panel="shell"] .collector-capture-split > aside.collector-capture-tool
   text-transform: uppercase;
   letter-spacing: 0.5px;
   pointer-events: none;
+}
+.collector-region-tag.begin {
+  background: #0284c7;
+}
+.collector-region-tag.end {
+  background: #059669;
+}
+.collector-region-tag.free {
+  background: #7c3aed;
 }
 .collector-region-tag.static {
   background: #0284c7;
@@ -2746,6 +2856,15 @@ body[data-panel="shell"] .collector-capture-split > aside.collector-capture-tool
   gap: 6px;
   margin-bottom: 6px;
 }
+.collector-region-card.begin {
+  border-left: 3px solid #38bdf8;
+}
+.collector-region-card.end {
+  border-left: 3px solid #34d399;
+}
+.collector-region-card.free {
+  border-left: 3px solid #a78bfa;
+}
 .collector-region-card.static {
   border-left: 3px solid #38bdf8;
 }
@@ -2755,6 +2874,104 @@ body[data-panel="shell"] .collector-capture-split > aside.collector-capture-tool
 .collector-region-card.selected {
   border-color: #60a5fa;
   background: #142132;
+}
+
+/* Candidate Variable Checkbox UI — Compact Responsive Grid */
+.collector-var-checkbox-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(130px, 1fr));
+  gap: 6px;
+  width: 100%;
+  margin-top: 4px;
+  box-sizing: border-box;
+}
+.collector-var-checkbox-item {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  background: #142132;
+  border: 1px solid #2b394a;
+  border-radius: 4px;
+  padding: 4px 8px;
+  cursor: pointer;
+  user-select: none;
+  box-sizing: border-box;
+  transition: background 0.15s, border-color 0.15s;
+  min-height: 28px;
+}
+.collector-var-checkbox-item:hover {
+  background: #1b2c42;
+  border-color: #3b506a;
+}
+.collector-var-checkbox-item.checked {
+  background: #15324d;
+  border-color: #38bdf8;
+}
+.collector-var-checkbox-item input[type="checkbox"] {
+  width: 14px;
+  height: 14px;
+  min-width: 14px;
+  max-width: 14px;
+  margin: 0;
+  flex-shrink: 0;
+  cursor: pointer;
+  accent-color: #38bdf8;
+}
+.collector-var-checkbox-item span {
+  font-size: 11px;
+  line-height: 1.25;
+  color: #e2e8f0;
+  word-break: break-word;
+  flex: 1;
+}
+
+/* Region Editor Dock Styles */
+.collector-region-edit-grid {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin-top: 6px;
+}
+.collector-region-edit-row {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+  flex-wrap: wrap;
+}
+.collector-region-edit-row label {
+  display: flex;
+  gap: 4px;
+  align-items: center;
+  font-size: 11px;
+}
+.collector-group-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  font-size: 10px;
+  font-weight: 600;
+  background: #1e293b;
+  border: 1px solid #334155;
+  border-radius: 3px;
+  padding: 1px 5px;
+  color: #94a3b8;
+}
+.collector-group-summary {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding: 6px 8px;
+  background: #0d1520;
+  border: 1px solid #1e293b;
+  border-radius: 4px;
+  font-size: 11px;
+  margin-top: 6px;
+}
+.collector-group-summary-item {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 6px;
 }
 .collector-container-card {
   margin-top: 10px;

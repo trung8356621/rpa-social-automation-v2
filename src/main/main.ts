@@ -1425,7 +1425,45 @@ async function boot() {
         if (!/^[a-f0-9-]+\.png$/.test(command.asset))
           throw new Error("Asset không hợp lệ.");
         try {
-          return await localOcr.recognize(await readFile(path.join(assetDir, command.asset)));
+          const fullPath = path.join(assetDir, command.asset);
+          let buf = await readFile(fullPath);
+          let cropOffset: { x: number; y: number } | undefined;
+          let containerCrop: { x: number; y: number; width: number; height: number } | undefined;
+          if (command.crop && command.crop.width > 0 && command.crop.height > 0) {
+            const meta = await sharp(buf).metadata();
+            const imgW = meta.width ?? 0;
+            const imgH = meta.height ?? 0;
+            if (imgW > 0 && imgH > 0) {
+              const left = Math.max(0, Math.min(imgW - 1, Math.round(command.crop.x)));
+              const top = Math.max(0, Math.min(imgH - 1, Math.round(command.crop.y)));
+              const width = Math.max(1, Math.min(imgW - left, Math.round(command.crop.width)));
+              const height = Math.max(1, Math.min(imgH - top, Math.round(command.crop.height)));
+              buf = await sharp(buf).extract({ left, top, width, height }).png().toBuffer();
+              cropOffset = { x: left, y: top };
+              containerCrop = { x: left, y: top, width, height };
+            }
+          }
+          const rawResult = await localOcr.recognize(buf);
+          if (cropOffset && (cropOffset.x > 0 || cropOffset.y > 0)) {
+            return {
+              ...rawResult,
+              cropOffset,
+              containerCrop,
+              segments: rawResult.segments.map((seg) => ({
+                ...seg,
+                bbox: {
+                  ...seg.bbox,
+                  x: seg.bbox.x + cropOffset.x,
+                  y: seg.bbox.y + cropOffset.y,
+                },
+              })),
+            };
+          }
+          return {
+            ...rawResult,
+            cropOffset,
+            containerCrop,
+          };
         } catch (error) {
           logMainError(runDir, "ocrTarget", error, { asset: command.asset });
           throw error;

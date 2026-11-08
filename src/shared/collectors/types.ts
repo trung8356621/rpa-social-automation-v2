@@ -206,7 +206,12 @@ export type CaptureItem = {
   domSnapshot?: CollectorDomSnapshot;
 };
 
-export type CollectorRegionType = "STATIC" | "DYNAMIC";
+export type CollectorRegionType =
+  | "BEGIN"
+  | "END"
+  | "FREE"
+  | "STATIC"
+  | "DYNAMIC";
 
 export type RegionRelationshipKind =
   | "inside"
@@ -248,6 +253,7 @@ export type CollectorRegion = {
   type: CollectorRegionType;
   label: string;
   role?: CollectorRegionRole;
+  groupTag?: string;
   geometry: NormalizedRegionGeometry;
   originalRoi?: Rect;
   candidateVariableKeys: string[];
@@ -281,6 +287,8 @@ export type VerifiedPostContainer = {
   isNestedSharedPost: boolean;
   outerHtmlSnippet?: string;
   rejectionReason?: string;
+  groupTag?: string;
+  rect?: Rect;
 };
 
 export type DynamicHtmlExtractionResult = {
