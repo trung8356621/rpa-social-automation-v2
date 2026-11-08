@@ -120,3 +120,15 @@ test("C2.6 Live ROI in render tracks clamped state during resize without jumping
   // liveRoi must prioritize live clamped roi during resize
   assert.match(capture, /const liveRoi = drag\s*\?\s*drag\.kind === "resize"\s*\?\s*\(roi/);
 });
+
+test("C2.6.1 Capture Library drawer hides native browser on open and restores only if not frozen", () => {
+  const capture = readFileSync(resolve("src/renderer/collectors/CaptureStep.tsx"), "utf8");
+  // When libraryOpen is true: hide native browser view
+  assert.match(capture, /if \(libraryOpen\) \{\s*void collectorSetBrowserVisible\(invoke, false\);/);
+  // When libraryOpen is false: restore only if opened and !frozen
+  assert.match(capture, /else if \(opened && !frozen\) \{\s*void collectorSetBrowserVisible\(invoke, true\)\.then\(publishHost\);/);
+  // restoreBrowse checks !libraryOpenRef.current before making browser visible
+  assert.match(capture, /if \(!libraryOpenRef\.current\) \{\s*await collectorSetBrowserVisible\(invoke, true\);/);
+  // Escape key closes library drawer
+  assert.match(capture, /if \(e\.key === "Escape"\) \{\s*e\.stopPropagation\(\);\s*onClose\(\);/);
+});

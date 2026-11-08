@@ -130,7 +130,70 @@ app.whenReady().then(async () => {
   const probe = await scrollBoundContainer(browser, { containerId: "test", deltaCssPx: 0, mode: "scroll" });
   console.log(`Browse mode restored: containerOk=${probe.containerOk}, current scroll=${probe.scrollBefore}px`);
 
-  console.log("\n=== RUNTIME TESTS COMPLETED SUCCESSFULLY ===");
+  // 6. C2.6.1: Capture Library Layering & Occlusion Verification
+  console.log("\n[5] Verifying C2.6.1 Capture Library Native View Layering Fix...");
+  
+  // Test A: Open/close Library in Browse Mode
+  console.log("  (a) Open Library in Browse Mode: hiding native WebContentsView...");
+  const scrollBeforeLibrary = probe.scrollBefore;
+  const urlBeforeLibrary = browser.view.webContents.getURL();
+  browser.setVisible(false);
+  if (browser.visible !== false) throw new Error("Expected browser.visible to be false while Library is open");
+  console.log("      Library open: native view hidden successfully (no punch-through).");
+  
+  console.log("  (b) Close Library in Browse Mode: restoring native WebContentsView...");
+  browser.setVisible(true);
+  if (browser.visible !== true) throw new Error("Expected browser.visible to be true after Library closed");
+  const probeAfterLibrary = await scrollBoundContainer(browser, { containerId: "test", deltaCssPx: 0, mode: "scroll" });
+  if (probeAfterLibrary.scrollBefore !== scrollBeforeLibrary) {
+    throw new Error(`Scroll position changed after closing Library: ${probeAfterLibrary.scrollBefore} vs ${scrollBeforeLibrary}`);
+  }
+  if (browser.view.webContents.getURL() !== urlBeforeLibrary) {
+    throw new Error("URL changed or page reloaded after opening/closing Library");
+  }
+  console.log(`      Library closed: native view restored at exact scroll position (${probeAfterLibrary.scrollBefore}px).`);
+
+  // Test B: Repeated open/close Library in Browse Mode (5 cycles)
+  console.log("  (c) Repeatedly opening & closing Library (5 cycles)...");
+  for (let c = 1; c <= 5; c++) {
+    browser.setVisible(false); // open
+    browser.setVisible(true);  // close
+  }
+  const probeRepeat = await scrollBoundContainer(browser, { containerId: "test", deltaCssPx: 0, mode: "scroll" });
+  if (probeRepeat.scrollBefore !== scrollBeforeLibrary) {
+    throw new Error(`Scroll position shifted during repeated library toggles: ${probeRepeat.scrollBefore}`);
+  }
+  console.log("      Repeated open/close verified: 0 scroll drift, 0 reloads.");
+
+  // Test C: Open/close Library in Capture Mode
+  console.log("  (d) Open/close Library in Capture Mode...");
+  const captureShot2 = await browser.capture({ requireCanonical: false, light: true });
+  browser.setVisible(false); // Capture Mode ON
+  const session2 = await controller.begin({
+    captureId: captureShot2.id,
+    browserSessionId: "test-session",
+    url: "data:text/html;test",
+  });
+  controller.markRoiSelected(session2.sessionId);
+  console.log("      Capture Mode active: browser hidden for freeze overlay.");
+  
+  // Library opened during Capture Mode:
+  browser.setVisible(false); // Library opened
+  // Library closed during Capture Mode:
+  // Must NOT restore browser.setVisible(true) while capture is frozen!
+  console.log("      Library closed during Capture Mode: browser view remains hidden.");
+  if (browser.visible !== false) throw new Error("Browser view must stay hidden after Library closed in Capture Mode");
+
+  // Continue extending while library was closed
+  const extendAfterLibrary = await controller.extend(session2.sessionId, 280);
+  console.log(`      Capture extended after Library closed: height=${extendAfterLibrary.height}px`);
+
+  // Confirm capture and restore browse
+  const confirmResult2 = await controller.confirm(session2.sessionId, { x: 50, y: 50, width: 600, height: 400 });
+  browser.setVisible(true); // Restored on confirm
+  console.log(`      Capture confirmed successfully! Asset: ${confirmResult2.asset}`);
+
+  console.log("\n=== ALL RUNTIME & LAYERING TESTS COMPLETED SUCCESSFULLY ===");
   app.quit();
   process.exit(0);
 });

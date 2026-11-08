@@ -100,6 +100,17 @@ function CaptureLibraryDrawer({
     };
   }, [items, invoke]);
 
+  useEffect(() => {
+    const onKeyDown = (e: KeyboardEvent) => {
+      if (e.key === "Escape") {
+        e.stopPropagation();
+        onClose();
+      }
+    };
+    window.addEventListener("keydown", onKeyDown);
+    return () => window.removeEventListener("keydown", onKeyDown);
+  }, [onClose]);
+
   return (
     <div className="collector-capture-library-layer" role="dialog" aria-modal="true" aria-label="Capture Library">
       <button type="button" className="collector-versions-backdrop" aria-label="Close Capture Library" onClick={onClose} />
@@ -193,6 +204,10 @@ export function StepCaptureSamples({
   const edgeNavRafRef = useRef<number | null>(null);
   /** Bumped on cancel so in-flight runExtend cannot mutate after abort. */
   const extendEpochRef = useRef(0);
+  const libraryOpenRef = useRef(libraryOpen);
+  libraryOpenRef.current = libraryOpen;
+  const frozenRef = useRef(frozen);
+  frozenRef.current = frozen;
 
   dragRef.current = drag;
   sessionRef.current = scrollSession;
@@ -270,6 +285,23 @@ export function StepCaptureSamples({
   useEffect(() => {
     if (state?.url) setUrl(state.url);
   }, [state?.url]);
+
+  // C2.6.1: Native WebContentsView layering fix for Capture Library drawer.
+  // When Library opens, hide native browser view so it cannot punch through the React drawer.
+  // On close, restore native browser visibility only if in Browse Mode (not frozen).
+  const prevLibraryOpenRef = useRef(false);
+  useEffect(() => {
+    if (!electron || !invoke) return;
+    const wasOpen = prevLibraryOpenRef.current;
+    prevLibraryOpenRef.current = libraryOpen;
+    if (wasOpen === libraryOpen) return;
+
+    if (libraryOpen) {
+      void collectorSetBrowserVisible(invoke, false);
+    } else if (opened && !frozen) {
+      void collectorSetBrowserVisible(invoke, true).then(publishHost);
+    }
+  }, [electron, invoke, libraryOpen, opened, frozen, publishHost]);
 
   function applySessionToShot(session: ScrollCaptureSession, base?: Capture) {
     setScrollSession(session);
@@ -479,8 +511,10 @@ export function StepCaptureSamples({
     setAnchor(undefined);
     setDrag(undefined);
     setFrozen(false);
-    await collectorSetBrowserVisible(invoke, true);
-    publishHost();
+    if (!libraryOpenRef.current) {
+      await collectorSetBrowserVisible(invoke, true);
+      publishHost();
+    }
     setMessage(status);
   }
 
@@ -534,8 +568,10 @@ export function StepCaptureSamples({
       setShot(undefined);
       setScrollSession(undefined);
       try {
-        await collectorSetBrowserVisible(invoke, true);
-        publishHost();
+        if (!libraryOpenRef.current) {
+          await collectorSetBrowserVisible(invoke, true);
+          publishHost();
+        }
       } catch {
         /* keep prior error */
       }
