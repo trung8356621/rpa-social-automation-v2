@@ -73,12 +73,12 @@ function captureN(draft: ReturnType<typeof createEmptyDraft>, n: number) {
 
 test("collector localStorage namespace is isolated from scripts", () => {
   assert.equal(COLLECTOR_STORAGE_KEY, "rpa.collectors.prototype.v1");
-  assert.equal(COLLECTOR_SCHEMA_VERSION, 6);
+  assert.equal(COLLECTOR_SCHEMA_VERSION, 7);
 });
 
-test("four-step wizard replaces fixed A/B/C steps", () => {
-  assert.deepEqual(WIZARD_STEPS.map((s) => s.id), [1, 2, 3, 4]);
-  assert.deepEqual(WIZARD_STEPS.map((s) => s.short), ["Capture", "Review", "Discovery", "Validation"]);
+test("five-step wizard replaces four-step wizard with Match Test", () => {
+  assert.deepEqual(WIZARD_STEPS.map((s) => s.id), [1, 2, 3, 4, 5]);
+  assert.deepEqual(WIZARD_STEPS.map((s) => s.short), ["Capture", "Review", "Match", "Discovery", "Validation"]);
 });
 
 test("creates Collector without Strategy or classification", () => {
@@ -89,7 +89,8 @@ test("creates Collector without Strategy or classification", () => {
   assert.deepEqual(draft.captures, []);
   assert.deepEqual(draft.captureAudits, []);
   assert.equal(draft.schemaRevision, 1);
-  assert.ok(stepValidationErrors(draft, 3).some((e) => /Strategy/i.test(e)));
+  assert.ok(stepValidationErrors(draft, 3).some((e) => /Match Test/i.test(e)));
+  assert.ok(stepValidationErrors(draft, 4).some((e) => /Strategy/i.test(e)));
 });
 
 test("malformed localStorage is recovered without silent delete", () => {
@@ -141,7 +142,7 @@ test("existing v1 localStorage records migrate into capture audits without data 
     ],
   };
   const migrated = parseEnvelope(JSON.stringify(legacy));
-  assert.equal(migrated.schemaVersion, 6);
+  assert.equal(migrated.schemaVersion, 7);
   assert.equal(migrated.collectors.length, 1);
   const c = migrated.collectors[0]!;
   assert.equal(c.wizardStep, 2); // old C1 step 3 → (+1)=4 → Review
@@ -150,8 +151,8 @@ test("existing v1 localStorage records migrate into capture audits without data 
   assert.equal(filledSampleCount(c), 3);
   assert.equal(slotMockSampleId(c, "A"), "sample.normal.1");
   assert.equal(migrateWizardStep(1, 1), 2);
-  assert.equal(migrateWizardStep(6, 1), 4); // C1 step6 → +1 →7 → Validation
-  assert.equal(migrateWizardStep(7, 4), 4);
+  assert.equal(migrateWizardStep(6, 1), 5); // C1 step6 → +1 →7 → Validation
+  assert.equal(migrateWizardStep(7, 4), 5);
   assert.equal(migrateWizardStep(2, 4), 2);
 });
 
@@ -271,7 +272,7 @@ test("discovery and validation consume confirmed audits, not fixed A/B/C", () =>
       },
     ],
   };
-  assert.deepEqual(stepValidationErrors(draft, 3), []);
+  assert.deepEqual(stepValidationErrors(draft, 4), []);
   draft = applyValidationSimulation(draft, "all_pass");
   assert.ok(draft.validation);
   assert.equal(draft.validation!.rawJson && (draft.validation!.rawJson as { needsAttention: number }).needsAttention, 1);
@@ -300,7 +301,7 @@ test("filter / duplicate / store roundtrip", () => {
   env = upsertCollector(env, draft);
   saveCollectorStore(storage, env);
   const loaded = loadCollectorStore(storage);
-  assert.equal(loaded.schemaVersion, 6);
+  assert.equal(loaded.schemaVersion, 7);
   assert.equal(loaded.collectors[0]!.captures.length, 2);
   assert.equal(loaded.collectors[0]!.captureAudits.length, 2);
   const copy = duplicateCollector(loaded.collectors[0]!);

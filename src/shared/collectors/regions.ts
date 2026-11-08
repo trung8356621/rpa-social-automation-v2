@@ -13,6 +13,7 @@
  */
 import type { Rect } from "../contracts.js";
 import type {
+  AnchorMatchDetail,
   CollectorDomElement,
   CollectorDomSnapshot,
   CollectorRegion,
@@ -21,7 +22,10 @@ import type {
   CollectorVariable,
   DynamicHtmlExtractionResult,
   LayoutContextKind,
+  MatchTestResult,
+  MatchTestStatus,
   NormalizedRegionGeometry,
+  PostGroupMatch,
   RegionRelationship,
   VerifiedPostContainer,
 } from "./types.js";
@@ -1237,5 +1241,490 @@ export function executeHtmlFilter(
     evidence,
     status: Object.keys(values).length > 0 ? "success" : "partial",
     rawHtml: dynamicExtraction.rawHtml,
+  };
+}
+
+// ---------------------------------------------------------------------------
+// 9. C2.10 LIVE BROWSER MATCH TEST ENGINE
+// ---------------------------------------------------------------------------
+
+function findAnchorCandidates(
+  region: CollectorRegion,
+  elements: CollectorDomElement[],
+): Array<{
+  el: CollectorDomElement;
+  score: number;
+  method: "text_dom" | "visual_projection" | "none";
+  reason: string;
+}> {
+  const candidates: Array<{
+    el: CollectorDomElement;
+    score: number;
+    method: "text_dom" | "visual_projection" | "none";
+    reason: string;
+  }> = [];
+
+  const rawText = region.ocrEvidence?.text || region.label;
+  const normalizedText = normalizeVietnameseText(rawText);
+  const refTokens = normalizedText.split(/\s+/).filter((t) => t.length > 1);
+
+  for (const el of elements) {
+    let score = 0;
+    let method: "text_dom" | "visual_projection" | "none" = "none";
+    const reasons: string[] = [];
+
+    // Text token matching
+    if (refTokens.length > 0 && el.textSnippet) {
+      const elText = normalizeVietnameseText(el.textSnippet);
+      const matchCount = refTokens.filter((token) => elText.includes(token)).length;
+      if (matchCount > 0) {
+        const textScore = Math.min(60, Math.round((matchCount / refTokens.length) * 60));
+        score += textScore;
+        method = "text_dom";
+        reasons.push(`matched ${matchCount}/${refTokens.length} tokens`);
+      }
+    }
+
+    // Role or attribute match
+    if (region.domEvidence?.role && el.role === region.domEvidence.role) {
+      score += 20;
+      reasons.push(`role "${el.role}"`);
+    } else if (region.role && (el.role === region.role || (el.className && el.className.includes(region.role)))) {
+      score += 15;
+      reasons.push(`role/class "${region.role}"`);
+    }
+
+    // Tag name match
+    if (region.domEvidence?.tagName && el.tagName === region.domEvidence.tagName) {
+      score += 10;
+      reasons.push(`<${el.tagName}>`);
+    }
+
+    // Spatial presence in viewport
+    if (el.rect.width > 0 && el.rect.height > 0) {
+      score += 10;
+      if (method === "none") method = "visual_projection";
+    }
+
+    if (score >= 40) {
+      candidates.push({
+        el,
+        score: Math.min(100, score),
+        method,
+        reason: reasons.join(", "),
+      });
+    }
+  }
+
+  return candidates.sort((a, b) => b.score - a.score);
+}
+
+/**
+ * C2.10 — Live Browser Match Test Engine
+ *
+ * Requirements:
+ * - Operates against actual live DOM snapshot (fails if snapshot is empty or stale).
+ * - Matches BEGIN and END reference templates in the live browser.
+ * - Computes dynamic bounds using live matched coordinates.
+ * - Distinguishes NOT TESTED, MATCHED, PARTIAL, AMBIGUOUS, FAILED.
+ * - Rejects cross-post pairings (e.g. broad feed ancestor / encloses multiple cards).
+ * - Rejects inverted ordering (END above BEGIN).
+ * - Respects multiple visible posts in a feed.
+ * - Explicitly reports visual matching limitations.
+ */
+export function executeLiveBrowserMatchTest(
+  regions: CollectorRegion[],
+  snapshot: CollectorDomSnapshot,
+): MatchTestResult {
+  const testedAt = new Date().toISOString();
+  const visualLimitations = [
+    "Visual matching uses DOM text tokens, attributes, and viewport layout projection.",
+    "Pixel-level image template matching for icons/avatars is not yet implemented.",
+  ];
+
+  if (!snapshot || !snapshot.elements || snapshot.elements.length === 0) {
+    return {
+      testedAt,
+      browserUrl: snapshot?.url || "",
+      status: "FAILED",
+      matchedPostCount: 0,
+      groups: [],
+      summary: "No DOM elements found in live browser page. Ensure page is loaded.",
+      limitations: visualLimitations,
+      error: "DOM snapshot empty or unavailable",
+    };
+  }
+
+  if (snapshot.isStale) {
+    return {
+      testedAt,
+      browserUrl: snapshot.url,
+      status: "FAILED",
+      matchedPostCount: 0,
+      groups: [],
+      summary: "DOM snapshot belongs to a different URL or outdated page state.",
+      limitations: visualLimitations,
+      error: "Stale page state",
+    };
+  }
+
+  const analysis = verifyAnchorGroups(regions);
+  if (analysis.errors.length > 0) {
+    return {
+      testedAt,
+      browserUrl: snapshot.url,
+      status: "FAILED",
+      matchedPostCount: 0,
+      groups: [],
+      summary: analysis.errors[0] || "Incomplete anchor group configuration.",
+      limitations: visualLimitations,
+      error: analysis.errors[0],
+    };
+  }
+
+  if (analysis.groups.size === 0) {
+    return {
+      testedAt,
+      browserUrl: snapshot.url,
+      status: "FAILED",
+      matchedPostCount: 0,
+      groups: [],
+      summary: "No anchor groups defined. Create paired BEGIN and END anchors with matching group tags in Step 2A.",
+      limitations: visualLimitations,
+      error: "No anchor groups defined",
+    };
+  }
+
+  const elementMap = new Map<string, CollectorDomElement>();
+  for (const el of snapshot.elements) {
+    elementMap.set(el.id, el);
+  }
+
+  const groupResults: PostGroupMatch[] = [];
+  let totalMatchedPosts = 0;
+
+  for (const [tag, group] of analysis.groups.entries()) {
+    const begin = group.begin;
+    const end = group.end;
+    if (!begin || !end) continue;
+
+    // 1. Find candidates for BEGIN
+    const beginCandidates = findAnchorCandidates(begin, snapshot.elements);
+    // 2. Find candidates for END
+    const endCandidates = findAnchorCandidates(end, snapshot.elements);
+
+    if (beginCandidates.length === 0 && endCandidates.length === 0) {
+      groupResults.push({
+        groupTag: tag,
+        status: "FAILED",
+        domAssociationStatus: "NOT_RESOLVED",
+        visualConfidence: 0,
+        limitations: visualLimitations,
+        failureReason: `Neither BEGIN anchor (${begin.label}) nor END anchor (${end.label}) matched in live DOM.`,
+      });
+      continue;
+    }
+
+    if (beginCandidates.length > 0 && endCandidates.length === 0) {
+      const topBegin = beginCandidates[0]!;
+      groupResults.push({
+        groupTag: tag,
+        status: "PARTIAL",
+        beginMatch: {
+          regionId: begin.id,
+          role: "BEGIN",
+          groupTag: tag,
+          matched: true,
+          matchedElementId: topBegin.el.id,
+          matchedTagName: topBegin.el.tagName,
+          matchedRect: topBegin.el.rect,
+          confidence: topBegin.score,
+          method: topBegin.method,
+          evidence: topBegin.reason,
+        },
+        domAssociationStatus: "NOT_RESOLVED",
+        visualConfidence: topBegin.score,
+        limitations: visualLimitations,
+        failureReason: `BEGIN anchor matched <${topBegin.el.tagName}>, but END anchor (${end.label}) was not found in live DOM.`,
+      });
+      continue;
+    }
+
+    if (beginCandidates.length === 0 && endCandidates.length > 0) {
+      const topEnd = endCandidates[0]!;
+      groupResults.push({
+        groupTag: tag,
+        status: "PARTIAL",
+        endMatch: {
+          regionId: end.id,
+          role: "END",
+          groupTag: tag,
+          matched: true,
+          matchedElementId: topEnd.el.id,
+          matchedTagName: topEnd.el.tagName,
+          matchedRect: topEnd.el.rect,
+          confidence: topEnd.score,
+          method: topEnd.method,
+          evidence: topEnd.reason,
+        },
+        domAssociationStatus: "NOT_RESOLVED",
+        visualConfidence: topEnd.score,
+        limitations: visualLimitations,
+        failureReason: `END anchor matched <${topEnd.el.tagName}>, but BEGIN anchor (${begin.label}) was not found in live DOM.`,
+      });
+      continue;
+    }
+
+    // Both have candidates. Evaluate pairings.
+    type PairCandidate = {
+      beginCandidate: (typeof beginCandidates)[0];
+      endCandidate: (typeof endCandidates)[0];
+      lca: CollectorDomElement | null;
+      isVerticallyOrdered: boolean;
+      isBroadFeed: boolean;
+      enclosesMultiple: boolean;
+      score: number;
+    };
+
+    const validPairs: PairCandidate[] = [];
+    const rejectedPairs: Array<{ pair: PairCandidate; reason: string }> = [];
+
+    for (const bCand of beginCandidates) {
+      for (const eCand of endCandidates) {
+        // Vertical ordering check
+        const isVerticallyOrdered = eCand.el.rect.y > bCand.el.rect.y + bCand.el.rect.height - 5;
+        if (!isVerticallyOrdered) {
+          rejectedPairs.push({
+            pair: {
+              beginCandidate: bCand,
+              endCandidate: eCand,
+              lca: null,
+              isVerticallyOrdered: false,
+              isBroadFeed: false,
+              enclosesMultiple: false,
+              score: 0,
+            },
+            reason: `Spatial ordering inverted: END (<${eCand.el.tagName}> at y:${eCand.el.rect.y}) is above BEGIN (<${bCand.el.tagName}> at y:${bCand.el.rect.y}).`,
+          });
+          continue;
+        }
+
+        const lca = findLowestCommonAncestor(bCand.el.id, eCand.el.id, elementMap);
+        if (!lca) {
+          rejectedPairs.push({
+            pair: {
+              beginCandidate: bCand,
+              endCandidate: eCand,
+              lca: null,
+              isVerticallyOrdered: true,
+              isBroadFeed: false,
+              enclosesMultiple: false,
+              score: 0,
+            },
+            reason: "Disjoint DOM subtrees: No common ancestor exists.",
+          });
+          continue;
+        }
+
+        const isBroadFeed =
+          lca.tagName === "BODY" ||
+          lca.tagName === "HTML" ||
+          lca.isFeedContainer ||
+          lca.role === "feed" ||
+          Boolean(lca.className && /\b(feed|stream|wall|timeline)\b/i.test(lca.className));
+
+        if (isBroadFeed) {
+          rejectedPairs.push({
+            pair: {
+              beginCandidate: bCand,
+              endCandidate: eCand,
+              lca,
+              isVerticallyOrdered: true,
+              isBroadFeed: true,
+              enclosesMultiple: false,
+              score: 0,
+            },
+            reason: `Cross-post mismatch rejected: Lowest common ancestor <${lca.tagName}.${lca.className || ""}> is a broad feed container. BEGIN and END belong to different posts.`,
+          });
+          continue;
+        }
+
+        const enclosedCards = snapshot.elements.filter(
+          (el) =>
+            el.id !== lca.id &&
+            el.isArticleOrCard &&
+            el.rect.x >= lca.rect.x &&
+            el.rect.y >= lca.rect.y &&
+            el.rect.x + el.rect.width <= lca.rect.x + lca.rect.width &&
+            el.rect.y + el.rect.height <= lca.rect.y + lca.rect.height,
+        );
+
+        if (enclosedCards.length > 1) {
+          rejectedPairs.push({
+            pair: {
+              beginCandidate: bCand,
+              endCandidate: eCand,
+              lca,
+              isVerticallyOrdered: true,
+              isBroadFeed: false,
+              enclosesMultiple: true,
+              score: 0,
+            },
+            reason: `Cross-post container rejected: Ancestor <${lca.tagName}> encloses multiple post cards.`,
+          });
+          continue;
+        }
+
+        const pairScore = Math.round((bCand.score + eCand.score) / 2);
+        validPairs.push({
+          beginCandidate: bCand,
+          endCandidate: eCand,
+          lca,
+          isVerticallyOrdered: true,
+          isBroadFeed: false,
+          enclosesMultiple: false,
+          score: pairScore,
+        });
+      }
+    }
+
+    // Sort valid pairs: top-down by Y
+    validPairs.sort((a, b) => a.beginCandidate.el.rect.y - b.beginCandidate.el.rect.y);
+
+    if (validPairs.length === 0) {
+      const primaryRejection =
+        rejectedPairs[0]?.reason || "No valid pairing between BEGIN and END anchors.";
+      groupResults.push({
+        groupTag: tag,
+        status: "FAILED",
+        beginMatch: {
+          regionId: begin.id,
+          role: "BEGIN",
+          groupTag: tag,
+          matched: true,
+          matchedElementId: beginCandidates[0]?.el.id,
+          matchedTagName: beginCandidates[0]?.el.tagName,
+          matchedRect: beginCandidates[0]?.el.rect,
+          confidence: beginCandidates[0]?.score ?? 0,
+          method: beginCandidates[0]?.method ?? "none",
+        },
+        endMatch: {
+          regionId: end.id,
+          role: "END",
+          groupTag: tag,
+          matched: true,
+          matchedElementId: endCandidates[0]?.el.id,
+          matchedTagName: endCandidates[0]?.el.tagName,
+          matchedRect: endCandidates[0]?.el.rect,
+          confidence: endCandidates[0]?.score ?? 0,
+          method: endCandidates[0]?.method ?? "none",
+        },
+        domAssociationStatus: "FAILED",
+        visualConfidence: Math.round(
+          ((beginCandidates[0]?.score ?? 0) + (endCandidates[0]?.score ?? 0)) / 2,
+        ),
+        limitations: visualLimitations,
+        failureReason: primaryRejection,
+      });
+      continue;
+    }
+
+    // Filter non-overlapping distinct posts (each post has its own BEGIN and END)
+    const distinctPosts: PairCandidate[] = [];
+    const usedBegins = new Set<string>();
+    const usedEnds = new Set<string>();
+
+    for (const vp of validPairs) {
+      if (!usedBegins.has(vp.beginCandidate.el.id) && !usedEnds.has(vp.endCandidate.el.id)) {
+        distinctPosts.push(vp);
+        usedBegins.add(vp.beginCandidate.el.id);
+        usedEnds.add(vp.endCandidate.el.id);
+      }
+    }
+
+    const primaryPair = distinctPosts[0]!;
+    const dynamic = computeMatchedDynamicBounds(
+      primaryPair.beginCandidate.el.rect,
+      primaryPair.endCandidate.el.rect,
+      snapshot.viewport.width,
+    );
+
+    totalMatchedPosts += distinctPosts.length;
+
+    groupResults.push({
+      groupTag: tag,
+      status: "MATCHED",
+      beginMatch: {
+        regionId: begin.id,
+        role: "BEGIN",
+        groupTag: tag,
+        matched: true,
+        matchedElementId: primaryPair.beginCandidate.el.id,
+        matchedTagName: primaryPair.beginCandidate.el.tagName,
+        matchedRect: primaryPair.beginCandidate.el.rect,
+        confidence: primaryPair.beginCandidate.score,
+        method: primaryPair.beginCandidate.method,
+        evidence: primaryPair.beginCandidate.reason,
+      },
+      endMatch: {
+        regionId: end.id,
+        role: "END",
+        groupTag: tag,
+        matched: true,
+        matchedElementId: primaryPair.endCandidate.el.id,
+        matchedTagName: primaryPair.endCandidate.el.tagName,
+        matchedRect: primaryPair.endCandidate.el.rect,
+        confidence: primaryPair.endCandidate.score,
+        method: primaryPair.endCandidate.method,
+        evidence: primaryPair.endCandidate.reason,
+      },
+      dynamicBounds: dynamic,
+      domContainer: primaryPair.lca
+        ? {
+            containerId: primaryPair.lca.id,
+            tagName: primaryPair.lca.tagName,
+            role: primaryPair.lca.role,
+            depth: primaryPair.lca.depth,
+            isArticleOrCard: Boolean(primaryPair.lca.isArticleOrCard),
+          }
+        : undefined,
+      domAssociationStatus: "CONFIRMED",
+      visualConfidence: primaryPair.score,
+      limitations: visualLimitations,
+    });
+  }
+
+  const allMatched = groupResults.length > 0 && groupResults.every((g) => g.status === "MATCHED");
+  const anyAmbiguous = groupResults.some((g) => g.status === "AMBIGUOUS");
+  const anyPartial = groupResults.some((g) => g.status === "PARTIAL");
+  const anyFailed = groupResults.some((g) => g.status === "FAILED");
+
+  let overallStatus: MatchTestStatus = "FAILED";
+  if (allMatched && totalMatchedPosts > 0) {
+    overallStatus = "MATCHED";
+  } else if (anyAmbiguous) {
+    overallStatus = "AMBIGUOUS";
+  } else if (anyPartial) {
+    overallStatus = "PARTIAL";
+  } else if (anyFailed) {
+    overallStatus = "FAILED";
+  }
+
+  const summary =
+    overallStatus === "MATCHED"
+      ? `Successfully verified ${totalMatchedPosts} post(s) across ${groupResults.length} anchor group(s). Dynamic boundaries resolved.`
+      : overallStatus === "PARTIAL"
+        ? `Partial match: ${groupResults.filter((g) => g.status === "MATCHED").length}/${groupResults.length} groups verified.`
+        : `Match Test failed: ${groupResults.find((g) => g.failureReason)?.failureReason || "Could not verify anchors in live DOM."}`;
+
+  return {
+    testedAt,
+    browserUrl: snapshot.url,
+    status: overallStatus,
+    matchedPostCount: totalMatchedPosts,
+    groups: groupResults,
+    summary,
+    limitations: visualLimitations,
+    error: overallStatus === "FAILED" ? summary : undefined,
   };
 }

@@ -34,6 +34,7 @@ import {
   verifyAnchorGroups,
   deriveReferenceCropFromAnchors,
   computeMatchedDynamicBounds,
+  executeLiveBrowserMatchTest,
 } from "../src/shared/collectors/regions.js";
 import {
   MemoryStorage,
@@ -1065,4 +1066,529 @@ test("C2.9 Architecture: Future Live Browser Match Test formula computeMatchedDy
   assert.equal(dynamic.height, 450); // 650 - 200
   assert.equal(dynamic.bounds.y, 200);
   assert.equal(dynamic.bounds.height, 450);
+});
+
+// ===========================================================================
+// C2.10 — CONTAINER-BASED FIELD MAPPING & LIVE BROWSER MATCH TEST
+// ===========================================================================
+
+function mockDomEl(
+  input: Partial<CollectorDomElement> & { id: string; tagName: string; rect: Rect; depth: number },
+): CollectorDomElement {
+  return {
+    childrenIds: [],
+    textSnippet: "",
+    attributes: {},
+    ...input,
+  };
+}
+
+test("C2.10 Part A: Region-Based OCR & Independent Crop Storage", () => {
+  const begin = createCollectorRegion({
+    captureItemId: "cap_ocr",
+    type: "BEGIN",
+    groupTag: "post-1",
+    label: "Header Anchor",
+    box: { x: 50, y: 100, width: 400, height: 60 },
+    imageWidth: 1000,
+    imageHeight: 1200,
+    referenceImage: "data:image/png;base64,beginCropPngBytes",
+  });
+
+  const end = createCollectorRegion({
+    captureItemId: "cap_ocr",
+    type: "END",
+    groupTag: "post-1",
+    label: "Footer Anchor",
+    box: { x: 50, y: 800, width: 400, height: 50 },
+    imageWidth: 1000,
+    imageHeight: 1200,
+    referenceImage: "data:image/png;base64,endCropPngBytes",
+  });
+
+  // Attach OCR strictly to the region crop
+  begin.ocr = {
+    text: "John Doe 2 hrs ago",
+    confidence: 96,
+    language: "vie+eng",
+    segments: [
+      { id: "seg_b1", text: "John Doe", kind: "word", confidence: 98, bbox: { x: 10, y: 10, width: 80, height: 25 } },
+      { id: "seg_b2", text: "2 hrs ago", kind: "line", confidence: 94, bbox: { x: 10, y: 38, width: 70, height: 18 } },
+    ],
+  };
+
+  end.ocr = {
+    text: "Like Comment Share",
+    confidence: 92,
+    language: "vie+eng",
+    segments: [
+      { id: "seg_e1", text: "Like Comment Share", kind: "line", confidence: 92, bbox: { x: 10, y: 10, width: 200, height: 30 } },
+    ],
+  };
+
+  // 1. OCR results belong to region and do not leak
+  assert.equal(begin.ocr.segments.length, 2);
+  assert.equal(end.ocr.segments.length, 1);
+  assert.equal(begin.referenceImage, "data:image/png;base64,beginCropPngBytes");
+  assert.equal(end.referenceImage, "data:image/png;base64,endCropPngBytes");
+
+  // 2. Coordinate projection from region crop to original screenshot
+  const cropSeg = begin.ocr.segments[0]!;
+  const screenshotX = (begin.originalRoi?.x ?? 0) + cropSeg.bbox.x;
+  const screenshotY = (begin.originalRoi?.y ?? 0) + cropSeg.bbox.y;
+  assert.equal(screenshotX, 60); // 50 + 10
+  assert.equal(screenshotY, 110); // 100 + 10
+});
+
+test("C2.10 Part B: Match Test fails when live DOM snapshot is empty or stale", () => {
+  const regions: CollectorRegion[] = [
+    createCollectorRegion({
+      captureItemId: "cap_1",
+      type: "BEGIN",
+      groupTag: "post-1",
+      label: "Header",
+      box: { x: 50, y: 50, width: 400, height: 50 },
+      imageWidth: 1000,
+      imageHeight: 1000,
+    }),
+    createCollectorRegion({
+      captureItemId: "cap_1",
+      type: "END",
+      groupTag: "post-1",
+      label: "Footer",
+      box: { x: 50, y: 500, width: 400, height: 50 },
+      imageWidth: 1000,
+      imageHeight: 1000,
+    }),
+  ];
+
+  // Empty snapshot
+  const emptySnapshot: CollectorDomSnapshot = {
+    url: "https://example.com/feed",
+    capturedAt: new Date().toISOString(),
+    viewport: { width: 1280, height: 800, scrollX: 0, scrollY: 0, dpr: 1 },
+    elements: [],
+  };
+  const emptyRes = executeLiveBrowserMatchTest(regions, emptySnapshot);
+  assert.equal(emptyRes.status, "FAILED");
+  assert.equal(emptyRes.matchedPostCount, 0);
+  assert.match(emptyRes.summary, /No DOM elements found/);
+
+  // Stale snapshot
+  const staleSnapshot: CollectorDomSnapshot = {
+    ...emptySnapshot,
+    elements: [mockDomEl({ id: "el_1", tagName: "DIV", rect: { x: 0, y: 0, width: 100, height: 100 }, depth: 1 })],
+    isStale: true,
+  };
+  const staleRes = executeLiveBrowserMatchTest(regions, staleSnapshot);
+  assert.equal(staleRes.status, "FAILED");
+  assert.match(staleRes.summary, /outdated page state/);
+});
+
+test("C2.10 Part B: Match Test single post MATCHED with live dynamic boundary", () => {
+  const regions: CollectorRegion[] = [
+    createCollectorRegion({
+      captureItemId: "cap_1",
+      type: "BEGIN",
+      groupTag: "post-main",
+      label: "Post Author Header",
+      box: { x: 50, y: 50, width: 400, height: 50 },
+      imageWidth: 1000,
+      imageHeight: 1000,
+      ocrText: "Tech Innovator",
+    }),
+    createCollectorRegion({
+      captureItemId: "cap_1",
+      type: "END",
+      groupTag: "post-main",
+      label: "Reactions Bar Footer",
+      box: { x: 50, y: 500, width: 400, height: 40 },
+      imageWidth: 1000,
+      imageHeight: 1000,
+      ocrText: "Like Comment Share",
+    }),
+  ];
+
+  const snapshot: CollectorDomSnapshot = {
+    url: "https://facebook.com/feed",
+    capturedAt: new Date().toISOString(),
+    viewport: { width: 1280, height: 900, scrollX: 0, scrollY: 0, dpr: 1 },
+    elements: [
+      mockDomEl({
+        id: "post_card_1",
+        tagName: "ARTICLE",
+        role: "article",
+        className: "user-post-card",
+        rect: { x: 100, y: 80, width: 700, height: 600 },
+        textSnippet: "Tech Innovator Content Like Comment Share",
+        childrenIds: ["head_1", "foot_1"],
+        depth: 2,
+        isArticleOrCard: true,
+      }),
+      mockDomEl({
+        id: "head_1",
+        parentId: "post_card_1",
+        tagName: "DIV",
+        role: "heading",
+        rect: { x: 110, y: 90, width: 680, height: 50 },
+        textSnippet: "Tech Innovator 5 hrs ago",
+        depth: 3,
+      }),
+      mockDomEl({
+        id: "foot_1",
+        parentId: "post_card_1",
+        tagName: "DIV",
+        role: "toolbar",
+        rect: { x: 110, y: 580, width: 680, height: 40 },
+        textSnippet: "Like Comment Share",
+        depth: 3,
+      }),
+    ],
+  };
+
+  const res = executeLiveBrowserMatchTest(regions, snapshot);
+  assert.equal(res.status, "MATCHED");
+  assert.equal(res.matchedPostCount, 1);
+  assert.equal(res.groups.length, 1);
+
+  const group = res.groups[0]!;
+  assert.equal(group.status, "MATCHED");
+  assert.equal(group.domAssociationStatus, "CONFIRMED");
+  assert.equal(group.domContainer?.containerId, "post_card_1");
+  assert.equal(group.beginMatch?.matchedElementId, "head_1");
+  assert.equal(group.endMatch?.matchedElementId, "foot_1");
+
+  // Dynamic boundary calculation using live coordinates:
+  // dynamicStartY = matchedBegin.y + matchedBegin.height = 90 + 50 = 140
+  // dynamicEndY = matchedEnd.y = 580
+  // height = 580 - 140 = 440
+  assert.equal(group.dynamicBounds?.dynamicStartY, 140);
+  assert.equal(group.dynamicBounds?.dynamicEndY, 580);
+  assert.equal(group.dynamicBounds?.height, 440);
+
+  // Engine limitations explicitly documented
+  assert.ok(res.limitations?.length);
+  assert.ok(res.limitations![0]!.includes("Visual matching"));
+});
+
+test("C2.10 Part B: Match Test rejects inverted spatial ordering (END above BEGIN)", () => {
+  const regions: CollectorRegion[] = [
+    createCollectorRegion({
+      captureItemId: "cap_1",
+      type: "BEGIN",
+      groupTag: "post-main",
+      label: "Header",
+      box: { x: 50, y: 50, width: 400, height: 50 },
+      imageWidth: 1000,
+      imageHeight: 1000,
+      ocrText: "Tech Innovator",
+    }),
+    createCollectorRegion({
+      captureItemId: "cap_1",
+      type: "END",
+      groupTag: "post-main",
+      label: "Footer",
+      box: { x: 50, y: 500, width: 400, height: 40 },
+      imageWidth: 1000,
+      imageHeight: 1000,
+      ocrText: "Like Comment Share",
+    }),
+  ];
+
+  // Inverted: foot_inv at y:50, head_inv at y:300
+  const snapshot: CollectorDomSnapshot = {
+    url: "https://example.com/feed",
+    capturedAt: new Date().toISOString(),
+    viewport: { width: 1280, height: 900, scrollX: 0, scrollY: 0, dpr: 1 },
+    elements: [
+      mockDomEl({
+        id: "card_inv",
+        tagName: "ARTICLE",
+        rect: { x: 100, y: 30, width: 700, height: 600 },
+        textSnippet: "Card",
+        childrenIds: ["foot_inv", "head_inv"],
+        depth: 2,
+        isArticleOrCard: true,
+      }),
+      mockDomEl({
+        id: "foot_inv",
+        parentId: "card_inv",
+        tagName: "DIV",
+        rect: { x: 110, y: 50, width: 680, height: 40 },
+        textSnippet: "Like Comment Share",
+        depth: 3,
+      }),
+      mockDomEl({
+        id: "head_inv",
+        parentId: "card_inv",
+        tagName: "DIV",
+        rect: { x: 110, y: 300, width: 680, height: 50 },
+        textSnippet: "Tech Innovator",
+        depth: 3,
+      }),
+    ],
+  };
+
+  const res = executeLiveBrowserMatchTest(regions, snapshot);
+  assert.equal(res.status, "FAILED");
+  assert.equal(res.matchedPostCount, 0);
+  assert.match(res.groups[0]!.failureReason!, /Spatial ordering inverted/);
+});
+
+test("C2.10 Part B: Match Test rejects cross-post pairing (broad feed ancestor)", () => {
+  const regions: CollectorRegion[] = [
+    createCollectorRegion({
+      captureItemId: "cap_1",
+      type: "BEGIN",
+      groupTag: "post-main",
+      label: "Header",
+      box: { x: 50, y: 50, width: 400, height: 50 },
+      imageWidth: 1000,
+      imageHeight: 1000,
+      ocrText: "Header Text",
+    }),
+    createCollectorRegion({
+      captureItemId: "cap_1",
+      type: "END",
+      groupTag: "post-main",
+      label: "Footer",
+      box: { x: 50, y: 500, width: 400, height: 40 },
+      imageWidth: 1000,
+      imageHeight: 1000,
+      ocrText: "Footer Text",
+    }),
+  ];
+
+  // Header belongs to card_1, Footer belongs to card_2. Lowest common ancestor is feed_container.
+  const snapshot: CollectorDomSnapshot = {
+    url: "https://example.com/feed",
+    capturedAt: new Date().toISOString(),
+    viewport: { width: 1280, height: 900, scrollX: 0, scrollY: 0, dpr: 1 },
+    elements: [
+      mockDomEl({
+        id: "feed_container",
+        tagName: "DIV",
+        role: "feed",
+        className: "news-feed",
+        rect: { x: 50, y: 0, width: 800, height: 1200 },
+        childrenIds: ["card_1", "card_2"],
+        depth: 1,
+        isFeedContainer: true,
+      }),
+      mockDomEl({
+        id: "card_1",
+        parentId: "feed_container",
+        tagName: "ARTICLE",
+        rect: { x: 60, y: 50, width: 780, height: 250 },
+        textSnippet: "Header Text only",
+        childrenIds: ["head_el"],
+        depth: 2,
+        isArticleOrCard: true,
+      }),
+      mockDomEl({
+        id: "head_el",
+        parentId: "card_1",
+        tagName: "DIV",
+        rect: { x: 70, y: 60, width: 500, height: 40 },
+        textSnippet: "Header Text",
+        depth: 3,
+      }),
+      mockDomEl({
+        id: "card_2",
+        parentId: "feed_container",
+        tagName: "ARTICLE",
+        rect: { x: 60, y: 350, width: 780, height: 250 },
+        textSnippet: "Footer Text only",
+        childrenIds: ["foot_el"],
+        depth: 2,
+        isArticleOrCard: true,
+      }),
+      mockDomEl({
+        id: "foot_el",
+        parentId: "card_2",
+        tagName: "DIV",
+        rect: { x: 70, y: 500, width: 500, height: 40 },
+        textSnippet: "Footer Text",
+        depth: 3,
+      }),
+    ],
+  };
+
+  const res = executeLiveBrowserMatchTest(regions, snapshot);
+  assert.equal(res.status, "FAILED");
+  assert.equal(res.matchedPostCount, 0);
+  assert.match(res.groups[0]!.failureReason!, /Cross-post mismatch rejected/);
+});
+
+test("C2.10 Part B: Match Test pairs multiple visible posts without cross-post mixing", () => {
+  const regions: CollectorRegion[] = [
+    createCollectorRegion({
+      captureItemId: "cap_1",
+      type: "BEGIN",
+      groupTag: "post-stream",
+      label: "Header",
+      box: { x: 50, y: 50, width: 400, height: 50 },
+      imageWidth: 1000,
+      imageHeight: 1000,
+      ocrText: "Author Header",
+    }),
+    createCollectorRegion({
+      captureItemId: "cap_1",
+      type: "END",
+      groupTag: "post-stream",
+      label: "Footer",
+      box: { x: 50, y: 500, width: 400, height: 40 },
+      imageWidth: 1000,
+      imageHeight: 1000,
+      ocrText: "Actions Bar",
+    }),
+  ];
+
+  // Feed with 2 independent post cards:
+  // Post 1: h1 (y:100), f1 (y:250) inside card_1
+  // Post 2: h2 (y:400), f2 (y:550) inside card_2
+  const snapshot: CollectorDomSnapshot = {
+    url: "https://example.com/feed",
+    capturedAt: new Date().toISOString(),
+    viewport: { width: 1280, height: 900, scrollX: 0, scrollY: 0, dpr: 1 },
+    elements: [
+      mockDomEl({
+        id: "feed_wrapper",
+        tagName: "DIV",
+        role: "feed",
+        rect: { x: 50, y: 0, width: 800, height: 900 },
+        childrenIds: ["card_1", "card_2"],
+        depth: 1,
+        isFeedContainer: true,
+      }),
+      mockDomEl({
+        id: "card_1",
+        parentId: "feed_wrapper",
+        tagName: "ARTICLE",
+        rect: { x: 60, y: 80, width: 780, height: 220 },
+        textSnippet: "Author Header Post 1 Actions Bar",
+        childrenIds: ["h1", "f1"],
+        depth: 2,
+        isArticleOrCard: true,
+      }),
+      mockDomEl({
+        id: "h1",
+        parentId: "card_1",
+        tagName: "DIV",
+        rect: { x: 70, y: 100, width: 500, height: 40 },
+        textSnippet: "Author Header",
+        depth: 3,
+      }),
+      mockDomEl({
+        id: "f1",
+        parentId: "card_1",
+        tagName: "DIV",
+        rect: { x: 70, y: 250, width: 500, height: 30 },
+        textSnippet: "Actions Bar",
+        depth: 3,
+      }),
+      mockDomEl({
+        id: "card_2",
+        parentId: "feed_wrapper",
+        tagName: "ARTICLE",
+        rect: { x: 60, y: 380, width: 780, height: 220 },
+        textSnippet: "Author Header Post 2 Actions Bar",
+        childrenIds: ["h2", "f2"],
+        depth: 2,
+        isArticleOrCard: true,
+      }),
+      mockDomEl({
+        id: "h2",
+        parentId: "card_2",
+        tagName: "DIV",
+        rect: { x: 70, y: 400, width: 500, height: 40 },
+        textSnippet: "Author Header",
+        depth: 3,
+      }),
+      mockDomEl({
+        id: "f2",
+        parentId: "card_2",
+        tagName: "DIV",
+        rect: { x: 70, y: 550, width: 500, height: 30 },
+        textSnippet: "Actions Bar",
+        depth: 3,
+      }),
+    ],
+  };
+
+  const res = executeLiveBrowserMatchTest(regions, snapshot);
+  assert.equal(res.status, "MATCHED");
+  assert.equal(res.matchedPostCount, 2); // Matched both posts!
+});
+
+test("C2.10 Part B: Match Test reports PARTIAL when END anchor is missing in DOM", () => {
+  const regions: CollectorRegion[] = [
+    createCollectorRegion({
+      captureItemId: "cap_1",
+      type: "BEGIN",
+      groupTag: "post-stream",
+      label: "Header",
+      box: { x: 50, y: 50, width: 400, height: 50 },
+      imageWidth: 1000,
+      imageHeight: 1000,
+      ocrText: "Author Header",
+    }),
+    createCollectorRegion({
+      captureItemId: "cap_1",
+      type: "END",
+      groupTag: "post-stream",
+      label: "Footer",
+      box: { x: 50, y: 500, width: 400, height: 40 },
+      imageWidth: 1000,
+      imageHeight: 1000,
+      ocrText: "Actions Bar",
+    }),
+  ];
+
+  const snapshot: CollectorDomSnapshot = {
+    url: "https://example.com/feed",
+    capturedAt: new Date().toISOString(),
+    viewport: { width: 1280, height: 900, scrollX: 0, scrollY: 0, dpr: 1 },
+    elements: [
+      mockDomEl({
+        id: "h1",
+        tagName: "DIV",
+        rect: { x: 70, y: 100, width: 500, height: 40 },
+        textSnippet: "Author Header",
+        depth: 2,
+      }),
+    ],
+  };
+
+  const res = executeLiveBrowserMatchTest(regions, snapshot);
+  assert.equal(res.status, "PARTIAL");
+  assert.equal(res.matchedPostCount, 0);
+  assert.match(res.groups[0]!.failureReason!, /END anchor/);
+});
+
+test("C2.10 Part D: Data Compatibility - v6 envelope migration to v7", () => {
+  const v6Payload = JSON.stringify({
+    schemaVersion: 6,
+    updatedAt: "2026-11-08T00:00:00.000Z",
+    collectors: [
+      {
+        id: "c_v6",
+        name: "Legacy V6 Collector",
+        description: "Test description",
+        status: "draft",
+        wizardStep: 3, // Old Discovery step
+        captures: [],
+        variables: [],
+      },
+    ],
+  });
+
+  const env = parseEnvelope(v6Payload);
+  assert.equal(env.schemaVersion, 7);
+  assert.equal(env.collectors.length, 1);
+  const col = env.collectors[0]!;
+  // Old step 3 (Discovery) migrates to step 4 in the 5-step wizard
+  assert.equal(col.wizardStep, 4);
+  // Match Test is NOT silently marked as MATCHED
+  assert.equal(col.matchTest, undefined);
 });

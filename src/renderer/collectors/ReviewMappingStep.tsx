@@ -39,6 +39,7 @@ import type {
   CollectorRegionRole,
   CollectorRegionType,
   CollectorVariable,
+  CollectorVariableMapping,
   LayoutContextKind,
 } from "../../shared/collectors/types";
 import { isRealCapture } from "../../shared/collectors/types";
@@ -164,6 +165,7 @@ export function StepReviewMapping({ draft, locked, onChange, invoke }: Props) {
 
   // Safe region deletion confirmation state
   const [regionPendingDelete, setRegionPendingDelete] = useState<CollectorRegion | null>(null);
+  const [showFullScreenshotModal, setShowFullScreenshotModal] = useState(false);
 
   const imageContainerRef = useRef<HTMLDivElement>(null);
 
@@ -280,74 +282,110 @@ export function StepReviewMapping({ draft, locked, onChange, invoke }: Props) {
     return null;
   }, [regionPendingDelete, activeRegions]);
 
-  const runOcr = useCallback(
-    async (force = false) => {
-      if (!active || ocrLoading) return;
-      if (active.ocr && !force) return;
+  const currentRegion = selectedRegion || activeRegions[0];
+
+  const runRegionOcr = useCallback(
+    async (force = false, targetRegionId?: string) => {
+      const regId = targetRegionId || selectedRegionId || activeRegions[0]?.id;
+      const targetReg = activeRegions.find((r) => r.id === regId);
+      if (!targetReg || !active || ocrLoading) return;
+      if (targetReg.ocr && !force) return;
 
       setOcrLoading(true);
       setOcrError(undefined);
       try {
         let result: OcrResult;
-        if (active.imageAsset && invoke && isElectronBrowserCoreAvailable()) {
-          result = await collectorOcrAsset(invoke, active.imageAsset);
-        } else {
+        const roi = targetReg.originalRoi;
+        if (active.imageAsset && invoke && isElectronBrowserCoreAvailable() && roi) {
+          result = await collectorOcrAsset(invoke, active.imageAsset, roi);
+          // Coordinates from ocrTarget with crop are offset by roi.x and roi.y.
+          // Convert to crop-local coordinates for overlay rendering:
+          const offsetX = roi.x;
+          const offsetY = roi.y;
           result = {
-            text: "Dạ em đang học CNTT và muốn hỏi về lộ trình...\n29 bình luận\n40 lượt thích",
-            confidence: 91,
+            ...result,
+            segments: result.segments.map((seg) => ({
+              ...seg,
+              bbox: {
+                ...seg.bbox,
+                x: seg.bbox.x >= offsetX ? seg.bbox.x - offsetX : seg.bbox.x,
+                y: seg.bbox.y >= offsetY ? seg.bbox.y - offsetY : seg.bbox.y,
+              },
+            })),
+          };
+        } else {
+          const cropW = roi?.width || 300;
+          const cropH = roi?.height || 60;
+          const sampleText = targetReg.ocrEvidence?.text || targetReg.label;
+          result = {
+            text: sampleText,
+            confidence: 92,
             language: "vie+eng",
             segments: [
-              { id: "0", text: "Dạ em đang học CNTT và muốn hỏi về lộ trình...", kind: "line", confidence: 94, bbox: { x: 50, y: 120, width: 600, height: 75 } },
-              { id: "1", text: "29", kind: "word", confidence: 88, bbox: { x: 50, y: 220, width: 35, height: 20 } },
-              { id: "2", text: "40", kind: "word", confidence: 87, bbox: { x: 110, y: 220, width: 35, height: 20 } },
+              {
+                id: `${targetReg.id}_seg_0`,
+                text: sampleText,
+                kind: "block",
+                confidence: 94,
+                bbox: { x: 5, y: 5, width: Math.max(20, cropW - 10), height: Math.max(15, cropH - 10) },
+              },
             ],
           };
         }
 
-        const nextCaptures = (draft.captures ?? []).map((c) =>
-          c.id === active.id ? { ...c, ocr: result } : c,
+        const nextRegions = (draft.regions ?? []).map((r) =>
+          r.id === targetReg.id
+            ? {
+                ...r,
+                ocr: result,
+                ocrEvidence: {
+                  text: result.text,
+                  confidence: result.confidence,
+                  segmentIds: result.segments.map((s) => s.id),
+                },
+                updatedAt: new Date().toISOString(),
+              }
+            : r,
         );
-        let nextDraft: CollectorDraft = {
+
+        onChange({
           ...draft,
-          captures: nextCaptures,
+          regions: nextRegions,
           dirty: true,
-        };
-
-        if (!isTeaching) {
-          nextDraft = proposeLearnedMappings(
-            nextDraft,
-            active.id,
-            imageDims.width,
-            imageDims.height,
-          );
-        }
-
-        onChange(nextDraft);
+        });
       } catch (err) {
         setOcrError(String(err));
       } finally {
         setOcrLoading(false);
       }
     },
-    [active, ocrLoading, invoke, draft, isTeaching, imageDims.width, imageDims.height, onChange],
+    [active, activeRegions, draft, invoke, ocrLoading, onChange, selectedRegionId],
   );
 
   useEffect(() => {
-    if (!active) return;
-    if (step2Stage === "fields" && !active.ocr) {
-      void runOcr(false);
+    if (!active || step2Stage !== "fields") return;
+    const target = selectedRegion || activeRegions[0];
+    if (target && !target.ocr) {
+      void runRegionOcr(false, target.id);
     }
-  }, [active?.id, active?.ocr, step2Stage, runOcr]);
+  }, [active?.id, step2Stage, selectedRegion?.id, selectedRegion?.ocr, activeRegions, runRegionOcr]);
 
   const activeSegments = useMemo(() => {
-    if (!active?.ocr) return [];
-    return getSegmentsByLevel(active.ocr, groupingLevel, imageDims.width, imageDims.height);
-  }, [active?.ocr, groupingLevel, imageDims.width, imageDims.height]);
+    const ocrSource = currentRegion?.ocr || active?.ocr;
+    if (!ocrSource) return [];
+    const w = currentRegion?.originalRoi?.width || imageDims.width;
+    const h = currentRegion?.originalRoi?.height || imageDims.height;
+    return getSegmentsByLevel(ocrSource, groupingLevel, w, h);
+  }, [currentRegion?.ocr, currentRegion?.originalRoi, active?.ocr, groupingLevel, imageDims.width, imageDims.height]);
 
   function getMappedVariableForSegment(segment: OcrSegment) {
     if (!active) return undefined;
     return draft.variables.find((v) => {
-      const m = v.mappings.find((entry) => entry.sampleId === active.id);
+      const m = v.mappings.find(
+        (entry) =>
+          entry.sampleId === active.id &&
+          (!entry.regionId || !currentRegion || entry.regionId === currentRegion.id),
+      );
       if (!m || m.presence !== "mapped") return false;
       if (m.segmentId === segment.id) return true;
       if (m.text && segment.text && m.text.trim() === segment.text.trim()) return true;
@@ -362,16 +400,56 @@ export function StepReviewMapping({ draft, locked, onChange, invoke }: Props) {
 
   function handleAssignSegment(segment: OcrSegment, varId: string) {
     if (!active || !varId) return;
-    onChange(
-      assignOcrSegmentToVariable(
-        draft,
-        active.id,
-        varId,
-        segment,
-        imageDims.width,
-        imageDims.height,
-      ),
-    );
+    const roiX = currentRegion?.originalRoi?.x ?? 0;
+    const roiY = currentRegion?.originalRoi?.y ?? 0;
+    const screenshotBbox: Rect = {
+      x: roiX + segment.bbox.x,
+      y: roiY + segment.bbox.y,
+      width: segment.bbox.width,
+      height: segment.bbox.height,
+    };
+
+    const variables = draft.variables.map((v) => {
+      if (v.id !== varId) return v;
+      const otherMappings = v.mappings.filter(
+        (m) => !(m.sampleId === active.id && (m.regionId === currentRegion?.id || !m.regionId)),
+      );
+      const newMapping: CollectorVariableMapping = {
+        sampleId: active.id,
+        regionId: currentRegion?.id,
+        presence: "mapped",
+        confirmed: true,
+        text: segment.text,
+        confidence: segment.confidence,
+        bbox: screenshotBbox,
+        segmentId: segment.id,
+      };
+      return {
+        ...v,
+        mappings: [...otherMappings, newMapping],
+      };
+    });
+
+    let nextRegions = draft.regions;
+    const targetVar = draft.variables.find((v) => v.id === varId);
+    if (currentRegion && targetVar) {
+      nextRegions = (draft.regions ?? []).map((r) =>
+        r.id === currentRegion.id
+          ? {
+              ...r,
+              candidateVariableKeys: Array.from(new Set([...r.candidateVariableKeys, targetVar.key])),
+              updatedAt: new Date().toISOString(),
+            }
+          : r,
+      );
+    }
+
+    onChange({
+      ...draft,
+      variables,
+      regions: nextRegions,
+      dirty: true,
+    });
   }
 
   function handleCreateVariableFromSegment(segment: OcrSegment) {
@@ -399,15 +477,8 @@ export function StepReviewMapping({ draft, locked, onChange, invoke }: Props) {
       variables: [...draft.variables, newVar],
       dirty: true,
     };
-    const nextDraft = assignOcrSegmentToVariable(
-      draftWithVar,
-      active.id,
-      newVar.id,
-      segment,
-      imageDims.width,
-      imageDims.height,
-    );
-    onChange(nextDraft);
+    onChange(draftWithVar);
+    handleAssignSegment(segment, newVar.id);
     setEditingId(newVar.id);
   }
 
@@ -931,7 +1002,7 @@ export function StepReviewMapping({ draft, locked, onChange, invoke }: Props) {
                 </div>
               )}
 
-              {/* STAGE 2B Toolbar: OCR Word/Line/Block + Search */}
+              {/* STAGE 2B Toolbar: Region Selector + OCR Word/Line/Block + Search */}
               {step2Stage === "fields" && (
                 <>
                   <button
@@ -941,6 +1012,26 @@ export function StepReviewMapping({ draft, locked, onChange, invoke }: Props) {
                   >
                     ← Back to Regions
                   </button>
+                  {/* Region Selector Pills */}
+                  <div className="collector-region-selector-bar" role="tablist" aria-label="Regions on capture">
+                    <span className="collector-subheading" style={{ fontSize: "11px", color: "#7f93ab" }}>Region:</span>
+                    {activeRegions.map((reg) => (
+                      <button
+                        key={reg.id}
+                        type="button"
+                        className={`collector-region-pill ${reg.type.toLowerCase()} ${(currentRegion?.id === reg.id) ? "active" : ""}`}
+                        onClick={() => {
+                          setSelectedRegionId(reg.id);
+                          setSelectedSegmentId(undefined);
+                        }}
+                      >
+                        <span className={`collector-region-tag ${reg.type.toLowerCase()}`}>{reg.type}</span>
+                        {reg.groupTag && <span className="collector-group-badge">#{reg.groupTag}</span>}
+                        <span>{reg.label}</span>
+                        {reg.ocr ? <span style={{ color: "#68d6a6", marginLeft: "2px" }}>✓</span> : null}
+                      </button>
+                    ))}
+                  </div>
                   <div className="collector-level-toggle" role="group" aria-label="OCR grouping level">
                     {(["block", "line", "word"] as OcrGroupingLevel[]).map((lvl) => (
                       <button
@@ -959,20 +1050,27 @@ export function StepReviewMapping({ draft, locked, onChange, invoke }: Props) {
                   <input
                     type="search"
                     className="collector-toolbar-search"
-                    placeholder="Search text on image..."
+                    placeholder="Search text on region..."
                     value={segmentSearch}
                     onChange={(e) => setSegmentSearch(e.target.value)}
                   />
                   <div style={{ marginLeft: "auto", display: "flex", gap: "6px", alignItems: "center" }}>
+                    <button
+                      type="button"
+                      onClick={() => setShowFullScreenshotModal(true)}
+                      title="View full original screenshot for reference"
+                    >
+                      🖼 Full Screenshot
+                    </button>
                     {ocrLoading && <small style={{ color: "#68d6a6" }}>Extracting OCR...</small>}
                     {ocrError && <small style={{ color: "#e05a5a" }}>OCR failed</small>}
                     <button
                       type="button"
-                      disabled={locked || ocrLoading}
-                      onClick={() => void runOcr(true)}
-                      title="Re-run offline OCR extraction"
+                      disabled={locked || ocrLoading || !currentRegion}
+                      onClick={() => void runRegionOcr(true, currentRegion?.id)}
+                      title="Re-run OCR for selected region"
                     >
-                      {ocrLoading ? "Extracting..." : "Re-run OCR"}
+                      {ocrLoading ? "Extracting..." : "Re-run Region OCR"}
                     </button>
                   </div>
                 </>
@@ -982,7 +1080,110 @@ export function StepReviewMapping({ draft, locked, onChange, invoke }: Props) {
             </div>
 
             <div className="collector-review-image-frame">
-              {previewSrcUrl ? (
+              {step2Stage === "fields" ? (
+                /* STAGE 2B — Region Crop Primary Workspace */
+                <div className="collector-region-crop-workspace">
+                  {activeRegions.length === 0 ? (
+                    <div className="collector-sample-empty" style={{ padding: "40px 20px", textAlign: "center" }}>
+                      <p style={{ color: "#e0b35a", fontWeight: "bold" }}>No anchor regions defined on this capture item.</p>
+                      <p style={{ color: "#7f93ab", fontSize: "12px", marginBottom: "16px" }}>
+                        Go back to Stage 2A (Region Teaching) to draw BEGIN, END, or FREE anchors first.
+                      </p>
+                      <button type="button" className="primary" onClick={() => setStep2Stage("regions")}>
+                        ← Go to Stage 2A (Region Teaching)
+                      </button>
+                    </div>
+                  ) : currentRegion ? (
+                    <div className="collector-region-crop-card">
+                      <div className="collector-region-crop-meta">
+                        <div style={{ display: "flex", gap: "8px", alignItems: "center", flexWrap: "wrap" }}>
+                          <span className={`collector-region-tag ${currentRegion.type.toLowerCase()}`}>
+                            {currentRegion.type}
+                          </span>
+                          {currentRegion.groupTag && (
+                            <span className="collector-group-badge">#{currentRegion.groupTag}</span>
+                          )}
+                          <b style={{ color: "#e2e8f0" }}>{currentRegion.label}</b>
+                          {currentRegion.originalRoi && (
+                            <small style={{ color: "#7f93ab" }}>
+                              [{currentRegion.originalRoi.width}×{currentRegion.originalRoi.height} at ({currentRegion.originalRoi.x}, {currentRegion.originalRoi.y})]
+                            </small>
+                          )}
+                        </div>
+                        <small style={{ color: "#68d6a6" }}>
+                          Teaching Reference Crop (Primary OCR Workspace)
+                        </small>
+                      </div>
+
+                      <div className="collector-region-crop-view-frame">
+                        {currentRegion.referenceImage ? (
+                          <div
+                            className="collector-review-image-container region-crop-view"
+                            style={{
+                              position: "relative",
+                              display: "inline-block",
+                              maxWidth: "100%",
+                              background: "#0f172a",
+                              borderRadius: "4px",
+                              overflow: "hidden",
+                              border: "1px solid #2b394a",
+                            }}
+                          >
+                            <img
+                              src={currentRegion.referenceImage}
+                              alt={`Crop for region ${currentRegion.label}`}
+                              draggable={false}
+                              style={{
+                                display: "block",
+                                maxWidth: "100%",
+                                maxHeight: "440px",
+                                height: "auto",
+                                userSelect: "none",
+                              }}
+                            />
+
+                            {/* STAGE 2B — OCR Field Mapping Overlay */}
+                            {step2Stage === "fields" && active.ocr && (
+                              <div className="collector-ocr-overlay">
+                                {activeSegments.map((s) => {
+                                  const mappedVar = getMappedVariableForSegment(s);
+                                  const m = mappedVar?.mappings.find((entry) => entry.sampleId === active.id);
+                                  const isProposed = Boolean(m?.simulatedProposal && !m?.confirmed);
+                                  const isSelected = selectedSegmentId === s.id;
+                                  const isSearchMatch =
+                                    !segmentSearch.trim() ||
+                                    normalizeVietnameseText(s.text).includes(normalizeVietnameseText(segmentSearch.trim()));
+                                  const cropW = Math.max(1, currentRegion.originalRoi?.width || 300);
+                                  const cropH = Math.max(1, currentRegion.originalRoi?.height || 60);
+                                  return (
+                                    <div
+                                      key={s.id}
+                                      className={`collector-ocr-box ${isSelected ? "selected" : ""} ${mappedVar && !isProposed ? "mapped" : ""} ${isProposed ? "proposed" : ""} ${!isSearchMatch ? "dimmed" : ""}`}
+                                      style={{
+                                        position: "absolute",
+                                        left: `${(s.bbox.x / cropW) * 100}%`,
+                                        top: `${(s.bbox.y / cropH) * 100}%`,
+                                        width: `${(s.bbox.width / cropW) * 100}%`,
+                                        height: `${(s.bbox.height / cropH) * 100}%`,
+                                      }}
+                                      onClick={() => setSelectedSegmentId(s.id)}
+                                      title={`${s.text} (${Math.round(s.confidence)}%)`}
+                                    />
+                                  );
+                                })}
+                              </div>
+                            )}
+                          </div>
+                        ) : (
+                          <div className="collector-sample-empty">
+                            No reference crop available for this region.
+                          </div>
+                        )}
+                      </div>
+                    </div>
+                  ) : null}
+                </div>
+              ) : previewSrcUrl ? (
                 <div
                   ref={imageContainerRef}
                   className={`collector-review-image-container mode-${regionInteractionMode}`}
@@ -1127,38 +1328,6 @@ export function StepReviewMapping({ draft, locked, onChange, invoke }: Props) {
                           </span>
                         </div>
                       )}
-                    </div>
-                  )}
-
-                  {/* STAGE 2B — OCR Field Mapping Overlay */}
-                  {step2Stage === "fields" && active.ocr && (
-                    <div className="collector-ocr-overlay">
-                      {activeSegments.map((s) => {
-                        const mappedVar = getMappedVariableForSegment(s);
-                        const m = mappedVar?.mappings.find((entry) => entry.sampleId === active.id);
-                        const isProposed = Boolean(m?.simulatedProposal && !m?.confirmed);
-                        const isSelected = selectedSegmentId === s.id;
-                        const isSearchMatch =
-                          !segmentSearch.trim() ||
-                          normalizeVietnameseText(s.text).includes(normalizeVietnameseText(segmentSearch.trim()));
-                        const w = Math.max(1, imageDims.width);
-                        const h = Math.max(1, imageDims.height);
-                        return (
-                          <div
-                            key={s.id}
-                            className={`collector-ocr-box ${isSelected ? "selected" : ""} ${mappedVar && !isProposed ? "mapped" : ""} ${isProposed ? "proposed" : ""} ${!isSearchMatch ? "dimmed" : ""}`}
-                            style={{
-                              position: "absolute",
-                              left: `${(s.bbox.x / w) * 100}%`,
-                              top: `${(s.bbox.y / h) * 100}%`,
-                              width: `${(s.bbox.width / w) * 100}%`,
-                              height: `${(s.bbox.height / h) * 100}%`,
-                            }}
-                            onClick={() => setSelectedSegmentId(s.id)}
-                            title={`${s.text} (${Math.round(s.confidence)}%)`}
-                          />
-                        );
-                      })}
                     </div>
                   )}
                 </div>
@@ -2056,6 +2225,55 @@ export function StepReviewMapping({ draft, locked, onChange, invoke }: Props) {
             </button>
           </div>
         </UiPopover>
+      )}
+
+      {/* Full Screenshot Reference Modal */}
+      {showFullScreenshotModal && previewSrcUrl && (
+        <div
+          className="collector-modal-backdrop"
+          style={{
+            position: "fixed",
+            top: 0,
+            left: 0,
+            right: 0,
+            bottom: 0,
+            background: "rgba(0, 0, 0, 0.75)",
+            zIndex: 9999,
+            display: "flex",
+            alignItems: "center",
+            justifyContent: "center",
+            padding: "20px",
+          }}
+          onClick={() => setShowFullScreenshotModal(false)}
+        >
+          <div
+            style={{
+              background: "#1e293b",
+              border: "1px solid #334155",
+              borderRadius: "8px",
+              padding: "16px",
+              maxWidth: "90vw",
+              maxHeight: "90vh",
+              display: "flex",
+              flexDirection: "column",
+              gap: "10px",
+              overflow: "hidden",
+            }}
+            onClick={(e) => e.stopPropagation()}
+          >
+            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+              <b style={{ color: "#e2e8f0" }}>Full Original Screenshot Reference</b>
+              <button type="button" onClick={() => setShowFullScreenshotModal(false)}>✕ Close</button>
+            </div>
+            <div style={{ overflow: "auto", flex: 1 }}>
+              <img
+                src={previewSrcUrl}
+                alt="Full original screenshot reference"
+                style={{ maxWidth: "100%", height: "auto", display: "block", borderRadius: "4px" }}
+              />
+            </div>
+          </div>
+        </div>
       )}
     </div>
   );

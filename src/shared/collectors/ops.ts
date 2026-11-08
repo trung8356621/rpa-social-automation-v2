@@ -50,8 +50,9 @@ export function parseTypedValue(valType: CollectorValueType, rawText?: string): 
 export const WIZARD_STEPS: Array<{ id: WizardStepId; label: string; short: string }> = [
   { id: 1, label: "Capture", short: "Capture" },
   { id: 2, label: "Review & Mapping", short: "Review" },
-  { id: 3, label: "Discovery", short: "Discovery" },
-  { id: 4, label: "Validation", short: "Validation" },
+  { id: 3, label: "Match Test", short: "Match" },
+  { id: 4, label: "Discovery", short: "Discovery" },
+  { id: 5, label: "Validation", short: "Validation" },
 ];
 
 export const CAPTURE_AUDIT_STATUSES: CaptureAuditStatus[] = [
@@ -193,6 +194,13 @@ export function stepValidationErrors(draft: CollectorDraft, step: WizardStepId):
     }
   }
   if (step === 3) {
+    if (!draft.matchTest || draft.matchTest.status === "NOT TESTED") {
+      errors.push("Run a Live Browser Match Test before continuing to Discovery.");
+    } else if (draft.matchTest.status === "FAILED") {
+      errors.push(`Match Test failed: ${draft.matchTest.error || "Anchors could not be verified in live browser."}`);
+    }
+  }
+  if (step === 4) {
     if (!draft.strategy) {
       errors.push("Select a Strategy (FEED_NETWORK_JSON or POST_DETAIL_VISUAL) before discovery.");
     }
@@ -201,7 +209,7 @@ export function stepValidationErrors(draft: CollectorDraft, step: WizardStepId):
       errors.push("Accept at least one discovery candidate (simulated).");
     }
   }
-  if (step === 4) {
+  if (step === 5) {
     if (!draft.validation || draft.validation.outdated) {
       errors.push("Run a simulated validation (or re-run after mapping changes).");
     }
@@ -382,6 +390,7 @@ export function createVersionSnapshot(draft: CollectorDraft, label?: string): Co
     auditActions: structuredClone(draft.auditActions),
     regions: structuredClone(draft.regions ?? []),
     layoutContext: draft.layoutContext ?? "FEED_ITEM",
+    matchTest: draft.matchTest ? structuredClone(draft.matchTest) : undefined,
   };
 }
 
@@ -448,6 +457,7 @@ export function revertDraftToVersion(draft: CollectorDraft, versionId: string): 
     auditActions: structuredClone(snapshot.auditActions ?? []),
     regions: structuredClone(snapshot.regions ?? []),
     layoutContext: snapshot.layoutContext ?? "FEED_ITEM",
+    matchTest: snapshot.matchTest ? structuredClone(snapshot.matchTest) : undefined,
     status: "outdated_validation",
     dirty: true,
     updatedAt: new Date().toISOString(),

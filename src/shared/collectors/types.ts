@@ -8,8 +8,9 @@ export const COLLECTOR_STORAGE_KEY = "rpa.collectors.prototype.v1";
 /**
  * C1.6+: Four-step audit-driven wizard (Capture → Review & Mapping → Discovery → Validation).
  * C2: Real Browser Core captures (imageAsset) + Unknown extraction until engines exist.
+ * C2.10: Five-step wizard with Live Browser Match Test (Capture → Review → Match Test → Discovery → Validation).
  */
-export const COLLECTOR_SCHEMA_VERSION = 6;
+export const COLLECTOR_SCHEMA_VERSION = 7;
 
 export type CollectorStrategy = "FEED_NETWORK_JSON" | "POST_DETAIL_VISUAL";
 export type CollectorStatus = "draft" | "ready" | "outdated_validation";
@@ -28,8 +29,8 @@ export type CollectorSource =
   | "ocr_image"
   | "manual"
   | "derived";
-/** C1.6 top-level wizard: 1 Capture · 2 Review & Mapping · 3 Discovery · 4 Validation */
-export type WizardStepId = 1 | 2 | 3 | 4;
+/** C2.10 top-level wizard: 1 Capture · 2 Review & Mapping · 3 Match Test · 4 Discovery · 5 Validation */
+export type WizardStepId = 1 | 2 | 3 | 4 | 5;
 export type MappingPresence = "mapped" | "not_present" | "unmapped";
 /** Per-capture audit status — Proposed is never Confirmed. */
 export type CaptureAuditStatus =
@@ -97,6 +98,8 @@ export type CollectorVariableMapping = {
   bbox?: Rect;
   confidence?: number;
   evidence?: string;
+  // C2.10: Region association for container/region-scoped OCR
+  regionId?: string;
   normalizedBbox?: {
     relX: number;
     relY: number;
@@ -270,8 +273,60 @@ export type CollectorRegion = {
   };
   referenceImage?: string;
   referenceImageAsset?: string;
+  // C2.10: OCR result scoped strictly to this region crop
+  ocr?: OcrResult;
   createdAt: string;
   updatedAt: string;
+};
+
+export type MatchTestStatus = "NOT TESTED" | "MATCHED" | "PARTIAL" | "AMBIGUOUS" | "FAILED";
+
+export type AnchorMatchDetail = {
+  regionId: string;
+  role: "BEGIN" | "END" | "FREE";
+  groupTag?: string;
+  matched: boolean;
+  matchedElementId?: string;
+  matchedTagName?: string;
+  matchedRect?: Rect;
+  confidence: number;
+  method: "text_dom" | "visual_projection" | "none";
+  evidence?: string;
+};
+
+export type PostGroupMatch = {
+  groupTag: string;
+  status: MatchTestStatus;
+  beginMatch?: AnchorMatchDetail;
+  endMatch?: AnchorMatchDetail;
+  dynamicBounds?: {
+    dynamicStartY: number;
+    dynamicEndY: number;
+    height: number;
+    bounds: Rect;
+  };
+  domContainer?: {
+    containerId: string;
+    tagName: string;
+    role?: string;
+    depth: number;
+    isArticleOrCard: boolean;
+  };
+  domAssociationStatus: "CONFIRMED" | "FAILED" | "NOT_RESOLVED";
+  visualConfidence: number;
+  limitations?: string[];
+  failureReason?: string;
+};
+
+export type MatchTestResult = {
+  testedAt: string;
+  browserUrl: string;
+  status: MatchTestStatus;
+  matchedPostCount: number;
+  groups: PostGroupMatch[];
+  summary: string;
+  limitations?: string[];
+  error?: string;
 };
 
 export type LayoutContextKind = "FEED_ITEM" | "POST_DETAIL";
@@ -438,6 +493,7 @@ export type CollectorVersionSnapshot = {
   auditActions?: AuditRecordAction[];
   regions?: CollectorRegion[];
   layoutContext?: LayoutContextKind;
+  matchTest?: MatchTestResult;
 };
 
 export type CollectorDraft = {
@@ -482,6 +538,8 @@ export type CollectorDraft = {
   regions?: CollectorRegion[];
   /** Layout context: feed stream item vs single post detail page (C2.8) */
   layoutContext?: LayoutContextKind;
+  /** Live Browser Match Test results (C2.10) */
+  matchTest?: MatchTestResult;
   versions: CollectorVersionSnapshot[];
   activeVersionId?: string;
   dirty: boolean;

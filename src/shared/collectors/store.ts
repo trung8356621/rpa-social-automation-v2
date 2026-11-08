@@ -60,26 +60,32 @@ function parseStrategy(raw: unknown): CollectorStrategy | "" {
 }
 
 /**
- * Normalize persisted wizard steps into C1.6 four-step space.
- * C1: 1..6 → (+1) C1.1–C1.5 seven-step → C1.6: Capture / Review / Discovery / Validation.
+ * Normalize persisted wizard steps into C2.10 five-step space.
+ * C1: 1..6 → (+1) C1.1–C1.5 seven-step → C1.6: Capture / Review / Discovery / Validation → C2.10: Capture / Review / Match Test / Discovery / Validation.
  */
 export function migrateWizardStep(rawStep: unknown, fromSchema: number): WizardStepId {
   let n = Number(rawStep);
   if (!Number.isFinite(n)) return 1;
   // C1 → C1.1 seven-step: insert Capture at 1
   if (fromSchema < 2 && n >= 1 && n <= 6) n = n + 1;
-  // Already on C1.6 four-step
-  if (fromSchema >= 5) {
-    if (n === 1 || n === 2 || n === 3 || n === 4) return n;
-    if (n <= 5) return 2;
-    if (n === 6) return 3;
-    return 4;
+  // Already on C2.10 five-step space
+  if (fromSchema >= 7) {
+    if (n >= 1 && n <= 5) return n as WizardStepId;
+    return 1;
   }
-  // Seven-step → four-step
+  // Migrating from C1.6 four-step (schema 5 or 6)
+  if (fromSchema >= 5) {
+    if (n === 1) return 1;
+    if (n === 2) return 2;
+    if (n === 3) return 4; // Discovery moved to 4
+    if (n === 4) return 5; // Validation moved to 5
+    return 1;
+  }
+  // Seven-step → five-step
   if (n <= 1) return 1;
   if (n <= 5) return 2; // Review / Assign / A / B / C → Review & Mapping
-  if (n === 6) return 3;
-  return 4;
+  if (n === 6) return 4;
+  return 5;
 }
 
 function parseCaptureAudit(raw: unknown): CaptureAudit | null {
@@ -342,6 +348,8 @@ function sanitizeCollector(
     warnings.push(`Migrated collector "${raw.name}" from schema v${fromSchema} → v${COLLECTOR_SCHEMA_VERSION} (audit-driven review)`);
   } else if (fromSchema < 6) {
     warnings.push(`Migrated collector "${raw.name}" from schema v${fromSchema} → v${COLLECTOR_SCHEMA_VERSION} (real browser captures)`);
+  } else if (fromSchema < 7) {
+    warnings.push(`Migrated collector "${raw.name}" from schema v${fromSchema} → v${COLLECTOR_SCHEMA_VERSION} (Match Test step)`);
   }
   const status =
     raw.status === "ready" || raw.status === "outdated_validation" ? raw.status : "draft";
@@ -404,6 +412,7 @@ function sanitizeCollector(
       : [],
     regions: Array.isArray(raw.regions) ? (raw.regions as CollectorDraft["regions"]) : [],
     layoutContext: raw.layoutContext === "POST_DETAIL" ? "POST_DETAIL" : "FEED_ITEM",
+    matchTest: isObject(raw.matchTest) ? (raw.matchTest as CollectorDraft["matchTest"]) : undefined,
     versions: Array.isArray(raw.versions) ? (raw.versions as CollectorDraft["versions"]) : [],
     activeVersionId: typeof raw.activeVersionId === "string" ? raw.activeVersionId : undefined,
     dirty: Boolean(raw.dirty),

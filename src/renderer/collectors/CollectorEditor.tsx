@@ -5,6 +5,7 @@ import type { State } from "../../shared/contracts";
 import { VersionPanel } from "./VersionPanel";
 import { StepCaptureSamples } from "./CaptureStep";
 import { StepReviewMapping } from "./ReviewMappingStep";
+import { StepMatchTest } from "./MatchTestStep";
 import { StepDiscovery, StepValidation } from "./wizard-steps";
 import type { CollectorInvoke } from "./browser-capture";
 
@@ -107,7 +108,7 @@ export function CollectorEditor({
   }, [initial.id]);
 
   useEffect(() => {
-    if (draft.wizardStep === 1 || draft.wizardStep === 2 || drawerMode) setVersionsOpen(false);
+    if (draft.wizardStep === 1 || draft.wizardStep === 2 || draft.wizardStep === 3 || drawerMode) setVersionsOpen(false);
     else setVersionsOpen(true);
   }, [drawerMode, draft.wizardStep]);
 
@@ -310,8 +311,18 @@ export function CollectorEditor({
                 invoke={invoke}
               />
             )}
-            {draft.wizardStep === 3 && <StepDiscovery draft={draft} locked={locked} onChange={patch} />}
-            {draft.wizardStep === 4 && (
+            {draft.wizardStep === 3 && (
+              <StepMatchTest
+                draft={draft}
+                locked={locked}
+                onChange={patch}
+                invoke={invoke}
+                state={state}
+                onSelectSession={onSelectSession}
+              />
+            )}
+            {draft.wizardStep === 4 && <StepDiscovery draft={draft} locked={locked} onChange={patch} />}
+            {draft.wizardStep === 5 && (
               <StepValidation
                 draft={draft}
                 locked={locked}
@@ -339,7 +350,7 @@ export function CollectorEditor({
             </button>
             <button
               type="button"
-              disabled={locked || draft.wizardStep === 4}
+              disabled={locked || draft.wizardStep === 5}
               className="primary"
               onClick={() => goto((draft.wizardStep + 1) as WizardStepId, true)}
             >

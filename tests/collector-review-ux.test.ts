@@ -315,7 +315,7 @@ test("UX 14: Verification supports single anchor without requiring hardcoded Hea
 test("UX 15: Stage 2A completely separates OCR from Region Teaching (no OCR boxes in 2A)", () => {
   // Extract Stage 2A JSX block
   const stage2aMatch = reviewSource.match(
-    /\{step2Stage === ["']regions["'] && \(\s*<div[\s\S]*?className=["']collector-ocr-overlay["'][\s\S]*?<\/div>\s*\)\}/
+    /\{step2Stage === ["']regions["'] && \(\s*<div\s+className=["']collector-ocr-overlay["'][\s\S]*?<\/div>\s*\)\}/
   );
   assert.ok(stage2aMatch, "Stage 2A overlay block must exist");
   const stage2aJsx = stage2aMatch[0];
