@@ -157,52 +157,16 @@ export class BrowserCore {
 
   /**
    * Prime CDP + compositor after the view is hidden for Capture Mode.
-   * First Page.captureScreenshot on a freshly hidden WebContentsView often stalls;
-   * running this during scroll-capture begin removes the "2 timeouts then success" warm-up.
+   * With stayHidden capture, hidden surface stalls are avoided.
    */
   async prepareSurfaceCapture(): Promise<{ ok: boolean; attempts: number; error?: string }> {
-    const wc = this.view.webContents;
-    let attempts = 0;
-    let lastError = "";
-    for (let i = 0; i < 2; i++) {
-      attempts++;
-      let release!: () => void;
-      const prev = this.captureGate;
-      this.captureGate = new Promise<void>((r) => {
-        release = r;
-      });
-      await prev;
-      let timer: ReturnType<typeof setTimeout> | undefined;
-      try {
-        if (!wc.debugger.isAttached()) wc.debugger.attach("1.3");
-        await wc.debugger.sendCommand("Page.enable").catch(() => undefined);
-        await Promise.race([
-          wc.debugger.sendCommand("Page.captureScreenshot", {
-            format: "png",
-            fromSurface: true,
-            captureBeyondViewport: false,
-          }),
-          new Promise<never>((_, reject) => {
-            timer = setTimeout(
-              () => reject(new Error("Screenshot timeout: không có frame sau 4 giây.")),
-              4000,
-            );
-          }),
-        ]);
-        return { ok: true, attempts };
-      } catch (e) {
-        lastError = e instanceof Error ? e.message : String(e);
-        try {
-          if (wc.debugger.isAttached()) wc.debugger.detach();
-        } catch {
-          /* ignore */
-        }
-      } finally {
-        if (timer) clearTimeout(timer);
-        release();
-      }
+    try {
+      const img = await this.view.webContents.capturePage(undefined, { stayHidden: true });
+      if (img.isEmpty()) throw new Error("Empty surface frame");
+      return { ok: true, attempts: 1 };
+    } catch (e) {
+      return { ok: false, attempts: 1, error: e instanceof Error ? e.message : String(e) };
     }
-    return { ok: false, attempts, error: lastError };
   }
 
   async capture(options?: {
@@ -234,33 +198,45 @@ export class BrowserCore {
     if (Math.abs(zoom - this.zoom) > 0.001)
       throw new Error("Zoom đã thay đổi. Nạp lại môi trường trước khi test.");
     let raw: Buffer;
-    {
-      let timer: ReturnType<typeof setTimeout> | undefined;
+    const wasHidden = !this.visible;
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    try {
+      if (wasHidden) {
+        // Temporarily wake WebContentsView visibility so Chromium compositor generates
+        // the display surface frame for the scrolled content without stalling.
+        this.view.setVisible(true);
+      }
+      if (!wc.debugger.isAttached()) wc.debugger.attach("1.3");
+      await wc.debugger.sendCommand("Page.enable").catch(() => undefined);
+      const frame = await Promise.race([
+        wc.debugger.sendCommand("Page.captureScreenshot", {
+          format: "png",
+          fromSurface: true,
+          captureBeyondViewport: false,
+        }),
+        new Promise<never>((_, reject) => {
+          timer = setTimeout(
+            () =>
+              reject(
+                new Error("Screenshot timeout: không có frame sau 4 giây."),
+              ),
+            4000,
+          );
+        }),
+      ]);
+      raw = Buffer.from(frame.data, "base64");
+    } catch (e) {
+      if (wc.debugger.isAttached()) wc.debugger.detach();
       try {
-        if (!wc.debugger.isAttached()) wc.debugger.attach("1.3");
-        await wc.debugger.sendCommand("Page.enable").catch(() => undefined);
-        const frame = await Promise.race([
-          wc.debugger.sendCommand("Page.captureScreenshot", {
-            format: "png",
-            fromSurface: true,
-            captureBeyondViewport: false,
-          }),
-          new Promise<never>((_, reject) => {
-            timer = setTimeout(
-              () =>
-                reject(
-                  new Error("Screenshot timeout: không có frame sau 4 giây."),
-                ),
-              4000,
-            );
-          }),
-        ]);
-        raw = Buffer.from(frame.data, "base64");
-      } catch (e) {
-        if (wc.debugger.isAttached()) wc.debugger.detach();
+        const image = await wc.capturePage(undefined, { stayHidden: true });
+        raw = image.toPNG();
+      } catch {
         throw e;
-      } finally {
-        if (timer) clearTimeout(timer);
+      }
+    } finally {
+      if (timer) clearTimeout(timer);
+      if (wasHidden) {
+        this.view.setVisible(false);
       }
     }
     if (!raw.length) throw new Error("Browser trả về ảnh rỗng.");

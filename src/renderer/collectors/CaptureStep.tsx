@@ -189,6 +189,7 @@ export function StepCaptureSamples({
   const imageSizeRef = useRef({ width: 0, height: 0 });
   const imageBoxRef = useRef<{ width: number; height: number } | null>(null);
   const lastPointerClientRef = useRef<{ x: number; y: number } | null>(null);
+  const activePointerIdRef = useRef<number | null>(null);
   const edgeNavRafRef = useRef<number | null>(null);
   /** Bumped on cancel so in-flight runExtend cannot mutate after abort. */
   const extendEpochRef = useRef(0);
@@ -390,7 +391,7 @@ export function StepCaptureSamples({
       const clamped = clampRoiToImage(prevRoi, anchor, next.width, next.height);
       roiRef.current = clamped;
       setRoi(clamped);
-      if (resizing && lastPointerClientRef.current) {
+      if (dragRef.current?.kind === "resize" && lastPointerClientRef.current) {
         applyPointerToResizeDrag(lastPointerClientRef.current.x, lastPointerClientRef.current.y);
       }
     }
@@ -398,7 +399,7 @@ export function StepCaptureSamples({
       if (epoch !== extendEpochRef.current) return;
       const el = previewScrollRef.current;
       if (!el) return;
-      if (!resizing) el.scrollTop = keepScrollTop;
+      if (dragRef.current?.kind !== "resize") el.scrollTop = keepScrollTop;
       else if (lastPointerClientRef.current) {
         applyPointerToResizeDrag(lastPointerClientRef.current.x, lastPointerClientRef.current.y);
       }
@@ -581,9 +582,17 @@ export function StepCaptureSamples({
 
   function startResize(e: React.PointerEvent, edge: "right" | "bottom" | "corner") {
     e.stopPropagation();
+    e.preventDefault();
     if (locked || !roi || !shot) return;
-    (e.currentTarget as HTMLElement).setPointerCapture?.(e.pointerId);
-    surfaceRef.current?.setPointerCapture(e.pointerId);
+    const surface = surfaceRef.current;
+    if (surface) {
+      try {
+        surface.setPointerCapture(e.pointerId);
+        activePointerIdRef.current = e.pointerId;
+      } catch {
+        /* ignore */
+      }
+    }
     lastPointerClientRef.current = { x: e.clientX, y: e.clientY };
     const p = pointerPos(e);
     const original = anchorRef.current
@@ -636,15 +645,26 @@ export function StepCaptureSamples({
     }
     try {
       const marked = await collectorScrollCaptureMarkRoi(invoke, sessionRef.current.sessionId);
-      setScrollSession(marked);
-      sessionRef.current = marked;
+      setScrollSession((prev) => prev ? { ...prev, ...marked, dataUrl: prev.dataUrl || marked.dataUrl } : marked);
+      sessionRef.current = { ...(sessionRef.current || marked), ...marked, dataUrl: sessionRef.current?.dataUrl || marked.dataUrl };
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e));
     }
   }
 
-  function onPointerUp() {
+  function onPointerUp(e?: React.PointerEvent) {
     stopEdgeNavLoop();
+    const pid = e?.pointerId ?? activePointerIdRef.current;
+    if (pid != null && surfaceRef.current) {
+      try {
+        if (surfaceRef.current.hasPointerCapture(pid)) {
+          surfaceRef.current.releasePointerCapture(pid);
+        }
+      } catch {
+        /* ignore */
+      }
+    }
+    activePointerIdRef.current = null;
     const d = dragRef.current;
     if (!d || !imageWidth || !imageHeight) return;
     // Resize: commit live roiRef (updated during drag) — never recompute from stale current*.
@@ -779,8 +799,8 @@ export function StepCaptureSamples({
   }
 
   const liveRoi = drag
-    ? drag.kind === "resize" && imageWidth && imageHeight
-      ? resizeCaptureRoi(drag.original, drag.edge, drag.currentX, drag.currentY, imageWidth, imageHeight)
+    ? drag.kind === "resize"
+      ? (roi ?? (imageWidth && imageHeight ? resizeCaptureRoi(drag.original, drag.edge, drag.currentX, drag.currentY, imageWidth, imageHeight) : roi))
       : drag.kind === "select" ? {
         x: Math.min(drag.startX, drag.currentX),
         y: Math.min(drag.startY, drag.currentY),
@@ -868,11 +888,18 @@ export function StepCaptureSamples({
           </button>
           <button
             type="button"
-            className="primary"
-            disabled={locked || busy || !opened || frozen}
-            onClick={() => void captureRegion()}
+            className={`primary collector-capture-toggle-btn ${frozen ? "active collector-capture-active" : ""}`}
+            aria-pressed={frozen}
+            disabled={locked || busy || (!opened && !frozen)}
+            onClick={() => {
+              if (frozen) {
+                void cancelFreeze();
+              } else {
+                void captureRegion();
+              }
+            }}
           >
-            Capture Region / Chụp vùng
+            {frozen ? "Thoát chụp vùng / Exit Capture" : "Capture Region / Chụp vùng"}
           </button>
           <span className="collector-capture-counter" aria-live="polite">
             Captures: <b>{count}</b>
@@ -942,9 +969,6 @@ export function StepCaptureSamples({
               className="collector-capture-preview-canvas"
               style={{ width: imageBox.width, height: imageBox.height, position: "relative" }}
               onPointerDown={onPointerDown}
-              onPointerMove={onPointerMove}
-              onPointerUp={onPointerUp}
-              onPointerCancel={onPointerUp}
             >
               <img
                 src={previewSrcUrl}

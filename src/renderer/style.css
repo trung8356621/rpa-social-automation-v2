@@ -2580,18 +2580,23 @@ body[data-panel="shell"] .collector-capture-split > aside.collector-capture-tool
   box-shadow: 0 0 0 2px #68d6a6;
   cursor: crosshair;
   touch-action: none;
+  user-select: none;
+  -webkit-user-select: none;
 }
 .collector-capture-freeze img {
   /* Size/position set inline from fitCaptureImageInDisplay — do not stretch via CSS fill. */
   display: block;
   pointer-events: none;
   user-select: none;
+  -webkit-user-select: none;
 }
 .collector-capture-freeze .collector-roi-highlight {
   position: absolute;
   border: 2px solid #68d6a6;
   background: #68d6a633;
   pointer-events: none;
+  user-select: none;
+  -webkit-user-select: none;
 }
 .collector-capture-freeze-tall {
   display: flex;
@@ -2606,9 +2611,19 @@ body[data-panel="shell"] .collector-capture-split > aside.collector-capture-tool
   /* Interactive scrollbar pans accumulated capture only — does not auto-extend. */
   outline: 1px dashed #3d5a73;
   outline-offset: -2px;
+  user-select: none;
+  -webkit-user-select: none;
 }
 .collector-capture-preview-canvas {
   margin: 0 auto;
+  user-select: none;
+  -webkit-user-select: none;
+}
+.collector-capture-toggle-btn.active {
+  background: #c9302c !important;
+  border-color: #ac2925 !important;
+  color: #fff !important;
+  box-shadow: 0 0 0 2px rgba(201, 48, 44, 0.45);
 }
 .collector-capture-extend-progress {
   position: absolute;

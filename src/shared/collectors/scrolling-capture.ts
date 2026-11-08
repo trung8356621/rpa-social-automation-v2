@@ -76,6 +76,8 @@ export const SCROLL_CAPTURE_LIMITS = Object.freeze({
   maxStickyPx: 180,
   /** Strict MAD for near-identical bands (sticky / unchanged screenshot). */
   maxMad: 22,
+  /** Full-frame MAD threshold below which consecutive captures are considered identical. */
+  unchangedScreenshotMad: 2.0,
   /**
    * Robust per-row median MAD for geometry-verified overlap.
    * Higher than maxMad because FB video/animation dirties some rows; geometry must agree.
@@ -435,7 +437,7 @@ export function alignExtendFrames(opts: {
   const col1 = Math.floor(prev.width * 0.92);
 
   const fullMad = madRows(prev.gray, next.gray, prev.width, 0, 0, prev.height, col0, col1);
-  if (fullMad <= SCROLL_CAPTURE_LIMITS.maxMad * 0.5) {
+  if (fullMad <= SCROLL_CAPTURE_LIMITS.unchangedScreenshotMad) {
     return {
       ok: false,
       reason: "NO_NEW_CONTENT",
@@ -568,7 +570,7 @@ export function alignVerticalFrames(
   const col1 = Math.floor(prev.width * 0.92);
   const compareH = Math.min(prev.height, next.height);
   const fullMad = madRows(prev.gray, next.gray, prev.width, 0, 0, compareH, col0, col1);
-  if (fullMad <= maxMad * 0.5) {
+  if (fullMad <= SCROLL_CAPTURE_LIMITS.unchangedScreenshotMad) {
     return {
       ok: false,
       reason: "NO_NEW_CONTENT",

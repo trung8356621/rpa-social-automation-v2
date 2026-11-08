@@ -70,6 +70,8 @@ type ScrollProbe = {
   scrollHeight: number;
   clientHeight: number;
   clientWidth: number;
+  viewportWidth: number;
+  viewportHeight: number;
   containerId: string;
   containerOk: boolean;
   containerReplaced: boolean;
@@ -210,6 +212,8 @@ export async function scrollBoundContainer(
             scrollHeight: el.scrollHeight,
             clientHeight: el.clientHeight,
             clientWidth: el.clientWidth || innerWidth,
+            viewportWidth: innerWidth,
+            viewportHeight: innerHeight,
             containerId: store.id,
             containerOk: true,
             containerReplaced: false,
@@ -228,6 +232,8 @@ export async function scrollBoundContainer(
           scrollHeight: el.scrollHeight,
           clientHeight: el.clientHeight,
           clientWidth: el.clientWidth || innerWidth,
+          viewportWidth: innerWidth,
+          viewportHeight: innerHeight,
           containerId: store.id,
           containerOk: true,
           containerReplaced: false,
@@ -244,6 +250,8 @@ export async function scrollBoundContainer(
     scrollHeight: Number(result?.scrollHeight) || 0,
     clientHeight: Number(result?.clientHeight) || 0,
     clientWidth: Number(result?.clientWidth) || 0,
+    viewportWidth: Number(result?.viewportWidth) || 0,
+    viewportHeight: Number(result?.viewportHeight) || 0,
     containerId: String(result?.containerId || opts.containerId),
     containerOk: Boolean(result?.containerOk),
     containerReplaced: Boolean(result?.containerReplaced),
@@ -648,7 +656,7 @@ export class CollectorScrollCaptureController {
       prev: prevGray,
       next: nextGray,
       scrollDeltaCss: scroll.deltaCss,
-      viewportCssHeight: scroll.clientHeight || prevGray.height,
+      viewportCssHeight: scroll.viewportHeight || scroll.clientHeight || prevGray.height,
     });
 
     if (!align.ok) {
