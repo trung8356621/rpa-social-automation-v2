@@ -14,6 +14,7 @@ import {
   type AlignResult,
   type ExtendDiagnostics,
   type ExtendFailureKind,
+  type ExtendStageDuration,
   type ExtendStageTiming,
   type ScrollCapturePhase,
 } from "../shared/collectors/scrolling-capture.js";
@@ -304,9 +305,13 @@ export class CollectorScrollCaptureController {
       failureKind: kind,
       message,
       stages: partial?.stages,
+      stageDurations: partial?.stageDurations,
       totalMs: partial?.totalMs,
       timeoutStage: partial?.timeoutStage,
       singleFlight: partial?.singleFlight ?? "accepted",
+      operationId: partial?.operationId,
+      startedAt: partial?.startedAt,
+      endedAt: partial?.endedAt,
     };
     logDiag(s.lastDiagnostics);
     return this.pub(s);
@@ -339,6 +344,20 @@ export class CollectorScrollCaptureController {
     if (!bind.containerOk) {
       throw new Error("No scrollable container found for Capture extend. Open the feed and try again.");
     }
+
+    // Capture Mode has already hidden the WebContentsView. Prime CDP/compositor now so the
+    // first user extend does not pay the cold hidden-surface stall (often 1–2 timeouts).
+    const ready = await this.browser.prepareSurfaceCapture();
+    console.info(
+      "[collector-scroll-capture]",
+      JSON.stringify({
+        event: "surface_ready",
+        ok: ready.ok,
+        attempts: ready.attempts,
+        error: ready.error,
+        browserSessionId: opts.browserSessionId,
+      }),
+    );
 
     const session: InternalSession = {
       id: randomUUID(),
@@ -425,58 +444,87 @@ export class CollectorScrollCaptureController {
     s.phase = nextScrollCapturePhase(s.phase, "extendStart");
     s.error = undefined;
     const gen = ++s.extendGeneration;
+    const operationId = randomUUID();
     const t0 = Date.now();
     const stages: ExtendStageTiming[] = [];
+    const stageDurations: ExtendStageDuration[] = [];
+    let stageStartedAt = t0;
+    let stageName = "main_enter";
     const mark = (stage: string) => {
+      const now = Date.now();
+      stageDurations.push({
+        stage: stageName,
+        startedAt: stageStartedAt,
+        endedAt: now,
+        durationMs: now - stageStartedAt,
+      });
+      stageName = stage;
+      stageStartedAt = now;
       s.currentStage = stage;
-      stages.push({ stage, ms: Date.now() - t0 });
+      stages.push({ stage, ms: now - t0 });
     };
     mark("main_enter");
 
+    const bodyPromise = this.extendBody(s, scrollDelta, gen, mark, stages, stageDurations, t0, operationId);
+
     let timer: ReturnType<typeof setTimeout> | undefined;
+    let timedOut = false;
     try {
       const result = await Promise.race([
-        this.extendBody(s, scrollDelta, gen, mark, stages, t0),
+        bodyPromise,
         new Promise<never>((_, reject) => {
-          timer = setTimeout(
-            () =>
-              reject(
-                Object.assign(
-                  new Error(
-                    `Scroll extend timed out after ${SCROLL_CAPTURE_LIMITS.extendTimeoutMs}ms during ${s.currentStage ?? "unknown"}. Last valid image kept.`,
-                  ),
-                  { timeoutStage: s.currentStage ?? "unknown" },
+          timer = setTimeout(() => {
+            timedOut = true;
+            reject(
+              Object.assign(
+                new Error(
+                  `Scroll extend timed out after ${SCROLL_CAPTURE_LIMITS.extendTimeoutMs}ms during ${s.currentStage ?? "unknown"}. Last valid image kept.`,
                 ),
+                { timeoutStage: s.currentStage ?? "unknown", operationId },
               ),
-            SCROLL_CAPTURE_LIMITS.extendTimeoutMs,
-          );
+            );
+          }, SCROLL_CAPTURE_LIMITS.extendTimeoutMs);
         }),
       ]);
       return result;
     } catch (error) {
+      // Invalidate immediately so a finishing body cannot mutate the PNG.
       s.extendGeneration++;
-      if (this.sessions.get(s.id) === s) {
-        try {
-          await scrollBoundContainer(this.browser, {
-            containerId: s.containerId,
-            deltaCssPx: 0,
-            mode: "restore",
-            targetScrollTop: s.verifiedScrollTop,
-          });
-        } catch {
-          /* ignore */
-        }
-        const timeoutStage =
-          (error as { timeoutStage?: string })?.timeoutStage ?? s.currentStage ?? "unknown";
-        mark("timeout");
-        return this.fail(s, "TIMEOUT", error instanceof Error ? error.message : String(error), {
-          stages: [...stages],
-          totalMs: Date.now() - t0,
-          timeoutStage,
-          singleFlight: "accepted",
+      // Drain orphaned body (capped) so CDP/capture mutex is free before the next attempt.
+      await Promise.race([
+        bodyPromise.catch(() => undefined),
+        sleep(5_000),
+      ]);
+      if (this.sessions.get(s.id) !== s) return this.pub(s);
+
+      try {
+        await scrollBoundContainer(this.browser, {
+          containerId: s.containerId,
+          deltaCssPx: 0,
+          mode: "restore",
+          targetScrollTop: s.verifiedScrollTop,
         });
+      } catch {
+        /* ignore */
       }
-      return this.pub(s);
+
+      const msg = error instanceof Error ? error.message : String(error);
+      const timeoutStage =
+        (error as { timeoutStage?: string })?.timeoutStage ?? s.currentStage ?? "unknown";
+      const endedAt = Date.now();
+      mark(timedOut ? "timeout" : "error");
+      const failureKind: ExtendFailureKind =
+        timedOut || /timed out|screenshot/i.test(msg) ? "TIMEOUT" : "ALIGN_FAILED";
+      return this.fail(s, failureKind, msg, {
+        stages: [...stages],
+        stageDurations: [...stageDurations],
+        totalMs: endedAt - t0,
+        timeoutStage,
+        singleFlight: "accepted",
+        operationId,
+        startedAt: t0,
+        endedAt,
+      });
     } finally {
       if (timer) clearTimeout(timer);
       s.currentStage = undefined;
@@ -493,8 +541,12 @@ export class CollectorScrollCaptureController {
     gen: number,
     mark: (stage: string) => void,
     stages: ExtendStageTiming[],
+    stageDurations: ExtendStageDuration[],
     t0: number,
+    operationId: string,
   ): Promise<ScrollCaptureSessionPublic> {
+    const opMeta = { operationId, startedAt: t0, singleFlight: "accepted" as const };
+
     const limitBefore = assertWithinScrollCaptureLimits({
       frameCount: s.frameCount + 1,
       width: s.width,
@@ -502,7 +554,13 @@ export class CollectorScrollCaptureController {
       bufferBytes: s.png.byteLength,
     });
     if (limitBefore) {
-      return this.fail(s, "LIMIT", limitBefore.message, { stages, totalMs: Date.now() - t0 });
+      return this.fail(s, "LIMIT", limitBefore.message, {
+        stages,
+        stageDurations,
+        totalMs: Date.now() - t0,
+        endedAt: Date.now(),
+        ...opMeta,
+      });
     }
 
     mark("scroll");
@@ -521,7 +579,10 @@ export class CollectorScrollCaptureController {
         viewportCssWidth: scroll.clientWidth,
         viewportCssHeight: scroll.clientHeight,
         stages,
+        stageDurations,
         totalMs: Date.now() - t0,
+        endedAt: Date.now(),
+        ...opMeta,
       });
     }
 
@@ -539,7 +600,10 @@ export class CollectorScrollCaptureController {
           viewportCssWidth: scroll.clientWidth,
           viewportCssHeight: scroll.clientHeight,
           stages,
+          stageDurations,
           totalMs: Date.now() - t0,
+          endedAt: Date.now(),
+          ...opMeta,
         },
       );
     }
@@ -550,7 +614,7 @@ export class CollectorScrollCaptureController {
     if (!this.stillCurrent(s, gen)) return this.pub(s);
 
     mark("screenshot");
-    const nextCapture = await this.browser.capture({ requireCanonical: false });
+    const nextCapture = await this.browser.capture({ requireCanonical: false, light: true });
     if (!this.stillCurrent(s, gen)) return this.pub(s);
     const nextPng = this.browser.captureBuffer(nextCapture.id);
 
@@ -563,13 +627,17 @@ export class CollectorScrollCaptureController {
       screenshotWidth: nextCapture.width,
       screenshotHeight: nextCapture.height,
       stages,
+      stageDurations,
       totalMs: Date.now() - t0,
-      singleFlight: "accepted" as const,
+      ...opMeta,
     };
 
     if (nextCapture.width !== s.width) {
       await this.restoreVerified(s);
-      return this.fail(s, "LAYOUT_SHIFT", `Viewport width changed (${s.width}→${nextCapture.width}); scroll restored.`, diagBase);
+      return this.fail(s, "LAYOUT_SHIFT", `Viewport width changed (${s.width}→${nextCapture.width}); scroll restored.`, {
+        ...diagBase,
+        endedAt: Date.now(),
+      });
     }
 
     mark("decode");
@@ -598,6 +666,7 @@ export class CollectorScrollCaptureController {
         expectedShiftPx: align.expectedShiftPx,
         strategy: "none",
         totalMs: Date.now() - t0,
+        endedAt: Date.now(),
       });
     }
 
@@ -613,7 +682,7 @@ export class CollectorScrollCaptureController {
     });
     if (memLimit) {
       await this.restoreVerified(s);
-      return this.fail(s, "LIMIT", memLimit.message, { ...diagBase, totalMs: Date.now() - t0 });
+      return this.fail(s, "LIMIT", memLimit.message, { ...diagBase, totalMs: Date.now() - t0, endedAt: Date.now() });
     }
 
     // Commit only while still current — cancel/timeout cannot land late writes.
@@ -628,6 +697,7 @@ export class CollectorScrollCaptureController {
     s.phase = nextScrollCapturePhase(s.phase, "extendOk");
     s.error = undefined;
     mark("respond");
+    const endedAt = Date.now();
     s.lastDiagnostics = {
       sessionId: s.id,
       containerId: s.containerId,
@@ -639,7 +709,9 @@ export class CollectorScrollCaptureController {
       failureKind: "SUCCESS",
       message: `Appended ${align.newContentPx}px via ${align.strategy} (score ${align.score.toFixed(1)}).`,
       stages: [...stages],
-      totalMs: Date.now() - t0,
+      stageDurations: [...stageDurations],
+      totalMs: endedAt - t0,
+      endedAt,
     };
     logDiag(s.lastDiagnostics);
     return this.pub(s);

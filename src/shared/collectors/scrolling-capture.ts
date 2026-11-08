@@ -51,7 +51,16 @@ export type ExtendStageName =
   | "respond"
   | "ui_complete";
 
+/** Cumulative mark (ms since op start). */
 export type ExtendStageTiming = { stage: ExtendStageName | string; ms: number };
+
+/** Per-stage wall duration for timeout diagnosis. */
+export type ExtendStageDuration = {
+  stage: ExtendStageName | string;
+  startedAt: number;
+  endedAt: number;
+  durationMs: number;
+};
 
 /**
  * Measured safe limits for Electron + Sharp stitching.
@@ -183,10 +192,16 @@ export type ExtendDiagnostics = {
   message: string;
   /** Cumulative ms from main_enter for each completed stage. */
   stages?: ExtendStageTiming[];
+  /** Wall-clock duration per stage (scroll/screenshot/align/stitch/…). */
+  stageDurations?: ExtendStageDuration[];
   totalMs?: number;
   /** Stage that was in progress when timeout fired (if known). */
   timeoutStage?: string;
   singleFlight?: "accepted" | "rejected_busy" | "coalesced";
+  /** Correlates one extend IPC with main logs. */
+  operationId?: string;
+  startedAt?: number;
+  endedAt?: number;
 };
 
 /** Phases that may start a new extend (not already in-flight). */
