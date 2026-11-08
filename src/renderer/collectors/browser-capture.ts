@@ -3,7 +3,7 @@
  * Reuses existing navigate / capture / crop / browserVisible / targetImage IPC.
  * Does not create a second browser engine or session store.
  */
-import type { Capture, Command, Rect } from "../../shared/contracts";
+import type { Capture, Command, OcrResult, Rect } from "../../shared/contracts";
 import type { SampleRoi } from "../../shared/collectors/types";
 import { WEB_HEIGHT, WEB_WIDTH } from "../../shared/geometry";
 
@@ -157,4 +157,18 @@ export function roiToSampleRoi(
     containerWidth: containerW,
     containerHeight: containerH,
   };
+}
+
+export async function collectorOcrAsset(
+  invoke: CollectorInvoke,
+  asset: string,
+): Promise<OcrResult> {
+  if (!isElectronBrowserCoreAvailable()) {
+    throw new Error(BROWSER_CORE_UNAVAILABLE);
+  }
+  const cleanAsset = asset.trim();
+  if (!/^[a-f0-9-]+\.png$/i.test(cleanAsset)) {
+    throw new Error("Invalid image asset filename for OCR.");
+  }
+  return invoke<OcrResult>({ type: "ocrTarget", asset: cleanAsset });
 }

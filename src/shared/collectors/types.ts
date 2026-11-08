@@ -2,6 +2,7 @@
  * Collector C1.1 prototype types — isolated from Script Variable / SQLite contracts.
  * Script Variable remains: { id, key, type: text|file|files|integer|number, description? }
  */
+import type { OcrResult, Rect } from "../contracts.js";
 
 export const COLLECTOR_STORAGE_KEY = "rpa.collectors.prototype.v1";
 /**
@@ -89,6 +90,23 @@ export type CollectorVariableMapping = {
   confirmed: boolean;
   /** True when filled by deterministic simulated auto-match (not live Network/DOM/OCR). */
   simulatedProposal?: boolean;
+
+  // C2.7: Actual OCR evidence and learned rule mapping
+  segmentId?: string;
+  text?: string;
+  bbox?: Rect;
+  confidence?: number;
+  evidence?: string;
+  normalizedBbox?: {
+    relX: number;
+    relY: number;
+    relW: number;
+    relH: number;
+  };
+  nearbyAnchors?: {
+    prevLineText?: string;
+    nextLineText?: string;
+  };
 };
 
 /** Per-capture review/audit state — independent of fixed Sample A/B/C roles. */
@@ -174,6 +192,8 @@ export type CaptureItem = {
   browserSessionId?: string;
   /** true = C1 simulated fixture; false/undefined with imageAsset = real capture. */
   simulatedCapture?: boolean;
+  /** Actual OCR result recognized from imageAsset (C2.7) */
+  ocr?: OcrResult;
 };
 
 export function isRealCapture(item: CaptureItem): boolean {

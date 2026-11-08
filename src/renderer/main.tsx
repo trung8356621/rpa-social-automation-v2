@@ -10,6 +10,7 @@ import { AppNavigation, ScenariosPage } from "./app-shell";
 import { BrowserSessionsPage, SessionSelector } from "./browser-sessions";
 import { TestLabPage, TestCaseEditor, CaseResultView, ExecutionErrorView, type CaseEditorHandle } from "./test-lab";
 import { CollectorsPage } from "./collectors/CollectorsPage";
+import type { CollectorEditorHandle } from "./collectors/CollectorEditor";
 import { Variables, Groups } from "./flow-controls";
 import { SeoOpsAuthPanel, scriptVersionLabel, syncBadge, type SeoOpsSessionState } from "./seo-ops-panel";
 import type { ScriptSyncRow } from "../shared/sync-status";
@@ -176,6 +177,12 @@ function Creator() {
   const reportCase = useCallback((id: string, handle: CaseEditorHandle) => {
     caseEditors.current.set(id, handle); setCaseRevision(value => value + 1);
   }, []);
+  const collectorEditor = useRef<CollectorEditorHandle | undefined>(undefined);
+  const [, setCollectorRevision] = useState(0);
+  const reportCollector = useCallback((handle: CollectorEditorHandle | undefined) => {
+    collectorEditor.current = handle;
+    setCollectorRevision(r => r + 1);
+  }, []);
   const [tabs, setTabs] = useState<WorkspaceTab[]>([]);
   const tabsRef = useRef<WorkspaceTab[]>([]);
   const [activeTabId, setActiveTabId] = useState<string>();
@@ -258,7 +265,7 @@ function Creator() {
   const [selected, setSelected] = useDraft<Step>("selected");
   const [overrideId, setOverrideId] = useDraft("overrideId", "");
   const [targetModal, setTargetModal] = useState(false);
-  const [pendingNavigation, setPendingNavigation] = useState<{ proceed: () => void | Promise<void>; closing?: boolean; caseTabId?: string; studioTabId?: string }>();
+  const [pendingNavigation, setPendingNavigation] = useState<{ proceed: () => void | Promise<void>; closing?: boolean; caseTabId?: string; studioTabId?: string; collector?: boolean }>();
   const pendingNavigationRef = useRef(false);
   const [confirmWorking, setConfirmWorking] = useState(false);
   const [confirmError, setConfirmError] = useState("");
@@ -1152,10 +1159,18 @@ function Creator() {
     : name !== "" || editableConfig(payload()) !== editableConfig({ action: "CLICK_TARGET" }));
   function requestNavigation(proceed: () => void | Promise<void>, closing = false) {
     if (pendingNavigationRef.current) return;
-    if (!(activeTabId ? tabDirty(activeTabId) : editorDirty)) { void task(async () => { await proceed(); }); return; }
+    const isCollectorDirty = (appPage === "collectors" || appPage === "collector-test-lab") && Boolean(collectorEditor.current?.dirty);
+    const isDirty = isCollectorDirty || (activeTabId ? tabDirty(activeTabId) : editorDirty);
+    if (!isDirty) { void task(async () => { await proceed(); }); return; }
     pendingNavigationRef.current = true;
     setConfirmError("");
-    setPendingNavigation({ proceed, closing, caseTabId: activeCaseTab?.id, studioTabId: tabs.find(t => t.id === activeTabId && t.kind === "studio")?.id });
+    setPendingNavigation({
+      proceed,
+      closing,
+      collector: isCollectorDirty,
+      caseTabId: activeCaseTab?.id,
+      studioTabId: tabs.find(t => t.id === activeTabId && t.kind === "studio")?.id,
+    });
   }
   function stayInEditor() {
     if (confirmWorking) return;
@@ -1170,7 +1185,11 @@ function Creator() {
     setConfirmWorking(true);
     setBusy(true);
     try {
-      if (pendingNavigation.studioTabId) {
+      if (pendingNavigation.collector) {
+        const handle = collectorEditor.current;
+        if (!handle) throw new Error("Collector draft is unavailable.");
+        if (save) await handle.save(); else handle.discard();
+      } else if (pendingNavigation.studioTabId) {
         const handle = studioEditors.current.get(pendingNavigation.studioTabId);
         if (!handle) throw new Error("Studio draft is unavailable.");
         if (save) await handle.save(); else handle.discard();
@@ -1178,8 +1197,13 @@ function Creator() {
         const handle = caseEditors.current.get(pendingNavigation.caseTabId);
         if (!handle) throw new Error("Không tìm thấy draft Test Case.");
         if (save) await handle.save(); else handle.discard();
-      } else if (save) await saveBase();
-      else if (selectedBase) await loadStep(selectedBase, false);
+      } else if (save) {
+        if (appPage === "collectors" || appPage === "collector-test-lab") {
+          if (collectorEditor.current) await collectorEditor.current.save();
+        } else {
+          await saveBase();
+        }
+      } else if (selectedBase) await loadStep(selectedBase, false);
       else resetStepDraft();
       const proceed = pendingNavigation.proceed;
       pendingNavigationRef.current = false;
@@ -1203,7 +1227,7 @@ function Creator() {
     exitReviewed.current.clear();
     setExitIntent("reload");
   };
-  const anyDirty = editorDirty || tabs.some(tab => tabDirty(tab.id));
+  const anyDirty = editorDirty || tabs.some(tab => tabDirty(tab.id)) || Boolean(collectorEditor.current?.dirty);
   const dirtyRef = useRef(anyDirty);
   dirtyRef.current = anyDirty;
   // Reuse the same Save/Discard confirmation for every dirty tab before leaving
@@ -1211,7 +1235,9 @@ function Creator() {
   useEffect(() => {
     if (!exitIntent || busy || pendingNavigationRef.current || workspaceLock.current) return;
     const currentId = activeTabId ?? "initial";
-    if ((activeTabId ? tabDirty(activeTabId) : editorDirty) && !exitReviewed.current.has(currentId)) {
+    const isCollectorDirty = (appPage === "collectors" || appPage === "collector-test-lab") && Boolean(collectorEditor.current?.dirty);
+    const isDirty = isCollectorDirty || (activeTabId ? tabDirty(activeTabId) : editorDirty);
+    if (isDirty && !exitReviewed.current.has(currentId)) {
       requestNavigation(() => {
         exitReviewed.current.add(currentId);
         setExitRevision(revision => revision + 1);
@@ -1348,6 +1374,7 @@ function Creator() {
           invoke={invoke}
           state={state}
           onSelectSession={(id) => void selectSession(id)}
+          reportEditor={reportCollector}
         />
       )}
       {shell && state && tabs.filter(tab => tab.kind === "test-case").map(tab => <div key={tab.id} className="case-editor-host"

@@ -2451,6 +2451,92 @@ body[data-panel="shell"] .collector-capture-split > aside.collector-capture-tool
   border-radius: 4px;
   overflow: auto;
   padding: 0;
+  position: relative;
+}
+.collector-review-image-container {
+  position: relative;
+  width: 100%;
+  display: block;
+}
+.collector-ocr-overlay {
+  position: absolute;
+  top: 0;
+  left: 0;
+  width: 100%;
+  height: 100%;
+  pointer-events: none;
+}
+.collector-ocr-box {
+  pointer-events: auto;
+  border: 1px dashed rgba(104, 214, 166, 0.45);
+  background: rgba(104, 214, 166, 0.08);
+  cursor: pointer;
+  transition: all 0.15s ease-in-out;
+  box-sizing: border-box;
+}
+.collector-ocr-box:hover {
+  border: 1.5px solid #68d6a6;
+  background: rgba(104, 214, 166, 0.25);
+  z-index: 10;
+}
+.collector-ocr-box.selected {
+  border: 2px solid #5aa9e6;
+  background: rgba(90, 169, 230, 0.35);
+  box-shadow: 0 0 6px rgba(90, 169, 230, 0.6);
+  z-index: 20;
+}
+.collector-ocr-box.mapped {
+  border: 1.5px solid #68d6a6;
+  background: rgba(104, 214, 166, 0.22);
+}
+.collector-ocr-box.proposed {
+  border: 1.5px dashed #c9a227;
+  background: rgba(201, 162, 39, 0.22);
+}
+.collector-ocr-segment-card {
+  border: 1px solid #2b394a;
+  border-radius: 6px;
+  padding: 6px 8px;
+  background: #0d1520;
+  cursor: pointer;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+.collector-ocr-segment-card:hover {
+  border-color: #68d6a6;
+}
+.collector-ocr-segment-card.selected {
+  border-color: #5aa9e6;
+  background: #152232;
+}
+.collector-ocr-segment-card.mapped {
+  border-left: 3px solid #68d6a6;
+}
+.collector-ocr-segment-card.proposed {
+  border-left: 3px dashed #c9a227;
+}
+.collector-evidence-badge {
+  font-size: 11px;
+  color: #c9a227;
+  background: rgba(201, 162, 39, 0.12);
+  border: 1px solid rgba(201, 162, 39, 0.3);
+  border-radius: 4px;
+  padding: 3px 6px;
+  margin-top: 4px;
+  display: block;
+  line-height: 1.3;
+}
+.collector-sample-filter {
+  width: 100%;
+  padding: 4px 6px;
+  font-size: 11px;
+  margin-bottom: 6px;
+  border: 1px solid #2b394a;
+  border-radius: 4px;
+  background: #111a26;
+  color: #fff;
+  box-sizing: border-box;
 }
 .collector-review-image-frame img {
   display: block;

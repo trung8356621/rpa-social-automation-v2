@@ -3,7 +3,7 @@ import { UiPopover } from "../ui-popover";
 import { createEmptyDraft } from "../../shared/collectors/fixtures";
 import type { AppPage, Command, State } from "../../shared/contracts";
 import type { CollectorDraft } from "../../shared/collectors/types";
-import { CollectorEditor } from "./CollectorEditor";
+import { CollectorEditor, type CollectorEditorHandle } from "./CollectorEditor";
 import { CollectorList } from "./CollectorList";
 import { CollectorTestLab } from "./CollectorTestLab";
 import { useCollectorStore } from "./useCollectorStore";
@@ -16,6 +16,7 @@ type Props = {
   invoke?: CollectorInvoke;
   state?: State | null;
   onSelectSession?: (id: string) => void;
+  reportEditor?: (handle: CollectorEditorHandle | undefined) => void;
 };
 
 export function CollectorsPage({
@@ -25,6 +26,7 @@ export function CollectorsPage({
   invoke,
   state,
   onSelectSession,
+  reportEditor,
 }: Props) {
   const store = useCollectorStore();
   const [editingId, setEditingId] = useState<string>();
@@ -68,6 +70,10 @@ export function CollectorsPage({
     navigate("collector-test-lab");
   }
 
+  React.useEffect(() => {
+    if (!editing) reportEditor?.(undefined);
+  }, [editing, reportEditor]);
+
   if (editing) {
     return (
       <section className="app-page collectors-page collectors-editor-host" aria-label="Collector Editor">
@@ -85,6 +91,7 @@ export function CollectorsPage({
           invoke={invoke}
           state={state}
           onSelectSession={onSelectSession}
+          report={reportEditor}
         />
       </section>
     );

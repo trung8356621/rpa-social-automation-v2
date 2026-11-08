@@ -8,6 +8,28 @@ import { StepReviewMapping } from "./ReviewMappingStep";
 import { StepDiscovery, StepValidation } from "./wizard-steps";
 import type { CollectorInvoke } from "./browser-capture";
 
+export type CollectorEditorHandle = {
+  dirty: boolean;
+  name: string;
+  save: () => Promise<void>;
+  discard: () => void;
+};
+
+export function validateCollectorDraft(draft: CollectorDraft): string[] {
+  const errors: string[] = [];
+  if (!draft.name || !draft.name.trim()) {
+    errors.push("Collector Name is required.");
+  }
+  if (draft.variables?.some((v) => !v.key.trim())) {
+    errors.push("Every Variable needs a stable key.");
+  }
+  const keys = draft.variables?.map((v) => v.key.trim()) ?? [];
+  if (new Set(keys).size !== keys.length) {
+    errors.push("Variable keys must be unique.");
+  }
+  return errors;
+}
+
 type Props = {
   initial: CollectorDraft;
   locked: boolean;
@@ -19,6 +41,7 @@ type Props = {
   invoke?: CollectorInvoke;
   state?: State | null;
   onSelectSession?: (id: string) => void;
+  report?: (handle: CollectorEditorHandle | undefined) => void;
 };
 
 const WARN_DISMISS_KEY = "rpa.collectors.prototype.warnDismissed";
@@ -48,6 +71,7 @@ export function CollectorEditor({
   invoke,
   state,
   onSelectSession,
+  report,
 }: Props) {
   const [draft, setDraft] = useState<CollectorDraft>(initial);
   const [errors, setErrors] = useState<string[]>([]);
@@ -104,13 +128,52 @@ export function CollectorEditor({
     setDraft((d) => ({ ...d, wizardStep: step, dirty: true }));
   }
 
-  function save() {
+  function performSave(closeAfter = false): boolean {
+    const validationErrors = validateCollectorDraft(draft);
+    if (validationErrors.length) {
+      setErrors(validationErrors);
+      return false;
+    }
     const next = saveAsVersion(draft);
     setDraft(next);
     onSave(next);
     setSavedFlash(`Saved ${next.versions[next.versions.length - 1]?.label ?? "version"}`);
     setTimeout(() => setSavedFlash(""), 2000);
+    if (closeAfter) {
+      onClose();
+    }
+    return true;
   }
+
+  function save() {
+    performSave(false);
+  }
+
+  function saveAndClose() {
+    performSave(true);
+  }
+
+  useEffect(() => {
+    if (!report) return;
+    report({
+      dirty: Boolean(draft.dirty),
+      name: draft.name,
+      save: async () => {
+        const validationErrors = validateCollectorDraft(draft);
+        if (validationErrors.length) {
+          setErrors(validationErrors);
+          throw new Error(validationErrors.join("; "));
+        }
+        const next = saveAsVersion(draft);
+        setDraft(next);
+        onSave(next);
+      },
+      discard: () => {
+        setDraft(initial);
+      },
+    });
+    return () => report(undefined);
+  }, [report, draft, onSave, initial]);
 
   function dismissWarnings() {
     setWarnDismissed(true);
@@ -190,6 +253,14 @@ export function CollectorEditor({
               {versionsOpen ? "Hide Versions" : "Versions"}
             </button>
             <button className="primary" disabled={locked} onClick={save}>Save</button>
+            <button
+              type="button"
+              disabled={locked}
+              onClick={saveAndClose}
+              title="Save version and return to library"
+            >
+              Save &amp; Close
+            </button>
             {savedFlash && <small role="status">{savedFlash}</small>}
           </div>
         </div>
@@ -258,6 +329,14 @@ export function CollectorEditor({
               Back
             </button>
             <button type="button" className="primary" disabled={locked} onClick={save}>Save</button>
+            <button
+              type="button"
+              disabled={locked}
+              onClick={saveAndClose}
+              title="Save version and return to library"
+            >
+              Save &amp; Close
+            </button>
             <button
               type="button"
               disabled={locked || draft.wizardStep === 4}

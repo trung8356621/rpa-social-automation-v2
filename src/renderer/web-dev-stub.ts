@@ -125,6 +125,20 @@ async function handleCommand(command: Command): Promise<unknown> {
     case "collectorScrollCaptureConfirm":
     case "collectorScrollCaptureCancel":
     case "targetImage":
+      return "data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='800' height='600'><rect width='100%' height='100%' fill='%231f2430'/><text x='40' y='60' fill='%23e6b450' font-family='sans-serif' font-size='20'>Simulated Target Image</text></svg>";
+    case "ocrTarget":
+      return {
+        text: "Người tham gia ẩn danh\n6 tháng 11 lúc 23:03\nDạ em đang học CNTT và muốn hỏi về lộ trình...\n29 bình luận\n40 lượt thích",
+        confidence: 91,
+        language: "vie+eng",
+        segments: [
+          { id: "0", text: "Người tham gia ẩn danh", kind: "line", confidence: 95, bbox: { x: 60, y: 30, width: 240, height: 26 } },
+          { id: "1", text: "6 tháng 11 lúc 23:03", kind: "line", confidence: 92, bbox: { x: 60, y: 64, width: 190, height: 20 } },
+          { id: "2", text: "Dạ em đang học CNTT và muốn hỏi về lộ trình...", kind: "line", confidence: 94, bbox: { x: 60, y: 110, width: 500, height: 75 } },
+          { id: "3", text: "29", kind: "word", confidence: 88, bbox: { x: 60, y: 220, width: 35, height: 20 } },
+          { id: "4", text: "40", kind: "word", confidence: 87, bbox: { x: 140, y: 220, width: 35, height: 20 } },
+        ],
+      };
     case "switchBrowserSession":
       throw new Error(
         `Web-dev stub: ${(command as { type: string }).type} requires Electron Browser Core — not available in UI-only preview.`,
