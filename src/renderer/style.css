@@ -2765,49 +2765,103 @@ body[data-panel="shell"] .collector-capture-split > aside.collector-capture-tool
   box-sizing: border-box;
   cursor: pointer;
   pointer-events: auto;
-  transition: box-shadow 0.15s ease-in-out;
+  transition: border-color 0.15s ease-in-out, box-shadow 0.15s ease-in-out, background 0.15s ease-in-out;
   z-index: 15;
 }
+
+/* DRAW mode: pass pointer events through to canvas so drawing is never intercepted */
+.collector-review-image-container.mode-draw .collector-region-box {
+  pointer-events: none;
+}
+
+/* BEGIN anchor: blue */
+.collector-region-box.begin,
 .collector-region-box.static {
-  border: 2px solid #38bdf8;
-  background: rgba(56, 189, 248, 0.15);
+  border: 2px solid #3b82f6;
+  background: rgba(59, 130, 246, 0.12);
+  box-shadow: 0 0 0 1px rgba(0, 0, 0, 0.55), inset 0 0 0 1px rgba(255, 255, 255, 0.25);
 }
+.collector-region-box.begin:hover,
 .collector-region-box.static:hover {
-  background: rgba(56, 189, 248, 0.28);
+  border-color: #60a5fa;
+  background: rgba(59, 130, 246, 0.22);
+  box-shadow: 0 0 0 1px rgba(0, 0, 0, 0.75), 0 0 8px rgba(59, 130, 246, 0.6);
 }
+
+/* END anchor: green */
+.collector-region-box.end {
+  border: 2px solid #10b981;
+  background: rgba(16, 185, 129, 0.12);
+  box-shadow: 0 0 0 1px rgba(0, 0, 0, 0.55), inset 0 0 0 1px rgba(255, 255, 255, 0.25);
+}
+.collector-region-box.end:hover {
+  border-color: #34d399;
+  background: rgba(16, 185, 129, 0.22);
+  box-shadow: 0 0 0 1px rgba(0, 0, 0, 0.75), 0 0 8px rgba(16, 185, 129, 0.6);
+}
+
+/* FREE region: purple */
+.collector-region-box.free,
 .collector-region-box.dynamic {
-  border: 2px dashed #c084fc;
-  background: rgba(192, 132, 252, 0.15);
+  border: 2px solid #a855f7;
+  background: rgba(168, 85, 247, 0.12);
+  box-shadow: 0 0 0 1px rgba(0, 0, 0, 0.55), inset 0 0 0 1px rgba(255, 255, 255, 0.25);
 }
+.collector-region-box.free:hover,
 .collector-region-box.dynamic:hover {
-  background: rgba(192, 132, 252, 0.28);
+  border-color: #c084fc;
+  background: rgba(168, 85, 247, 0.22);
+  box-shadow: 0 0 0 1px rgba(0, 0, 0, 0.75), 0 0 8px rgba(168, 85, 247, 0.6);
 }
+
+/* Selected state in VIEW / EDIT */
 .collector-region-box.selected {
-  outline: 2px solid #60a5fa;
-  box-shadow: 0 0 10px rgba(96, 165, 250, 0.8);
   z-index: 25;
 }
+.collector-region-box.begin.selected,
+.collector-region-box.static.selected {
+  border: 2px solid #bfdbfe;
+  outline: 2px solid #2563eb;
+  background: rgba(59, 130, 246, 0.22);
+  box-shadow: 0 0 0 1px rgba(0, 0, 0, 0.8), 0 0 12px rgba(59, 130, 246, 0.85);
+}
+.collector-region-box.end.selected {
+  border: 2px solid #a7f3d0;
+  outline: 2px solid #059669;
+  background: rgba(16, 185, 129, 0.22);
+  box-shadow: 0 0 0 1px rgba(0, 0, 0, 0.8), 0 0 12px rgba(16, 185, 129, 0.85);
+}
+.collector-region-box.free.selected,
+.collector-region-box.dynamic.selected {
+  border: 2px solid #e9d5ff;
+  outline: 2px solid #7c3aed;
+  background: rgba(168, 85, 247, 0.22);
+  box-shadow: 0 0 0 1px rgba(0, 0, 0, 0.8), 0 0 12px rgba(168, 85, 247, 0.85);
+}
+
 .collector-region-box.drawing {
   border: 2px dashed #f59e0b;
   background: rgba(245, 158, 11, 0.2);
+  box-shadow: 0 0 0 1px rgba(0, 0, 0, 0.6);
   pointer-events: none;
   z-index: 30;
 }
 
 .collector-resize-handle {
   position: absolute;
-  width: 8px;
-  height: 8px;
-  background: #60a5fa;
-  border: 1px solid #fff;
+  width: 9px;
+  height: 9px;
+  background: #ffffff;
+  border: 1.5px solid #2563eb;
   border-radius: 2px;
   z-index: 35;
   box-sizing: border-box;
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.4);
 }
-.collector-resize-handle.nw { top: -4px; left: -4px; cursor: nwse-resize; }
-.collector-resize-handle.ne { top: -4px; right: -4px; cursor: nesw-resize; }
-.collector-resize-handle.sw { bottom: -4px; left: -4px; cursor: nesw-resize; }
-.collector-resize-handle.se { bottom: -4px; right: -4px; cursor: nwse-resize; }
+.collector-resize-handle.nw { top: -4.5px; left: -4.5px; cursor: nwse-resize; }
+.collector-resize-handle.ne { top: -4.5px; right: -4.5px; cursor: nesw-resize; }
+.collector-resize-handle.sw { bottom: -4.5px; left: -4.5px; cursor: nesw-resize; }
+.collector-resize-handle.se { bottom: -4.5px; right: -4.5px; cursor: nwse-resize; }
 
 .collector-container-highlight {
   position: absolute;

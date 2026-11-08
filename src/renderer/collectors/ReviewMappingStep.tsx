@@ -31,6 +31,7 @@ import {
   normalizeGeometry,
   verifyAnchorGroups,
   normalizeCollectorRegions,
+  resolveRegionCropBox,
 } from "../../shared/collectors/regions";
 import type {
   CaptureAuditStatus,
@@ -110,6 +111,10 @@ export function StepReviewMapping({ draft, locked, onChange, invoke }: Props) {
       ? sampleById(active.linkedMockSampleId)
       : undefined;
   const [realImageUrl, setRealImageUrl] = useState<string>();
+  const [assetLoading, setAssetLoading] = useState(false);
+  const [assetError, setAssetError] = useState<string | null>(null);
+  const [cropRecoveryError, setCropRecoveryError] = useState<string | null>(null);
+  const [isRecoveringCrop, setIsRecoveringCrop] = useState(false);
   const isTeaching =
     Boolean(active) &&
     (draft.teachingCaptureId === active!.id ||
@@ -126,6 +131,7 @@ export function StepReviewMapping({ draft, locked, onChange, invoke }: Props) {
   // Task B & C2.7.1 — Real OCR state & interaction
   const [ocrLoading, setOcrLoading] = useState(false);
   const [ocrError, setOcrError] = useState<string>();
+  const [ocrStatusFeedback, setOcrStatusFeedback] = useState<string | null>(null);
   const [groupingLevel, setGroupingLevel] = useState<OcrGroupingLevel>("block");
   const [selectedSegmentId, setSelectedSegmentId] = useState<string>();
   const [segmentSearch, setSegmentSearch] = useState("");
@@ -291,19 +297,39 @@ export function StepReviewMapping({ draft, locked, onChange, invoke }: Props) {
       if (!targetReg || !active || ocrLoading) return;
       if (targetReg.ocr && !force) return;
 
+      if (!targetReg.referenceImage) {
+        setOcrError("Cannot run OCR: reference crop image is unavailable for this region.");
+        setOcrStatusFeedback("OCR failed — Cannot run OCR: reference crop image is unavailable for this region.");
+        return;
+      }
+
       setOcrLoading(true);
       setOcrError(undefined);
+      setOcrStatusFeedback("Running OCR...");
+
+      const cropBoxResult = resolveRegionCropBox(targetReg, imageDims.width, imageDims.height);
+      const roi = targetReg.originalRoi || cropBoxResult.box;
+
+      console.log(`[Collector OCR] Running OCR for region: ${targetReg.id} (${targetReg.label})`, {
+        regionId: targetReg.id,
+        groupTag: targetReg.groupTag,
+        roi,
+        hasImageAsset: Boolean(active.imageAsset),
+        isElectronCore: isElectronBrowserCoreAvailable(),
+      });
+
       try {
         let result: OcrResult;
-        const roi = targetReg.originalRoi;
         if (active.imageAsset && invoke && isElectronBrowserCoreAvailable() && roi) {
           result = await collectorOcrAsset(invoke, active.imageAsset, roi);
-          // Coordinates from ocrTarget with crop are offset by roi.x and roi.y.
+          // Coordinates from ocrTarget with crop are offset by cropOffset (or roi.x and roi.y).
           // Convert to crop-local coordinates for overlay rendering:
-          const offsetX = roi.x;
-          const offsetY = roi.y;
+          const offsetX = result.cropOffset?.x ?? roi.x;
+          const offsetY = result.cropOffset?.y ?? roi.y;
           result = {
             ...result,
+            containerCrop: result.containerCrop ?? { x: roi.x, y: roi.y, width: roi.width, height: roi.height },
+            cropOffset: { x: offsetX, y: offsetY },
             segments: result.segments.map((seg) => ({
               ...seg,
               bbox: {
@@ -313,6 +339,12 @@ export function StepReviewMapping({ draft, locked, onChange, invoke }: Props) {
               },
             })),
           };
+          console.log(`[Collector OCR] IPC OCR completed: ${result.segments.length} segments found.`, {
+            textSnippet: result.text.slice(0, 40),
+            segmentCount: result.segments.length,
+            confidence: result.confidence,
+            coordinateSystem: "crop-local",
+          });
         } else {
           const cropW = roi?.width || 300;
           const cropH = roi?.height || 60;
@@ -321,6 +353,8 @@ export function StepReviewMapping({ draft, locked, onChange, invoke }: Props) {
             text: sampleText,
             confidence: 92,
             language: "vie+eng",
+            containerCrop: roi ? { x: roi.x, y: roi.y, width: roi.width, height: roi.height } : undefined,
+            cropOffset: roi ? { x: roi.x, y: roi.y } : undefined,
             segments: [
               {
                 id: `${targetReg.id}_seg_0`,
@@ -333,10 +367,18 @@ export function StepReviewMapping({ draft, locked, onChange, invoke }: Props) {
           };
         }
 
+        const count = result.segments.length;
+        if (count > 0) {
+          setOcrStatusFeedback(`OCR completed — ${count} segment${count === 1 ? "" : "s"}`);
+        } else {
+          setOcrStatusFeedback("No text detected");
+        }
+
         const nextRegions = (draft.regions ?? []).map((r) =>
           r.id === targetReg.id
             ? {
                 ...r,
+                originalRoi: roi || r.originalRoi,
                 ocr: result,
                 ocrEvidence: {
                   text: result.text,
@@ -354,29 +396,47 @@ export function StepReviewMapping({ draft, locked, onChange, invoke }: Props) {
           dirty: true,
         });
       } catch (err) {
-        setOcrError(String(err));
+        const msg = err instanceof Error ? err.message : String(err);
+        console.error(`[Collector OCR] OCR failed for region ${targetReg.id}:`, msg);
+        setOcrError(msg);
+        setOcrStatusFeedback(`OCR failed — ${msg}`);
       } finally {
         setOcrLoading(false);
       }
     },
-    [active, activeRegions, draft, invoke, ocrLoading, onChange, selectedRegionId],
+    [active, activeRegions, draft, imageDims.height, imageDims.width, invoke, ocrLoading, onChange, selectedRegionId],
   );
+
+  useEffect(() => {
+    if (currentRegion?.ocr) {
+      const count = currentRegion.ocr.segments.length;
+      if (count > 0) {
+        setOcrStatusFeedback(`OCR completed — ${count} segment${count === 1 ? "" : "s"}`);
+      } else {
+        setOcrStatusFeedback("No text detected");
+      }
+    } else {
+      setOcrStatusFeedback(null);
+    }
+    setOcrError(undefined);
+  }, [currentRegion?.id, currentRegion?.ocr]);
 
   useEffect(() => {
     if (!active || step2Stage !== "fields") return;
     const target = selectedRegion || activeRegions[0];
-    if (target && !target.ocr) {
+    if (target && target.referenceImage && !target.ocr) {
       void runRegionOcr(false, target.id);
     }
-  }, [active?.id, step2Stage, selectedRegion?.id, selectedRegion?.ocr, activeRegions, runRegionOcr]);
+  }, [active?.id, step2Stage, selectedRegion?.id, selectedRegion?.ocr, selectedRegion?.referenceImage, activeRegions, runRegionOcr]);
 
   const activeSegments = useMemo(() => {
     const ocrSource = currentRegion?.ocr || active?.ocr;
     if (!ocrSource) return [];
-    const w = currentRegion?.originalRoi?.width || imageDims.width;
-    const h = currentRegion?.originalRoi?.height || imageDims.height;
+    const cropBox = currentRegion ? resolveRegionCropBox(currentRegion, imageDims.width, imageDims.height).box : undefined;
+    const w = currentRegion?.originalRoi?.width || cropBox?.width || imageDims.width;
+    const h = currentRegion?.originalRoi?.height || cropBox?.height || imageDims.height;
     return getSegmentsByLevel(ocrSource, groupingLevel, w, h);
-  }, [currentRegion?.ocr, currentRegion?.originalRoi, active?.ocr, groupingLevel, imageDims.width, imageDims.height]);
+  }, [currentRegion, active?.ocr, groupingLevel, imageDims.width, imageDims.height]);
 
   function getMappedVariableForSegment(segment: OcrSegment) {
     if (!active) return undefined;
@@ -400,8 +460,9 @@ export function StepReviewMapping({ draft, locked, onChange, invoke }: Props) {
 
   function handleAssignSegment(segment: OcrSegment, varId: string) {
     if (!active || !varId) return;
-    const roiX = currentRegion?.originalRoi?.x ?? 0;
-    const roiY = currentRegion?.originalRoi?.y ?? 0;
+    const cropBox = currentRegion ? resolveRegionCropBox(currentRegion, imageDims.width, imageDims.height).box : undefined;
+    const roiX = currentRegion?.originalRoi?.x ?? cropBox?.x ?? 0;
+    const roiY = currentRegion?.originalRoi?.y ?? cropBox?.y ?? 0;
     const screenshotBbox: Rect = {
       x: roiX + segment.bbox.x,
       y: roiY + segment.bbox.y,
@@ -462,6 +523,25 @@ export function StepReviewMapping({ draft, locked, onChange, invoke }: Props) {
       .replace(/^_+|_+$/g, "")
       .slice(0, 20);
     const key = rawKey || `var_${draft.variables.length + 1}`;
+    const cropBox = currentRegion ? resolveRegionCropBox(currentRegion, imageDims.width, imageDims.height).box : undefined;
+    const roiX = currentRegion?.originalRoi?.x ?? cropBox?.x ?? 0;
+    const roiY = currentRegion?.originalRoi?.y ?? cropBox?.y ?? 0;
+    const screenshotBbox: Rect = {
+      x: roiX + segment.bbox.x,
+      y: roiY + segment.bbox.y,
+      width: segment.bbox.width,
+      height: segment.bbox.height,
+    };
+    const newMapping: CollectorVariableMapping = {
+      sampleId: active.id,
+      regionId: currentRegion?.id,
+      presence: "mapped",
+      confirmed: true,
+      text: segment.text,
+      confidence: segment.confidence,
+      bbox: screenshotBbox,
+      segmentId: segment.id,
+    };
     const newVar: CollectorVariable = {
       id: cryptoRandomId(),
       key,
@@ -470,15 +550,26 @@ export function StepReviewMapping({ draft, locked, onChange, invoke }: Props) {
       required: false,
       source: "ocr_image",
       expectedValue: segment.text,
-      mappings: [],
+      mappings: [newMapping],
     };
-    const draftWithVar: CollectorDraft = {
+    let nextRegions = draft.regions;
+    if (currentRegion) {
+      nextRegions = (draft.regions ?? []).map((r) =>
+        r.id === currentRegion.id
+          ? {
+              ...r,
+              candidateVariableKeys: Array.from(new Set([...r.candidateVariableKeys, newVar.key])),
+              updatedAt: new Date().toISOString(),
+            }
+          : r,
+      );
+    }
+    onChange({
       ...draft,
       variables: [...draft.variables, newVar],
+      regions: nextRegions,
       dirty: true,
-    };
-    onChange(draftWithVar);
-    handleAssignSegment(segment, newVar.id);
+    });
     setEditingId(newVar.id);
   }
 
@@ -632,7 +723,10 @@ export function StepReviewMapping({ draft, locked, onChange, invoke }: Props) {
   function handleSaveRegion() {
     if (!active || !newRegionBox) return;
     const imgEl = imageContainerRef.current?.querySelector("img") as HTMLImageElement | null;
-    const refImg = cropRegionReference(imgEl, newRegionBox);
+    let refImg: string | undefined;
+    if (imgEl && imgEl.complete && imgEl.naturalWidth > 0) {
+      refImg = cropRegionReference(imgEl, newRegionBox);
+    }
     const region = createCollectorRegion({
       captureItemId: active.id,
       type: newRegionType,
@@ -660,11 +754,16 @@ export function StepReviewMapping({ draft, locked, onChange, invoke }: Props) {
 
   function handleUpdateRegionGeometry(regionId: string, box: Rect) {
     const imgEl = imageContainerRef.current?.querySelector("img") as HTMLImageElement | null;
-    const refImg = cropRegionReference(imgEl, box);
+    let refImg: string | undefined;
+    if (imgEl && imgEl.complete && imgEl.naturalWidth > 0) {
+      refImg = cropRegionReference(imgEl, box);
+    }
     const updated = updateRegionInDraft(draft, regionId, {
       originalRoi: box,
       geometry: normalizeGeometry(box, imageDims.width, imageDims.height),
       ...(refImg ? { referenceImage: refImg } : {}),
+      ocr: undefined,
+      ocrEvidence: undefined,
     });
     onChange(updated);
   }
@@ -796,13 +895,29 @@ export function StepReviewMapping({ draft, locked, onChange, invoke }: Props) {
   useEffect(() => {
     let cancelled = false;
     setRealImageUrl(undefined);
-    if (!active?.imageAsset || !invoke || !isElectronBrowserCoreAvailable()) return;
+    setAssetError(null);
+    if (!active?.imageAsset) {
+      setAssetLoading(false);
+      return;
+    }
+    if (!invoke || !isElectronBrowserCoreAvailable()) {
+      setAssetLoading(false);
+      return;
+    }
+    setAssetLoading(true);
     void collectorLoadImageAsset(invoke, active.imageAsset)
       .then((url) => {
-        if (!cancelled) setRealImageUrl(url);
+        if (!cancelled) {
+          setRealImageUrl(url);
+          setAssetLoading(false);
+        }
       })
-      .catch(() => {
-        if (!cancelled) setRealImageUrl(undefined);
+      .catch((err) => {
+        if (!cancelled) {
+          setRealImageUrl(undefined);
+          setAssetLoading(false);
+          setAssetError(err instanceof Error ? err.message : String(err));
+        }
       });
     return () => {
       cancelled = true;
@@ -814,6 +929,106 @@ export function StepReviewMapping({ draft, locked, onChange, invoke }: Props) {
     const asset = active?.previewAssetId ?? mock?.previewAssetId;
     return asset ? previewSrc(asset) : undefined;
   }, [realCapture, realImageUrl, active?.previewAssetId, mock?.previewAssetId]);
+
+  const recoverCrops = useCallback(async () => {
+    if (!active || !previewSrcUrl || isRecoveringCrop) return;
+    const missing = (draft.regions ?? []).filter(
+      (r) => r.captureItemId === active.id && !r.referenceImage,
+    );
+    if (missing.length === 0) return;
+
+    setIsRecoveringCrop(true);
+    setCropRecoveryError(null);
+
+    try {
+      const img = await new Promise<HTMLImageElement>((resolve, reject) => {
+        const i = new Image();
+        i.crossOrigin = "anonymous";
+        i.onload = () => resolve(i);
+        i.onerror = () => reject(new Error("Asset loading failure: could not decode screenshot image."));
+        i.src = previewSrcUrl;
+      });
+
+      const updatedRegions: CollectorRegion[] = [];
+      let latestError: string | null = null;
+
+      for (const region of missing) {
+        const { box, error } = resolveRegionCropBox(region, img.naturalWidth, img.naturalHeight);
+        if (error || !box) {
+          latestError = error || "Invalid region bounds.";
+          continue;
+        }
+
+        try {
+          const canvas = document.createElement("canvas");
+          canvas.width = Math.max(1, Math.round(box.width));
+          canvas.height = Math.max(1, Math.round(box.height));
+          const ctx = canvas.getContext("2d");
+          if (!ctx) {
+            latestError = "Crop generation failure: 2D canvas context unavailable.";
+            continue;
+          }
+          ctx.drawImage(
+            img,
+            Math.round(box.x),
+            Math.round(box.y),
+            Math.round(box.width),
+            Math.round(box.height),
+            0,
+            0,
+            canvas.width,
+            canvas.height,
+          );
+          const dataUrl = canvas.toDataURL("image/png");
+          updatedRegions.push({
+            ...region,
+            originalRoi: box,
+            referenceImage: dataUrl,
+            updatedAt: new Date().toISOString(),
+          });
+        } catch (cropErr) {
+          latestError = `Crop generation failure: ${cropErr instanceof Error ? cropErr.message : String(cropErr)}`;
+        }
+      }
+
+      if (updatedRegions.length > 0) {
+        const updatedMap = new Map(updatedRegions.map((r) => [r.id, r]));
+        const nextRegions = (draft.regions ?? []).map((r) => updatedMap.get(r.id) ?? r);
+        const nextCaptures = (draft.captures ?? []).map((c) => {
+          if (c.id !== active.id) return c;
+          return {
+            ...c,
+            regions: (c.regions ?? []).map((r) => updatedMap.get(r.id) ?? r),
+          };
+        });
+        onChange({
+          ...draft,
+          regions: nextRegions,
+          captures: nextCaptures,
+          dirty: true,
+        });
+      }
+
+      if (latestError && updatedRegions.length === 0) {
+        setCropRecoveryError(latestError);
+      }
+    } catch (err) {
+      setCropRecoveryError(err instanceof Error ? err.message : String(err));
+    } finally {
+      setIsRecoveringCrop(false);
+    }
+  }, [active, previewSrcUrl, isRecoveringCrop, draft, onChange]);
+
+  useEffect(() => {
+    if (active && previewSrcUrl) {
+      const hasMissing = (draft.regions ?? []).some(
+        (r) => r.captureItemId === active.id && !r.referenceImage,
+      );
+      if (hasMissing && !isRecoveringCrop) {
+        void recoverCrops();
+      }
+    }
+  }, [active?.id, previewSrcUrl, draft.regions, isRecoveringCrop, recoverCrops]);
 
   const pendingLeft = nextPendingReviewCaptureId(draft, null);
 
@@ -1062,15 +1277,57 @@ export function StepReviewMapping({ draft, locked, onChange, invoke }: Props) {
                     >
                       🖼 Full Screenshot
                     </button>
-                    {ocrLoading && <small style={{ color: "#68d6a6" }}>Extracting OCR...</small>}
-                    {ocrError && <small style={{ color: "#e05a5a" }}>OCR failed</small>}
+                    {ocrStatusFeedback && (
+                      <span
+                        className={`collector-ocr-feedback-pill ${
+                          ocrLoading
+                            ? "loading"
+                            : ocrError
+                            ? "error"
+                            : ocrStatusFeedback === "No text detected"
+                            ? "empty"
+                            : "success"
+                        }`}
+                        style={{
+                          fontSize: "11px",
+                          fontWeight: 600,
+                          padding: "3px 8px",
+                          borderRadius: "4px",
+                          color: ocrLoading
+                            ? "#38bdf8"
+                            : ocrError
+                            ? "#f87171"
+                            : ocrStatusFeedback === "No text detected"
+                            ? "#fbbf24"
+                            : "#34d399",
+                          background: ocrLoading
+                            ? "rgba(56, 189, 248, 0.12)"
+                            : ocrError
+                            ? "rgba(248, 113, 113, 0.12)"
+                            : ocrStatusFeedback === "No text detected"
+                            ? "rgba(251, 191, 36, 0.12)"
+                            : "rgba(52, 211, 153, 0.12)",
+                          border: `1px solid ${
+                            ocrLoading
+                              ? "rgba(56, 189, 248, 0.3)"
+                              : ocrError
+                              ? "rgba(248, 113, 113, 0.3)"
+                              : ocrStatusFeedback === "No text detected"
+                              ? "rgba(251, 191, 36, 0.3)"
+                              : "rgba(52, 211, 153, 0.3)"
+                          }`,
+                        }}
+                      >
+                        {ocrStatusFeedback}
+                      </span>
+                    )}
                     <button
                       type="button"
-                      disabled={locked || ocrLoading || !currentRegion}
+                      disabled={locked || ocrLoading || !currentRegion || !currentRegion.referenceImage || isRecoveringCrop}
                       onClick={() => void runRegionOcr(true, currentRegion?.id)}
-                      title="Re-run OCR for selected region"
+                      title={!currentRegion?.referenceImage ? "Reference crop must be available before running OCR" : (ocrStatusFeedback || "Re-run OCR for selected region")}
                     >
-                      {ocrLoading ? "Extracting..." : "Re-run Region OCR"}
+                      {ocrLoading ? "Running OCR..." : "Re-run Region OCR"}
                     </button>
                   </div>
                 </>
@@ -1143,7 +1400,7 @@ export function StepReviewMapping({ draft, locked, onChange, invoke }: Props) {
                             />
 
                             {/* STAGE 2B — OCR Field Mapping Overlay */}
-                            {step2Stage === "fields" && active.ocr && (
+                            {step2Stage === "fields" && (currentRegion?.ocr || active.ocr) && (
                               <div className="collector-ocr-overlay">
                                 {activeSegments.map((s) => {
                                   const mappedVar = getMappedVariableForSegment(s);
@@ -1153,8 +1410,9 @@ export function StepReviewMapping({ draft, locked, onChange, invoke }: Props) {
                                   const isSearchMatch =
                                     !segmentSearch.trim() ||
                                     normalizeVietnameseText(s.text).includes(normalizeVietnameseText(segmentSearch.trim()));
-                                  const cropW = Math.max(1, currentRegion.originalRoi?.width || 300);
-                                  const cropH = Math.max(1, currentRegion.originalRoi?.height || 60);
+                                  const resolvedBox = resolveRegionCropBox(currentRegion, imageDims.width, imageDims.height).box;
+                                  const cropW = Math.max(1, currentRegion.originalRoi?.width || currentRegion.ocr?.containerCrop?.width || resolvedBox?.width || 300);
+                                  const cropH = Math.max(1, currentRegion.originalRoi?.height || currentRegion.ocr?.containerCrop?.height || resolvedBox?.height || 60);
                                   return (
                                     <div
                                       key={s.id}
@@ -1173,10 +1431,64 @@ export function StepReviewMapping({ draft, locked, onChange, invoke }: Props) {
                                 })}
                               </div>
                             )}
+
+                            {step2Stage === "fields" && currentRegion?.ocr && activeSegments.length === 0 && (
+                              <div
+                                className="collector-ocr-empty-notice"
+                                style={{
+                                  position: "absolute",
+                                  bottom: "8px",
+                                  left: "8px",
+                                  right: "8px",
+                                  padding: "6px 10px",
+                                  background: "rgba(15, 23, 42, 0.9)",
+                                  border: "1px dashed #e0b35a",
+                                  borderRadius: "4px",
+                                  fontSize: "11px",
+                                  color: "#fbbf24",
+                                  textAlign: "center",
+                                  zIndex: 10,
+                                }}
+                              >
+                                ℹ️ No text detected in this region crop ({groupingLevel}).
+                              </div>
+                            )}
                           </div>
                         ) : (
-                          <div className="collector-sample-empty">
-                            No reference crop available for this region.
+                          <div className="collector-sample-empty collector-crop-recovery-box" style={{ padding: "30px 20px", textAlign: "center" }}>
+                            <div style={{ color: assetError || cropRecoveryError ? "#f87171" : "#e0b35a", fontWeight: "bold", marginBottom: "8px" }}>
+                              {assetError
+                                ? "Asset loading failure"
+                                : cropRecoveryError
+                                ? "Reference Crop Recovery Failed"
+                                : isRecoveringCrop || assetLoading
+                                ? "Generating Reference Crop..."
+                                : "Reference Crop Unavailable"}
+                            </div>
+                            <div style={{ color: "#94a3b8", fontSize: "12px", marginBottom: "14px", maxWidth: "420px", margin: "0 auto 14px auto" }}>
+                              {assetError
+                                ? `Could not load original screenshot asset: ${assetError}`
+                                : cropRecoveryError
+                                ? cropRecoveryError
+                                : isRecoveringCrop
+                                ? "Extracting region crop from capture screenshot..."
+                                : assetLoading
+                                ? "Loading original capture screenshot..."
+                                : !active?.imageAsset && !active?.previewAssetId && !mock?.previewAssetId
+                                ? "Original screenshot missing."
+                                : !currentRegion?.originalRoi && (!currentRegion?.geometry || currentRegion.geometry.relW <= 0)
+                                ? "Invalid region bounds."
+                                : "No reference crop available for this region. Click below to regenerate."}
+                            </div>
+                            {previewSrcUrl && !isRecoveringCrop && (
+                              <button
+                                type="button"
+                                className="primary small"
+                                onClick={() => void recoverCrops()}
+                              >
+                                Regenerate Region Crop
+                              </button>
+                            )}
                           </div>
                         )}
                       </div>

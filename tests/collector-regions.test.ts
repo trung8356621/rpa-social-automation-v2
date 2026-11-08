@@ -35,6 +35,7 @@ import {
   deriveReferenceCropFromAnchors,
   computeMatchedDynamicBounds,
   executeLiveBrowserMatchTest,
+  resolveRegionCropBox,
 } from "../src/shared/collectors/regions.js";
 import {
   MemoryStorage,
@@ -1591,4 +1592,149 @@ test("C2.10 Part D: Data Compatibility - v6 envelope migration to v7", () => {
   assert.equal(col.wizardStep, 4);
   // Match Test is NOT silently marked as MATCHED
   assert.equal(col.matchTest, undefined);
+});
+
+test("C2.10.1 resolveRegionCropBox resolves explicit originalRoi and denormalizes geometry when missing", () => {
+  // Case A: explicit originalRoi
+  const r1 = createCollectorRegion({
+    captureItemId: "cap_1",
+    type: "BEGIN",
+    label: "Header",
+    box: { x: 10, y: 20, width: 200, height: 50 },
+    imageWidth: 800,
+    imageHeight: 600,
+  });
+  const res1 = resolveRegionCropBox(r1, 800, 600);
+  assert.equal(res1.error, undefined);
+  assert.deepEqual(res1.box, { x: 10, y: 20, width: 200, height: 50 });
+
+  // Case B: missing originalRoi (migrated legacy region) - denormalizes from geometry
+  const r2: CollectorRegion = {
+    ...r1,
+    originalRoi: undefined,
+    geometry: { relX: 0.1, relY: 0.2, relW: 0.25, relH: 0.1 },
+  };
+  const res2 = resolveRegionCropBox(r2, 1000, 500);
+  assert.equal(res2.error, undefined);
+  assert.deepEqual(res2.box, { x: 100, y: 100, width: 250, height: 50 });
+
+  // Case C: Clamps coordinates within image dimensions
+  const r3 = createCollectorRegion({
+    captureItemId: "cap_1",
+    type: "END",
+    label: "Footer",
+    box: { x: 750, y: 580, width: 100, height: 80 },
+    imageWidth: 800,
+    imageHeight: 600,
+  });
+  const res3 = resolveRegionCropBox(r3, 800, 600);
+  assert.equal(res3.error, undefined);
+  assert.deepEqual(res3.box, { x: 750, y: 580, width: 50, height: 20 });
+
+  // Case D: Invalid region bounds
+  const rInvalid: CollectorRegion = {
+    ...r1,
+    originalRoi: { x: 0, y: 0, width: 0, height: 0 },
+    geometry: { relX: 0, relY: 0, relW: 0, relH: 0 },
+  };
+  const resInvalid = resolveRegionCropBox(rInvalid, 800, 600);
+  assert.equal(resInvalid.box, undefined);
+  assert.equal(resInvalid.error, "Invalid region bounds.");
+
+  // Case E: Invalid image dimensions
+  const resDim = resolveRegionCropBox(r1, 0, 0);
+  assert.equal(resDim.box, undefined);
+  assert.equal(resDim.error, "Invalid image dimensions.");
+});
+
+test("C2.10.1 updateRegionInDraft invalidates OCR and reference crop on geometry change", () => {
+  let draft = createEmptyDraft({ name: "CropLifecycle" });
+  draft = addCaptureItem(draft, {
+    captureUrl: "https://example.com",
+    imageAsset: "11111111-2222-3333-4444-555555555555.png",
+    roi: { x: 0, y: 0, width: 800, height: 600, containerWidth: 800, containerHeight: 600 },
+  });
+  const capId = draft.captures[0]!.id;
+  const region = createCollectorRegion({
+    captureItemId: capId,
+    type: "BEGIN",
+    label: "Begin Anchor",
+    box: { x: 10, y: 15, width: 100, height: 40 },
+    imageWidth: 800,
+    imageHeight: 600,
+    referenceImage: "data:image/png;base64,initialCrop",
+  });
+  draft = addRegionToDraft(draft, region);
+
+  // Attach OCR to region
+  draft = updateRegionInDraft(draft, region.id, {
+    ocr: {
+      text: "Initial OCR",
+      confidence: 95,
+      language: "vie+eng",
+      segments: [],
+    },
+    ocrEvidence: {
+      text: "Initial OCR",
+      confidence: 95,
+      segmentIds: [],
+    },
+  });
+
+  const withOcr = draft.regions?.find((r) => r.id === region.id);
+  assert.equal(withOcr?.referenceImage, "data:image/png;base64,initialCrop");
+  assert.equal(withOcr?.ocr?.text, "Initial OCR");
+
+  // Non-geometry update (e.g. rename label) must PRESERVE referenceImage and OCR
+  draft = updateRegionInDraft(draft, region.id, { label: "Renamed Anchor" });
+  const renamed = draft.regions?.find((r) => r.id === region.id);
+  assert.equal(renamed?.label, "Renamed Anchor");
+  assert.equal(renamed?.referenceImage, "data:image/png;base64,initialCrop");
+  assert.equal(renamed?.ocr?.text, "Initial OCR");
+
+  // Geometry change (updating box) must INVALIDATE ocr and referenceImage
+  const newBox: Rect = { x: 20, y: 25, width: 120, height: 45 };
+  draft = updateRegionInDraft(draft, region.id, {
+    originalRoi: newBox,
+    geometry: normalizeGeometry(newBox, 800, 600),
+  });
+  const resized = draft.regions?.find((r) => r.id === region.id);
+  assert.deepEqual(resized?.originalRoi, newBox);
+  assert.equal(resized?.ocr, undefined, "OCR must be invalidated on geometry change");
+  assert.equal(resized?.ocrEvidence, undefined, "ocrEvidence must be invalidated on geometry change");
+  assert.equal(resized?.referenceImage, undefined, "referenceImage must be invalidated on geometry change");
+});
+
+test("C2.10.1 version snapshot and revert preserve regions and support recovery", () => {
+  let draft = createEmptyDraft({ name: "SnapshotRecovery" });
+  draft = addCaptureItem(draft, {
+    captureUrl: "https://example.com/item",
+    imageAsset: "22222222-3333-4444-5555-666666666666.png",
+    roi: { x: 0, y: 0, width: 800, height: 600, containerWidth: 800, containerHeight: 600 },
+  });
+  const capId = draft.captures[0]!.id;
+  // Legacy-style region without referenceImage
+  const legacyRegion = createCollectorRegion({
+    captureItemId: capId,
+    type: "END",
+    groupTag: "post-main",
+    label: "Footer Anchor",
+    box: { x: 15, y: 500, width: 250, height: 60 },
+    imageWidth: 800,
+    imageHeight: 600,
+  });
+  // Explicitly remove referenceImage to emulate v6 migration
+  delete (legacyRegion as any).referenceImage;
+  draft = addRegionToDraft(draft, legacyRegion);
+
+  draft = saveAsVersion(draft, "v1");
+  assert.equal(draft.versions.length, 1);
+  const snap = draft.versions[0]!;
+  assert.equal(snap.regions?.length, 1);
+  assert.equal(snap.regions[0]!.referenceImage, undefined);
+
+  // Recovering box for the region from snapshot
+  const recovered = resolveRegionCropBox(snap.regions[0]!, 800, 600);
+  assert.equal(recovered.error, undefined);
+  assert.deepEqual(recovered.box, { x: 15, y: 500, width: 250, height: 60 });
 });

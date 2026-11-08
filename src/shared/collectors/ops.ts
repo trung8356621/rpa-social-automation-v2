@@ -1062,12 +1062,38 @@ export function updateRegionInDraft(
   const regions = current.map((r) => {
     if (r.id !== regionId) return r;
     targetCaptureId = r.captureItemId;
-    return { ...r, ...patch, updatedAt: now };
+
+    // Detect if geometry changed
+    const roiChanged =
+      patch.originalRoi !== undefined &&
+      (r.originalRoi?.x !== patch.originalRoi.x ||
+        r.originalRoi?.y !== patch.originalRoi.y ||
+        r.originalRoi?.width !== patch.originalRoi.width ||
+        r.originalRoi?.height !== patch.originalRoi.height);
+    const geomChanged =
+      patch.geometry !== undefined &&
+      (r.geometry?.relX !== patch.geometry.relX ||
+        r.geometry?.relY !== patch.geometry.relY ||
+        r.geometry?.relW !== patch.geometry.relW ||
+        r.geometry?.relH !== patch.geometry.relH);
+    const geometryChanged = Boolean(roiChanged || geomChanged);
+
+    const merged = { ...r, ...patch, updatedAt: now };
+    if (geometryChanged) {
+      if (!("ocr" in patch)) merged.ocr = undefined;
+      if (!("ocrEvidence" in patch)) merged.ocrEvidence = undefined;
+      if (!("referenceImage" in patch)) merged.referenceImage = undefined;
+    }
+    return merged;
   });
 
   const captures = (draft.captures ?? []).map((c) => {
     if (c.id !== targetCaptureId && !c.regions?.some((r) => r.id === regionId)) return c;
-    const cRegions = (c.regions ?? []).map((r) => (r.id === regionId ? { ...r, ...patch, updatedAt: now } : r));
+    const cRegions = (c.regions ?? []).map((r) => {
+      if (r.id !== regionId) return r;
+      const updated = regions.find((reg) => reg.id === regionId);
+      return updated ?? { ...r, ...patch, updatedAt: now };
+    });
     return { ...c, regions: cRegions };
   });
 

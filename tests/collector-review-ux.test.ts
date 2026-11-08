@@ -334,7 +334,7 @@ test("UX 15: Stage 2A completely separates OCR from Region Teaching (no OCR boxe
 test("UX 16: Stage 2B preserves full OCR Word/Line/Block overlay and mapping without regression", () => {
   // Extract Stage 2B JSX block
   const stage2bMatch = reviewSource.match(
-    /\{step2Stage === ["']fields["'] && active\.ocr && \(\s*<div[\s\S]*?className=["']collector-ocr-overlay["'][\s\S]*?<\/div>\s*\)\}/
+    /\{step2Stage === ["']fields["'] && \(currentRegion\?\.ocr \|\| active\.ocr\) && \(\s*<div[\s\S]*?className=["']collector-ocr-overlay["'][\s\S]*?<\/div>\s*\)\}/
   );
   assert.ok(stage2bMatch, "Stage 2B OCR overlay block must exist");
   const stage2bJsx = stage2bMatch[0];
@@ -389,4 +389,67 @@ test("UX 16: Stage 2B preserves full OCR Word/Line/Block overlay and mapping wit
   assert.equal(updatedCap.ocr.text, "Sample Header");
   assert.equal(updatedCap.ocr.segments.length, 1);
   assert.equal(regionsForCapture(draftWithRegion, "cap_ocr").length, 1);
+});
+
+test("UX 17: Persistent Region Highlight borders for BEGIN, END, and FREE across light/dark backgrounds", () => {
+  // BEGIN (blue), END (green), FREE (purple)
+  assert.match(cssSource, /\.collector-region-box\.begin[\s\S]*?border:\s*2px solid #3b82f6/);
+  assert.match(cssSource, /\.collector-region-box\.end[\s\S]*?border:\s*2px solid #10b981/);
+  assert.match(cssSource, /\.collector-region-box\.free[\s\S]*?border:\s*2px solid #a855f7/);
+
+  // High contrast shadow for visibility on both dark and light screenshots
+  assert.match(cssSource, /\.collector-region-box\.begin[\s\S]*?box-shadow:/);
+  assert.match(cssSource, /\.collector-region-box\.end[\s\S]*?box-shadow:/);
+  assert.match(cssSource, /\.collector-region-box\.free[\s\S]*?box-shadow:/);
+
+  // DRAW mode passes pointer events through so existing regions do not intercept drawing
+  assert.match(cssSource, /\.collector-review-image-container\.mode-draw\s+\.collector-region-box[\s\S]*?pointer-events:\s*none/);
+
+  // Resize handles have distinct styling and border
+  assert.match(cssSource, /\.collector-resize-handle[\s\S]*?border:/);
+});
+
+test("UX 18: Stage 2B automatic crop recovery, actionable error handling, and OCR safety", () => {
+  // Automatic crop recovery hook and callback exist
+  assert.match(reviewSource, /recoverCrops/);
+  assert.match(reviewSource, /resolveRegionCropBox/);
+
+  // OCR refuses to run / report success if referenceImage is missing
+  assert.match(reviewSource, /if\s*\(!targetReg\.referenceImage\)\s*\{\s*setOcrError\(/);
+  assert.match(reviewSource, /disabled=\{locked \|\| ocrLoading \|\| !currentRegion \|\| !currentRegion\.referenceImage \|\| isRecoveringCrop\}/);
+
+  // Actionable error states exist for crop recovery failures
+  assert.match(reviewSource, /Original screenshot missing\./);
+  assert.match(reviewSource, /Invalid region bounds\./);
+  assert.match(reviewSource, /Crop generation failure/);
+  assert.match(reviewSource, /Asset loading failure/);
+
+  // Manual regenerate button available
+  assert.match(reviewSource, />\s*Regenerate Region Crop\s*<\/button>/);
+});
+
+test("UX 19: C2.10.2 Region OCR Pipeline, Status Feedback, and Coordinate Mapping", () => {
+  // 1. Stage 2B overlay renders when currentRegion.ocr is present
+  assert.match(reviewSource, /\{step2Stage === ["']fields["'] && \(currentRegion\?\.ocr \|\| active\.ocr\) && \(/);
+
+  // 2. OCR button and feedback badge show meaningful runtime states
+  assert.match(reviewSource, /Running OCR\.\.\./);
+  assert.match(reviewSource, /OCR completed —/);
+  assert.match(reviewSource, /No text detected/);
+  assert.match(reviewSource, /OCR failed —/);
+  assert.match(reviewSource, /collector-ocr-feedback-pill/);
+
+  // 3. Informative notice rendered when region OCR contains 0 segments
+  assert.match(reviewSource, /No text detected in this region crop/);
+
+  // 4. Bounding box rendered in crop-local coordinates relative to crop dimensions
+  assert.match(reviewSource, /left:\s*`\$\{\(s\.bbox\.x \/ cropW\) \* 100\}%`/);
+  assert.match(reviewSource, /top:\s*`\$\{\(s\.bbox\.y \/ cropH\) \* 100\}%`/);
+
+  // 5. Variable mapping transforms crop-local segment bbox back to screenshot coordinates
+  assert.match(reviewSource, /x:\s*roiX \+ segment\.bbox\.x/);
+  assert.match(reviewSource, /y:\s*roiY \+ segment\.bbox\.y/);
+
+  // 6. Atomic variable creation from segment sets mapping directly
+  assert.match(reviewSource, /function handleCreateVariableFromSegment[\s\S]*?mappings:\s*\[newMapping\]/);
 });

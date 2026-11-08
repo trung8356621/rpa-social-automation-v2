@@ -78,6 +78,43 @@ export function calculateIoU(a: Rect, b: Rect): number {
   return union <= 0 ? 0 : intersection / union;
 }
 
+/**
+ * Resolves a region's pixel crop box against source image dimensions.
+ * Handles legacy regions lacking originalRoi by denormalizing normalized geometry.
+ * Clamps coordinates to stay within image boundaries.
+ */
+export function resolveRegionCropBox(
+  region: CollectorRegion,
+  imageWidth: number,
+  imageHeight: number,
+): { box?: Rect; error?: string } {
+  if (imageWidth <= 0 || imageHeight <= 0) {
+    return { error: "Invalid image dimensions." };
+  }
+  let box = region.originalRoi;
+  if (!box || box.width <= 0 || box.height <= 0) {
+    if (region.geometry && region.geometry.relW > 0 && region.geometry.relH > 0) {
+      box = denormalizeGeometry(region.geometry, imageWidth, imageHeight);
+    }
+  }
+  if (!box || box.width <= 0 || box.height <= 0) {
+    return { error: "Invalid region bounds." };
+  }
+  const clampedX = Math.max(0, Math.min(imageWidth - 1, box.x));
+  const clampedY = Math.max(0, Math.min(imageHeight - 1, box.y));
+  const clampedW = Math.max(1, Math.min(imageWidth - clampedX, box.width));
+  const clampedH = Math.max(1, Math.min(imageHeight - clampedY, box.height));
+
+  return {
+    box: {
+      x: Math.round(clampedX),
+      y: Math.round(clampedY),
+      width: Math.round(clampedW),
+      height: Math.round(clampedH),
+    },
+  };
+}
+
 // ---------------------------------------------------------------------------
 // 2. REGION CRUD & TEACHING MODEL
 // ---------------------------------------------------------------------------
