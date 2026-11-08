@@ -9,7 +9,6 @@ import {
 import {
   ScrollExtendGate,
   userFacingExtendError,
-  withTimeout,
 } from "../../shared/collectors/scroll-extend-gate";
 import {
   SCROLL_CAPTURE_LIMITS,
@@ -365,18 +364,25 @@ export function StepCaptureSamples({
     const previewEl = previewScrollRef.current;
     const keepScrollTop = previewEl?.scrollTop ?? 0;
     const resizing = dragRef.current?.kind === "resize";
-    const next = await withTimeout(
-      collectorScrollCaptureExtend(invoke, session.sessionId, deltaCssPx),
-      SCROLL_CAPTURE_LIMITS.extendTimeoutMs,
-      `Scroll extend timed out after ${SCROLL_CAPTURE_LIMITS.extendTimeoutMs}ms. Last valid image kept.`,
-      signal,
-    );
+    // Main owns the extend timeout + single-flight. Do not wrap with a second
+    // renderer timeout — that unlocked UI while main was still capturing (C2.5.6).
+    const next = await collectorScrollCaptureExtend(invoke, session.sessionId, deltaCssPx);
     if (signal.aborted || epoch !== extendEpochRef.current) {
       throw new Error("Extend cancelled.");
     }
     applySessionToShot(next, shotRef.current);
-    if (next.error || next.phase === "FAILED") {
-      throw new Error(next.error || "Extend failed — last valid image kept.");
+    if (
+      next.error ||
+      next.phase === "FAILED" ||
+      next.phase === "RECOVERABLE_ERROR"
+    ) {
+      const stage = next.lastDiagnostics?.timeoutStage;
+      const total = next.lastDiagnostics?.totalMs;
+      const detail =
+        stage || total != null
+          ? ` [${stage ?? "?"} · ${total ?? "?"}ms]`
+          : "";
+      throw new Error((next.error || "Extend failed — last valid image kept.") + detail);
     }
     const anchor = anchorRef.current;
     const prevRoi = roiRef.current;

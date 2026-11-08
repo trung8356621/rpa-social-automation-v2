@@ -1,12 +1,26 @@
 import type { Rect } from "../contracts.js";
 
-/** Collector scrolling-capture session phases (main + renderer). */
+/**
+ * Authoritative scrolling-capture operation lifecycle (main owns truth).
+ *
+ * Legal transitions (extend path):
+ *   ROI_SELECTED|READY|RECOVERABLE_ERROR --extendStart→ EXTENDING
+ *   EXTENDING --settle→ SETTLING --ok→ READY | --fail→ RECOVERABLE_ERROR
+ *   READY|ROI_SELECTED|RECOVERABLE_ERROR --confirm→ CONFIRMING → CONFIRMED
+ *   * --cancel|sessionChange|navigateAway→ CANCELLED
+ *
+ * EXTENDING rejects a second extend (main single-flight). FAILED kept as
+ * legacy alias of RECOVERABLE_ERROR for older diagnostics strings.
+ */
 export type ScrollCapturePhase =
   | "IDLE"
   | "INITIAL_FRAME"
   | "ROI_SELECTED"
   | "EXTENDING"
+  | "SETTLING"
   | "READY"
+  | "RECOVERABLE_ERROR"
+  | "CONFIRMING"
   | "CONFIRMED"
   | "CANCELLED"
   | "FAILED";
@@ -16,12 +30,28 @@ export type ScrollCaptureAction =
   | "selectRoi"
   | "resetRoi"
   | "extendStart"
+  | "extendSettle"
   | "extendOk"
   | "extendFail"
   | "confirm"
+  | "confirmDone"
   | "cancel"
   | "sessionChange"
   | "navigateAway";
+
+/** Stages timed during one extend (for timeout diagnosis). */
+export type ExtendStageName =
+  | "main_enter"
+  | "scroll"
+  | "settle"
+  | "screenshot"
+  | "decode"
+  | "align"
+  | "stitch"
+  | "respond"
+  | "ui_complete";
+
+export type ExtendStageTiming = { stage: ExtendStageName | string; ms: number };
 
 /**
  * Measured safe limits for Electron + Sharp stitching.
@@ -151,7 +181,23 @@ export type ExtendDiagnostics = {
   accepted: boolean;
   failureKind: ExtendFailureKind;
   message: string;
+  /** Cumulative ms from main_enter for each completed stage. */
+  stages?: ExtendStageTiming[];
+  totalMs?: number;
+  /** Stage that was in progress when timeout fired (if known). */
+  timeoutStage?: string;
+  singleFlight?: "accepted" | "rejected_busy" | "coalesced";
 };
+
+/** Phases that may start a new extend (not already in-flight). */
+export function canStartExtend(phase: ScrollCapturePhase): boolean {
+  return phase === "ROI_SELECTED" || phase === "READY" || phase === "RECOVERABLE_ERROR" || phase === "FAILED";
+}
+
+/** Phases that may confirm the current PNG. */
+export function canConfirmCapture(phase: ScrollCapturePhase): boolean {
+  return phase === "ROI_SELECTED" || phase === "READY" || phase === "RECOVERABLE_ERROR" || phase === "FAILED";
+}
 
 export function nextScrollCapturePhase(
   phase: ScrollCapturePhase,
@@ -164,19 +210,23 @@ export function nextScrollCapturePhase(
     case "begin":
       return "INITIAL_FRAME";
     case "selectRoi":
-      return phase === "INITIAL_FRAME" || phase === "ROI_SELECTED" || phase === "READY" || phase === "EXTENDING"
+      return phase === "INITIAL_FRAME" || phase === "ROI_SELECTED" || phase === "READY" || phase === "RECOVERABLE_ERROR" || phase === "FAILED"
         ? "ROI_SELECTED"
         : phase;
     case "resetRoi":
       return phase === "IDLE" || phase === "CONFIRMED" || phase === "CANCELLED" ? phase : "INITIAL_FRAME";
     case "extendStart":
-      return phase === "ROI_SELECTED" || phase === "READY" || phase === "EXTENDING" ? "EXTENDING" : phase;
+      return canStartExtend(phase) ? "EXTENDING" : phase;
+    case "extendSettle":
+      return phase === "EXTENDING" ? "SETTLING" : phase;
     case "extendOk":
-      return phase === "EXTENDING" ? "READY" : phase;
+      return phase === "EXTENDING" || phase === "SETTLING" ? "READY" : phase;
     case "extendFail":
-      return phase === "EXTENDING" ? "FAILED" : phase;
+      return phase === "EXTENDING" || phase === "SETTLING" ? "RECOVERABLE_ERROR" : phase;
     case "confirm":
-      return phase === "ROI_SELECTED" || phase === "READY" || phase === "EXTENDING" ? "CONFIRMED" : phase;
+      return canConfirmCapture(phase) ? "CONFIRMING" : phase;
+    case "confirmDone":
+      return phase === "CONFIRMING" ? "CONFIRMED" : phase;
     default:
       return phase;
   }

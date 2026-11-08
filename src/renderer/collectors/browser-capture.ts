@@ -83,6 +83,10 @@ export type ScrollCaptureSession = {
     scrollAfter?: number;
     scrollDeltaCss?: number;
     accepted?: boolean;
+    stages?: Array<{ stage: string; ms: number }>;
+    totalMs?: number;
+    timeoutStage?: string;
+    singleFlight?: string;
   };
 };
 

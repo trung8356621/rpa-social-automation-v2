@@ -8,9 +8,13 @@ import {
   SCROLL_CAPTURE_LIMITS,
   alignExtendFrames,
   assertWithinScrollCaptureLimits,
+  canConfirmCapture,
+  canStartExtend,
+  nextScrollCapturePhase,
   type AlignResult,
   type ExtendDiagnostics,
   type ExtendFailureKind,
+  type ExtendStageTiming,
   type ScrollCapturePhase,
 } from "../shared/collectors/scrolling-capture.js";
 import { validateRect } from "../shared/geometry.js";
@@ -50,6 +54,10 @@ type InternalSession = {
   verifiedScrollTop: number;
   extendGeneration: number;
   lastDiagnostics?: ExtendDiagnostics;
+  /** In-flight extend promise — main single-flight per session. */
+  inFlightExtend?: Promise<ScrollCaptureSessionPublic>;
+  /** Stage label updated as extendBody progresses (timeout diagnosis). */
+  currentStage?: string;
 };
 
 type ScrollProbe = {
@@ -275,8 +283,10 @@ export class CollectorScrollCaptureController {
     message: string,
     partial?: Partial<ExtendDiagnostics>,
   ): ScrollCaptureSessionPublic {
-    s.phase = "FAILED";
+    s.phase = nextScrollCapturePhase(s.phase === "SETTLING" ? "SETTLING" : "EXTENDING", "extendFail");
+    if (s.phase !== "RECOVERABLE_ERROR") s.phase = "RECOVERABLE_ERROR";
     s.error = message;
+    s.currentStage = undefined;
     s.lastDiagnostics = {
       sessionId: s.id,
       containerId: s.containerId,
@@ -293,6 +303,10 @@ export class CollectorScrollCaptureController {
       accepted: false,
       failureKind: kind,
       message,
+      stages: partial?.stages,
+      totalMs: partial?.totalMs,
+      timeoutStage: partial?.timeoutStage,
+      singleFlight: partial?.singleFlight ?? "accepted",
     };
     logDiag(s.lastDiagnostics);
     return this.pub(s);
@@ -352,45 +366,96 @@ export class CollectorScrollCaptureController {
 
   markRoiSelected(sessionId: string) {
     const s = this.require(sessionId);
-    if (s.phase === "INITIAL_FRAME" || s.phase === "READY" || s.phase === "ROI_SELECTED" || s.phase === "FAILED") {
+    const next = nextScrollCapturePhase(s.phase, "selectRoi");
+    if (next === "ROI_SELECTED") {
       s.phase = "ROI_SELECTED";
       s.error = undefined;
     }
     return this.pub(s);
   }
 
+  /**
+   * Single-flight extend: concurrent calls while EXTENDING/SETTLING are rejected.
+   * Timed-out work is invalidated via extendGeneration so it cannot mutate later.
+   */
   async extend(
     sessionId: string,
     deltaCssPx?: number,
   ): Promise<ScrollCaptureSessionPublic> {
-    const scrollDelta = deltaCssPx ?? SCROLL_CAPTURE_LIMITS.defaultScrollCssPx;
     const s = this.require(sessionId);
-    if (!["ROI_SELECTED", "READY", "FAILED", "EXTENDING"].includes(s.phase)) {
+    if (s.inFlightExtend || s.phase === "EXTENDING" || s.phase === "SETTLING") {
+      const diag: ExtendDiagnostics = {
+        sessionId: s.id,
+        containerId: s.containerId,
+        scrollBefore: s.verifiedScrollTop,
+        scrollAfter: s.verifiedScrollTop,
+        scrollDeltaCss: 0,
+        viewportCssWidth: 0,
+        viewportCssHeight: 0,
+        screenshotWidth: s.width,
+        screenshotHeight: s.lastViewportHeight,
+        accepted: false,
+        failureKind: "TIMEOUT",
+        message: `Extend rejected: already ${s.phase} (single-flight). stage=${s.currentStage ?? "n/a"}`,
+        stages: s.lastDiagnostics?.stages,
+        timeoutStage: s.currentStage ?? s.phase,
+        singleFlight: "rejected_busy",
+      };
+      logDiag(diag);
+      throw new Error(diag.message);
+    }
+    if (!canStartExtend(s.phase)) {
       throw new Error("Select an ROI before scrolling to extend the capture.");
     }
-    s.phase = "EXTENDING";
+
+    const scrollDelta = deltaCssPx ?? SCROLL_CAPTURE_LIMITS.defaultScrollCssPx;
+    const work = this.runExtendExclusive(s, scrollDelta);
+    s.inFlightExtend = work;
+    try {
+      return await work;
+    } finally {
+      if (s.inFlightExtend === work) s.inFlightExtend = undefined;
+    }
+  }
+
+  private async runExtendExclusive(
+    s: InternalSession,
+    scrollDelta: number,
+  ): Promise<ScrollCaptureSessionPublic> {
+    s.phase = nextScrollCapturePhase(s.phase, "extendStart");
     s.error = undefined;
     const gen = ++s.extendGeneration;
+    const t0 = Date.now();
+    const stages: ExtendStageTiming[] = [];
+    const mark = (stage: string) => {
+      s.currentStage = stage;
+      stages.push({ stage, ms: Date.now() - t0 });
+    };
+    mark("main_enter");
 
     let timer: ReturnType<typeof setTimeout> | undefined;
     try {
       const result = await Promise.race([
-        this.extendBody(s, scrollDelta, gen),
+        this.extendBody(s, scrollDelta, gen, mark, stages, t0),
         new Promise<never>((_, reject) => {
           timer = setTimeout(
-            () => reject(new Error(
-              `Scroll extend timed out after ${SCROLL_CAPTURE_LIMITS.extendTimeoutMs}ms. Last valid image kept.`,
-            )),
+            () =>
+              reject(
+                Object.assign(
+                  new Error(
+                    `Scroll extend timed out after ${SCROLL_CAPTURE_LIMITS.extendTimeoutMs}ms during ${s.currentStage ?? "unknown"}. Last valid image kept.`,
+                  ),
+                  { timeoutStage: s.currentStage ?? "unknown" },
+                ),
+              ),
             SCROLL_CAPTURE_LIMITS.extendTimeoutMs,
           );
         }),
       ]);
       return result;
     } catch (error) {
-      // Invalidate late mutations from a timed-out body.
       s.extendGeneration++;
-      if (this.sessions.get(sessionId) === s) {
-        // Best-effort restore verified scroll after timeout.
+      if (this.sessions.get(s.id) === s) {
         try {
           await scrollBoundContainer(this.browser, {
             containerId: s.containerId,
@@ -401,15 +466,20 @@ export class CollectorScrollCaptureController {
         } catch {
           /* ignore */
         }
-        return this.fail(
-          s,
-          "TIMEOUT",
-          error instanceof Error ? error.message : String(error),
-        );
+        const timeoutStage =
+          (error as { timeoutStage?: string })?.timeoutStage ?? s.currentStage ?? "unknown";
+        mark("timeout");
+        return this.fail(s, "TIMEOUT", error instanceof Error ? error.message : String(error), {
+          stages: [...stages],
+          totalMs: Date.now() - t0,
+          timeoutStage,
+          singleFlight: "accepted",
+        });
       }
       return this.pub(s);
     } finally {
       if (timer) clearTimeout(timer);
+      s.currentStage = undefined;
     }
   }
 
@@ -421,6 +491,9 @@ export class CollectorScrollCaptureController {
     s: InternalSession,
     scrollDelta: number,
     gen: number,
+    mark: (stage: string) => void,
+    stages: ExtendStageTiming[],
+    t0: number,
   ): Promise<ScrollCaptureSessionPublic> {
     const limitBefore = assertWithinScrollCaptureLimits({
       frameCount: s.frameCount + 1,
@@ -429,9 +502,10 @@ export class CollectorScrollCaptureController {
       bufferBytes: s.png.byteLength,
     });
     if (limitBefore) {
-      return this.fail(s, "LIMIT", limitBefore.message);
+      return this.fail(s, "LIMIT", limitBefore.message, { stages, totalMs: Date.now() - t0 });
     }
 
+    mark("scroll");
     const scroll = await scrollBoundContainer(this.browser, {
       containerId: s.containerId,
       deltaCssPx: scrollDelta,
@@ -446,6 +520,8 @@ export class CollectorScrollCaptureController {
         scrollDeltaCss: scroll.deltaCss,
         viewportCssWidth: scroll.clientWidth,
         viewportCssHeight: scroll.clientHeight,
+        stages,
+        totalMs: Date.now() - t0,
       });
     }
 
@@ -462,13 +538,18 @@ export class CollectorScrollCaptureController {
           scrollDeltaCss: scroll.deltaCss,
           viewportCssWidth: scroll.clientWidth,
           viewportCssHeight: scroll.clientHeight,
+          stages,
+          totalMs: Date.now() - t0,
         },
       );
     }
 
+    mark("settle");
+    s.phase = nextScrollCapturePhase(s.phase, "extendSettle");
     await sleep(SCROLL_CAPTURE_LIMITS.settleMs);
     if (!this.stillCurrent(s, gen)) return this.pub(s);
 
+    mark("screenshot");
     const nextCapture = await this.browser.capture({ requireCanonical: false });
     if (!this.stillCurrent(s, gen)) return this.pub(s);
     const nextPng = this.browser.captureBuffer(nextCapture.id);
@@ -481,6 +562,9 @@ export class CollectorScrollCaptureController {
       viewportCssHeight: scroll.clientHeight || s.lastViewportHeight,
       screenshotWidth: nextCapture.width,
       screenshotHeight: nextCapture.height,
+      stages,
+      totalMs: Date.now() - t0,
+      singleFlight: "accepted" as const,
     };
 
     if (nextCapture.width !== s.width) {
@@ -488,8 +572,10 @@ export class CollectorScrollCaptureController {
       return this.fail(s, "LAYOUT_SHIFT", `Viewport width changed (${s.width}→${nextCapture.width}); scroll restored.`, diagBase);
     }
 
+    mark("decode");
     const prevGray = await toGray(s.lastViewportPng);
     const nextGray = await toGray(nextPng);
+    mark("align");
     const align = alignExtendFrames({
       prev: prevGray,
       next: nextGray,
@@ -511,9 +597,11 @@ export class CollectorScrollCaptureController {
         score: align.score,
         expectedShiftPx: align.expectedShiftPx,
         strategy: "none",
+        totalMs: Date.now() - t0,
       });
     }
 
+    mark("stitch");
     const stitched = await stitchAppend(s.png, nextPng, align);
     if (!this.stillCurrent(s, gen)) return this.pub(s);
 
@@ -525,9 +613,10 @@ export class CollectorScrollCaptureController {
     });
     if (memLimit) {
       await this.restoreVerified(s);
-      return this.fail(s, "LIMIT", memLimit.message, diagBase);
+      return this.fail(s, "LIMIT", memLimit.message, { ...diagBase, totalMs: Date.now() - t0 });
     }
 
+    // Commit only while still current — cancel/timeout cannot land late writes.
     s.png = stitched.png;
     s.width = stitched.width;
     s.height = stitched.height;
@@ -536,8 +625,9 @@ export class CollectorScrollCaptureController {
     s.frameCount += 1;
     s.lastAlignScore = align.score;
     s.verifiedScrollTop = scroll.scrollAfter;
-    s.phase = "READY";
+    s.phase = nextScrollCapturePhase(s.phase, "extendOk");
     s.error = undefined;
+    mark("respond");
     s.lastDiagnostics = {
       sessionId: s.id,
       containerId: s.containerId,
@@ -548,6 +638,8 @@ export class CollectorScrollCaptureController {
       accepted: true,
       failureKind: "SUCCESS",
       message: `Appended ${align.newContentPx}px via ${align.strategy} (score ${align.score.toFixed(1)}).`,
+      stages: [...stages],
+      totalMs: Date.now() - t0,
     };
     logDiag(s.lastDiagnostics);
     return this.pub(s);
@@ -574,9 +666,13 @@ export class CollectorScrollCaptureController {
     roi: Rect,
   ): Promise<{ asset: string; roi: Rect; dataUrl: string; environment: { width: number; height: number; zoom: number } }> {
     const s = this.require(sessionId);
-    if (!["ROI_SELECTED", "READY", "EXTENDING", "FAILED"].includes(s.phase)) {
+    if (s.inFlightExtend || s.phase === "EXTENDING" || s.phase === "SETTLING") {
+      throw new Error("Cannot confirm while an extend is still in progress.");
+    }
+    if (!canConfirmCapture(s.phase)) {
       throw new Error("Nothing to confirm.");
     }
+    s.phase = nextScrollCapturePhase(s.phase, "confirm");
     const fitted = validateRect(roi, s.width, s.height);
     const cropped = await sharp(s.png)
       .extract({
@@ -590,7 +686,7 @@ export class CollectorScrollCaptureController {
     const asset = `${randomUUID()}.png`;
     await writeFile(path.join(this.assetDir, asset), cropped);
     const environment = { width: s.width, height: s.height, zoom: this.browser.zoom };
-    s.phase = "CONFIRMED";
+    s.phase = nextScrollCapturePhase(s.phase, "confirmDone");
     this.sessions.delete(sessionId);
     return {
       asset,
@@ -600,11 +696,18 @@ export class CollectorScrollCaptureController {
     };
   }
 
+  /**
+   * Cancel: invalidate generation (blocks late stitch writes), mark CANCELLED,
+   * drop session. In-flight work may finish but cannot mutate the removed session.
+   */
   cancel(sessionId: string) {
     const s = this.sessions.get(sessionId);
     if (s) {
       s.extendGeneration++;
       s.phase = "CANCELLED";
+      s.currentStage = undefined;
+      // Keep inFlightExtend reference only so extend()'s finally can clear it;
+      // session is removed so stillCurrent fails.
       this.sessions.delete(sessionId);
     }
   }

@@ -164,6 +164,9 @@ export function userFacingExtendError(raw: string): string {
   if (s.includes("container")) {
     return "Vùng cuộn trang đã đổi. Hủy và Chụp vùng lại.";
   }
+  if (s.includes("already") && s.includes("progress")) {
+    return "Đang mở rộng — chờ xong rồi thử lại.";
+  }
   if (s.includes("timeout") || s.includes("timed out")) {
     return "Mở rộng quá lâu — ảnh hiện tại được giữ. Thử cuộn lại.";
   }

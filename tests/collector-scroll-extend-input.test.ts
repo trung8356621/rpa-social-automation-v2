@@ -245,7 +245,7 @@ test("C2.5.3 CaptureStep gesture UX — no Scroll & append; debounce; progress; 
   assert.doesNotMatch(capture, /preview_up/);
   assert.doesNotMatch(capture, /\bMAD\b|\bIPC\b|geometry \+/);
   assert.match(capture, /gateRef\.current\.cancel/);
-  assert.match(capture, /extendTimeoutMs/);
+  assert.doesNotMatch(capture, /withTimeout\(\s*collectorScrollCaptureExtend/);
   assert.match(mainCtrl, /extendTimeoutMs/);
   assert.match(css, /\.collector-capture-preview-scroll/);
   assert.match(css, /\.collector-capture-extend-progress/);

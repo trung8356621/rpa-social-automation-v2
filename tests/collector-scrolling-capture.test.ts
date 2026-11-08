@@ -72,13 +72,22 @@ test("C2.5 phase machine covers browse→roi→extend→confirm and cancel paths
   p = nextScrollCapturePhase(p, "extendOk");
   assert.equal(p, "READY");
   p = nextScrollCapturePhase(p, "confirm");
+  assert.equal(p, "CONFIRMING");
+  p = nextScrollCapturePhase(p, "confirmDone");
   assert.equal(p, "CONFIRMED");
 
-  assert.equal(nextScrollCapturePhase("EXTENDING", "extendFail"), "FAILED");
+  assert.equal(nextScrollCapturePhase("EXTENDING", "extendFail"), "RECOVERABLE_ERROR");
+  assert.equal(nextScrollCapturePhase("EXTENDING", "extendSettle"), "SETTLING");
+  assert.equal(nextScrollCapturePhase("SETTLING", "extendOk"), "READY");
+  assert.equal(nextScrollCapturePhase("READY", "extendStart"), "EXTENDING");
+  assert.equal(nextScrollCapturePhase("EXTENDING", "extendStart"), "EXTENDING"); // no re-entry via phase machine
   assert.equal(nextScrollCapturePhase("READY", "cancel"), "CANCELLED");
   assert.equal(nextScrollCapturePhase("ROI_SELECTED", "sessionChange"), "CANCELLED");
   assert.equal(nextScrollCapturePhase("EXTENDING", "navigateAway"), "CANCELLED");
   assert.equal(nextScrollCapturePhase("INITIAL_FRAME", "resetRoi"), "INITIAL_FRAME");
+  assert.equal(nextScrollCapturePhase("READY", "confirm"), "CONFIRMING");
+  assert.equal(nextScrollCapturePhase("CONFIRMING", "confirmDone"), "CONFIRMED");
+  assert.equal(nextScrollCapturePhase("EXTENDING", "confirm"), "EXTENDING"); // confirm blocked while extending
 });
 
 test("C2.5 single-viewport: perfect overlap of identical frames → NO_NEW_CONTENT", () => {
