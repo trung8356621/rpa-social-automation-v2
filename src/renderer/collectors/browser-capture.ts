@@ -4,7 +4,7 @@
  * Does not create a second browser engine or session store.
  */
 import type { Capture, Command, OcrResult, Rect } from "../../shared/contracts";
-import type { SampleRoi } from "../../shared/collectors/types";
+import type { CollectorDomSnapshot, LayoutContextKind, SampleRoi } from "../../shared/collectors/types";
 import { WEB_HEIGHT, WEB_WIDTH } from "../../shared/geometry";
 
 declare global {
@@ -171,4 +171,21 @@ export async function collectorOcrAsset(
     throw new Error("Invalid image asset filename for OCR.");
   }
   return invoke<OcrResult>({ type: "ocrTarget", asset: cleanAsset });
+}
+
+export async function collectorInspectDom(
+  invoke: CollectorInvoke,
+  url?: string,
+  layoutContext?: LayoutContextKind,
+): Promise<CollectorDomSnapshot> {
+  if (!isElectronBrowserCoreAvailable()) {
+    return {
+      url: url || "",
+      capturedAt: new Date().toISOString(),
+      viewport: { width: 1280, height: 800, scrollX: 0, scrollY: 0, dpr: 1 },
+      elements: [],
+      isStale: false,
+    };
+  }
+  return invoke<CollectorDomSnapshot>({ type: "collectorInspectDom", url, layoutContext });
 }

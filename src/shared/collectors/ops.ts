@@ -7,6 +7,7 @@ import type {
   CaptureItem,
   CollectorDraft,
   CollectorListFilters,
+  CollectorRegion,
   CollectorValueType,
   CollectorVariable,
   CollectorVersionSnapshot,
@@ -379,6 +380,8 @@ export function createVersionSnapshot(draft: CollectorDraft, label?: string): Co
     validation: draft.validation ? structuredClone(draft.validation) : undefined,
     variants: structuredClone(draft.variants),
     auditActions: structuredClone(draft.auditActions),
+    regions: structuredClone(draft.regions ?? []),
+    layoutContext: draft.layoutContext ?? "FEED_ITEM",
   };
 }
 
@@ -443,6 +446,8 @@ export function revertDraftToVersion(draft: CollectorDraft, versionId: string): 
       : undefined,
     variants: structuredClone(snapshot.variants ?? []),
     auditActions: structuredClone(snapshot.auditActions ?? []),
+    regions: structuredClone(snapshot.regions ?? []),
+    layoutContext: snapshot.layoutContext ?? "FEED_ITEM",
     status: "outdated_validation",
     dirty: true,
     updatedAt: new Date().toISOString(),
@@ -1006,3 +1011,83 @@ export function assignSampleSlot(
 export function clearSampleSlot(draft: CollectorDraft, slot: SampleSlot): CollectorDraft {
   return assignSampleSlot(draft, slot, null);
 }
+
+// ---------------------------------------------------------------------------
+// Region Management Operations (C2.8)
+// ---------------------------------------------------------------------------
+
+export function ensureDraftRegions(draft: CollectorDraft): CollectorRegion[] {
+  return draft.regions ?? [];
+}
+
+export function regionsForCapture(draft: CollectorDraft, captureId: string): CollectorRegion[] {
+  const all = ensureDraftRegions(draft);
+  return all.filter((r) => r.captureItemId === captureId);
+}
+
+export function addRegionToDraft(draft: CollectorDraft, region: CollectorRegion): CollectorDraft {
+  const current = ensureDraftRegions(draft);
+  const regions = [...current, region];
+  const captures = (draft.captures ?? []).map((c) =>
+    c.id === region.captureItemId
+      ? { ...c, regions: [...(c.regions ?? []).filter((r) => r.id !== region.id), region] }
+      : c,
+  );
+  return markValidationOutdated({
+    ...draft,
+    regions,
+    captures,
+    dirty: true,
+  });
+}
+
+export function updateRegionInDraft(
+  draft: CollectorDraft,
+  regionId: string,
+  patch: Partial<CollectorRegion>,
+): CollectorDraft {
+  const current = ensureDraftRegions(draft);
+  const now = new Date().toISOString();
+  let targetCaptureId: string | undefined;
+  const regions = current.map((r) => {
+    if (r.id !== regionId) return r;
+    targetCaptureId = r.captureItemId;
+    return { ...r, ...patch, updatedAt: now };
+  });
+
+  const captures = (draft.captures ?? []).map((c) => {
+    if (c.id !== targetCaptureId && !c.regions?.some((r) => r.id === regionId)) return c;
+    const cRegions = (c.regions ?? []).map((r) => (r.id === regionId ? { ...r, ...patch, updatedAt: now } : r));
+    return { ...c, regions: cRegions };
+  });
+
+  return markValidationOutdated({
+    ...draft,
+    regions,
+    captures,
+    dirty: true,
+  });
+}
+
+export function deleteRegionFromDraft(draft: CollectorDraft, regionId: string): CollectorDraft {
+  const current = ensureDraftRegions(draft);
+  const regions = current.filter((r) => r.id !== regionId);
+  const captures = (draft.captures ?? []).map((c) => ({
+    ...c,
+    regions: (c.regions ?? []).filter((r) => r.id !== regionId),
+  }));
+  return markValidationOutdated({
+    ...draft,
+    regions,
+    captures,
+    dirty: true,
+  });
+}
+
+export function confirmRegionInDraft(draft: CollectorDraft, regionId: string): CollectorDraft {
+  return updateRegionInDraft(draft, regionId, {
+    confirmed: true,
+    simulatedProposal: false,
+  });
+}
+

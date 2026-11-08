@@ -2664,6 +2664,120 @@ body[data-panel="shell"] .collector-capture-split > aside.collector-capture-tool
   flex-direction: column;
   gap: 8px;
 }
+/* C2.8 — Static / Dynamic Region Architecture & DOM Discovery Styles */
+.collector-mode-toggle {
+  display: inline-flex;
+  border: 1px solid #3b5068;
+  border-radius: 6px;
+  overflow: hidden;
+  background: #0d1520;
+}
+.collector-mode-toggle button {
+  padding: 4px 12px;
+  font-size: 11px;
+  font-weight: 600;
+  border: none;
+  background: transparent;
+  color: #9fb3c8;
+  cursor: pointer;
+}
+.collector-mode-toggle button.active {
+  background: #2563eb;
+  color: #fff;
+}
+.collector-region-box {
+  position: absolute;
+  box-sizing: border-box;
+  cursor: pointer;
+  pointer-events: auto;
+  transition: all 0.15s ease-in-out;
+  z-index: 15;
+}
+.collector-region-box.static {
+  border: 2px solid #38bdf8;
+  background: rgba(56, 189, 248, 0.15);
+}
+.collector-region-box.static:hover {
+  background: rgba(56, 189, 248, 0.28);
+}
+.collector-region-box.dynamic {
+  border: 2px dashed #c084fc;
+  background: rgba(192, 132, 252, 0.15);
+}
+.collector-region-box.dynamic:hover {
+  background: rgba(192, 132, 252, 0.28);
+}
+.collector-region-box.selected {
+  outline: 2px solid #60a5fa;
+  box-shadow: 0 0 8px rgba(96, 165, 250, 0.7);
+  z-index: 25;
+}
+.collector-region-box.drawing {
+  border: 2px dashed #f59e0b;
+  background: rgba(245, 158, 11, 0.2);
+  pointer-events: none;
+}
+.collector-region-tag {
+  position: absolute;
+  top: 2px;
+  left: 2px;
+  font-size: 9px;
+  font-weight: 700;
+  padding: 1px 5px;
+  border-radius: 3px;
+  color: #fff;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+  pointer-events: none;
+}
+.collector-region-tag.static {
+  background: #0284c7;
+}
+.collector-region-tag.dynamic {
+  background: #9333ea;
+}
+.collector-region-card {
+  border: 1px solid #2b394a;
+  border-radius: 6px;
+  padding: 8px 10px;
+  background: #0d1520;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin-bottom: 6px;
+}
+.collector-region-card.static {
+  border-left: 3px solid #38bdf8;
+}
+.collector-region-card.dynamic {
+  border-left: 3px dashed #c084fc;
+}
+.collector-region-card.selected {
+  border-color: #60a5fa;
+  background: #142132;
+}
+.collector-container-card {
+  margin-top: 10px;
+  padding: 10px;
+  border-radius: 6px;
+  border: 1px solid #3b5068;
+  background: #0d1520;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.collector-container-card.verified {
+  border-color: #10b981;
+  background: rgba(16, 185, 129, 0.08);
+}
+.collector-container-card.rejected {
+  border-color: #ef4444;
+  background: rgba(239, 68, 68, 0.08);
+}
+.collector-container-card.needs_attention {
+  border-color: #f59e0b;
+  background: rgba(245, 158, 11, 0.08);
+}
 .collector-output-schema-row {
   display: grid;
   grid-template-columns: minmax(100px, 1.2fr) minmax(90px, 1fr) auto auto;

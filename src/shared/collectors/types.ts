@@ -194,6 +194,134 @@ export type CaptureItem = {
   simulatedCapture?: boolean;
   /** Actual OCR result recognized from imageAsset (C2.7) */
   ocr?: OcrResult;
+  /** Visual & DOM regions defined/learned for this capture (C2.8) */
+  regions?: CollectorRegion[];
+  /** Layout context: feed stream item vs single post detail page (C2.8) */
+  layoutContext?: LayoutContextKind;
+  /** Verified post container element verified for this item (C2.8) */
+  postContainer?: VerifiedPostContainer;
+  /** Dynamic HTML extraction result for this item (C2.8) */
+  dynamicExtraction?: DynamicHtmlExtractionResult;
+  /** DOM snapshot captured alongside this item (C2.8) */
+  domSnapshot?: CollectorDomSnapshot;
+};
+
+export type CollectorRegionType = "STATIC" | "DYNAMIC";
+
+export type RegionRelationshipKind =
+  | "inside"
+  | "after"
+  | "before"
+  | "between"
+  | "belongs_to_container";
+
+export type RegionRelationship = {
+  relation: RegionRelationshipKind;
+  targetRegionId: string;
+};
+
+export type NormalizedRegionGeometry = {
+  relX: number; // 0..1 relative to original image width
+  relY: number; // 0..1 relative to original image height
+  relW: number; // 0..1 relative to original image width
+  relH: number; // 0..1 relative to original image height
+};
+
+export type DomElementEvidence = {
+  tagName: string;
+  id?: string;
+  className?: string;
+  role?: string;
+  cssSelector?: string;
+  xpath?: string;
+  bbox?: Rect;
+  textSnippet?: string;
+  attributes?: Record<string, string>;
+  depth?: number;
+};
+
+export type CollectorRegionRole = "header" | "footer" | "content" | "media" | "actions" | "custom";
+
+export type CollectorRegion = {
+  id: string;
+  captureItemId: string;
+  type: CollectorRegionType;
+  label: string;
+  role?: CollectorRegionRole;
+  geometry: NormalizedRegionGeometry;
+  originalRoi?: Rect;
+  candidateVariableKeys: string[];
+  confirmed: boolean;
+  simulatedProposal?: boolean;
+  confidence?: number;
+  evidence?: string;
+  relationships?: RegionRelationship[];
+  domEvidence?: DomElementEvidence;
+  ocrEvidence?: {
+    text: string;
+    segmentIds?: string[];
+    confidence: number;
+  };
+  createdAt: string;
+  updatedAt: string;
+};
+
+export type LayoutContextKind = "FEED_ITEM" | "POST_DETAIL";
+
+export type VerifiedPostContainer = {
+  containerId: string;
+  tagName: string;
+  selector: string;
+  role?: string;
+  layoutContext: LayoutContextKind;
+  confidence: number;
+  evidence: string[];
+  headerMatched: boolean;
+  footerMatched: boolean;
+  isNestedSharedPost: boolean;
+  outerHtmlSnippet?: string;
+  rejectionReason?: string;
+};
+
+export type DynamicHtmlExtractionResult = {
+  status: "success" | "partial" | "empty" | "stale";
+  rawHtml: string;
+  extractedText?: string;
+  mediaUrls?: string[];
+  linkPreviews?: Array<{ title: string; url: string; domain?: string }>;
+  isComplete: boolean;
+  hasCollapsedText: boolean;
+  hasLazyMedia: boolean;
+  evidence: string[];
+  extractedAt: string;
+};
+
+export type CollectorDomElement = {
+  id: string;
+  tagName: string;
+  role?: string;
+  className?: string;
+  idAttr?: string;
+  rect: Rect;
+  textSnippet: string;
+  attributes: Record<string, string>;
+  childrenIds: string[];
+  parentId?: string;
+  depth: number;
+  isArticleOrCard?: boolean;
+  isFeedContainer?: boolean;
+  isDialogOrModal?: boolean;
+  hasMedia?: boolean;
+  outerHtmlSnippet?: string;
+};
+
+export type CollectorDomSnapshot = {
+  url: string;
+  capturedAt: string;
+  viewport: { width: number; height: number; scrollX: number; scrollY: number; dpr: number };
+  elements: CollectorDomElement[];
+  rootId?: string;
+  isStale?: boolean;
 };
 
 export function isRealCapture(item: CaptureItem): boolean {
@@ -298,6 +426,8 @@ export type CollectorVersionSnapshot = {
   validation?: ValidationRun;
   variants?: VariantPattern[];
   auditActions?: AuditRecordAction[];
+  regions?: CollectorRegion[];
+  layoutContext?: LayoutContextKind;
 };
 
 export type CollectorDraft = {
@@ -338,6 +468,10 @@ export type CollectorDraft = {
   /** Default extraction pattern is implicit; variants are optional and audit-driven. */
   variants: VariantPattern[];
   auditActions: AuditRecordAction[];
+  /** Visual & DOM region anchors across the collector (C2.8) */
+  regions?: CollectorRegion[];
+  /** Layout context: feed stream item vs single post detail page (C2.8) */
+  layoutContext?: LayoutContextKind;
   versions: CollectorVersionSnapshot[];
   activeVersionId?: string;
   dirty: boolean;

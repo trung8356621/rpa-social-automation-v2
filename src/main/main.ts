@@ -1685,6 +1685,96 @@ async function boot() {
         scrollCapture.cancel(command.sessionId);
         return { ok: true };
       }
+      case "collectorInspectDom": {
+        isIdle();
+        const wc = browser.view.webContents;
+        const currentUrl = wc.getURL();
+        const isStale = Boolean(
+          command.url &&
+            currentUrl &&
+            !currentUrl.split("?")[0]!.startsWith(command.url.split("?")[0]!.slice(0, 30)),
+        );
+
+        const snapshot = await wc
+          .executeJavaScript(
+            `(() => {
+          const visible = (el) => {
+            const r = el.getBoundingClientRect(), s = getComputedStyle(el);
+            return r.width > 0 && r.height > 0 && s.visibility !== 'hidden' && s.display !== 'none';
+          };
+          const elements = [];
+          const walker = document.createTreeWalker(document.body || document.documentElement, NodeFilter.SHOW_ELEMENT);
+          let node = walker.currentNode;
+          let count = 0;
+          const maxNodes = 600;
+          
+          while (node && count < maxNodes) {
+            if (node instanceof HTMLElement && visible(node)) {
+              const r = node.getBoundingClientRect();
+              const role = node.getAttribute('role') || undefined;
+              const className = typeof node.className === 'string' ? node.className.slice(0, 100) : '';
+              const isArticle = role === 'article' || /\\b(card|post|feed-item)\\b/i.test(className) || node.hasAttribute('data-pagelet');
+              const isFeed = role === 'feed' || /\\b(feed|stream|wall)\\b/i.test(className);
+              const isDialog = role === 'dialog' || node.getAttribute('aria-modal') === 'true';
+              
+              let depth = 0;
+              for (let p = node.parentElement; p; p = p.parentElement) depth++;
+              
+              const attrs = {};
+              for (const name of ['href', 'src', 'data-pagelet', 'aria-label', 'role']) {
+                if (node.hasAttribute(name)) attrs[name] = (node.getAttribute(name) || '').slice(0, 200);
+              }
+              
+              elements.push({
+                id: 'dom_' + count,
+                tagName: node.tagName,
+                role,
+                className,
+                idAttr: node.id || undefined,
+                rect: { x: Math.round(r.x), y: Math.round(r.y), width: Math.round(r.width), height: Math.round(r.height) },
+                textSnippet: (node.innerText || node.textContent || '').trim().slice(0, 150),
+                attributes: attrs,
+                childrenIds: [],
+                parentId: undefined,
+                depth,
+                isArticleOrCard: Boolean(isArticle),
+                isFeedContainer: Boolean(isFeed),
+                isDialogOrModal: Boolean(isDialog),
+                hasMedia: Boolean(node.querySelector('img, video')),
+                outerHtmlSnippet: (node.outerHTML || '').slice(0, 300),
+              });
+              count++;
+            }
+            node = walker.nextNode();
+          }
+          
+          return {
+            url: window.location.href,
+            capturedAt: new Date().toISOString(),
+            viewport: {
+              width: window.innerWidth,
+              height: window.innerHeight,
+              scrollX: window.scrollX,
+              scrollY: window.scrollY,
+              dpr: window.devicePixelRatio || 1,
+            },
+            elements,
+          };
+        })()`,
+          )
+          .catch((err) => ({
+            url: currentUrl,
+            capturedAt: new Date().toISOString(),
+            viewport: { width: 1280, height: 800, scrollX: 0, scrollY: 0, dpr: 1 },
+            elements: [],
+            error: String(err),
+          }));
+
+        if (isStale && snapshot) {
+          snapshot.isStale = true;
+        }
+        return snapshot;
+      }
       default:
         throw new Error("Command không hỗ trợ.");
     }

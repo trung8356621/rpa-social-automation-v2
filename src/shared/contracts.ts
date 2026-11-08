@@ -478,7 +478,12 @@ export type Command =
   | { type: "collectorScrollCaptureExtend"; sessionId: string; deltaY?: number }
   | { type: "collectorScrollCaptureMarkRoi"; sessionId: string }
   | { type: "collectorScrollCaptureConfirm"; sessionId: string; roi: Rect }
-  | { type: "collectorScrollCaptureCancel"; sessionId: string };
+  | { type: "collectorScrollCaptureCancel"; sessionId: string }
+  | {
+      type: "collectorInspectDom";
+      url?: string;
+      layoutContext?: "FEED_ITEM" | "POST_DETAIL";
+    };
 export const DRAFT_KEYS = [
   "variableId",
   "state",

@@ -716,6 +716,8 @@ export function createEmptyDraft(input: {
       : [],
     variants: [],
     auditActions: [],
+    regions: [],
+    layoutContext: "FEED_ITEM",
     versions: [],
     dirty: true,
   };

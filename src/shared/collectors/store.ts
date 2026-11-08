@@ -402,6 +402,8 @@ function sanitizeCollector(
     auditActions: Array.isArray(raw.auditActions)
       ? (raw.auditActions as CollectorDraft["auditActions"])
       : [],
+    regions: Array.isArray(raw.regions) ? (raw.regions as CollectorDraft["regions"]) : [],
+    layoutContext: raw.layoutContext === "POST_DETAIL" ? "POST_DETAIL" : "FEED_ITEM",
     versions: Array.isArray(raw.versions) ? (raw.versions as CollectorDraft["versions"]) : [],
     activeVersionId: typeof raw.activeVersionId === "string" ? raw.activeVersionId : undefined,
     dirty: Boolean(raw.dirty),
