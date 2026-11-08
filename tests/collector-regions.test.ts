@@ -7,6 +7,7 @@ import type {
   CollectorRegion,
   NormalizedRegionGeometry,
 } from "../src/shared/collectors/types.js";
+import type { Rect } from "../src/shared/contracts.js";
 import { createEmptyDraft } from "../src/shared/collectors/fixtures.js";
 import {
   addCaptureItem,
@@ -32,6 +33,7 @@ import {
   normalizeCollectorRegions,
   verifyAnchorGroups,
   deriveReferenceCropFromAnchors,
+  computeMatchedDynamicBounds,
 } from "../src/shared/collectors/regions.js";
 import {
   MemoryStorage,
@@ -993,87 +995,74 @@ test("C2.9 Scenario 8: Container-scoped OCR coordinate shifting and original bou
   assert.equal(shiftedSegments[1]!.bbox.y, 350);
 });
 
-test("C2.9.1 Scenario 1: deriveReferenceCropFromAnchors calculates exact bounding box enclosing BEGIN and END anchors without live DOM", () => {
+test("C2.9 Architecture: BEGIN and END anchors are cropped independently with exact rectangles and stored with groupTag", () => {
   const begin = createCollectorRegion({
     captureItemId: "cap_1",
     type: "BEGIN",
     groupTag: "post-main",
-    label: "Header",
+    label: "Header Anchor",
     box: { x: 50, y: 100, width: 600, height: 60 },
     imageWidth: 1000,
     imageHeight: 1200,
+    referenceImage: "data:image/png;base64,mockBeginCropBytes",
   });
 
   const end = createCollectorRegion({
     captureItemId: "cap_1",
     type: "END",
     groupTag: "post-main",
-    label: "Footer",
+    label: "Footer Anchor",
     box: { x: 60, y: 700, width: 580, height: 50 },
     imageWidth: 1000,
     imageHeight: 1200,
+    referenceImage: "data:image/png;base64,mockEndCropBytes",
   });
 
-  const result = deriveReferenceCropFromAnchors([begin, end], 1000, 1200);
-  assert.ok(result);
-  assert.equal(result.groupTag, "post-main");
-  assert.equal(result.source, "anchor_group");
-  // minX = 50, minY = 100, maxX = max(50+600, 60+580) = 650, maxY = 700+50 = 750
-  assert.equal(result.crop.x, 50);
-  assert.equal(result.crop.y, 100);
-  assert.equal(result.crop.width, 600);
-  assert.equal(result.crop.height, 650);
+  // 1. Preserved exact original dimensions and coordinates independently
+  assert.equal(begin.originalRoi?.x, 50);
+  assert.equal(begin.originalRoi?.y, 100);
+  assert.equal(begin.originalRoi?.width, 600);
+  assert.equal(begin.originalRoi?.height, 60);
+  assert.equal(begin.groupTag, "post-main");
+  assert.equal(begin.referenceImage, "data:image/png;base64,mockBeginCropBytes");
+
+  assert.equal(end.originalRoi?.x, 60);
+  assert.equal(end.originalRoi?.y, 700);
+  assert.equal(end.originalRoi?.width, 580);
+  assert.equal(end.originalRoi?.height, 50);
+  assert.equal(end.groupTag, "post-main");
+  assert.equal(end.referenceImage, "data:image/png;base64,mockEndCropBytes");
+
+  // 2. Not combined into a single crop, nor inferred as a dynamic crop union in Step 2
+  assert.notEqual(begin.referenceImage, end.referenceImage);
 });
 
-test("C2.9.1 Scenario 2: deriveReferenceCropFromAnchors returns null when group is incomplete or missing", () => {
-  const orphanBegin = createCollectorRegion({
-    captureItemId: "cap_1",
-    type: "BEGIN",
-    groupTag: "incomplete-group",
-    label: "Orphan Begin",
-    box: { x: 50, y: 100, width: 600, height: 60 },
-    imageWidth: 1000,
-    imageHeight: 1000,
-  });
-
-  const freeRegion = createCollectorRegion({
+test("C2.9 Architecture: FREE regions remain independent references without groupTag", () => {
+  const free = createCollectorRegion({
     captureItemId: "cap_1",
     type: "FREE",
-    label: "Free Text",
-    box: { x: 50, y: 300, width: 400, height: 100 },
+    label: "Free Anchor",
+    box: { x: 40, y: 300, width: 300, height: 80 },
     imageWidth: 1000,
     imageHeight: 1000,
+    referenceImage: "data:image/png;base64,mockFreeCropBytes",
   });
 
-  assert.equal(deriveReferenceCropFromAnchors([orphanBegin], 1000, 1000), null);
-  assert.equal(deriveReferenceCropFromAnchors([freeRegion], 1000, 1000), null);
-  assert.equal(deriveReferenceCropFromAnchors([], 1000, 1000), null);
+  assert.equal(free.type, "FREE");
+  assert.equal(free.groupTag, undefined);
+  assert.equal(free.originalRoi?.width, 300);
+  assert.equal(free.referenceImage, "data:image/png;base64,mockFreeCropBytes");
 });
 
-test("C2.9.1 Scenario 3: deriveReferenceCropFromAnchors supports legacy STATIC regions as fallback", () => {
-  const static1 = createCollectorRegion({
-    captureItemId: "cap_1",
-    type: "STATIC",
-    label: "Static 1",
-    box: { x: 40, y: 80, width: 500, height: 50 },
-    imageWidth: 1000,
-    imageHeight: 1000,
-  });
+test("C2.9 Architecture: Future Live Browser Match Test formula computeMatchedDynamicBounds", () => {
+  // Matches live in browser: dynamicStartY = matchedBegin.y + matchedBegin.height, dynamicEndY = matchedEnd.y
+  const matchedBegin: Rect = { x: 100, y: 150, width: 600, height: 50 };
+  const matchedEnd: Rect = { x: 100, y: 650, width: 600, height: 40 };
 
-  const static2 = createCollectorRegion({
-    captureItemId: "cap_1",
-    type: "STATIC",
-    label: "Static 2",
-    box: { x: 40, y: 500, width: 520, height: 40 },
-    imageWidth: 1000,
-    imageHeight: 1000,
-  });
-
-  const result = deriveReferenceCropFromAnchors([static1, static2], 1000, 1000);
-  assert.ok(result);
-  assert.equal(result.source, "legacy_static");
-  assert.equal(result.crop.x, 40);
-  assert.equal(result.crop.y, 80);
-  assert.equal(result.crop.width, 520);
-  assert.equal(result.crop.height, 460); // 540 - 80 = 460
+  const dynamic = computeMatchedDynamicBounds(matchedBegin, matchedEnd, 800);
+  assert.equal(dynamic.dynamicStartY, 200); // 150 + 50
+  assert.equal(dynamic.dynamicEndY, 650);
+  assert.equal(dynamic.height, 450); // 650 - 200
+  assert.equal(dynamic.bounds.y, 200);
+  assert.equal(dynamic.bounds.height, 450);
 });

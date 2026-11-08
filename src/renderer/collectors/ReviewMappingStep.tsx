@@ -31,7 +31,6 @@ import {
   normalizeGeometry,
   verifyAnchorGroups,
   normalizeCollectorRegions,
-  deriveReferenceCropFromAnchors,
 } from "../../shared/collectors/regions";
 import type {
   CaptureAuditStatus,
@@ -68,6 +67,31 @@ type Props = {
   onChange: (next: CollectorDraft) => void;
   invoke?: CollectorInvoke;
 };
+
+function cropRegionReference(imgElement: HTMLImageElement | null, box: Rect): string | undefined {
+  if (!imgElement || box.width <= 0 || box.height <= 0) return undefined;
+  try {
+    const canvas = document.createElement("canvas");
+    canvas.width = Math.round(box.width);
+    canvas.height = Math.round(box.height);
+    const ctx = canvas.getContext("2d");
+    if (!ctx) return undefined;
+    ctx.drawImage(
+      imgElement,
+      Math.round(box.x),
+      Math.round(box.y),
+      Math.round(box.width),
+      Math.round(box.height),
+      0,
+      0,
+      Math.round(box.width),
+      Math.round(box.height),
+    );
+    return canvas.toDataURL("image/png");
+  } catch {
+    return undefined;
+  }
+}
 
 export function StepReviewMapping({ draft, locked, onChange, invoke }: Props) {
   const captures = draft.captures ?? [];
@@ -235,10 +259,6 @@ export function StepReviewMapping({ draft, locked, onChange, invoke }: Props) {
     return verifyAnchorGroups(activeRegions);
   }, [activeRegions]);
 
-  const referenceCrop = useMemo(() => {
-    return deriveReferenceCropFromAnchors(activeRegions, imageDims.width, imageDims.height);
-  }, [activeRegions, imageDims.width, imageDims.height]);
-
   const deletionWarning = useMemo(() => {
     if (!regionPendingDelete) return null;
     const tag = regionPendingDelete.groupTag || "default";
@@ -247,14 +267,14 @@ export function StepReviewMapping({ draft, locked, onChange, invoke }: Props) {
         (r) => r.id !== regionPendingDelete.id && r.type === "BEGIN" && (r.groupTag || "default") === tag,
       );
       if (!hasOtherBegin) {
-        return `Deleting this anchor will leave group "${tag}" without a BEGIN anchor, preventing crop derivation in Stage 2B.`;
+        return `Deleting this anchor will leave group "${tag}" without a BEGIN anchor reference.`;
       }
     } else if (regionPendingDelete.type === "END") {
       const hasOtherEnd = activeRegions.some(
         (r) => r.id !== regionPendingDelete.id && r.type === "END" && (r.groupTag || "default") === tag,
       );
       if (!hasOtherEnd) {
-        return `Deleting this anchor will leave group "${tag}" without an END anchor, preventing crop derivation in Stage 2B.`;
+        return `Deleting this anchor will leave group "${tag}" without an END anchor reference.`;
       }
     }
     return null;
@@ -265,43 +285,21 @@ export function StepReviewMapping({ draft, locked, onChange, invoke }: Props) {
       if (!active || ocrLoading) return;
       if (active.ocr && !force) return;
 
-      const activeRegs = regionsForCapture(draft, active.id);
-      const refCrop = deriveReferenceCropFromAnchors(activeRegs, imageDims.width, imageDims.height);
-
-      if (!refCrop) {
-        setOcrError(
-          "Anchor group configuration incomplete. Configure paired BEGIN and END anchors in Stage 2A to derive reference crop bounds for OCR.",
-        );
-        return;
-      }
-
-      const crop = refCrop.crop;
-      if (!crop || crop.width <= 0 || crop.height <= 0) {
-        setOcrError(
-          "Derived reference crop has invalid bounds. Reconfigure BEGIN and END anchors in Stage 2A.",
-        );
-        return;
-      }
-
       setOcrLoading(true);
       setOcrError(undefined);
       try {
         let result: OcrResult;
         if (active.imageAsset && invoke && isElectronBrowserCoreAvailable()) {
-          result = await collectorOcrAsset(invoke, active.imageAsset, crop);
+          result = await collectorOcrAsset(invoke, active.imageAsset);
         } else {
-          const left = Math.round(crop.x);
-          const top = Math.round(crop.y);
           result = {
             text: "Dạ em đang học CNTT và muốn hỏi về lộ trình...\n29 bình luận\n40 lượt thích",
             confidence: 91,
             language: "vie+eng",
-            cropOffset: { x: left, y: top },
-            containerCrop: crop,
             segments: [
-              { id: "0", text: "Dạ em đang học CNTT và muốn hỏi về lộ trình...", kind: "line", confidence: 94, bbox: { x: left + 20, y: top + 40, width: Math.min(500, Math.max(100, crop.width - 40)), height: 75 } },
-              { id: "1", text: "29", kind: "word", confidence: 88, bbox: { x: left + 20, y: top + 140, width: 35, height: 20 } },
-              { id: "2", text: "40", kind: "word", confidence: 87, bbox: { x: left + 80, y: top + 140, width: 35, height: 20 } },
+              { id: "0", text: "Dạ em đang học CNTT và muốn hỏi về lộ trình...", kind: "line", confidence: 94, bbox: { x: 50, y: 120, width: 600, height: 75 } },
+              { id: "1", text: "29", kind: "word", confidence: 88, bbox: { x: 50, y: 220, width: 35, height: 20 } },
+              { id: "2", text: "40", kind: "word", confidence: 87, bbox: { x: 110, y: 220, width: 35, height: 20 } },
             ],
           };
         }
@@ -336,11 +334,10 @@ export function StepReviewMapping({ draft, locked, onChange, invoke }: Props) {
 
   useEffect(() => {
     if (!active) return;
-    const refCrop = deriveReferenceCropFromAnchors(activeRegions, imageDims.width, imageDims.height);
-    if (step2Stage === "fields" && !active.ocr && refCrop) {
+    if (step2Stage === "fields" && !active.ocr) {
       void runOcr(false);
     }
-  }, [active?.id, active?.ocr, activeRegions, imageDims.width, imageDims.height, step2Stage, runOcr]);
+  }, [active?.id, active?.ocr, step2Stage, runOcr]);
 
   const activeSegments = useMemo(() => {
     if (!active?.ocr) return [];
@@ -563,6 +560,8 @@ export function StepReviewMapping({ draft, locked, onChange, invoke }: Props) {
 
   function handleSaveRegion() {
     if (!active || !newRegionBox) return;
+    const imgEl = imageContainerRef.current?.querySelector("img") as HTMLImageElement | null;
+    const refImg = cropRegionReference(imgEl, newRegionBox);
     const region = createCollectorRegion({
       captureItemId: active.id,
       type: newRegionType,
@@ -574,6 +573,7 @@ export function StepReviewMapping({ draft, locked, onChange, invoke }: Props) {
       imageHeight: imageDims.height,
       candidateVariableKeys: newRegionVars,
       ocrText: newRegionOcrText || undefined,
+      referenceImage: refImg,
     });
     onChange(addRegionToDraft(draft, region));
     setNewRegionBox(null);
@@ -588,9 +588,12 @@ export function StepReviewMapping({ draft, locked, onChange, invoke }: Props) {
   }
 
   function handleUpdateRegionGeometry(regionId: string, box: Rect) {
+    const imgEl = imageContainerRef.current?.querySelector("img") as HTMLImageElement | null;
+    const refImg = cropRegionReference(imgEl, box);
     const updated = updateRegionInDraft(draft, regionId, {
       originalRoi: box,
       geometry: normalizeGeometry(box, imageDims.width, imageDims.height),
+      ...(refImg ? { referenceImage: refImg } : {}),
     });
     onChange(updated);
   }
@@ -1016,39 +1019,7 @@ export function StepReviewMapping({ draft, locked, onChange, invoke }: Props) {
                     }}
                   />
 
-                  {/* Reference Crop Boundary Highlight derived from visual anchors */}
-                  {step2Stage === "fields" && referenceCrop && (
-                    <div
-                      className="collector-container-highlight"
-                      style={{
-                        position: "absolute",
-                        left: `${(referenceCrop.crop.x / imageDims.width) * 100}%`,
-                        top: `${(referenceCrop.crop.y / imageDims.height) * 100}%`,
-                        width: `${(referenceCrop.crop.width / imageDims.width) * 100}%`,
-                        height: `${(referenceCrop.crop.height / imageDims.height) * 100}%`,
-                        border: "2px dashed #10b981",
-                        background: "rgba(16, 185, 129, 0.08)",
-                        pointerEvents: "none",
-                        zIndex: 2,
-                      }}
-                    >
-                      <span
-                        style={{
-                          position: "absolute",
-                          top: "2px",
-                          left: "2px",
-                          fontSize: "10px",
-                          fontWeight: "bold",
-                          background: "#059669",
-                          color: "#fff",
-                          padding: "1px 5px",
-                          borderRadius: "3px",
-                        }}
-                      >
-                        REFERENCE CROP: {referenceCrop.groupTag} [{referenceCrop.crop.width}×{referenceCrop.crop.height}]
-                      </span>
-                    </div>
-                  )}
+
 
                   {/* STAGE 2A — Regions Overlay */}
                   {step2Stage === "regions" && (
@@ -1417,6 +1388,26 @@ export function StepReviewMapping({ draft, locked, onChange, invoke }: Props) {
                       Evidence: {selectedRegion.evidence}
                     </span>
                   )}
+                  {selectedRegion.referenceImage && (
+                    <div style={{ marginTop: "6px" }}>
+                      <small style={{ color: "#7f93ab", display: "block", marginBottom: "2px" }}>
+                        Anchor Reference Crop:
+                      </small>
+                      <img
+                        src={selectedRegion.referenceImage}
+                        alt={`${selectedRegion.label} reference crop`}
+                        style={{
+                          maxWidth: "180px",
+                          maxHeight: "60px",
+                          objectFit: "contain",
+                          borderRadius: "3px",
+                          border: "1px solid #1e3a5f",
+                          background: "#0b131e",
+                          display: "block",
+                        }}
+                      />
+                    </div>
+                  )}
                 </div>
 
                 <div style={{ display: "flex", gap: "6px", marginTop: "8px" }}>
@@ -1608,6 +1599,23 @@ export function StepReviewMapping({ draft, locked, onChange, invoke }: Props) {
                               Variables: {r.candidateVariableKeys.join(", ")}
                             </div>
                           )}
+                          {r.referenceImage && (
+                            <div style={{ marginTop: "4px" }}>
+                              <img
+                                src={r.referenceImage}
+                                alt={`${r.label} reference crop`}
+                                style={{
+                                  maxWidth: "140px",
+                                  maxHeight: "40px",
+                                  objectFit: "contain",
+                                  borderRadius: "2px",
+                                  border: "1px solid #1e293b",
+                                  background: "#090d14",
+                                  display: "block",
+                                }}
+                              />
+                            </div>
+                          )}
                           <div style={{ display: "flex", gap: "6px", marginTop: "4px" }}>
                             {!r.confirmed && (
                               <button type="button" className="primary" onClick={() => handleConfirmRegion(r.id)}>
@@ -1675,13 +1683,9 @@ export function StepReviewMapping({ draft, locked, onChange, invoke }: Props) {
                   type="button"
                   className="primary"
                   style={{ width: "100%", marginTop: "10px" }}
-                  disabled={locked || !groupAnalysis.valid}
+                  disabled={locked}
                   onClick={() => setStep2Stage("fields")}
-                  title={
-                    groupAnalysis.valid
-                      ? "Advance to OCR Field Mapping"
-                      : "Configure at least one complete anchor group (paired BEGIN and END) to continue"
-                  }
+                  title="Advance to OCR Field Mapping"
                 >
                   Continue to Field Mapping →
                 </button>
@@ -1710,34 +1714,7 @@ export function StepReviewMapping({ draft, locked, onChange, invoke }: Props) {
                   )}
                 </div>
 
-                {/* Screenshot Reference Crop Status for Scoped OCR */}
-                {!referenceCrop ? (
-                  <div className="collector-banner warn" role="alert" style={{ display: "flex", flexDirection: "column", gap: "6px" }}>
-                    <span>
-                      <b>Anchor group configuration incomplete:</b> Configure paired BEGIN and END anchors in Stage 2A to derive reference crop bounds for OCR.
-                    </span>
-                    <button type="button" className="primary" onClick={() => setStep2Stage("regions")} style={{ alignSelf: "flex-start" }}>
-                      ← Return to Stage 2A (Region Teaching)
-                    </button>
-                  </div>
-                ) : (
-                  <div style={{ background: "#091420", padding: "8px", borderRadius: "4px", border: "1px solid #1e3a5f", marginBottom: "8px" }}>
-                    <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
-                      <b style={{ fontSize: "11px", color: "#38bdf8" }}>Reference Crop ({referenceCrop.groupTag})</b>
-                      <button
-                        type="button"
-                        disabled={locked || ocrLoading}
-                        onClick={() => void runOcr(true)}
-                        style={{ fontSize: "10px", padding: "2px 8px" }}
-                      >
-                        {ocrLoading ? "Running OCR..." : "Re-run Scoped OCR"}
-                      </button>
-                    </div>
-                    <small style={{ color: "#7f93ab", display: "block", marginTop: "2px" }}>
-                      Crop Bounds: {referenceCrop.crop.width}×{referenceCrop.crop.height} at [{referenceCrop.crop.x}, {referenceCrop.crop.y}] ({referenceCrop.source === "legacy_static" ? "Legacy Static" : "Anchor Group"})
-                    </small>
-                  </div>
-                )}
+
                 {isTeaching ? (
                   <p className="collector-banner ok" role="status">
                     Teaching Reference: Click OCR blocks on screenshot to map to Variables.

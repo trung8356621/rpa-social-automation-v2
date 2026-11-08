@@ -268,6 +268,8 @@ export type CollectorRegion = {
     segmentIds?: string[];
     confidence: number;
   };
+  referenceImage?: string;
+  referenceImageAsset?: string;
   createdAt: string;
   updatedAt: string;
 };

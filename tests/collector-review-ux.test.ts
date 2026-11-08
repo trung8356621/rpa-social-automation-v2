@@ -183,27 +183,23 @@ test("UX 8: Sequential Stages (2A Region Teaching -> 2B Field Mapping) & Back na
   assert.equal(draft.variables[0]!.mappings[0]!.text, "Nguyen Van A");
 });
 
-test("UX 9 & 10: C2.9.1 Decouples Region Teaching from live browser DOM (pure configuration validation)", () => {
+test("UX 9 & 10: C2.9 Architecture: Decouples Region Teaching from live browser DOM", () => {
   // Live browser DOM verification action is removed from Stage 2A to prevent deadlock
   assert.doesNotMatch(reviewSource, />\s*Verify Post Container\s*<\/button>/);
 
-  // Advancing from 2A -> 2B is gated purely on configuration validity (groupAnalysis.valid)
-  assert.match(
-    reviewSource,
-    /disabled=\{locked\s*\|\|\s*!groupAnalysis\.valid\}/
-  );
+  // Advancing from 2A -> 2B does not deadlock on live DOM or fake post container
   assert.match(reviewSource, /Continue to Field Mapping →/);
 });
 
-test("C2.9.1 Safe Region Deletion: explicit modal confirmation with completeness warning", () => {
+test("C2.9 Safe Region Deletion: explicit modal confirmation with completeness warning", () => {
   // Safe deletion modal state and popover exist
   assert.match(reviewSource, /regionPendingDelete/);
   assert.match(reviewSource, /<UiPopover[^>]*variant="modal"[^>]*className="unsaved-confirm"/);
   assert.match(reviewSource, /Delete Region Anchor\?/);
 
-  // Deletion warning checks completeness of BEGIN/END anchors
+  // Deletion warning checks completeness of BEGIN/END anchor references
   assert.match(reviewSource, /deletionWarning/);
-  assert.match(reviewSource, /leave group.*without.*preventing crop derivation/i);
+  assert.match(reviewSource, /leave group.*without a.*anchor reference/i);
 
   // Default focused Cancel button and destructive Delete Region action
   assert.match(reviewSource, /<button[^>]*autoFocus[^>]*onClick=\{[^}]*setRegionPendingDelete\(null\)[^}]*\}[^>]*>\s*Cancel\s*<\/button>/);
@@ -214,11 +210,17 @@ test("C2.9.1 Safe Region Deletion: explicit modal confirmation with completeness
   assert.match(reviewSource, /onClick=\{\(\) => setRegionPendingDelete\(r\)\}/);
 });
 
-test("C2.9.1 Stage 2B: Derives reference crop directly from screenshot anchors without live DOM", () => {
-  assert.match(reviewSource, /deriveReferenceCropFromAnchors/);
-  assert.match(reviewSource, /Reference Crop \(\{referenceCrop\.groupTag\}\)/);
-  assert.match(reviewSource, /REFERENCE CROP:/);
-  assert.match(reviewSource, /Anchor group configuration incomplete/);
+test("C2.9 Architecture: Does not combine BEGIN and END into union crop during Step 2; renders independent reference crops", () => {
+  // Independent anchor crop generation helper exists
+  assert.match(reviewSource, /cropRegionReference/);
+
+  // Anchor reference image thumbnail previews exist in both dock and cards
+  assert.match(reviewSource, /selectedRegion\.referenceImage/);
+  assert.match(reviewSource, /r\.referenceImage/);
+
+  // Does NOT combine anchors into a bounding-box union nor infer a dynamic container crop in Step 2
+  assert.doesNotMatch(reviewSource, /collector-container-highlight/);
+  assert.doesNotMatch(reviewSource, /deriveReferenceCropFromAnchors/);
 });
 
 test("UX 11: FEED_ITEM / POST_DETAIL selector is hidden from Review UI", () => {

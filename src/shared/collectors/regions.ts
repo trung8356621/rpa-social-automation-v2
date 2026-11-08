@@ -125,6 +125,8 @@ export function createCollectorRegion(opts: {
   relationships?: RegionRelationship[];
   ocrText?: string;
   ocrConfidence?: number;
+  referenceImage?: string;
+  referenceImageAsset?: string;
 }): CollectorRegion {
   const now = new Date().toISOString();
   const rawTag = opts.groupTag?.trim();
@@ -153,6 +155,8 @@ export function createCollectorRegion(opts: {
           confidence: opts.ocrConfidence ?? 90,
         }
       : undefined,
+    referenceImage: opts.referenceImage,
+    referenceImageAsset: opts.referenceImageAsset,
     createdAt: now,
     updatedAt: now,
   };
@@ -313,6 +317,43 @@ export function verifyAnchorGroups(
     errors,
     groups,
     freeRegions,
+  };
+}
+
+/**
+ * ARCHITECTURAL CONTRACT — FUTURE LIVE BROWSER MATCH TEST:
+ * Not called during Step 2 Reference Teaching.
+ *
+ * For a vertically ordered BEGIN/END pair matched in the live browser:
+ * dynamicStartY = matchedBegin.y + matchedBegin.height;
+ * dynamicEndY = matchedEnd.y;
+ *
+ * These are coordinates of anchors matched in the live browser,
+ * NOT automatically the coordinates of the teaching screenshot.
+ */
+export function computeMatchedDynamicBounds(
+  matchedBegin: Rect,
+  matchedEnd: Rect,
+  containerWidth?: number,
+): { dynamicStartY: number; dynamicEndY: number; height: number; bounds: Rect } {
+  const dynamicStartY = matchedBegin.y + matchedBegin.height;
+  const dynamicEndY = matchedEnd.y;
+  const height = Math.max(0, dynamicEndY - dynamicStartY);
+  const x = Math.min(matchedBegin.x, matchedEnd.x);
+  const width = containerWidth
+    ? Math.max(1, containerWidth - x)
+    : Math.max(matchedBegin.width, matchedEnd.width);
+
+  return {
+    dynamicStartY,
+    dynamicEndY,
+    height,
+    bounds: {
+      x,
+      y: dynamicStartY,
+      width,
+      height,
+    },
   };
 }
 
