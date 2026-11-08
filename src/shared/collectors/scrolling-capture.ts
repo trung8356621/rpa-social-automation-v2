@@ -58,6 +58,8 @@ export const SCROLL_CAPTURE_LIMITS = Object.freeze({
   previewEndEpsilonPx: 3,
   /** Wheel-at-end debounce: one extend per gesture burst (C2.5.3). */
   wheelDebounceMs: 200,
+  /** Held ROI-edge preview scroll step (CSS px per animation tick). */
+  edgePreviewScrollPx: 18,
 });
 
 /** Decide whether a wheel/scroll gesture should extend the browser capture vs pan the preview. */
