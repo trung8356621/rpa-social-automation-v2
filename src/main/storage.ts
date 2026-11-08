@@ -96,7 +96,8 @@ export function validatePayload(p: Payload) {
     if (
       o.confirmed !== true ||
       o.language !== "vie+eng" ||
-      !["line", "word"].includes(o.kind) ||
+      !o.kind ||
+      !["line", "word", "block"].includes(o.kind) ||
       !o.text?.trim() ||
       o.text.length > 2000 ||
       !Number.isFinite(o.confidence) ||

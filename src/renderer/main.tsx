@@ -58,7 +58,7 @@ const shell = !panel;
 document.body.dataset.panel = panel || "shell";
 
 type TabDraft = {
-  editor: EditorDraft; dirty: boolean; ocrEdit?: string; ocrKind: "none" | "line" | "word";
+  editor: EditorDraft; dirty: boolean; ocrEdit?: string; ocrKind: "none" | "line" | "word" | "block";
   playback: Record<string, StepPlayback>; activeStepId: string; blocked: Set<string>;
   execution?: ExecutionStart; urlInput: string; urlDirty: boolean;
 };
@@ -261,7 +261,7 @@ function Creator() {
   const [ocrError, setOcrError] = useDraft("ocrError", "");
   const [ocrLoading, setOcrLoading] = useDraft("ocrLoading", false);
   const [ocrEdit, setOcrEdit] = useState<string>();
-  const [ocrKind, setOcrKind] = useState<"none" | "line" | "word">("none");
+  const [ocrKind, setOcrKind] = useState<"none" | "line" | "word" | "block">("none");
   const [selected, setSelected] = useDraft<Step>("selected");
   const [overrideId, setOverrideId] = useDraft("overrideId", "");
   const [targetModal, setTargetModal] = useState(false);
@@ -789,7 +789,7 @@ function Creator() {
     });
   }
   function confirmOcr(segment: OcrSegment) {
-    setOcrKind(segment.kind);
+    setOcrKind(segment.kind ?? "none");
     setTarget((previous) =>
       previous
         ? {

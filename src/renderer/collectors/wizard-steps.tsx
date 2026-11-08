@@ -1,23 +1,31 @@
-import React, { useState } from "react";
+import React, { useMemo, useState } from "react";
 import { discoveryCandidates } from "../../shared/collectors/fixtures";
 import {
   applyValidationSimulation,
   auditRecordKey,
   auditStatusCounts,
+  bumpSharedSchemaRevision,
   confirmedCaptureIds,
   createVariantPattern,
   defaultAuditStateForResult,
   ensureCaptureAudits,
+  markValidationOutdated,
+  parseTypedValue,
   upsertAuditAction,
 } from "../../shared/collectors/ops";
-import { markValidationOutdated } from "../../shared/collectors/ops";
 import type {
   AuditMatchState,
   CollectorDraft,
   CollectorStrategy,
+  CollectorValueType,
+  CollectorVariable,
   ValidationOutcome,
   WizardStepId,
 } from "../../shared/collectors/types";
+
+const VALUE_TYPES: CollectorValueType[] = [
+  "string", "text", "number", "boolean", "url", "datetime", "array", "object",
+];
 
 const AUDIT_STATES: AuditMatchState[] = [
   "matched",
@@ -199,6 +207,26 @@ export function StepValidation({
     onChange(next);
   }
 
+  function updateVariable(id: string, patch: Partial<CollectorVariable>) {
+    const variables = draft.variables.map((v) => (v.id === id ? { ...v, ...patch } : v));
+    let next = markValidationOutdated({ ...draft, variables, dirty: true });
+    if (draft.teachingCaptureId || ensureCaptureAudits(draft).some((a) => a.status === "confirmed")) {
+      next = bumpSharedSchemaRevision(next);
+    }
+    onChange(next);
+  }
+
+  const liveTypedOutput = useMemo(() => {
+    const result: Record<string, unknown> = {};
+    const teachingId = draft.teachingCaptureId || draft.captures[0]?.id;
+    for (const v of draft.variables) {
+      const mapping = v.mappings.find((m) => m.sampleId === teachingId && m.presence === "mapped");
+      const raw = mapping?.text ?? v.expectedValue;
+      result[v.key] = parseTypedValue(v.valueType, raw);
+    }
+    return result;
+  }, [draft.variables, draft.teachingCaptureId, draft.captures]);
+
   return (
     <div className="collector-step collector-scroll-step">
       <p className="hint collector-step-lede">
@@ -240,6 +268,79 @@ export function StepValidation({
         <div>
           <small>Variant patterns</small>
           <b>{(draft.variants ?? []).length}</b>
+        </div>
+      </div>
+
+      <div className="collector-output-schema-card">
+        <div className="collector-mapping-toolbar">
+          <b>Output Schema Configuration</b>
+          <small className="hint">Step 4 defines data types &amp; validation rules (Step 2 stores raw strings)</small>
+        </div>
+        <p className="hint">
+          Configure output field types and required constraints. Preview parses live values from the teaching capture.
+        </p>
+
+        <div style={{ display: "grid", gap: "8px", marginTop: "8px" }}>
+          {draft.variables.map((v) => {
+            const teachingId = draft.teachingCaptureId || draft.captures[0]?.id;
+            const mapping = v.mappings.find((m) => m.sampleId === teachingId && m.presence === "mapped");
+            const raw = mapping?.text ?? v.expectedValue;
+            const parsed = parseTypedValue(v.valueType, raw);
+            return (
+              <div
+                key={v.id}
+                style={{
+                  display: "flex",
+                  alignItems: "center",
+                  gap: "12px",
+                  background: "#111a26",
+                  padding: "8px 12px",
+                  borderRadius: "6px",
+                  border: "1px solid #2b394a",
+                  flexWrap: "wrap",
+                }}
+              >
+                <div style={{ minWidth: "140px" }}>
+                  <b>{v.label}</b>
+                  <code style={{ display: "block", fontSize: "11px", color: "#7f93ab" }}>{v.key}</code>
+                </div>
+                <label style={{ display: "flex", alignItems: "center", gap: "6px", fontSize: "12px" }}>
+                  <span>Type:</span>
+                  <select
+                    disabled={locked}
+                    value={v.valueType}
+                    onChange={(e) => updateVariable(v.id, { valueType: e.target.value as CollectorValueType })}
+                  >
+                    {VALUE_TYPES.map((t) => (
+                      <option key={t} value={t}>
+                        {t}
+                      </option>
+                    ))}
+                  </select>
+                </label>
+                <label className="collector-check" style={{ fontSize: "12px" }}>
+                  <input
+                    type="checkbox"
+                    disabled={locked}
+                    checked={v.required}
+                    onChange={(e) => updateVariable(v.id, { required: e.target.checked })}
+                  />
+                  Required
+                </label>
+                <div style={{ marginLeft: "auto", fontSize: "11px", display: "flex", gap: "6px", alignItems: "center" }}>
+                  <span style={{ color: "#7f93ab" }}>Parsed Preview:</span>
+                  <code style={{ color: "#68d6a6", background: "#0d1520", padding: "2px 6px", borderRadius: "3px" }}>
+                    {JSON.stringify(parsed)}
+                  </code>
+                </div>
+              </div>
+            );
+          })}
+        </div>
+
+        <div className="collector-raw-json" style={{ marginTop: "12px" }}>
+          <b>Live Typed Output JSON (from Teaching Sample)</b>
+          <pre>{JSON.stringify(liveTypedOutput, null, 2)}</pre>
         </div>
       </div>
 

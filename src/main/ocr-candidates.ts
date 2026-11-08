@@ -8,7 +8,7 @@ export function normalizeOcrText(text: string) {
 }
 
 /** Merge only geometrically adjacent, ordered segments; never skip a token. */
-export function findOcrCandidates(result: OcrResult, selection: { text: string; kind: "line" | "word" }): OcrSegment[] {
+export function findOcrCandidates(result: OcrResult, selection: { text: string; kind?: "line" | "word" | "block" }): OcrSegment[] {
   const expected = normalizeOcrText(selection.text);
   if (!expected) return [];
   const matches: OcrSegment[] = [];
@@ -19,7 +19,7 @@ export function findOcrCandidates(result: OcrResult, selection: { text: string; 
     const x = Math.min(...parts.map(p => p.bbox.x)), y = Math.min(...parts.map(p => p.bbox.y));
     const right = Math.max(...parts.map(p => p.bbox.x+p.bbox.width));
     const bottom = Math.max(...parts.map(p => p.bbox.y+p.bbox.height));
-    const candidate = { id: `candidate-${matches.length}`, text, kind: selection.kind,
+    const candidate = { id: `candidate-${matches.length}`, text, kind: selection.kind ?? "line",
       confidence: Math.min(...parts.map(p => Number.isFinite(p.confidence) ? p.confidence : 0)), bbox: { x, y, width: right-x, height: bottom-y } };
     const duplicate = matches.find(saved => {
       const a = saved.bbox, b = candidate.bbox;

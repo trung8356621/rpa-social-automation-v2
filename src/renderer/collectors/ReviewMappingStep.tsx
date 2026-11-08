@@ -13,14 +13,15 @@ import {
 } from "../../shared/collectors/ops";
 import {
   assignOcrSegmentToVariable,
+  getSegmentsByLevel,
+  normalizeVietnameseText,
   proposeLearnedMappings,
   unmapVariableForCapture,
+  type OcrGroupingLevel,
 } from "../../shared/collectors/ocr-learning";
 import type {
   CaptureAuditStatus,
   CollectorDraft,
-  CollectorSource,
-  CollectorValueType,
   CollectorVariable,
 } from "../../shared/collectors/types";
 import { isRealCapture } from "../../shared/collectors/types";
@@ -31,13 +32,6 @@ import {
   isElectronBrowserCoreAvailable,
   type CollectorInvoke,
 } from "./browser-capture";
-
-const VALUE_TYPES: CollectorValueType[] = [
-  "string", "text", "number", "boolean", "url", "datetime", "array", "object",
-];
-const SOURCES: CollectorSource[] = [
-  "network_json", "visual_dom", "ocr_image", "manual", "derived",
-];
 
 const STATUS_LABEL: Record<CaptureAuditStatus, string> = {
   unreviewed: "Unreviewed",
@@ -85,9 +79,10 @@ export function StepReviewMapping({ draft, locked, onChange, invoke }: Props) {
   const [confirmError, setConfirmError] = useState<string>();
   const [quarantineOpen, setQuarantineOpen] = useState(false);
 
-  // Task B — Real OCR state & interaction
+  // Task B & C2.7.1 — Real OCR state & interaction
   const [ocrLoading, setOcrLoading] = useState(false);
   const [ocrError, setOcrError] = useState<string>();
+  const [groupingLevel, setGroupingLevel] = useState<OcrGroupingLevel>("block");
   const [selectedSegmentId, setSelectedSegmentId] = useState<string>();
   const [segmentSearch, setSegmentSearch] = useState("");
   const [assignTargetVarId, setAssignTargetVarId] = useState("");
@@ -227,18 +222,26 @@ export function StepReviewMapping({ draft, locked, onChange, invoke }: Props) {
     }
   }, [active?.id, active?.ocr, runOcr]);
 
-  function getMappedVariableForSegment(segmentId: string) {
+  const activeSegments = useMemo(() => {
+    if (!active?.ocr) return [];
+    return getSegmentsByLevel(active.ocr, groupingLevel, imageDims.width, imageDims.height);
+  }, [active?.ocr, groupingLevel, imageDims.width, imageDims.height]);
+
+  function getMappedVariableForSegment(segment: OcrSegment) {
     if (!active) return undefined;
     return draft.variables.find((v) => {
       const m = v.mappings.find((entry) => entry.sampleId === active.id);
-      return m && m.segmentId === segmentId && m.presence === "mapped";
+      if (!m || m.presence !== "mapped") return false;
+      if (m.segmentId === segment.id) return true;
+      if (m.text && segment.text && m.text.trim() === segment.text.trim()) return true;
+      return false;
     });
   }
 
   const selectedSegment = useMemo(() => {
-    if (!active?.ocr || !selectedSegmentId) return undefined;
-    return active.ocr.segments.find((s) => s.id === selectedSegmentId);
-  }, [active?.ocr, selectedSegmentId]);
+    if (!selectedSegmentId) return undefined;
+    return activeSegments.find((s) => s.id === selectedSegmentId);
+  }, [activeSegments, selectedSegmentId]);
 
   function handleAssignSegment(segment: OcrSegment, varId: string) {
     if (!active || !varId) return;
@@ -503,9 +506,47 @@ export function StepReviewMapping({ draft, locked, onChange, invoke }: Props) {
       </div>
 
       {active && audit && (
-        <div className="collector-review-workspace collector-review-workspace-3col">
-          {/* Column 1 — Feed Preview (~50%) */}
-          <div className="collector-review-image-pane" aria-label="Feed preview">
+        <div className="collector-review-workspace collector-review-workspace-3col collector-review-workspace-2pane">
+          {/* Left Pane (~68%) — Screenshot, Level Toggle, Search & Sample Data OCR Mapping */}
+          <div className="collector-review-image-pane" aria-label="Sample Data & OCR Mapping">
+            <div className="collector-mapping-toolbar" style={{ marginBottom: "6px", flexWrap: "wrap", gap: "8px" }}>
+              <div className="collector-level-toggle" role="group" aria-label="OCR grouping level">
+                {(["block", "line", "word"] as OcrGroupingLevel[]).map((lvl) => (
+                  <button
+                    key={lvl}
+                    type="button"
+                    className={groupingLevel === lvl ? "active" : ""}
+                    onClick={() => {
+                      setGroupingLevel(lvl);
+                      setSelectedSegmentId(undefined);
+                    }}
+                  >
+                    {lvl.toUpperCase()}
+                  </button>
+                ))}
+              </div>
+              <input
+                type="search"
+                className="collector-toolbar-search"
+                placeholder="Search text on image..."
+                value={segmentSearch}
+                onChange={(e) => setSegmentSearch(e.target.value)}
+              />
+              <span className="hint" style={{ fontSize: "11px", color: "#7f93ab" }}>Sample Data</span>
+              <div style={{ marginLeft: "auto", display: "flex", gap: "6px", alignItems: "center" }}>
+                {ocrLoading && <small style={{ color: "#68d6a6" }}>Extracting OCR...</small>}
+                {ocrError && <small style={{ color: "#e05a5a" }}>OCR failed</small>}
+                <button
+                  type="button"
+                  disabled={locked || ocrLoading}
+                  onClick={() => void runOcr(true)}
+                  title="Re-run offline OCR extraction"
+                >
+                  {ocrLoading ? "Extracting..." : "Re-run OCR"}
+                </button>
+              </div>
+            </div>
+
             <div className="collector-review-image-frame">
               {previewSrcUrl ? (
                 <div className="collector-review-image-container">
@@ -526,17 +567,20 @@ export function StepReviewMapping({ draft, locked, onChange, invoke }: Props) {
                   />
                   {active.ocr && (
                     <div className="collector-ocr-overlay">
-                      {active.ocr.segments.map((s) => {
-                        const mappedVar = getMappedVariableForSegment(s.id);
+                      {activeSegments.map((s) => {
+                        const mappedVar = getMappedVariableForSegment(s);
                         const m = mappedVar?.mappings.find((entry) => entry.sampleId === active.id);
                         const isProposed = Boolean(m?.simulatedProposal && !m?.confirmed);
                         const isSelected = selectedSegmentId === s.id;
+                        const isSearchMatch =
+                          !segmentSearch.trim() ||
+                          normalizeVietnameseText(s.text).includes(normalizeVietnameseText(segmentSearch.trim()));
                         const w = Math.max(1, imageDims.width);
                         const h = Math.max(1, imageDims.height);
                         return (
                           <div
                             key={s.id}
-                            className={`collector-ocr-box ${isSelected ? "selected" : ""} ${mappedVar && !isProposed ? "mapped" : ""} ${isProposed ? "proposed" : ""}`}
+                            className={`collector-ocr-box ${isSelected ? "selected" : ""} ${mappedVar && !isProposed ? "mapped" : ""} ${isProposed ? "proposed" : ""} ${!isSearchMatch ? "dimmed" : ""}`}
                             style={{
                               position: "absolute",
                               left: `${(s.bbox.x / w) * 100}%`,
@@ -558,153 +602,109 @@ export function StepReviewMapping({ draft, locked, onChange, invoke }: Props) {
                 </div>
               )}
             </div>
-            <small className="collector-mock-preview-label">
+
+            {/* Docked selected OCR segment inspector */}
+            {selectedSegment ? (
+              <div className="collector-selected-segment-dock">
+                <div className="collector-dock-head">
+                  <div style={{ display: "flex", gap: "6px", alignItems: "center" }}>
+                    <span className="script-badge badge-active">
+                      {selectedSegment.kind?.toUpperCase() || groupingLevel.toUpperCase()}
+                    </span>
+                    <small style={{ color: selectedSegment.confidence >= 80 ? "#68d6a6" : "#e0b35a" }}>
+                      {Math.round(selectedSegment.confidence)}% confidence
+                    </small>
+                    <small style={{ color: "#7f93ab" }}>
+                      [{selectedSegment.bbox.width}×{selectedSegment.bbox.height} at x:{selectedSegment.bbox.x}, y:{selectedSegment.bbox.y}]
+                    </small>
+                  </div>
+                  <button
+                    type="button"
+                    className="close-btn"
+                    onClick={() => setSelectedSegmentId(undefined)}
+                    title="Deselect"
+                  >
+                    ✕
+                  </button>
+                </div>
+                <div className="collector-dock-text">
+                  {selectedSegment.text}
+                </div>
+                <div className="collector-dock-assign-row">
+                  <button
+                    type="button"
+                    onClick={() => void navigator.clipboard?.writeText(selectedSegment.text)}
+                  >
+                    Copy
+                  </button>
+                  {isTeaching && (
+                    <button
+                      type="button"
+                      disabled={locked}
+                      onClick={() => handleCreateVariableFromSegment(selectedSegment)}
+                    >
+                      + Create Variable
+                    </button>
+                  )}
+                  {draft.variables.length > 0 && (
+                    <div style={{ display: "flex", gap: "4px", alignItems: "center", flex: 1 }}>
+                      <select
+                        disabled={locked}
+                        value={assignTargetVarId}
+                        onChange={(e) => setAssignTargetVarId(e.target.value)}
+                        style={{ flex: 1, fontSize: "11px" }}
+                      >
+                        <option value="">— Assign to Variable —</option>
+                        {draft.variables.map((v) => (
+                          <option key={v.id} value={v.id}>
+                            {v.label} ({v.key})
+                          </option>
+                        ))}
+                      </select>
+                      <button
+                        type="button"
+                        className="primary"
+                        disabled={locked || !assignTargetVarId}
+                        onClick={() => {
+                          if (assignTargetVarId) handleAssignSegment(selectedSegment, assignTargetVarId);
+                        }}
+                      >
+                        Assign
+                      </button>
+                    </div>
+                  )}
+                  {(() => {
+                    const mappedVar = getMappedVariableForSegment(selectedSegment);
+                    if (mappedVar) {
+                      return (
+                        <button
+                          type="button"
+                          disabled={locked}
+                          onClick={() => onChange(unmapVariableForCapture(draft, active.id, mappedVar.id))}
+                        >
+                          Unmap ({mappedVar.label})
+                        </button>
+                      );
+                    }
+                    return null;
+                  })()}
+                </div>
+              </div>
+            ) : (
+              <div className="collector-dock-placeholder">
+                <span>Click any text <b>{groupingLevel}</b> on the screenshot to inspect, copy, or assign to a variable.</span>
+              </div>
+            )}
+
+            <small className="collector-mock-preview-label" style={{ marginTop: "4px" }}>
               {realCapture
-                ? "Real Browser Core capture · screenshot + OCR bounding box overlay"
-                : "Mock preview · screenshot + OCR bounding box overlay"}
+                ? `Real Browser Core capture · screenshot + OCR bounding box overlay (${groupingLevel} mode)`
+                : `Mock preview · screenshot + OCR bounding box overlay (${groupingLevel} mode)`}
             </small>
           </div>
 
-          {/* Column 2 — Sample Data (~20%) */}
-          <div className="collector-review-sample-pane" aria-label="Sample data">
-            <div className="collector-mapping-toolbar">
-              <b>Sample Data (OCR)</b>
-              <button
-                type="button"
-                disabled={locked || ocrLoading}
-                onClick={() => void runOcr(true)}
-                title="Re-run offline OCR extraction"
-              >
-                {ocrLoading ? "Extracting..." : "Re-run OCR"}
-              </button>
-            </div>
-            {ocrLoading && (
-              <div className="collector-banner ok" role="status">
-                Extracting text via offline OCR (vie+eng)...
-              </div>
-            )}
-            {ocrError && (
-              <div className="collector-banner warn" role="alert">
-                OCR Error: {ocrError}{" "}
-                <button type="button" onClick={() => void runOcr(true)}>Retry</button>
-              </div>
-            )}
-            {active.ocr && (
-              <>
-                <p className="hint">
-                  {active.ocr.segments.length} recognized text segments. Click to highlight or map.
-                </p>
-                <input
-                  type="search"
-                  className="collector-sample-filter"
-                  placeholder="Filter OCR text..."
-                  value={segmentSearch}
-                  onChange={(e) => setSegmentSearch(e.target.value)}
-                />
-                <div className="collector-sample-kv-list">
-                  {active.ocr.segments
-                    .filter((s) => !segmentSearch || s.text.toLowerCase().includes(segmentSearch.toLowerCase()))
-                    .map((s) => {
-                      const mappedVar = getMappedVariableForSegment(s.id);
-                      const m = mappedVar?.mappings.find((entry) => entry.sampleId === active.id);
-                      const isProposed = Boolean(m?.simulatedProposal && !m?.confirmed);
-                      const isSelected = selectedSegmentId === s.id;
-                      return (
-                        <div
-                          key={s.id}
-                          className={`collector-ocr-segment-card ${isSelected ? "selected" : ""} ${mappedVar && !isProposed ? "mapped" : ""} ${isProposed ? "proposed" : ""}`}
-                          onClick={() => setSelectedSegmentId(s.id)}
-                        >
-                          <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
-                            <small style={{ color: "#7f93ab" }}>
-                              {s.kind || "text"} · [x:{s.bbox.x}, y:{s.bbox.y}]
-                            </small>
-                            <small style={{ color: s.confidence >= 80 ? "#68d6a6" : "#e0b35a" }}>
-                              {Math.round(s.confidence)}%
-                            </small>
-                          </div>
-                          <code style={{ fontSize: "11px", whiteSpace: "pre-wrap", wordBreak: "break-word" }}>
-                            {s.text}
-                          </code>
-                          {mappedVar && (
-                            <div style={{ display: "flex", gap: "4px", marginTop: "2px" }}>
-                              <span className={`script-badge ${isProposed ? "badge-draft" : "badge-active"}`}>
-                                {isProposed ? "Proposed" : "Mapped"} → {mappedVar.label || mappedVar.key}
-                              </span>
-                            </div>
-                          )}
-                          {isSelected && (
-                            <div
-                              style={{ marginTop: "6px", display: "grid", gap: "4px" }}
-                              onClick={(e) => e.stopPropagation()}
-                            >
-                              <div style={{ display: "flex", gap: "4px", flexWrap: "wrap" }}>
-                                <button
-                                  type="button"
-                                  onClick={() => void navigator.clipboard?.writeText(s.text)}
-                                >
-                                  Copy
-                                </button>
-                                <button
-                                  type="button"
-                                  disabled={locked}
-                                  onClick={() => handleCreateVariableFromSegment(s)}
-                                >
-                                  + Create Variable
-                                </button>
-                                {mappedVar && (
-                                  <button
-                                    type="button"
-                                    disabled={locked}
-                                    onClick={() => onChange(unmapVariableForCapture(draft, active.id, mappedVar.id))}
-                                  >
-                                    Unmap
-                                  </button>
-                                )}
-                              </div>
-                              {draft.variables.length > 0 && (
-                                <div style={{ display: "flex", gap: "4px", alignItems: "center", marginTop: "4px" }}>
-                                  <select
-                                    disabled={locked}
-                                    value={assignTargetVarId}
-                                    onChange={(e) => setAssignTargetVarId(e.target.value)}
-                                    style={{ flex: 1, fontSize: "11px" }}
-                                  >
-                                    <option value="">— Assign to Variable —</option>
-                                    {draft.variables.map((v) => (
-                                      <option key={v.id} value={v.id}>
-                                        {v.label} ({v.key})
-                                      </option>
-                                    ))}
-                                  </select>
-                                  <button
-                                    type="button"
-                                    disabled={locked || !assignTargetVarId}
-                                    onClick={() => {
-                                      if (assignTargetVarId) handleAssignSegment(s, assignTargetVarId);
-                                    }}
-                                  >
-                                    Assign
-                                  </button>
-                                </div>
-                              )}
-                            </div>
-                          )}
-                        </div>
-                      );
-                    })}
-                </div>
-              </>
-            )}
-            {!active.ocr && !ocrLoading && (
-              <div className="empty-tags-box">
-                No OCR results yet. Click Re-run OCR to extract.
-              </div>
-            )}
-          </div>
-
-          {/* Column 3 — Variables (~30%) */}
-          <div className="collector-review-editor-pane" aria-label="Variables">
+          {/* Right Pane (~32%) — Compact Mapped Variables List */}
+          <div className="collector-review-editor-pane" aria-label="Variables & Mappings">
             <div className="collector-mapping-toolbar">
               <b>Variables</b>
               {isTeaching && (
@@ -727,7 +727,7 @@ export function StepReviewMapping({ draft, locked, onChange, invoke }: Props) {
             </div>
             {isTeaching ? (
               <p className="collector-banner ok" role="status">
-                Image #1 — Manual Teaching Reference. Map recognized OCR segments to define ground truth.
+                Image #1 — Manual Teaching Reference. Click OCR blocks on the screenshot to assign variables.
               </p>
             ) : (
               <p className="collector-banner" role="status">
@@ -760,15 +760,17 @@ export function StepReviewMapping({ draft, locked, onChange, invoke }: Props) {
                       >
                         {open ? "▾" : "▸"} {variable.label} <code>{variable.key}</code>
                       </button>
-                      <span className="variable-type-tag">{variable.valueType}</span>
-                      <span className="script-badge badge-draft">
-                        {variable.required ? "Required" : "Optional"}
-                      </span>
+                      {isMapped && !isProposed && (
+                        <span className="script-badge badge-active">Mapped</span>
+                      )}
                       {isProposed && (
                         <span className="script-badge badge-draft">Proposed</span>
                       )}
-                      {mapping?.confirmed && (
-                        <span className="script-badge badge-active">Confirmed</span>
+                      {mapping?.presence === "not_present" && (
+                        <span className="script-badge">Not Present</span>
+                      )}
+                      {!isMapped && mapping?.presence !== "not_present" && (
+                        <span className="script-badge" style={{ opacity: 0.6 }}>Unmapped</span>
                       )}
                       {isTeaching && (
                         <button type="button" disabled={locked} onClick={() => removeVariable(variable.id)}>
@@ -777,16 +779,16 @@ export function StepReviewMapping({ draft, locked, onChange, invoke }: Props) {
                       )}
                     </div>
 
-                    {/* Mapped Value summary */}
+                    {/* Mapped Value preview */}
                     {isMapped && (
-                      <div style={{ marginTop: "4px", padding: "6px", background: "rgba(0,0,0,0.25)", borderRadius: "4px", border: isProposed ? "1px dashed #c9a227" : "1px solid #2b394a" }}>
+                      <div className="collector-compact-var-text" style={{ borderColor: isProposed ? "#c9a227" : "#2b394a" }}>
                         <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
                           <b style={{ fontSize: "11px", color: isProposed ? "#e0b35a" : "#68d6a6" }}>
                             {isProposed ? "Suggested Value:" : "Mapped Value:"}
                           </b>
                           {mapping?.confidence != null && (
                             <small style={{ color: "#7f93ab" }}>
-                              Confidence: {mapping.confidence}%
+                              {mapping.confidence}% match
                             </small>
                           )}
                         </div>
@@ -821,7 +823,7 @@ export function StepReviewMapping({ draft, locked, onChange, invoke }: Props) {
                     )}
 
                     {!isMapped && (
-                      <div style={{ marginTop: "4px", display: "flex", gap: "4px", alignItems: "center", flexWrap: "wrap" }}>
+                      <div className="collector-compact-var-unmapped">
                         <small style={{ color: "#7f93ab" }}>
                           {mapping?.presence === "not_present" ? "Marked Not Present" : "Not mapped"}
                         </small>
@@ -830,9 +832,9 @@ export function StepReviewMapping({ draft, locked, onChange, invoke }: Props) {
                             type="button"
                             disabled={locked}
                             onClick={() => handleAssignSegment(selectedSegment, variable.id)}
-                            title={`Assign "${selectedSegment.text}" to this variable`}
+                            title={`Assign "${selectedSegment.text}" to ${variable.label}`}
                           >
-                            Map from selected
+                            Map Selected {groupingLevel.toUpperCase()}
                           </button>
                         )}
                         {!isTeaching && mapping?.presence !== "not_present" && (
@@ -878,63 +880,16 @@ export function StepReviewMapping({ draft, locked, onChange, invoke }: Props) {
                                 onChange={(e) => updateVariable(variable.id, { label: e.target.value })}
                               />
                             </label>
-                            <label>
-                              Type
-                              <select
-                                disabled={locked}
-                                value={variable.valueType}
-                                onChange={(e) =>
-                                  updateVariable(variable.id, {
-                                    valueType: e.target.value as CollectorValueType,
-                                  })
-                                }
-                              >
-                                {VALUE_TYPES.map((t) => (
-                                  <option key={t} value={t}>
-                                    {t}
-                                  </option>
-                                ))}
-                              </select>
-                            </label>
-                            <label>
-                              Source / provenance
-                              <select
-                                disabled={locked}
-                                value={variable.source ?? "ocr_image"}
-                                onChange={(e) =>
-                                  updateVariable(variable.id, {
-                                    source: e.target.value as CollectorSource,
-                                  })
-                                }
-                              >
-                                {SOURCES.map((s) => (
-                                  <option key={s} value={s}>
-                                    {s}
-                                  </option>
-                                ))}
-                              </select>
-                            </label>
-                            <label className="collector-check">
-                              <input
-                                type="checkbox"
-                                disabled={locked}
-                                checked={variable.required}
-                                onChange={(e) =>
-                                  updateVariable(variable.id, { required: e.target.checked })
-                                }
-                              />
-                              Required
-                            </label>
                           </>
                         )}
                         <div className="collector-map-controls">
                           <label>
-                            Map from OCR Segment
+                            Map from OCR {groupingLevel.toUpperCase()}
                             <select
                               disabled={locked}
                               value={mapping?.segmentId ?? ""}
                               onChange={(e) => {
-                                const seg = active.ocr?.segments.find((s) => s.id === e.target.value);
+                                const seg = activeSegments.find((s) => s.id === e.target.value);
                                 if (seg) {
                                   handleAssignSegment(seg, variable.id);
                                 } else {
@@ -942,8 +897,8 @@ export function StepReviewMapping({ draft, locked, onChange, invoke }: Props) {
                                 }
                               }}
                             >
-                              <option value="">— Select recognized text —</option>
-                              {active.ocr?.segments.map((s) => (
+                              <option value="">— Select recognized text ({groupingLevel}) —</option>
+                              {activeSegments.map((s) => (
                                 <option key={s.id} value={s.id}>
                                   {s.text.slice(0, 40)} ({Math.round(s.confidence)}%)
                                 </option>

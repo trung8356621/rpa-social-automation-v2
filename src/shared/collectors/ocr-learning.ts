@@ -16,6 +16,267 @@ export function normalizeVietnameseText(text: string): string {
     .toLocaleLowerCase("vi");
 }
 
+/** Check if text matches a Facebook post timestamp / date pattern. */
+export function isTimestampText(text: string): boolean {
+  const norm = normalizeVietnameseText(text);
+  if (
+    /(\d{1,2}\s+tháng\s+\d{1,2}|lúc\s+\d{1,2}:\d{2}|\d+\s*(giờ|ngày|phút|giây|h|m|d)\s*trước|hôm qua|hôm nay|vừa xong|yesterday|hours?\s+ago|minutes?\s+ago|just\s+now)/i.test(
+      norm,
+    )
+  ) {
+    return true;
+  }
+  if (/^\d{1,2}[/-]\d{1,2}([/-]\d{2,4})?(\s+(lúc\s+)?\d{1,2}:\d{2})?$/i.test(norm)) {
+    return true;
+  }
+  return false;
+}
+
+/** Check if text matches reactions, comments, shares, or action buttons. */
+export function isEngagementText(text: string): boolean {
+  const norm = normalizeVietnameseText(text);
+  if (
+    /^\d+([.,]\d+)?[km]?\s*(bình luận|lượt thích|chia sẻ|shares?|comments?|reactions?|likes?)$/i.test(
+      norm,
+    )
+  ) {
+    return true;
+  }
+  if (/^(thích|bình luận|chia sẻ|gửi|like|comment|share)$/i.test(norm)) {
+    return true;
+  }
+  if (/^\d+([.,]\d+)?[km]?$/i.test(norm) && norm.length <= 6) {
+    return true;
+  }
+  return false;
+}
+
+/** Check if text is a plausible author name. */
+export function isAuthorCandidate(text: string): boolean {
+  const trimmed = text.trim();
+  if (trimmed.length < 2 || trimmed.length > 60) return false;
+  if (isTimestampText(trimmed) || isEngagementText(trimmed)) return false;
+  if (/[.?!]$/.test(trimmed)) return false;
+  return true;
+}
+
+export type OcrGroupingLevel = "block" | "line" | "word";
+
+export type GroupedOcrSegments = {
+  words: OcrSegment[];
+  lines: OcrSegment[];
+  blocks: OcrSegment[];
+};
+
+/**
+ * Group OCR segments into Word, Line, and Block levels with boundary enforcement:
+ * - Word: individual token level.
+ * - Line: horizontal lines.
+ * - Block: multiline paragraphs grouped using spatial proximity and alignment.
+ * Boundary enforcement: NEVER merges author, timestamp, reactions, comments, or separate posts into post body.
+ */
+export function groupOcrSegments(
+  ocrResult: OcrResult,
+  _imageWidth?: number,
+  _imageHeight?: number,
+): GroupedOcrSegments {
+  if (!ocrResult.segments || !ocrResult.segments.length) {
+    return { words: [], lines: [], blocks: [] };
+  }
+
+  // 1. Separate raw words and lines
+  const rawWords = ocrResult.segments.filter((s) => s.kind === "word");
+  const rawLines = ocrResult.segments.filter((s) => s.kind === "line" || !s.kind);
+
+  let lines: OcrSegment[] = [];
+  if (rawLines.length > 0) {
+    lines = [...rawLines];
+  } else if (rawWords.length > 0) {
+    // Group words into lines based on vertical overlap
+    const sortedWords = [...rawWords].sort((a, b) => a.bbox.y - b.bbox.y || a.bbox.x - b.bbox.x);
+    const lineBuckets: OcrSegment[][] = [];
+    for (const word of sortedWords) {
+      let placed = false;
+      for (const bucket of lineBuckets) {
+        const last = bucket[bucket.length - 1]!;
+        const yOverlap =
+          Math.min(last.bbox.y + last.bbox.height, word.bbox.y + word.bbox.height) -
+          Math.max(last.bbox.y, word.bbox.y);
+        if (yOverlap > Math.min(last.bbox.height, word.bbox.height) * 0.5) {
+          bucket.push(word);
+          placed = true;
+          break;
+        }
+      }
+      if (!placed) lineBuckets.push([word]);
+    }
+    lines = lineBuckets.map((bucket, idx) => {
+      bucket.sort((a, b) => a.bbox.x - b.bbox.x);
+      const x = Math.min(...bucket.map((w) => w.bbox.x));
+      const y = Math.min(...bucket.map((w) => w.bbox.y));
+      const x2 = Math.max(...bucket.map((w) => w.bbox.x + w.bbox.width));
+      const y2 = Math.max(...bucket.map((w) => w.bbox.y + w.bbox.height));
+      const avgConf = bucket.reduce((sum, w) => sum + w.confidence, 0) / bucket.length;
+      return {
+        id: `line_${idx}`,
+        text: bucket.map((w) => w.text).join(" "),
+        confidence: Math.round(avgConf),
+        bbox: { x, y, width: x2 - x, height: y2 - y },
+        kind: "line" as const,
+      };
+    });
+  }
+
+  // Sort lines top-to-bottom: y, then x
+  lines.sort((a, b) => a.bbox.y - b.bbox.y || a.bbox.x - b.bbox.x);
+
+  // 2. Identify author lines and timestamps
+  const isAuthorAtIdx = new Set<number>();
+  for (let i = 0; i < lines.length; i++) {
+    const cur = lines[i]!;
+    if (i < lines.length - 1) {
+      const next = lines[i + 1]!;
+      const gap = next.bbox.y - (cur.bbox.y + cur.bbox.height);
+      if (gap < 45 && isTimestampText(next.text) && isAuthorCandidate(cur.text)) {
+        isAuthorAtIdx.add(i);
+      }
+    }
+    if (i === 0 && isAuthorCandidate(cur.text) && cur.bbox.y < 120) {
+      isAuthorAtIdx.add(0);
+    }
+  }
+
+  // Calculate median line height
+  const heights = lines.map((l) => l.bbox.height).filter((h) => h > 5).sort((a, b) => a - b);
+  const medianHeight = heights.length ? heights[Math.floor(heights.length / 2)]! : 22;
+
+  // 3. Group lines into semantic blocks
+  const blockBuckets: OcrSegment[][] = [];
+  let currentBlock: OcrSegment[] = [];
+
+  for (let i = 0; i < lines.length; i++) {
+    const line = lines[i]!;
+    const isAuthor = isAuthorAtIdx.has(i);
+    const isTimestamp = isTimestampText(line.text);
+    const isEngagement = isEngagementText(line.text);
+
+    if (currentBlock.length === 0) {
+      currentBlock.push(line);
+      if (isAuthor || isTimestamp || isEngagement) {
+        blockBuckets.push(currentBlock);
+        currentBlock = [];
+      }
+      continue;
+    }
+
+    const prevLine = currentBlock[currentBlock.length - 1]!;
+    const gap = line.bbox.y - (prevLine.bbox.y + prevLine.bbox.height);
+
+    let shouldBreak = false;
+    if (isAuthor || isTimestamp || isEngagement) {
+      shouldBreak = true;
+    } else if (gap > medianHeight * 1.6 || gap > 40) {
+      shouldBreak = true;
+    } else if (gap < -8) {
+      shouldBreak = true;
+    } else if (Math.abs(line.bbox.x - prevLine.bbox.x) > 75) {
+      shouldBreak = true;
+    }
+
+    if (shouldBreak) {
+      blockBuckets.push(currentBlock);
+      currentBlock = [line];
+      if (isAuthor || isTimestamp || isEngagement) {
+        blockBuckets.push(currentBlock);
+        currentBlock = [];
+      }
+    } else {
+      currentBlock.push(line);
+    }
+  }
+
+  if (currentBlock.length > 0) {
+    blockBuckets.push(currentBlock);
+  }
+
+  // Format blocks into OcrSegment objects
+  const blocks: OcrSegment[] = blockBuckets.map((bucket, idx) => {
+    const x = Math.min(...bucket.map((l) => l.bbox.x));
+    const y = Math.min(...bucket.map((l) => l.bbox.y));
+    const x2 = Math.max(...bucket.map((l) => l.bbox.x + l.bbox.width));
+    const y2 = Math.max(...bucket.map((l) => l.bbox.y + l.bbox.height));
+    const avgConf = bucket.reduce((sum, l) => sum + l.confidence, 0) / bucket.length;
+
+    return {
+      id: `block_${idx}`,
+      text: bucket.map((l) => l.text).join("\n"),
+      confidence: Math.round(avgConf),
+      bbox: { x, y, width: x2 - x, height: y2 - y },
+      kind: "block" as const,
+    };
+  });
+
+  // Ensure lines have kind "line"
+  const formattedLines: OcrSegment[] = lines.map((l, idx) => ({
+    ...l,
+    id: l.id || `line_${idx}`,
+    kind: "line" as const,
+  }));
+
+  // Ensure words have kind "word"
+  let formattedWords: OcrSegment[] = rawWords.map((w, idx) => ({
+    ...w,
+    id: w.id || `word_${idx}`,
+    kind: "word" as const,
+  }));
+
+  // If no raw words from OCR, split lines into words
+  if (!formattedWords.length && lines.length) {
+    let wordCount = 0;
+    formattedWords = [];
+    for (const line of lines) {
+      const tokens = line.text.split(/\s+/).filter(Boolean);
+      if (tokens.length <= 1) {
+        formattedWords.push({ ...line, id: `word_${wordCount++}`, kind: "word" as const });
+      } else {
+        const tokenWidth = line.bbox.width / tokens.length;
+        tokens.forEach((token, tIdx) => {
+          formattedWords.push({
+            id: `word_${wordCount++}`,
+            text: token,
+            confidence: line.confidence,
+            bbox: {
+              x: Math.round(line.bbox.x + tIdx * tokenWidth),
+              y: line.bbox.y,
+              width: Math.round(tokenWidth),
+              height: line.bbox.height,
+            },
+            kind: "word" as const,
+          });
+        });
+      }
+    }
+  }
+
+  return {
+    words: formattedWords,
+    lines: formattedLines,
+    blocks,
+  };
+}
+
+export function getSegmentsByLevel(
+  ocrResult: OcrResult,
+  level: OcrGroupingLevel,
+  imageWidth?: number,
+  imageHeight?: number,
+): OcrSegment[] {
+  const grouped = groupOcrSegments(ocrResult, imageWidth, imageHeight);
+  if (level === "block") return grouped.blocks;
+  if (level === "line") return grouped.lines;
+  return grouped.words;
+}
+
 /**
  * Extract normalized coordinates and surrounding layout/anchor context for a segment.
  * Saved as teaching evidence on Image #1 or any confirmed capture.
@@ -125,8 +386,13 @@ export function matchLearnedVariable(
   let bestScore = -1;
   let bestEvidence = "";
 
-  const lines = targetOcr.segments.filter((s) => s.kind === "line" || !s.kind);
-  const pool = isCount ? targetOcr.segments : lines.length ? lines : targetOcr.segments;
+  const grouped = groupOcrSegments(targetOcr, imageWidth, imageHeight);
+  const refIsMultiline = Boolean(ref.text?.includes("\n") || ref.segmentId?.startsWith("block_"));
+  const pool = isCount
+    ? [...grouped.blocks, ...grouped.lines, ...grouped.words]
+    : refIsMultiline
+      ? [...grouped.blocks, ...grouped.lines]
+      : [...grouped.blocks, ...grouped.lines];
 
   for (let i = 0; i < pool.length; i++) {
     const cand = pool[i]!;
@@ -162,20 +428,24 @@ export function matchLearnedVariable(
     let contentScore = 0;
     const candText = cand.text.trim();
     if (isCount) {
-      if (/^\d+([.,]\d+)?[kKmM]?$/.test(candText) || /^\d+\s*(bình luận|lượt thích|chia sẻ|shares?|comments?|reactions?)$/i.test(candText)) {
+      if (isEngagementText(candText)) {
         contentScore += 20;
       } else if (/\d/.test(candText)) {
         contentScore += 10;
       }
     } else if (isDate) {
-      if (/(\d{1,2}\s+tháng\s+\d{1,2}|lúc\s+\d{1,2}:\d{2}|\d+\s*(giờ|ngày|phút|giây|h|m|d)\s*trước|hôm qua|hôm nay)/i.test(candText)) {
+      if (isTimestampText(candText)) {
         contentScore += 20;
       } else if (/(\d{1,2}[:/.-]\d{1,2})/.test(candText)) {
         contentScore += 10;
       }
     } else if (isAuthor) {
-      if (candRelY < 0.28 && candText.length >= 2 && candText.length <= 60) {
-        contentScore += 15;
+      if (isAuthorCandidate(candText) && candRelY < 0.28) {
+        contentScore += 20;
+      }
+    } else if (refIsMultiline) {
+      if (cand.kind === "block" && candText.length >= 30) {
+        contentScore += 20;
       }
     }
 

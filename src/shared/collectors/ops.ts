@@ -7,6 +7,7 @@ import type {
   CaptureItem,
   CollectorDraft,
   CollectorListFilters,
+  CollectorValueType,
   CollectorVariable,
   CollectorVersionSnapshot,
   ParentRangeState,
@@ -17,6 +18,33 @@ import type {
   VariantPattern,
   WizardStepId,
 } from "./types.js";
+
+export function parseTypedValue(valType: CollectorValueType, rawText?: string): unknown {
+  if (rawText === undefined || rawText === null) return null;
+  const trimmed = rawText.trim();
+  switch (valType) {
+    case "number": {
+      const digitsOnly = trimmed.replace(/[^0-9.-]/g, "");
+      if (!digitsOnly) return null;
+      const num = Number(digitsOnly);
+      return Number.isNaN(num) ? null : num;
+    }
+    case "boolean":
+      if (!trimmed) return false;
+      return trimmed.toLowerCase() !== "false" && trimmed !== "0";
+    case "array":
+      if (!trimmed) return [];
+      return trimmed.split(/\n|,/).map((s) => s.trim()).filter(Boolean);
+    case "object":
+      return { text: trimmed };
+    case "url":
+    case "datetime":
+    case "text":
+    case "string":
+    default:
+      return trimmed;
+  }
+}
 
 export const WIZARD_STEPS: Array<{ id: WizardStepId; label: string; short: string }> = [
   { id: 1, label: "Capture", short: "Capture" },

@@ -80,7 +80,7 @@ export type OcrSegment = {
   text: string;
   bbox: Rect;
   confidence: number;
-  kind: "line" | "word";
+  kind?: "line" | "word" | "block";
 };
 export type OcrResult = {
   text: string;
