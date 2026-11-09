@@ -284,7 +284,7 @@ export type CollectorRegion = {
   updatedAt: string;
 };
 
-export type MatchTestStatus = "NOT TESTED" | "MATCHED" | "PARTIAL" | "AMBIGUOUS" | "FAILED";
+export type MatchTestStatus = "NOT TESTED" | "MATCHED" | "PARTIAL" | "AMBIGUOUS" | "NO MATCH" | "FAILED";
 
 export type AnchorMatchDetail = {
   regionId: string;

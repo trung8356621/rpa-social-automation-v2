@@ -3473,6 +3473,82 @@ body[data-panel="shell"] .collector-capture-split > aside.collector-capture-tool
   border-radius: 6px;
 }
 
+.collector-match-actions {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+
+.collector-match-mode-control {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  background: #0f172a;
+  padding: 3px 8px;
+  border: 1px solid #334155;
+  border-radius: 6px;
+}
+
+.collector-match-mode-label {
+  font-size: 12px;
+  font-weight: 600;
+  color: #cbd5e1;
+}
+
+.collector-match-mode-toggle {
+  display: flex;
+  border-radius: 4px;
+  overflow: hidden;
+  border: 1px solid #475569;
+}
+
+.collector-toggle-btn {
+  background: #1e293b;
+  color: #94a3b8;
+  border: none;
+  padding: 4px 10px;
+  font-size: 11px;
+  font-weight: 700;
+  cursor: pointer;
+  transition: all 0.15s ease;
+}
+
+.collector-toggle-btn:hover:not(:disabled) {
+  color: #f8fafc;
+}
+
+.collector-toggle-btn.active.off {
+  background: #475569;
+  color: #f8fafc;
+}
+
+.collector-toggle-btn.active.on {
+  background: #0284c7;
+  color: #ffffff;
+  box-shadow: 0 0 6px rgba(2, 132, 199, 0.5);
+}
+
+.collector-toggle-btn:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.collector-match-off-instruction {
+  background: #1e293b;
+  border: 1px dashed #475569;
+  border-radius: 6px;
+  padding: 14px 16px;
+  margin-bottom: 12px;
+  color: #94a3b8;
+  font-size: 13px;
+  line-height: 1.5;
+}
+
+.collector-btn-rematch:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
 .collector-match-session-info {
   display: flex;
   flex-direction: column;
@@ -3767,6 +3843,12 @@ body[data-panel="shell"] .collector-capture-split > aside.collector-capture-tool
   background: #7f1d1d;
   color: #f87171;
   border: 1px solid #ef4444;
+}
+
+.collector-match-pill.status-no-match {
+  background: #3b2a1a;
+  color: #fb923c;
+  border: 1px solid #f97316;
 }
 
 .collector-match-pill.status-not-tested {

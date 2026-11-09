@@ -59,8 +59,10 @@ test("C2.10.5 Lifecycle: Browser Host effect is strictly decoupled from match ex
   assert.match(matchTestStepSource, /collectorReportBrowserHost\(invoke, null\)/);
   assert.match(matchTestStepSource, /collectorSetBrowserVisible\(invoke, false\)/);
 
-  // 5. Automatic initial match test runs once using hasAutoRunRef
-  assert.match(matchTestStepSource, /hasAutoRunRef\.current/);
+  // 5. C2.10.6 Match Mode: Starts OFF by default, single-run execution guard via isRunningRef and runIdRef
+  assert.match(matchTestStepSource, /const \[matchMode, setMatchMode\] = useState<boolean>\(false\)/);
+  assert.match(matchTestStepSource, /isRunningRef\.current/);
+  assert.match(matchTestStepSource, /runIdRef\.current/);
 });
 
 test("C2.10.5 Screenshot Recovery: In-memory asset caching and loading state distinction", () => {

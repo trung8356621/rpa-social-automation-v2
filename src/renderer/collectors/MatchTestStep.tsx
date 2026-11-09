@@ -35,15 +35,20 @@ export function StepMatchTest({
   invoke,
   state,
 }: MatchTestStepProps) {
-  const [isRunning, setIsRunning] = useState(false);
+  // C2.10.6: Interactive Match Mode toggle (default OFF)
+  const [matchMode, setMatchMode] = useState<boolean>(false);
+  const [isRunning, setIsRunning] = useState<boolean>(false);
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
   const [browserConnected, setBrowserConnected] = useState<boolean>(false);
 
   const hostRef = useRef<HTMLDivElement>(null);
   const lastBoundsRef = useRef<{ x: number; y: number; width: number; height: number } | null>(null);
-  const hasAutoRunRef = useRef<boolean>(false);
   const isMountedRef = useRef<boolean>(true);
   const isRunningRef = useRef<boolean>(false);
+  const matchModeRef = useRef<boolean>(false);
+  const runIdRef = useRef<number>(0);
+  // Auto-run on entry replaced by explicit Match Mode toggle; ref retained for compatibility
+  const hasAutoRunRef = useRef<boolean>(false);
 
   // Keep latest mutable props in refs to decouple browser lifecycle from state changes
   const draftRef = useRef(draft);
@@ -60,7 +65,7 @@ export function StepMatchTest({
   const currentUrl = session?.lastUrl || state?.url || "";
 
   const matchTestResult: MatchTestResult | undefined = draft.matchTest;
-  const status = matchTestResult?.status ?? "NOT TESTED";
+  const rawStatus = matchTestResult?.status ?? "NOT TESTED";
 
   // Counts: clearly separate inspected viewport candidates from actually resolved post matches
   const inspectedCount = matchTestResult?.matchedItems?.length ?? 0;
@@ -68,6 +73,18 @@ export function StepMatchTest({
     matchTestResult?.matchedPostCount ??
     matchTestResult?.matchedItems?.filter((item) => item.domResolved).length ??
     0;
+
+  // Differentiate NO MATCH (inspection succeeded but 0 containers matched) from execution/browser failures (ERROR/FAILED)
+  const isExecutionError = Boolean(
+    errorMsg ||
+    matchTestResult?.error?.includes("unavailable") ||
+    matchTestResult?.error?.includes("empty") ||
+    matchTestResult?.error?.includes("Stale")
+  );
+  const displayStatus =
+    rawStatus === "FAILED" && !isExecutionError && resolvedMatchedCount === 0
+      ? "NO MATCH"
+      : rawStatus;
 
   // Measure and report host frame bounds to Electron shell.
   // Suppresses redundant IPC calls if bounds have not changed.
@@ -99,12 +116,22 @@ export function StepMatchTest({
   }, [invoke]);
 
   // Execute Match Test logic: decoupled from the WebContentsView lifecycle
-  const handleRunMatchTest = useCallback(async () => {
+  // Single-run guarantee with runIdRef and isRunningRef to drop stale results
+  const runViewportMatch = useCallback(async () => {
     if (lockedRef.current || isRunningRef.current) return;
+    if (!matchModeRef.current) return;
+
+    const currentRunId = ++runIdRef.current;
+    isRunningRef.current = true;
+    setIsRunning(true);
     setErrorMsg(null);
 
     if (!isElectronBrowserCoreAvailable() || !invoke) {
-      if (!isMountedRef.current) return;
+      if (!isMountedRef.current || currentRunId !== runIdRef.current || !matchModeRef.current) {
+        isRunningRef.current = false;
+        setIsRunning(false);
+        return;
+      }
       setErrorMsg(
         "Browser Core session unavailable. Live Browser Match Test requires an active Electron browser session.",
       );
@@ -122,34 +149,49 @@ export function StepMatchTest({
         error: "Browser Core unavailable",
       };
       onChangeRef.current({ ...draftRef.current, matchTest: failedResult, dirty: true });
+      isRunningRef.current = false;
+      setIsRunning(false);
       return;
     }
 
-    isRunningRef.current = true;
-    setIsRunning(true);
     try {
       // Clear previous highlights before fresh run
       await collectorClearHighlights(invoke);
 
-      if (!isMountedRef.current) return;
+      if (!isMountedRef.current || currentRunId !== runIdRef.current || !matchModeRef.current) {
+        return;
+      }
 
-      // Real live DOM inspection strictly bounded to current visible viewport (no scroll)
+      // Real live DOM inspection strictly bounded to current visible viewport (NO SCROLL)
       const snapshot = await collectorInspectDom(invoke, currentUrl, draftRef.current.layoutContext);
 
-      if (!isMountedRef.current) return;
+      if (!isMountedRef.current || currentRunId !== runIdRef.current || !matchModeRef.current) {
+        return;
+      }
 
       const result = executeLiveBrowserMatchTest(draftRef.current.regions ?? [], snapshot);
 
-      // Inject live visual highlights on WebContentsView
-      if (result.matchedItems && result.matchedItems.length > 0 && isMountedRef.current) {
-        await collectorHighlightMatches(invoke, result.matchedItems);
+      // Filter to highlight ONLY successfully resolved containers (never unresolved candidates)
+      const resolvedMatches = (result.matchedItems || []).filter((item) => item.domResolved);
+
+      if (!isMountedRef.current || currentRunId !== runIdRef.current || !matchModeRef.current) {
+        await collectorClearHighlights(invoke);
+        return;
       }
 
-      if (isMountedRef.current) {
+      if (resolvedMatches.length > 0) {
+        await collectorHighlightMatches(invoke, resolvedMatches);
+      } else {
+        await collectorClearHighlights(invoke);
+      }
+
+      if (isMountedRef.current && currentRunId === runIdRef.current && matchModeRef.current) {
         onChangeRef.current({ ...draftRef.current, matchTest: result, dirty: true });
       }
     } catch (err) {
-      if (!isMountedRef.current) return;
+      if (!isMountedRef.current || currentRunId !== runIdRef.current || !matchModeRef.current) {
+        return;
+      }
       const msg = err instanceof Error ? err.message : String(err);
       setErrorMsg(`Match Test failed: ${msg}`);
       const failedResult: MatchTestResult = {
@@ -164,15 +206,46 @@ export function StepMatchTest({
       };
       onChangeRef.current({ ...draftRef.current, matchTest: failedResult, dirty: true });
     } finally {
-      isRunningRef.current = false;
-      if (isMountedRef.current) {
-        setIsRunning(false);
+      if (currentRunId === runIdRef.current) {
+        isRunningRef.current = false;
+        if (isMountedRef.current) {
+          setIsRunning(false);
+        }
       }
     }
   }, [invoke, currentUrl]);
 
+  // Alias for backward compatibility
+  const handleRunMatchTest = runViewportMatch;
+
+  // Handle explicit Match Mode toggling (OFF / ON)
+  const handleToggleMatchMode = useCallback(
+    (nextMode: boolean) => {
+      if (lockedRef.current) return;
+      if (nextMode === matchModeRef.current) return;
+
+      matchModeRef.current = nextMode;
+      setMatchMode(nextMode);
+
+      if (nextMode) {
+        // Switching ON: Trigger exactly one match operation
+        void runViewportMatch();
+      } else {
+        // Switching OFF: Invalidate any in-flight run, clear highlights, return to normal browser
+        runIdRef.current++;
+        isRunningRef.current = false;
+        setIsRunning(false);
+        setErrorMsg(null);
+        if (invoke && isElectronBrowserCoreAvailable()) {
+          void collectorClearHighlights(invoke);
+        }
+      }
+    },
+    [invoke, runViewportMatch],
+  );
+
   // 1. Browser Host Lifecycle: Mounted ONCE when entering Step 3, unmounted ONCE when leaving Step 3.
-  // Independent of isRunning, draft updates, match results, or React re-renders.
+  // Independent of isRunning, matchMode, draft updates, match results, or React re-renders.
   useEffect(() => {
     isMountedRef.current = true;
     const isAvailable = isElectronBrowserCoreAvailable();
@@ -202,27 +275,19 @@ export function StepMatchTest({
 
     return () => {
       isMountedRef.current = false;
+      // Invalidate in-flight operations and clear visual highlights
+      runIdRef.current++;
+      isRunningRef.current = false;
+      matchModeRef.current = false;
       ro?.disconnect();
       window.removeEventListener("resize", onResize);
       lastBoundsRef.current = null;
       void collectorClearHighlights(invoke);
       void collectorReportBrowserHost(invoke, null);
       void collectorSetBrowserVisible(invoke, false);
+      // NOTE: Browser session itself is preserved and NOT closed/destroyed.
     };
   }, [invoke, publishHost]);
-
-  // 2. Initial Match Execution Lifecycle: Runs exactly ONCE when the browser session is ready.
-  useEffect(() => {
-    if (!hasAutoRunRef.current && isElectronBrowserCoreAvailable() && invoke) {
-      hasAutoRunRef.current = true;
-      const timer = setTimeout(() => {
-        if (isMountedRef.current) {
-          void handleRunMatchTest();
-        }
-      }, 300);
-      return () => clearTimeout(timer);
-    }
-  }, [invoke, handleRunMatchTest]);
 
   return (
     <div className="collector-match-test-stage">
@@ -242,13 +307,41 @@ export function StepMatchTest({
         </div>
 
         <div className="collector-match-actions">
+          {/* Prominent Match Mode Toggle (OFF / ON) */}
+          <div className="collector-match-mode-control">
+            <span className="collector-match-mode-label">Match Mode:</span>
+            <div className="collector-match-mode-toggle" role="radiogroup" aria-label="Match Mode">
+              <button
+                type="button"
+                className={`collector-toggle-btn ${!matchMode ? "active off" : ""}`}
+                disabled={locked}
+                onClick={() => handleToggleMatchMode(false)}
+                aria-checked={!matchMode}
+                role="radio"
+              >
+                OFF
+              </button>
+              <button
+                type="button"
+                className={`collector-toggle-btn ${matchMode ? "active on" : ""}`}
+                disabled={locked}
+                onClick={() => handleToggleMatchMode(true)}
+                aria-checked={matchMode}
+                role="radio"
+              >
+                ON
+              </button>
+            </div>
+          </div>
+
           <button
             type="button"
-            className="primary"
-            disabled={locked || isRunning}
-            onClick={() => void handleRunMatchTest()}
+            className="primary collector-btn-rematch"
+            disabled={locked || isRunning || !matchMode}
+            onClick={() => void runViewportMatch()}
+            title="Re-run Match Test on current visible viewport"
           >
-            {isRunning ? "Running Match Test..." : "↻ Re-run Match Test"}
+            {isRunning ? "Testing Viewport..." : "↻ Re-match Current Viewport"}
           </button>
         </div>
       </div>
@@ -272,7 +365,7 @@ export function StepMatchTest({
         <div className="collector-match-browser-area">
           <div className="collector-match-browser-toolbar">
             <span style={{ fontSize: "12px", fontWeight: 600, color: "#93c5fd" }}>
-              🌐 Live Browser Viewport
+              🌐 Live Browser Viewport {matchMode ? "(Match Mode Active)" : "(Interactive Browsing)"}
             </span>
             <span className="collector-match-limit-tag">
               Bounded Viewport · Max 3 Posts
@@ -295,19 +388,35 @@ export function StepMatchTest({
 
         {/* Right: Diagnostics Dock */}
         <div className="collector-match-diagnostics-dock">
+          {/* Instruction when Match Mode is OFF */}
+          {!matchMode && (
+            <div className="collector-match-off-instruction">
+              <div style={{ display: "flex", gap: "8px", alignItems: "center", marginBottom: "6px" }}>
+                <span style={{ fontSize: "16px" }}>ℹ️</span>
+                <b style={{ color: "#38bdf8" }}>Match Mode is OFF</b>
+              </div>
+              <p style={{ margin: "0 0 6px 0" }}>
+                The live browser is interactive. Scroll and navigate normally to view the target feed or posts.
+              </p>
+              <p style={{ margin: 0 }}>
+                When ready, switch <b>Match Mode to ON</b> to evaluate anchor matching and DOM container resolution on the current visible viewport.
+              </p>
+            </div>
+          )}
+
           {/* Summary Status Card */}
           <div className="collector-match-summary-card">
             <div className="collector-match-status-bar">
               <div style={{ display: "flex", gap: "10px", alignItems: "center" }}>
                 <span className="collector-subheading">Status:</span>
                 <span
-                  className={`collector-match-pill status-${status.toLowerCase().replace(/\s+/g, "-")}`}
+                  className={`collector-match-pill status-${displayStatus.toLowerCase().replace(/\s+/g, "-")}`}
                 >
-                  {status}
+                  {displayStatus}
                 </span>
                 {matchTestResult && (
                   <span className="collector-post-count-badge">
-                    {matchTestResult.matchedPostCount} post(s) matched
+                    {resolvedMatchedCount} post(s) matched
                   </span>
                 )}
               </div>
@@ -343,11 +452,13 @@ export function StepMatchTest({
               </div>
             </div>
 
-            {(!matchTestResult?.matchedItems || matchTestResult.matchedItems.length === 0) && (
+            {(!matchTestResult?.matchedItems || matchTestResult.matchedItems.length === 0 || resolvedMatchedCount === 0) && (
               <div className="collector-sample-empty">
-                {status === "NOT TESTED"
-                  ? "Click 'Re-run Match Test' to evaluate anchors on the live page."
-                  : "0 posts matched in the current visible viewport. Check that the page is loaded and matching anchor regions are visible."}
+                {displayStatus === "NOT TESTED"
+                  ? "Switch Match Mode to ON to evaluate anchors on the live page."
+                  : displayStatus === "NO MATCH"
+                    ? "0 posts matched in the current visible viewport. Scroll the browser to visible posts and click 'Re-match Current Viewport'."
+                    : "0 posts matched in the current visible viewport. Check that the page is loaded and matching anchor regions are visible."}
               </div>
             )}
 
