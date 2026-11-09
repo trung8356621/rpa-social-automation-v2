@@ -11,13 +11,18 @@ import {
   addRegionToDraft,
   saveAsVersion,
   revertDraftToVersion,
+  confirmCaptureAudit,
+  auditForCapture,
+  applyAuditActionAndAdvance,
 } from "../src/shared/collectors/ops.js";
 import {
   assignSegmentMapping,
   buildLearnedAnchorRules,
   createCollectorRegion,
   executeLiveBrowserMatchTest,
+  findAnchorCandidates,
   getGroupTagSuggestions,
+  getLearnedCandidateVariablesForGroup,
   proposeRegionQuickFill,
   confirmQuickFillMapping,
   rejectQuickFillMapping,
@@ -767,4 +772,362 @@ test("Checkpoint C: Version snapshots and saves preserve Quick Fill and learned 
   const revProposal = reverted.variables[0].mappings.find((m) => m.sampleId === cap2);
   assert.equal(revProposal?.confidence, 88);
   assert.equal(revProposal?.simulatedProposal, true);
+});
+
+// ---------------------------------------------------------------------------
+// C2.11.3 Issue A: Candidate Variables Auto-Fill Tests
+// ---------------------------------------------------------------------------
+
+test("C2.11.3 Issue A: getLearnedCandidateVariablesForGroup inherits candidate variables matching groupTag and type", () => {
+  const { draft, capIds } = makeTestDraftWithCaptures(3);
+  const [cap1, cap2, cap3] = capIds;
+
+  draft.variables = [
+    { id: "v1", key: "author", label: "Author", valueType: "string", required: true, mappings: [] },
+    { id: "v2", key: "created_at", label: "Created At", valueType: "string", required: true, mappings: [] },
+    { id: "v3", key: "like_count", label: "Likes", valueType: "number", required: false, mappings: [] },
+  ];
+
+  // Confirmed BEGIN on sample 1 with author & created_at
+  const b1 = createCollectorRegion({
+    id: "b1",
+    captureItemId: cap1,
+    type: "BEGIN",
+    groupTag: "post-main",
+    label: "Header 1",
+    box: { x: 20, y: 20, width: 300, height: 60 },
+    imageWidth: 800,
+    imageHeight: 600,
+    candidateVariableKeys: ["author", "created_at"],
+    confirmed: true,
+  });
+
+  // Confirmed END on sample 1 with like_count
+  const e1 = createCollectorRegion({
+    id: "e1",
+    captureItemId: cap1,
+    type: "END",
+    groupTag: "post-main",
+    label: "Footer 1",
+    box: { x: 20, y: 500, width: 300, height: 40 },
+    imageWidth: 800,
+    imageHeight: 600,
+    candidateVariableKeys: ["like_count"],
+    confirmed: true,
+  });
+
+  // Confirmed BEGIN on sample 2 also with author
+  const b2 = createCollectorRegion({
+    id: "b2",
+    captureItemId: cap2,
+    type: "BEGIN",
+    groupTag: "post-main",
+    label: "Header 2",
+    box: { x: 20, y: 20, width: 300, height: 60 },
+    imageWidth: 800,
+    imageHeight: 600,
+    candidateVariableKeys: ["author"],
+    confirmed: true,
+  });
+
+  let d = addRegionToDraft(draft, b1);
+  d = addRegionToDraft(d, e1);
+  d = addRegionToDraft(d, b2);
+
+  // When creating a BEGIN anchor on sample 3 for "post-main":
+  const learnedBegin = getLearnedCandidateVariablesForGroup(d, "post-main", "BEGIN", cap3);
+  assert.equal(learnedBegin.sampleCount, 2);
+  assert.ok(learnedBegin.variableKeys.includes("author"));
+  assert.ok(learnedBegin.variableKeys.includes("created_at"));
+  // Rule: Never mix BEGIN variables with END variables
+  assert.ok(!learnedBegin.variableKeys.includes("like_count"));
+
+  // When creating an END anchor on sample 3 for "post-main":
+  const learnedEnd = getLearnedCandidateVariablesForGroup(d, "post-main", "END", cap3);
+  assert.equal(learnedEnd.sampleCount, 1);
+  assert.deepEqual(learnedEnd.variableKeys, ["like_count"]);
+  assert.ok(!learnedEnd.variableKeys.includes("author"));
+});
+
+// ---------------------------------------------------------------------------
+// C2.11.3 Issue B: Canonical Region Prioritization & Live Match Heuristics
+// ---------------------------------------------------------------------------
+
+test("C2.11.3 Issue B: Prioritizes confirmed OCR regions over blank unconfirmed regions during live match", () => {
+  const { draft, capIds } = makeTestDraftWithCaptures(2);
+  const [cap1, cap2] = capIds;
+  draft.teachingCaptureId = cap2; // Active capture is sample 2, but has blank unconfirmed regions
+
+  const confirmedBegin = createCollectorRegion({
+    id: "cb1",
+    captureItemId: cap1,
+    type: "BEGIN",
+    groupTag: "post-main",
+    label: "post-main Begin",
+    box: { x: 20, y: 20, width: 300, height: 60 },
+    imageWidth: 800,
+    imageHeight: 600,
+    ocrText: "Nguyễn Văn A · 2 giờ",
+    confirmed: true,
+  });
+
+  const confirmedEnd = createCollectorRegion({
+    id: "ce1",
+    captureItemId: cap1,
+    type: "END",
+    groupTag: "post-main",
+    label: "post-main End",
+    box: { x: 20, y: 500, width: 300, height: 40 },
+    imageWidth: 800,
+    imageHeight: 600,
+    ocrText: "Thích Bình luận Chia sẻ",
+    confirmed: true,
+  });
+
+  const blankBegin = createCollectorRegion({
+    id: "bb2",
+    captureItemId: cap2,
+    type: "BEGIN",
+    groupTag: "post-main",
+    label: "post-main Begin",
+    box: { x: 20, y: 20, width: 300, height: 60 },
+    imageWidth: 800,
+    imageHeight: 600,
+    confirmed: false,
+  });
+
+  const blankEnd = createCollectorRegion({
+    id: "be2",
+    captureItemId: cap2,
+    type: "END",
+    groupTag: "post-main",
+    label: "post-main End",
+    box: { x: 20, y: 500, width: 300, height: 40 },
+    imageWidth: 800,
+    imageHeight: 600,
+    confirmed: false,
+  });
+
+  let d = addRegionToDraft(draft, confirmedBegin);
+  d = addRegionToDraft(d, confirmedEnd);
+  d = addRegionToDraft(d, blankBegin);
+  d = addRegionToDraft(d, blankEnd);
+
+  // Live snapshot with real social post structure
+  const snapshot: CollectorDomSnapshot = {
+    url: "https://facebook.com/groups/123",
+    capturedAt: new Date().toISOString(),
+    viewport: { width: 1280, height: 800, scrollX: 0, scrollY: 0, dpr: 1 },
+    elements: [
+      {
+        id: "feed_1",
+        tagName: "DIV",
+        role: "feed",
+        rect: { x: 200, y: 0, width: 680, height: 1600 },
+        textSnippet: "",
+        attributes: { role: "feed" },
+        depth: 1,
+        childrenIds: ["post_1"],
+        isFeedContainer: true,
+      },
+      {
+        id: "post_1",
+        tagName: "DIV",
+        rect: { x: 200, y: 80, width: 680, height: 500 },
+        textSnippet: "Trần Thị B · 5 phút ... Chia sẻ",
+        attributes: {},
+        depth: 2,
+        parentId: "feed_1",
+        childrenIds: ["header_1", "footer_1"],
+        isArticleOrCard: true,
+      },
+      {
+        id: "header_1",
+        tagName: "A",
+        role: "link",
+        rect: { x: 220, y: 100, width: 250, height: 40 },
+        textSnippet: "Trần Thị B · 5 phút",
+        attributes: { href: "/user/tran.thi.b", role: "link" },
+        depth: 3,
+        parentId: "post_1",
+        childrenIds: [],
+      },
+      {
+        id: "footer_1",
+        tagName: "DIV",
+        role: "toolbar",
+        rect: { x: 220, y: 520, width: 640, height: 40 },
+        textSnippet: "Thích Bình luận Chia sẻ",
+        attributes: { role: "toolbar" },
+        depth: 3,
+        parentId: "post_1",
+        childrenIds: [],
+      },
+    ],
+  };
+
+  const result = executeLiveBrowserMatchTest(d.regions ?? [], snapshot, d);
+  assert.equal(result.status, "MATCHED");
+  assert.equal(result.matchedPostCount, 1);
+  assert.equal(result.groups[0]?.status, "MATCHED");
+  assert.equal(result.groups[0]?.domAssociationStatus, "CONFIRMED");
+  assert.equal(result.matchedItems?.[0]?.domResolved, true);
+});
+
+test("C2.11.3 Issue B: findAnchorCandidates recognizes social header and actions bar", () => {
+  const beginRegion = createCollectorRegion({
+    captureItemId: "s1",
+    type: "BEGIN",
+    groupTag: "post-main",
+    label: "post-main Begin",
+    box: { x: 20, y: 20, width: 300, height: 60 },
+    imageWidth: 800,
+    imageHeight: 600,
+    candidateVariableKeys: ["author", "created_at"],
+  });
+
+  const endRegion = createCollectorRegion({
+    captureItemId: "s1",
+    type: "END",
+    groupTag: "post-main",
+    label: "post-main End",
+    box: { x: 20, y: 500, width: 300, height: 40 },
+    imageWidth: 800,
+    imageHeight: 600,
+    candidateVariableKeys: ["like_count"],
+  });
+
+  const elements = [
+    {
+      id: "h1",
+      tagName: "A",
+      role: "link",
+      rect: { x: 200, y: 100, width: 200, height: 35 },
+      textSnippet: "Nguyễn Văn C · 15 phút",
+      attributes: { href: "/profile.php?id=1000" },
+      childrenIds: [],
+    },
+    {
+      id: "f1",
+      tagName: "DIV",
+      role: "toolbar",
+      rect: { x: 200, y: 480, width: 500, height: 40 },
+      textSnippet: "Thích Bình luận Chia sẻ",
+      attributes: { role: "toolbar" },
+      childrenIds: [],
+    },
+  ];
+
+  const beginCands = findAnchorCandidates(beginRegion, elements as any);
+  assert.ok(beginCands.length > 0, "Should generate candidate for social header");
+  assert.ok(beginCands[0].score >= 40, `Header score should meet threshold: ${beginCands[0].score}`);
+
+  const endCands = findAnchorCandidates(endRegion, elements as any);
+  assert.ok(endCands.length > 0, "Should generate candidate for social action bar");
+  assert.ok(endCands[0].score >= 40, `Footer score should meet threshold: ${endCands[0].score}`);
+});
+
+// ---------------------------------------------------------------------------
+// C2.11.4 Free-Form Sample Confirmation Tests
+// ---------------------------------------------------------------------------
+
+test("C2.11.4: Confirm Audit succeeds regardless of missing anchors or incomplete anchor groups", () => {
+  const { draft, capIds } = makeTestDraftWithCaptures(2);
+  const [cap1, cap2] = capIds;
+
+  // Sample 1 has ZERO regions/anchors defined
+  const confirmedDraft1 = confirmCaptureAudit(draft, cap1);
+  const audit1 = auditForCapture(confirmedDraft1, cap1);
+  assert.equal(audit1.status, "confirmed", "Confirm Audit must succeed with 0 anchors");
+
+  // Sample 2 has only a BEGIN anchor (no END anchor)
+  const beginOnly = createCollectorRegion({
+    id: "b_only",
+    captureItemId: cap2,
+    type: "BEGIN",
+    groupTag: "post-main",
+    label: "Incomplete Begin",
+    box: { x: 10, y: 10, width: 200, height: 50 },
+    imageWidth: 800,
+    imageHeight: 600,
+    confirmed: false,
+  });
+  const withRegion = addRegionToDraft(confirmedDraft1, beginOnly);
+  const confirmedDraft2 = confirmCaptureAudit(withRegion, cap2);
+  const audit2 = auditForCapture(confirmedDraft2, cap2);
+  assert.equal(audit2.status, "confirmed", "Confirm Audit must succeed with incomplete anchor group");
+
+  // Confirmed region becomes confirmed
+  const reg = confirmedDraft2.regions?.find((r) => r.id === "b_only");
+  assert.equal(reg?.confirmed, true, "Region on confirmed sample is confirmed");
+});
+
+test("C2.11.4: Confirm Audit succeeds with unmapped required variables without fabricating info", () => {
+  const { draft, capIds } = makeTestDraftWithCaptures(2);
+  const [cap1] = capIds;
+
+  draft.variables = [
+    { id: "v_req", key: "author", label: "Author", valueType: "string", required: true, mappings: [] },
+    { id: "v_opt", key: "url", label: "Post URL", valueType: "string", required: false, mappings: [] },
+  ];
+
+  // User mapped nothing for cap1
+  const confirmedDraft = confirmCaptureAudit(draft, cap1);
+  const audit = auditForCapture(confirmedDraft, cap1);
+  assert.equal(audit.status, "confirmed", "Confirm Audit must succeed with unmapped required variables");
+
+  // Verify: Must NOT fabricate missing information or mark as not_present
+  const vReq = confirmedDraft.variables.find((v) => v.id === "v_req");
+  const mapping = vReq?.mappings.find((m) => m.sampleId === cap1);
+  assert.equal(mapping, undefined, "Must not fabricate missing mapping");
+
+  // Advance works cleanly
+  const advResult = applyAuditActionAndAdvance(draft, cap1, "confirm");
+  assert.equal(advResult.advanced, true);
+  assert.equal(auditForCapture(advResult.draft, cap1).status, "confirmed");
+});
+
+test("C2.11.4: Preserves user-provided mappings and evidence without fabrication", () => {
+  const { draft, capIds } = makeTestDraftWithCaptures(1);
+  const [cap1] = capIds;
+
+  draft.variables = [
+    {
+      id: "v1",
+      key: "author",
+      label: "Author",
+      valueType: "string",
+      required: true,
+      mappings: [
+        {
+          sampleId: cap1,
+          regionId: "reg1",
+          presence: "mapped",
+          method: "OCR_TEXT",
+          text: "Real Author",
+          segmentId: "seg1",
+          confirmed: false,
+        },
+      ],
+    },
+    {
+      id: "v2",
+      key: "likes",
+      label: "Likes",
+      valueType: "number",
+      required: false,
+      mappings: [], // unmapped
+    },
+  ];
+
+  const confirmed = confirmCaptureAudit(draft, cap1);
+  const v1 = confirmed.variables.find((v) => v.id === "v1");
+  const m1 = v1?.mappings.find((m) => m.sampleId === cap1);
+  assert.equal(m1?.confirmed, true, "Existing mapping is confirmed");
+  assert.equal(m1?.text, "Real Author", "Existing text evidence preserved");
+  assert.equal(m1?.method, "OCR_TEXT", "Existing method preserved");
+
+  const v2 = confirmed.variables.find((v) => v.id === "v2");
+  const m2 = v2?.mappings.find((m) => m.sampleId === cap1);
+  assert.equal(m2, undefined, "Unmapped variable remains untouched without fake not_present");
 });

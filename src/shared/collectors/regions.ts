@@ -1527,15 +1527,39 @@ export function findAnchorCandidates(
       if (method === "none") method = "visual_projection";
     }
 
-    // Relative vertical alignment with learned geometry profile
-    if (learnedRule?.geometryProfile) {
-      if (region.type === "BEGIN" && el.rect.y < 350) {
-        score += 10;
-        reasons.push("top layout zone");
-      } else if (region.type === "END" && el.rect.y > 150) {
-        score += 10;
-        reasons.push("bottom layout zone");
-      }
+    // Relative vertical alignment in viewport layout zone
+    if (region.type === "BEGIN" && el.rect.y < 550) {
+      score += 10;
+      reasons.push("top layout zone");
+    } else if (region.type === "END" && el.rect.y > 80) {
+      score += 10;
+      reasons.push("bottom layout zone");
+    }
+
+    // Social post header heuristics (author profile link, timestamp pattern)
+    const isAuthorHeader =
+      (el.tagName === "A" && Boolean(el.attributes?.href) && Boolean(el.textSnippet && el.textSnippet.length > 2)) ||
+      (el.attributes?.role === "link" && Boolean(el.textSnippet && isAuthorCandidate(el.textSnippet))) ||
+      Boolean(el.textSnippet && isTimestampText(el.textSnippet));
+
+    if (region.type === "BEGIN" && isAuthorHeader) {
+      score += 25;
+      if (method === "none") method = "text_dom";
+      reasons.push("header author/time structure");
+    }
+
+    // Social post footer/actions heuristics (like/comment/share actions, engagement toolbar)
+    const isActionFooter =
+      Boolean(el.textSnippet && isEngagementText(el.textSnippet)) ||
+      Boolean(el.textSnippet && /\b(thích|bình luận|chia sẻ|like|comment|share|reply|gửi|send|upvote|retweet|repost)\b/i.test(el.textSnippet)) ||
+      Boolean(el.attributes?.["aria-label"] && /\b(thích|bình luận|chia sẻ|like|comment|share)\b/i.test(el.attributes["aria-label"])) ||
+      el.role === "toolbar" ||
+      el.role === "group";
+
+    if (region.type === "END" && isActionFooter) {
+      score += 30;
+      if (method === "none") method = "text_dom";
+      reasons.push("social actions bar (like/comment/share)");
     }
 
     if (score >= 40) {
@@ -1608,13 +1632,17 @@ export function executeLiveBrowserMatchTest(
   const seenEnd = new Set<string>();
 
   const sortedRegions = [...regions].sort((a, b) => {
-    const aPri = draft?.teachingCaptureId
-      ? a.captureItemId === draft.teachingCaptureId ? 2 : a.confirmed ? 1 : 0
-      : a.confirmed ? 1 : 0;
-    const bPri = draft?.teachingCaptureId
-      ? b.captureItemId === draft.teachingCaptureId ? 2 : b.confirmed ? 1 : 0
-      : b.confirmed ? 1 : 0;
-    return bPri - aPri;
+    const aOcrScore = (a.ocr?.text || a.ocrEvidence?.text) ? 20 : 0;
+    const aConfScore = a.confirmed ? 10 : 0;
+    const aSampleScore = a.captureItemId === draft?.teachingCaptureId ? 2 : 0;
+    const aTotal = aOcrScore + aConfScore + aSampleScore;
+
+    const bOcrScore = (b.ocr?.text || b.ocrEvidence?.text) ? 20 : 0;
+    const bConfScore = b.confirmed ? 10 : 0;
+    const bSampleScore = b.captureItemId === draft?.teachingCaptureId ? 2 : 0;
+    const bTotal = bOcrScore + bConfScore + bSampleScore;
+
+    return bTotal - aTotal;
   });
 
   for (const r of sortedRegions) {
@@ -2582,6 +2610,67 @@ export function buildLearnedAnchorRules(
   }
 
   return groups;
+}
+
+export interface LearnedVariablesResult {
+  variableKeys: string[];
+  sampleCount: number;
+}
+
+/**
+ * C2.11.3: Look up confirmed reference anchors with matching groupTag and region type
+ * to inherit candidate variables for new sample teaching.
+ *
+ * Rules:
+ * - Only confirmed reference regions qualify.
+ * - Strict type matching: BEGIN never inherits END variables, END never inherits BEGIN variables.
+ * - Optional excludeCaptureId prevents inheriting unconfirmed/draft variables from the active capture.
+ */
+export function getLearnedCandidateVariablesForGroup(
+  draft: CollectorDraft,
+  groupTag: string | undefined,
+  type: CollectorRegionType,
+  excludeCaptureId?: string,
+): LearnedVariablesResult {
+  const normTag = (groupTag || (type === "FREE" ? "free" : "default")).trim().toLowerCase();
+
+  const allRegions: CollectorRegion[] = [
+    ...(draft.regions ?? []),
+    ...(draft.captures ?? []).flatMap((c) => c.regions ?? []),
+  ];
+
+  const regionMap = new Map<string, CollectorRegion>();
+  for (const r of allRegions) {
+    if (!regionMap.has(r.id)) regionMap.set(r.id, r);
+  }
+
+  // Filter confirmed reference regions with matching type and groupTag
+  const matchingRefs = Array.from(regionMap.values()).filter((r) => {
+    if (!r.confirmed) return false;
+    if (excludeCaptureId && r.captureItemId === excludeCaptureId) return false;
+    if (r.type !== type) return false;
+    const rTag = (r.groupTag || (r.type === "FREE" ? "free" : "default")).trim().toLowerCase();
+    return rTag === normTag;
+  });
+
+  const sampleIds = new Set(matchingRefs.map((r) => r.captureItemId));
+  const variableKeySet = new Set<string>();
+  const validDraftKeys = new Set((draft.variables ?? []).map((v) => v.key));
+
+  for (const r of matchingRefs) {
+    if (r.candidateVariableKeys) {
+      for (const vk of r.candidateVariableKeys) {
+        if (validDraftKeys.size === 0 || validDraftKeys.has(vk)) {
+          variableKeySet.add(vk);
+        }
+      }
+    }
+  }
+
+  return {
+    variableKeys: Array.from(variableKeySet),
+    sampleCount: sampleIds.size,
+  };
 }
 
 // ---------------------------------------------------------------------------

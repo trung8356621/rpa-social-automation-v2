@@ -266,10 +266,9 @@ test("UX 12: Existing Collector records still load cleanly with backwards compat
   assert.equal(col.layoutContext, "FEED_ITEM");
 });
 
-test("UX 13: Confirm Audit follows correct gate (blocks premature confirm when Region Teaching is incomplete)", () => {
-  // Explicit gate prevents falsely confirming when region teaching is incomplete on teaching item
-  assert.match(reviewSource, /Region Teaching incomplete/);
-  assert.match(reviewSource, /activeStaticAnchors\.length === 0/);
+test("UX 13: C2.11.4 Free-Form Sample Confirmation allows confirming without blocking on incomplete region teaching", () => {
+  // Teaching is unrestricted — no completeness blocking gates on confirm audit
+  assert.doesNotMatch(reviewSource, /Confirm blocked — Region Teaching incomplete/);
 });
 
 test("UX 14: Verification supports single anchor without requiring hardcoded Header + Footer", () => {

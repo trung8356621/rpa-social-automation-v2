@@ -432,11 +432,8 @@ test("C1.8 exclude quarantine is recoverable and preserves capture identity", ()
   assert.equal(captureHasConfirmedAudit(draft, id), false);
 });
 
-test("C1.8 confirm failure does not advance", () => {
-  let draft = captureN(createEmptyDraft({ name: "Block" }), 2);
-  // Clear variables to force empty required set — use required unmapped without propose path:
-  // confirmCaptureAudit auto-proposes; create a required var with no observed values match by emptying observed via custom capture?
-  // Instead: confirm when variables require mapping but propose can't map — simulate by wiping variables mappings after propose block.
+test("C2.11.4 free-form confirm succeeds even with unmapped required variables and advances", () => {
+  let draft = captureN(createEmptyDraft({ name: "FreeFormConfirm" }), 2);
   draft = {
     ...draft,
     variables: draft.variables.map((v) => ({
@@ -445,7 +442,6 @@ test("C1.8 confirm failure does not advance", () => {
       mappings: [],
     })),
   };
-  // Remove linked sample so propose cannot fill — keep capture but break observed by using unknown mock
   draft = {
     ...draft,
     captures: draft.captures.map((c, i) =>
@@ -454,7 +450,6 @@ test("C1.8 confirm failure does not advance", () => {
   };
   const id = draft.captures[0]!.id;
   const result = applyAuditActionAndAdvance(draft, id, "confirm");
-  assert.equal(result.advanced, false);
-  assert.equal(result.completed, false);
-  assert.notEqual(auditForCapture(result.draft, id).status, "confirmed");
+  assert.equal(result.advanced, true);
+  assert.equal(auditForCapture(result.draft, id).status, "confirmed");
 });

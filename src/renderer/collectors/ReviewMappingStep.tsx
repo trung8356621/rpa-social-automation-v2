@@ -39,6 +39,7 @@ import {
   proposeRegionQuickFill,
   confirmQuickFillMapping,
   rejectQuickFillMapping,
+  getLearnedCandidateVariablesForGroup,
 } from "../../shared/collectors/regions";
 import { GroupTagCombobox } from "./GroupTagCombobox";
 import type {
@@ -205,6 +206,7 @@ export function StepReviewMapping({ draft, locked, onChange, invoke }: Props) {
   const [newRegionRole, setNewRegionRole] = useState<CollectorRegionRole>("header");
   const [newRegionLabel, setNewRegionLabel] = useState("");
   const [newRegionVars, setNewRegionVars] = useState<string[]>([]);
+  const [learnedVarsNotice, setLearnedVarsNotice] = useState<string | null>(null);
   const [newRegionOcrText, setNewRegionOcrText] = useState("");
 
   // Edit mode drag/resize state
@@ -786,7 +788,14 @@ export function StepReviewMapping({ draft, locked, onChange, invoke }: Props) {
       setNewRegionGroupTag(defaultTag);
       setNewRegionRole(suggestedType === "BEGIN" ? "header" : "footer");
       setNewRegionLabel(suggestedType === "BEGIN" ? `${defaultTag} Begin` : `${defaultTag} End`);
-      setNewRegionVars([]);
+      const learned = getLearnedCandidateVariablesForGroup(draft, defaultTag, suggestedType, active?.id);
+      if (learned.variableKeys.length > 0) {
+        setNewRegionVars(learned.variableKeys);
+        setLearnedVarsNotice(`Variables learned from ${learned.sampleCount} sample${learned.sampleCount > 1 ? "s" : ""}`);
+      } else {
+        setNewRegionVars([]);
+        setLearnedVarsNotice(null);
+      }
       setNewRegionOcrText("");
     } else {
       setIsDrawing(false);
@@ -893,24 +902,10 @@ export function StepReviewMapping({ draft, locked, onChange, invoke }: Props) {
     onChange(nextDraft);
   }
 
-  // Audit Confirmation Gate
+  // C2.11.4: Free-form sample confirmation — no completeness blocking gates
   function runAuditAction(action: "confirm" | "needs_attention" | "exclude") {
     if (!active) return;
     setConfirmError(undefined);
-
-    // GATE: Region confirmation vs Capture Audit separation
-    // Prevent falsely confirming capture whose required Region Teaching work is incomplete
-    if (action === "confirm") {
-      const activeStaticAnchors = activeRegions.filter(
-        (r) => r.type === "BEGIN" || r.type === "END" || r.type === "STATIC" || r.type === "FREE",
-      );
-      if (isTeaching && activeStaticAnchors.length === 0) {
-        setConfirmError(
-          "Confirm blocked — Region Teaching incomplete. Define and verify at least one STATIC anchor before confirming audit.",
-        );
-        return;
-      }
-    }
 
     let nextDraft = draft;
     if (action === "confirm") {
@@ -920,7 +915,7 @@ export function StepReviewMapping({ draft, locked, onChange, invoke }: Props) {
           teachingCaptureId: active.id,
         };
       }
-      // Confirm all mapped variables for active.id
+      // Confirm whatever mapped variables exist for active.id without fabricating missing info
       const variables = nextDraft.variables.map((v) => {
         const mappings = v.mappings.map((m) => {
           if (m.sampleId === active.id && m.presence === "mapped") {
@@ -930,7 +925,7 @@ export function StepReviewMapping({ draft, locked, onChange, invoke }: Props) {
         });
         return { ...v, mappings };
       });
-      // Also confirm all regions for active.id
+      // Also confirm whatever regions exist for active.id
       const regions = (nextDraft.regions ?? []).map((r) =>
         r.captureItemId === active.id ? { ...r, confirmed: true, simulatedProposal: false } : r,
       );
@@ -954,16 +949,7 @@ export function StepReviewMapping({ draft, locked, onChange, invoke }: Props) {
           }
         : undefined,
     );
-    if (
-      action === "confirm" &&
-      !result.advanced &&
-      !result.completed &&
-      auditForCapture(result.draft, active.id).status !== "confirmed"
-    ) {
-      setConfirmError("Confirm blocked — map or mark Not Present for all required variables.");
-      onChange(result.draft);
-      return;
-    }
+    onChange(result.draft);
     setExcludeOpen(false);
     setExcludeTags([]);
     setExcludeReason("");
@@ -1793,6 +1779,7 @@ export function StepReviewMapping({ draft, locked, onChange, invoke }: Props) {
                       onChange={(e) => {
                         const t = e.target.value as CollectorRegionType;
                         setNewRegionType(t);
+                        let targetTag = newRegionGroupTag;
                         if (t === "BEGIN") {
                           setNewRegionRole("header");
                           setNewRegionLabel(newRegionGroupTag ? `${newRegionGroupTag} Begin` : "Begin Anchor");
@@ -1803,12 +1790,20 @@ export function StepReviewMapping({ draft, locked, onChange, invoke }: Props) {
                               r.type === "BEGIN" &&
                               !activeRegions.some((end) => end.type === "END" && (end.groupTag || "default") === (r.groupTag || "default")),
                           );
-                          const tag = unpaired?.groupTag || newRegionGroupTag || "post-main";
-                          setNewRegionGroupTag(tag);
-                          setNewRegionLabel(`${tag} End`);
+                          targetTag = unpaired?.groupTag || newRegionGroupTag || "post-main";
+                          setNewRegionGroupTag(targetTag);
+                          setNewRegionLabel(`${targetTag} End`);
                         } else {
                           setNewRegionRole("custom");
                           setNewRegionLabel("Free Region");
+                        }
+                        const learned = getLearnedCandidateVariablesForGroup(draft, targetTag, t, active?.id);
+                        if (learned.variableKeys.length > 0) {
+                          setNewRegionVars(learned.variableKeys);
+                          setLearnedVarsNotice(`Variables learned from ${learned.sampleCount} sample${learned.sampleCount > 1 ? "s" : ""}`);
+                        } else {
+                          setNewRegionVars([]);
+                          setLearnedVarsNotice(null);
                         }
                       }}
                     >
@@ -1826,6 +1821,13 @@ export function StepReviewMapping({ draft, locked, onChange, invoke }: Props) {
                           setNewRegionGroupTag(tag);
                           if (newRegionType === "BEGIN") setNewRegionLabel(`${tag} Begin`);
                           if (newRegionType === "END") setNewRegionLabel(`${tag} End`);
+                          const learned = getLearnedCandidateVariablesForGroup(draft, tag, newRegionType, active?.id);
+                          if (learned.variableKeys.length > 0) {
+                            setNewRegionVars(learned.variableKeys);
+                            setLearnedVarsNotice(`Variables learned from ${learned.sampleCount} sample${learned.sampleCount > 1 ? "s" : ""}`);
+                          } else {
+                            setLearnedVarsNotice(null);
+                          }
                         }}
                         suggestions={createGroupSuggestions}
                         placeholder="e.g. post-main"
@@ -1847,7 +1849,14 @@ export function StepReviewMapping({ draft, locked, onChange, invoke }: Props) {
                 {/* Candidate Variable Checkbox UI — Compact Responsive Grid */}
                 {draft.variables.length > 0 && (
                   <div style={{ marginTop: "6px" }}>
-                    <small style={{ color: "#7f93ab" }}>Candidate Variables:</small>
+                    <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+                      <small style={{ color: "#7f93ab" }}>Candidate Variables:</small>
+                      {learnedVarsNotice && (
+                        <small style={{ color: "#38bdf8", fontWeight: "bold" }}>
+                          ⚡ {learnedVarsNotice}
+                        </small>
+                      )}
+                    </div>
                     <div className="collector-var-checkbox-grid">
                       {draft.variables.map((v) => {
                         const checked = newRegionVars.includes(v.key);
@@ -1860,11 +1869,12 @@ export function StepReviewMapping({ draft, locked, onChange, invoke }: Props) {
                             <input
                               type="checkbox"
                               checked={checked}
-                              onChange={() =>
+                              onChange={() => {
                                 setNewRegionVars((prev) =>
                                   checked ? prev.filter((k) => k !== v.key) : [...prev, v.key],
-                                )
-                              }
+                                );
+                                setLearnedVarsNotice(null);
+                              }}
                             />
                             <span>{v.label}</span>
                           </label>

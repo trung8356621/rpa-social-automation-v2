@@ -492,6 +492,10 @@ export type Command =
     }
   | {
       type: "collectorClearHighlights";
+    }
+  | {
+      type: "collectorLogMatchDiagnostic";
+      payload: Record<string, unknown>;
     };
 export const DRAFT_KEYS = [
   "variableId",

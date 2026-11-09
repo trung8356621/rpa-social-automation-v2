@@ -205,3 +205,11 @@ export async function collectorClearHighlights(
   if (!isElectronBrowserCoreAvailable()) return;
   await invoke({ type: "collectorClearHighlights" });
 }
+
+export async function collectorLogMatchDiagnostic(
+  invoke: CollectorInvoke,
+  payload: Record<string, unknown>,
+): Promise<void> {
+  if (!isElectronBrowserCoreAvailable()) return;
+  await invoke({ type: "collectorLogMatchDiagnostic", payload });
+}

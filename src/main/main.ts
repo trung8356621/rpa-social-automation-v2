@@ -13,6 +13,7 @@ import {
   clipboard,
 } from "electron";
 import { mkdir, mkdtemp, rm, writeFile, readFile, stat } from "node:fs/promises";
+import { appendFileSync, existsSync, statSync, unlinkSync, renameSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
@@ -1781,15 +1782,30 @@ async function boot() {
               if (inViewport(r) || (r.width > 200 && r.height > 200)) {
                 const role = node.getAttribute('role') || undefined;
                 const className = typeof node.className === 'string' ? node.className.slice(0, 100) : '';
-                const isArticle = role === 'article' || /\\b(card|post|feed-item)\\b/i.test(className) || node.hasAttribute('data-pagelet');
                 const isFeed = role === 'feed' || /\\b(feed|stream|wall)\\b/i.test(className);
                 const isDialog = role === 'dialog' || node.getAttribute('aria-modal') === 'true';
+
+                const isFeedChildPost = Boolean(
+                  node.parentElement &&
+                  (node.parentElement.getAttribute('role') === 'feed' || /\\b(feed|stream)\\b/i.test(node.parentElement.className || '')) &&
+                  r.height > 100 &&
+                  r.width > 350
+                );
+
+                const isArticle =
+                  role === 'article' ||
+                  /\\b(card|post|feed-item)\\b/i.test(className) ||
+                  node.hasAttribute('aria-posinset') ||
+                  node.hasAttribute('data-ad-preview') ||
+                  node.hasAttribute('data-ad-comet-preview') ||
+                  (node.hasAttribute('data-pagelet') && /FeedUnit|GroupFeed|Story/i.test(node.getAttribute('data-pagelet') || '')) ||
+                  isFeedChildPost;
 
                 let depth = 0;
                 for (let p = node.parentElement; p; p = p.parentElement) depth++;
 
                 const attrs = {};
-                for (const name of ['href', 'src', 'data-pagelet', 'aria-label', 'role']) {
+                for (const name of ['href', 'src', 'data-pagelet', 'aria-label', 'role', 'aria-posinset', 'data-ad-preview']) {
                   if (node.hasAttribute(name)) attrs[name] = (node.getAttribute(name) || '').slice(0, 200);
                 }
 
@@ -1930,6 +1946,32 @@ async function boot() {
         })()`,
           )
           .catch(() => {});
+        return { success: true };
+      }
+      case "collectorLogMatchDiagnostic": {
+        isIdle();
+        const payload = command.payload;
+        if (payload && typeof payload === "object") {
+          try {
+            const matchLogFile = path.join(logDir, "match-diagnostic.jsonl");
+            if (existsSync(matchLogFile)) {
+              const stats = statSync(matchLogFile);
+              if (stats.size > 5 * 1024 * 1024) {
+                const backup = path.join(logDir, "match-diagnostic.old.jsonl");
+                if (existsSync(backup)) unlinkSync(backup);
+                renameSync(matchLogFile, backup);
+              }
+            }
+            appendFileSync(matchLogFile, JSON.stringify(payload) + "\n", "utf8");
+            logMainEvent(logDir, "match-diagnostic", {
+              matchRunId: payload.matchRunId,
+              status: payload.status,
+              matchedPostCount: payload.matchedPostCount,
+            });
+          } catch (e) {
+            console.error("[Match Diagnostic log write failed]", e);
+          }
+        }
         return { success: true };
       }
       default:

@@ -656,16 +656,9 @@ export function confirmCaptureAudit(
     draft.teachingCaptureId === captureItemId ||
     draft.captures[0]?.id === captureItemId;
 
-  // Fill any still-unmapped required fields with deterministic simulated proposals before confirm.
-  let working = draft;
-  const needsPropose = draft.variables.some((v) => {
-    if (!v.required) return false;
-    const m = getMapping(v, capture);
-    return !m || m.presence === "unmapped";
-  });
-  if (needsPropose) working = proposeMappingsForCapture(working, captureItemId);
-
-  const variables = working.variables.map((variable) => {
+  // C2.11.4 Free-Form Sample Confirmation: Preserve whatever mappings the user provided.
+  // Never fabricate missing information and never mark unmapped variables as not_present.
+  const variables = draft.variables.map((variable) => {
     const mapping = getMapping(variable, capture);
     if (!mapping) return variable;
     const others = variable.mappings.filter(
@@ -679,28 +672,28 @@ export function confirmCaptureAudit(
         {
           ...mapping,
           sampleId: capture.id,
-          confirmed: confirmable,
+          confirmed: confirmable ? true : mapping.confirmed,
           simulatedProposal: false,
         },
       ],
     };
   });
 
-  const requiredBad = variables.filter((v) => {
-    if (!v.required) return false;
-    const m = getMapping(v, capture);
-    if (!m) return true;
-    if (m.presence === "not_present") return false;
-    if (m.presence === "mapped") {
-      const cfg = getMappingConfigState(m);
-      return !cfg.isValid;
-    }
-    return true;
-  });
-  if (requiredBad.length) return working;
+  // Confirm all regions belonging to this capture item
+  const regions = (draft.regions ?? []).map((r) =>
+    r.captureItemId === captureItemId ? { ...r, confirmed: true, simulatedProposal: false } : r,
+  );
+  const captures = (draft.captures ?? []).map((c) =>
+    c.id === captureItemId
+      ? {
+          ...c,
+          regions: (c.regions ?? []).map((r) => ({ ...r, confirmed: true, simulatedProposal: false })),
+        }
+      : c,
+  );
 
-  const schemaRevision = working.schemaRevision ?? 1;
-  const captureAudits = ensureCaptureAudits(working).map((a) =>
+  const schemaRevision = draft.schemaRevision ?? 1;
+  const captureAudits = ensureCaptureAudits(draft).map((a) =>
     a.captureItemId === captureItemId
       ? {
           ...a,
@@ -713,15 +706,17 @@ export function confirmCaptureAudit(
   );
 
   let next: CollectorDraft = markValidationOutdated({
-    ...working,
+    ...draft,
     variables,
+    regions,
+    captures,
     captureAudits,
-    teachingCaptureId: working.teachingCaptureId ?? (isTeaching ? captureItemId : working.teachingCaptureId),
+    teachingCaptureId: draft.teachingCaptureId ?? (isTeaching ? captureItemId : draft.teachingCaptureId),
     dirty: true,
   });
 
   // Auto-propose subsequent unreviewed items after teaching confirm
-  if (!working.teachingCaptureId || working.teachingCaptureId === captureItemId || isTeaching) {
+  if (!draft.teachingCaptureId || draft.teachingCaptureId === captureItemId || isTeaching) {
     next = { ...next, teachingCaptureId: captureItemId };
     for (const item of next.captures) {
       if (item.id === captureItemId) continue;
