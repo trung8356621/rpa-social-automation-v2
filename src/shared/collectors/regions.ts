@@ -1459,6 +1459,196 @@ export type EvaluatedBeginCandidate = {
 };
 
 /**
+ * C2.11.10: Separates BEGIN candidate eligibility from similarity scoring.
+ * First determines whether an element could legitimately represent a post header.
+ * Only eligible elements may enter the learned BEGIN scoring process.
+ *
+ * Explicitly rejects:
+ * 1. Fixed/sticky chrome and top viewport chrome (y < 45).
+ * 2. Global navigation items and group navigation tabs.
+ * 3. Post composer boxes ("Bạn đang nghĩ gì?").
+ * 4. Engagement counters and media sliders ("33 / 52", "24 / 47", "1,2K").
+ * 5. Comment expansion controls ("Xem thêm bình luận", "Xem tất cả...").
+ * 6. Video player controls and playback timestamps ("0:00 / 1:37").
+ * 7. Nested comment headers and comment authors (e.g. "Ken", "Thanh Vu", nested role=article, or below toolbar).
+ */
+export function checkBeginCandidateEligibility(
+  el: CollectorDomElement,
+  elementMap: Map<string, CollectorDomElement>,
+): { eligible: boolean; reason?: string } {
+  // 1. Dimensions
+  if (el.rect.width === 0 || el.rect.height === 0) {
+    return { eligible: false, reason: "Zero dimensions" };
+  }
+  if (el.rect.height > 160 && el.tagName !== "HEADER") {
+    return { eligible: false, reason: `Element too tall for post header (${el.rect.height}px > 160px)` };
+  }
+  if (el.rect.width < 12 && el.rect.height < 12) {
+    return { eligible: false, reason: "Element too small (< 12px)" };
+  }
+
+  // 2. Fixed/sticky chrome
+  if (el.isFixed) {
+    return { eligible: false, reason: "Fixed/sticky chrome" };
+  }
+
+  // 3. Top viewport chrome boundary (y < 45)
+  if (el.rect.y < 45) {
+    return { eligible: false, reason: "Top viewport chrome boundary (y < 45)" };
+  }
+
+  const rawText = el.textSnippet ? el.textSnippet.trim() : "";
+  const normText = normalizeVietnameseText(rawText);
+
+  // 4. Global navigation / Facebook banner
+  const globalNavRegex = /^(facebook|trang chủ|bạn bè|video|watch|marketplace|nhóm|groups|gaming|thông báo|notifications|menu)$/i;
+  if ((el.role === "banner" || (el.rect.y < 70 && el.depth <= 3)) && rawText && globalNavRegex.test(rawText)) {
+    return { eligible: false, reason: "Facebook global navigation item" };
+  }
+
+  // 5. Group navigation tabs ("Bài viết", "Giới thiệu", "Thành viên", etc.)
+  const navTabRegex = /^(bài viết|giới thiệu|thành viên|đáng chú ý|sự kiện|file|phương tiện|discussion|featured|about|members|events|media|files|reels|photos|videos|home|trang chủ|thông báo|tin nhắn|xem thêm|see more)$/i;
+  if (el.role === "tab" || el.attributes?.role === "tab" || (rawText && navTabRegex.test(rawText) && el.rect.height < 60)) {
+    return { eligible: false, reason: "Group navigation tab" };
+  }
+
+  // 6. Post composer box ("Bạn đang nghĩ gì?")
+  const composerRegex = /bạn đang nghĩ gì|tạo bài viết|viết bài|what's on your mind|create a post|ảnh\/video/i;
+  if (rawText && composerRegex.test(rawText)) {
+    return { eligible: false, reason: "Post composer box" };
+  }
+
+  // 7. Engagement counters & media sliders ("33 / 52", "24 / 47", "1,2K", etc.)
+  if (/^\d+\s*[/]\s*\d+$/.test(rawText)) {
+    return { eligible: false, reason: `Engagement or media slider counter ("${rawText}")` };
+  }
+  if (/^\d+([.,]\d+)?[km]?\s*(lượt\s+thích|bình\s+luận|chia\s+sẻ|lượt\s+xem|views?|likes?|comments?|shares?|reactions?)\s*$/i.test(rawText)) {
+    return { eligible: false, reason: `Engagement count ("${rawText}")` };
+  }
+  if (/^\d+([.,]\d+)?[km]?$/.test(rawText) && rawText.length <= 6) {
+    return { eligible: false, reason: `Standalone counter ("${rawText}")` };
+  }
+  if (/^(bạn\s+và\s+\d+|tất\s+cả\s+\d+|người\s+khác)\b/i.test(rawText)) {
+    return { eligible: false, reason: `Reaction summary ("${rawText}")` };
+  }
+  if (/^(thích|bình\s+luận|chia\s+sẻ|gửi|like|comment|share)$/i.test(normText)) {
+    return { eligible: false, reason: `Action button ("${rawText}")` };
+  }
+
+  // 8. Comment expansion controls & comment filters ("Xem thêm bình luận", "Xem tất cả 47 bình luận", etc.)
+  if (
+    /^(xem\s+thêm|xem\s+tất\s+cả|xem\s+các|view\s+more|view\s+all|view\s+previous)\s+(bình\s+luận|phản\s+hồi|câu\s+trả\s+lời|comments?|replies|trước|cũ\s+hơn)/i.test(
+      rawText,
+    ) ||
+    /^(xem\s+thêm\s+bình\s+luận|view\s+more\s+comments)$/i.test(rawText) ||
+    /^(phù\s+hợp\s+nhất|tất\s+cả\s+bình\s+luận|bình\s+luận\s+mới\s+nhất|most\s+relevant|all\s+comments|newest\s+comments)$/i.test(
+      rawText,
+    ) ||
+    /^(viết\s+bình\s+luận|viết\s+câu\s+trả\s+lời|write\s+a\s+comment|reply\.\.\.)/i.test(rawText)
+  ) {
+    return { eligible: false, reason: `Comment expansion or comment section control ("${rawText}")` };
+  }
+
+  // 9. Video player controls and playback timestamps ("0:00 / 1:37")
+  if (/^\d+:\d{2}(\s*[/]\s*\d+:\d{2})?$/.test(rawText)) {
+    return { eligible: false, reason: `Video playback timestamp ("${rawText}")` };
+  }
+  if (el.role === "slider" || el.role === "progressbar") {
+    return { eligible: false, reason: "Media player slider/progress control" };
+  }
+  const videoControlRegex = /phát|tạm dừng|bật tiếng|tắt tiếng|toàn màn hình|cài đặt video|play|pause|mute|unmute|volume|fullscreen/i;
+  if (el.attributes?.["aria-label"] && videoControlRegex.test(el.attributes["aria-label"])) {
+    return { eligible: false, reason: `Video player control ("${el.attributes["aria-label"]}")` };
+  }
+
+  // 10. Nested comment headers and comment authors (e.g. "Ken", "Thanh Vu")
+  // 10a. Direct comment textSnippet, aria-label, or class name
+  const commentAriaRegex = /bình\s+luận\s+của|comment\s+by|trả\s+lời\s+của|reply\s+by/i;
+  if (
+    (rawText && commentAriaRegex.test(rawText)) ||
+    (el.attributes?.["aria-label"] && commentAriaRegex.test(el.attributes["aria-label"])) ||
+    (el.className && /\bcomment\b/i.test(el.className) && el.rect.width < 250)
+  ) {
+    return { eligible: false, reason: `Comment author / element ("${rawText || el.className}")` };
+  }
+
+  // 10b. Ancestor chain inspection
+  let articleCount = 0;
+  if (el.role === "article" || el.isArticleOrCard) {
+    articleCount++;
+  }
+  let cur = el.parentId ? elementMap.get(el.parentId) : undefined;
+  let postCard: CollectorDomElement | undefined;
+
+  while (cur) {
+    if (cur.role === "article" || cur.isArticleOrCard) {
+      articleCount++;
+      if (!postCard) postCard = cur;
+    } else if (!postCard && cur.rect.width >= 350 && cur.rect.height >= 180) {
+      postCard = cur;
+    }
+
+    if (cur.attributes?.["aria-label"] && commentAriaRegex.test(cur.attributes["aria-label"])) {
+      return { eligible: false, reason: `Inside comment author container ("${cur.attributes["aria-label"]}")` };
+    }
+
+    if (
+      cur.attributes?.["aria-label"] &&
+      /^(danh sách bình luận|bình luận|comments?|replies)$/i.test(cur.attributes["aria-label"].trim())
+    ) {
+      return { eligible: false, reason: `Inside comment list container ("${cur.attributes["aria-label"]}")` };
+    }
+
+    cur = cur.parentId ? elementMap.get(cur.parentId) : undefined;
+  }
+
+  // Nested article: in accessible HTML feeds, comments inside posts have role="article"
+  // So articleCount >= 2 definitively indicates a nested comment article inside a post article
+  if (articleCount >= 2) {
+    return { eligible: false, reason: "Nested comment element (nested role=article inside post)" };
+  }
+
+  // 10c. Comment action indicator text e.g. "Thích · Phản hồi · 18 giờ"
+  if (/^(thích\s*·\s*phản\s+hồi|like\s*·\s*reply|trả\s+lời\s*·\s*\d+|phản\s+hồi\s*·\s*\d+)/i.test(rawText)) {
+    return { eligible: false, reason: `Comment reply action text ("${rawText}")` };
+  }
+
+  // 10d. Position relative to post actions toolbar:
+  // Post header is ALWAYS above the post actions toolbar ("Thích", "Bình luận", "Chia sẻ").
+  // Any element located below the toolbar in the same post card is in the comment/footer zone.
+  if (postCard) {
+    for (const other of elementMap.values()) {
+      if (
+        other.rect.y > postCard.rect.y &&
+        other.rect.y + other.rect.height <= postCard.rect.y + postCard.rect.height &&
+        other.rect.x >= postCard.rect.x - 20 &&
+        other.rect.x + other.rect.width <= postCard.rect.x + postCard.rect.width + 20
+      ) {
+        const isToolbar =
+          other.role === "toolbar" ||
+          (other.textSnippet &&
+            /\b(thích|like)\b/i.test(other.textSnippet) &&
+            /\b(bình luận|comment)\b/i.test(other.textSnippet) &&
+            other.rect.width >= 200);
+
+        if (isToolbar && other.rect.height < 80) {
+          const isNarrowOrIndented = el.rect.width < 320 || el.rect.x > postCard.rect.x + 35;
+          if (el.rect.y >= other.rect.y + 10 && isNarrowOrIndented) {
+            return {
+              eligible: false,
+              reason: `Located below post actions toolbar (y:${el.rect.y} >= toolbar.y:${other.rect.y}) in comment area`,
+            };
+          }
+          break;
+        }
+      }
+    }
+  }
+
+  return { eligible: true };
+}
+
+/**
  * C2.11.8: Evaluates and deduplicates live DOM elements into unified BEGIN post header candidates.
  *
  * Requirements:
@@ -1490,56 +1680,20 @@ export function evaluateLiveBeginCandidates(
     reasons: string[];
   }> = [];
 
-  const navTabRegex = /^(bài viết|giới thiệu|thành viên|đáng chú ý|sự kiện|file|phương tiện|discussion|featured|about|members|events|media|files|reels|photos|videos|home|trang chủ|thông báo|tin nhắn|xem thêm|see more)$/i;
-  const globalNavRegex = /^(facebook|trang chủ|bạn bè|video|watch|marketplace|nhóm|groups|gaming|thông báo|notifications|menu)$/i;
-  const composerRegex = /bạn đang nghĩ gì|tạo bài viết|viết bài|what's on your mind|create a post|ảnh\/video/i;
+  const elementMap = new Map<string, CollectorDomElement>(elements.map((e) => [e.id, e]));
 
   for (const el of elements) {
-    if (el.rect.width === 0 || el.rect.height === 0) {
-      continue;
-    }
-
-    // 1. False positive: Sticky / Fixed elements
-    if (el.isFixed) {
-      rejectedElements.push({ id: el.id, tagName: el.tagName, textSnippet: el.textSnippet?.slice(0, 40), reason: "Fixed/sticky chrome" });
-      continue;
-    }
-
-    // 2. False positive: Global top navigation boundary (y < 45)
-    if (el.rect.y < 45) {
-      rejectedElements.push({ id: el.id, tagName: el.tagName, textSnippet: el.textSnippet?.slice(0, 40), reason: "Top viewport chrome boundary (y < 45)" });
-      continue;
-    }
-
-    // 3. False positive: Facebook global top navigation / banner
-    if ((el.role === "banner" || (el.rect.y < 70 && el.depth <= 3)) && el.textSnippet && globalNavRegex.test(el.textSnippet.trim())) {
-      rejectedElements.push({ id: el.id, tagName: el.tagName, textSnippet: el.textSnippet?.slice(0, 40), reason: "Facebook global navigation item" });
-      continue;
-    }
-
-    // 4. False positive: Group navigation tabs ("Bài viết", "Giới thiệu", "Thành viên", etc.)
-    if (el.textSnippet && navTabRegex.test(el.textSnippet.trim()) && el.rect.height < 60) {
-      rejectedElements.push({ id: el.id, tagName: el.tagName, textSnippet: el.textSnippet?.slice(0, 40), reason: "Group navigation tab" });
-      continue;
-    }
-    if (el.role === "tab" || el.attributes?.role === "tab") {
-      rejectedElements.push({ id: el.id, tagName: el.tagName, textSnippet: el.textSnippet?.slice(0, 40), reason: "Navigation tab" });
-      continue;
-    }
-
-    // 5. False positive: Composer box ("Bạn đang nghĩ gì?")
-    if (el.textSnippet && composerRegex.test(el.textSnippet)) {
-      rejectedElements.push({ id: el.id, tagName: el.tagName, textSnippet: el.textSnippet?.slice(0, 40), reason: "Post composer box" });
-      continue;
-    }
-
-    // 6. False positive: Comment author headers (narrow width, nested inside comments)
-    const isCommentElement =
-      (el.rect.width < 250 && (/bình luận|comment|reply|trả lời/i.test(el.textSnippet || "") || el.className?.includes("comment") || el.attributes?.["aria-label"]?.includes("Bình luận"))) ||
-      (el.attributes?.["aria-label"]?.startsWith("Bình luận của") ?? false);
-
-    if (isCommentElement) {
-      rejectedElements.push({ id: el.id, tagName: el.tagName, textSnippet: el.textSnippet?.slice(0, 40), reason: "Comment author header / element" });
+    // 1. Separate BEGIN candidate eligibility from similarity scoring
+    const eligibility = checkBeginCandidateEligibility(el, elementMap);
+    if (!eligibility.eligible) {
+      if (el.rect.width > 0 && el.rect.height > 0) {
+        rejectedElements.push({
+          id: el.id,
+          tagName: el.tagName,
+          textSnippet: el.textSnippet?.slice(0, 40),
+          reason: eligibility.reason || "Ineligible candidate",
+        });
+      }
       continue;
     }
 
@@ -1718,6 +1872,11 @@ export function evaluateLiveBeginCandidates(
 
     const finalScore = Math.min(100, clusterScore);
     if (finalScore < 40) {
+      continue;
+    }
+
+    // A valid post header cluster MUST contain an author link or a timestamp indicator
+    if (!cluster.hasAuthorLink && !cluster.hasTimestamp) {
       continue;
     }
 
@@ -2075,10 +2234,20 @@ export function findAnchorCandidates(
     refTokens = normalizedText.split(/\s+/).filter((t) => t.length > 1);
   }
 
+  const elementMap = new Map<string, CollectorDomElement>(elements.map((e) => [e.id, e]));
+
   for (const el of elements) {
     // Top chrome and fixed elements cannot be feed post anchors
     if (el.isFixed) {
       continue;
+    }
+
+    // C2.11.10: For BEGIN anchors, element must pass strict candidate eligibility
+    if (region.type === "BEGIN") {
+      const eligibility = checkBeginCandidateEligibility(el, elementMap);
+      if (!eligibility.eligible) {
+        continue;
+      }
     }
 
     // A post END anchor (footer / reactions / actions) cannot be in the top navigation zone

@@ -21,6 +21,7 @@ import {
   buildLearnedAnchorRules,
   createCollectorRegion,
   evaluateLiveBeginCandidates,
+  checkBeginCandidateEligibility,
   executeLiveBrowserMatchTest,
   findAnchorCandidates,
   getGroupTagSuggestions,
@@ -2119,4 +2120,400 @@ test("C2.11.9: Outer post container resolution succeeds without role='article' u
   const item = res.matchedItems![0]!;
   assert.equal(item.containerId, "outer_card");
   assert.equal(item.containerRect?.height, 380);
+});
+
+test("C2.11.10: Rejects real-world false BEGIN candidates from match-diagnostic.jsonl", () => {
+  const dummyMap = new Map<string, CollectorDomElement>();
+
+  // Case 1: "33 / 52" (scrollY=1170)
+  const el1: CollectorDomElement = {
+    id: "cnt_1",
+    tagName: "DIV",
+    rect: { x: 50, y: 120, width: 280, height: 40 },
+    textSnippet: "33 / 52",
+    depth: 3,
+    attributes: {},
+    childrenIds: [],
+  };
+  dummyMap.set(el1.id, el1);
+  const chk1 = checkBeginCandidateEligibility(el1, dummyMap);
+  assert.equal(chk1.eligible, false);
+  assert.ok(chk1.reason?.includes("33 / 52") || chk1.reason?.includes("Engagement or media slider"));
+
+  // Case 2: "Xem thêm bình luận" (scrollY=1370)
+  const el2: CollectorDomElement = {
+    id: "comment_expand",
+    tagName: "SPAN",
+    rect: { x: 32, y: 90, width: 300, height: 35 },
+    textSnippet: "Xem thêm bình luận",
+    depth: 3,
+    attributes: {},
+    childrenIds: [],
+  };
+  dummyMap.set(el2.id, el2);
+  const chk2 = checkBeginCandidateEligibility(el2, dummyMap);
+  assert.equal(chk2.eligible, false);
+  assert.ok(chk2.reason?.includes("Comment expansion"));
+
+  // Case 3: "24 / 47" (scrollY=1500)
+  const el3: CollectorDomElement = {
+    id: "cnt_2",
+    tagName: "DIV",
+    rect: { x: 50, y: 150, width: 200, height: 35 },
+    textSnippet: "24 / 47",
+    depth: 3,
+    attributes: {},
+    childrenIds: [],
+  };
+  dummyMap.set(el3.id, el3);
+  const chk3 = checkBeginCandidateEligibility(el3, dummyMap);
+  assert.equal(chk3.eligible, false);
+  assert.ok(chk3.reason?.includes("24 / 47") || chk3.reason?.includes("Engagement or media slider"));
+
+  // Case 4: Video playback time "0:00 / 1:37" (scrollY=4539)
+  const el4: CollectorDomElement = {
+    id: "video_time",
+    tagName: "DIV",
+    rect: { x: 16, y: 440, width: 577, height: 44 },
+    textSnippet: "0:00 / 1:37",
+    depth: 3,
+    attributes: {},
+    childrenIds: [],
+  };
+  dummyMap.set(el4.id, el4);
+  const chk4 = checkBeginCandidateEligibility(el4, dummyMap);
+  assert.equal(chk4.eligible, false);
+  assert.ok(chk4.reason?.includes("0:00 / 1:37") || chk4.reason?.includes("Video"));
+
+  // Case 5: Nested comment author "Ken" (scrollY=1870) inside nested role="article"
+  const postArticle: CollectorDomElement = {
+    id: "post_145",
+    tagName: "DIV",
+    role: "article",
+    isArticleOrCard: true,
+    rect: { x: 16, y: 40, width: 577, height: 600 },
+    textSnippet: "",
+    depth: 1,
+    attributes: {},
+    childrenIds: ["comment_182"],
+  };
+  const commentArticle: CollectorDomElement = {
+    id: "comment_182",
+    tagName: "DIV",
+    role: "article",
+    rect: { x: 74, y: 350, width: 500, height: 86 },
+    textSnippet: "Ken\n·\n18 giờ\nTạo token thì đơn giản.",
+    depth: 2,
+    parentId: "post_145",
+    attributes: { "aria-label": "Bình luận của Ken" },
+    childrenIds: ["ken_link"],
+  };
+  const kenLink: CollectorDomElement = {
+    id: "ken_link",
+    tagName: "A",
+    role: "link",
+    rect: { x: 74, y: 355, width: 120, height: 20 },
+    textSnippet: "Ken",
+    depth: 3,
+    parentId: "comment_182",
+    attributes: { href: "/user/ken" },
+    childrenIds: [],
+  };
+  const commentMap = new Map<string, CollectorDomElement>([
+    [postArticle.id, postArticle],
+    [commentArticle.id, commentArticle],
+    [kenLink.id, kenLink],
+  ]);
+  const chk5 = checkBeginCandidateEligibility(kenLink, commentMap);
+  assert.equal(chk5.eligible, false);
+  assert.ok(/comment/i.test(chk5.reason || ""));
+
+  // Case 6: Nested comment author "Thanh Vu" (scrollY=1970) located below toolbar
+  const toolbar: CollectorDomElement = {
+    id: "tb_actions",
+    tagName: "DIV",
+    role: "toolbar",
+    rect: { x: 16, y: 220, width: 577, height: 40 },
+    textSnippet: "Thích Bình luận Chia sẻ",
+    depth: 2,
+    parentId: "post_145",
+    attributes: {},
+    childrenIds: [],
+  };
+  const thanhVuLink: CollectorDomElement = {
+    id: "thanh_vu_link",
+    tagName: "A",
+    role: "link",
+    rect: { x: 82, y: 280, width: 80, height: 20 },
+    textSnippet: "Thanh Vu",
+    depth: 3,
+    parentId: "post_145",
+    attributes: { href: "/user/thanhvu" },
+    childrenIds: [],
+  };
+  const toolbarMap = new Map<string, CollectorDomElement>([
+    [postArticle.id, postArticle],
+    [toolbar.id, toolbar],
+    [thanhVuLink.id, thanhVuLink],
+  ]);
+  const chk6 = checkBeginCandidateEligibility(thanhVuLink, toolbarMap);
+  assert.equal(chk6.eligible, false);
+  assert.ok(chk6.reason?.includes("below post actions toolbar") || chk6.reason?.includes("Comment"));
+});
+
+test("C2.11.10: Post with false positives resolves ONLY the true post header and rejects all noise", () => {
+  let { draft, capIds } = makeTestDraftWithCaptures(1);
+  const cap1 = capIds[0]!;
+
+  const box1 = { x: 16, y: 137, width: 577, height: 48 };
+  const reg1 = createCollectorRegion({
+    id: "r1",
+    captureItemId: cap1,
+    type: "BEGIN",
+    groupTag: "post-main",
+    label: "Header",
+    box: box1,
+    imageWidth: 610,
+    imageHeight: 800,
+    confirmed: true,
+  });
+  reg1.ocr = makeRegionOcr([
+    { id: "s1", text: "Nguyễn Đình Lân", bbox: { x: 70, y: 137, width: 140, height: 20 }, confidence: 95 },
+    { id: "s2", text: "14 giờ trước", bbox: { x: 70, y: 160, width: 80, height: 16 }, confidence: 93 },
+  ], box1);
+
+  draft = addRegionToDraft(draft, reg1);
+
+  // Snapshot contains:
+  // - True post header: "Nguyễn Đình Lân\n14 giờ trước"
+  // - Video time: "0:00 / 1:37"
+  // - Toolbar: "Thích Bình luận Chia sẻ"
+  // - Slider counter: "33 / 52"
+  // - Expansion control: "Xem thêm bình luận"
+  // - Comment author: "Ken"
+  const snapshot: CollectorDomSnapshot = {
+    url: "https://www.facebook.com/groups/test",
+    capturedAt: new Date().toISOString(),
+    viewport: { width: 610, height: 800, scrollX: 0, scrollY: 1170, dpr: 1 },
+    elements: [
+      {
+        id: "post_card",
+        tagName: "DIV",
+        role: "article",
+        isArticleOrCard: true,
+        rect: { x: 16, y: 130, width: 577, height: 600 },
+        textSnippet: "Nguyễn Đình Lân\n14 giờ trước\nBài viết mẫu\n0:00 / 1:37\nThích Bình luận\n33 / 52\nXem thêm bình luận\nKen",
+        depth: 1,
+        attributes: {},
+        childrenIds: ["hdr_div", "video_div", "tb_div", "counter_div", "expand_div", "comment_div"],
+      },
+      // 1. True Post Header
+      {
+        id: "hdr_div",
+        tagName: "DIV",
+        rect: { x: 16, y: 137, width: 577, height: 48 },
+        textSnippet: "Nguyễn Đình Lân\n14 giờ trước",
+        depth: 2,
+        parentId: "post_card",
+        attributes: {},
+        childrenIds: ["author_link", "time_link"],
+      },
+      {
+        id: "author_link",
+        tagName: "A",
+        role: "link",
+        rect: { x: 70, y: 139, width: 140, height: 20 },
+        textSnippet: "Nguyễn Đình Lân",
+        depth: 3,
+        parentId: "hdr_div",
+        attributes: { href: "/user/lan" },
+        childrenIds: [],
+      },
+      {
+        id: "time_link",
+        tagName: "A",
+        role: "link",
+        rect: { x: 70, y: 162, width: 80, height: 16 },
+        textSnippet: "14 giờ trước",
+        depth: 3,
+        parentId: "hdr_div",
+        attributes: { href: "/post/1" },
+        childrenIds: [],
+      },
+      // 2. Video Player inside body
+      {
+        id: "video_div",
+        tagName: "DIV",
+        rect: { x: 16, y: 200, width: 577, height: 44 },
+        textSnippet: "0:00 / 1:37",
+        depth: 2,
+        parentId: "post_card",
+        attributes: {},
+        childrenIds: [],
+      },
+      // 3. Post Actions Toolbar
+      {
+        id: "tb_div",
+        tagName: "DIV",
+        role: "toolbar",
+        rect: { x: 16, y: 260, width: 577, height: 40 },
+        textSnippet: "Thích Bình luận Chia sẻ",
+        depth: 2,
+        parentId: "post_card",
+        attributes: {},
+        childrenIds: [],
+      },
+      // 4. Media slider counter below toolbar
+      {
+        id: "counter_div",
+        tagName: "DIV",
+        rect: { x: 50, y: 310, width: 200, height: 30 },
+        textSnippet: "33 / 52",
+        depth: 2,
+        parentId: "post_card",
+        attributes: {},
+        childrenIds: [],
+      },
+      // 5. Comment expansion control
+      {
+        id: "expand_div",
+        tagName: "SPAN",
+        rect: { x: 30, y: 350, width: 300, height: 30 },
+        textSnippet: "Xem thêm bình luận",
+        depth: 2,
+        parentId: "post_card",
+        attributes: {},
+        childrenIds: [],
+      },
+      // 6. Comment article & author
+      {
+        id: "comment_div",
+        tagName: "DIV",
+        role: "article",
+        rect: { x: 74, y: 390, width: 500, height: 80 },
+        textSnippet: "Ken\n·\n18 giờ\nTạo token thì đơn giản.",
+        depth: 2,
+        parentId: "post_card",
+        attributes: { "aria-label": "Bình luận của Ken" },
+        childrenIds: ["comment_author_link"],
+      },
+      {
+        id: "comment_author_link",
+        tagName: "A",
+        role: "link",
+        rect: { x: 74, y: 392, width: 100, height: 20 },
+        textSnippet: "Ken",
+        depth: 3,
+        parentId: "comment_div",
+        attributes: { href: "/user/ken" },
+        childrenIds: [],
+      },
+    ],
+  };
+
+  const res = executeLiveBrowserMatchTest(draft.regions!, snapshot, draft, { mode: "BEGIN_ONLY" });
+  assert.equal(res.status, "MATCHED");
+  // Exactly ONE true post is matched, all false positives are rejected
+  assert.equal(res.matchedPostCount, 1);
+  assert.equal(res.matchedItems?.length, 1);
+  assert.equal(res.matchedItems![0]!.containerId, "post_card");
+
+  const grp = res.groups[0]!;
+  assert.equal(grp.candidateDiagnostics?.finalUniquePostCount, 1);
+  assert.equal(grp.beginMatch?.matchedElementId, "hdr_div");
+
+  // Rejection reasons must contain records for the false positives
+  const rejections = grp.candidateDiagnostics?.rejectionReasons || [];
+  assert.ok(rejections.some((r) => r.textSnippet?.includes("0:00 / 1:37") || r.reason.includes("Video")));
+  assert.ok(rejections.some((r) => r.textSnippet?.includes("33 / 52") || r.reason.includes("counter")));
+  assert.ok(rejections.some((r) => r.textSnippet?.includes("Xem thêm") || r.reason.includes("Comment expansion")));
+});
+
+test("C2.11.10: Does not force a MATCHED result when ONLY comments and controls are in viewport", () => {
+  let { draft, capIds } = makeTestDraftWithCaptures(1);
+  const cap1 = capIds[0]!;
+
+  const box1 = { x: 16, y: 50, width: 577, height: 48 };
+  const reg1 = createCollectorRegion({
+    id: "r1",
+    captureItemId: cap1,
+    type: "BEGIN",
+    groupTag: "post-main",
+    label: "Header",
+    box: box1,
+    imageWidth: 610,
+    imageHeight: 800,
+    confirmed: true,
+  });
+  reg1.ocr = makeRegionOcr([
+    { id: "s1", text: "Trần Anh Vũ", bbox: { x: 70, y: 50, width: 140, height: 20 }, confidence: 95 },
+  ], box1);
+
+  draft = addRegionToDraft(draft, reg1);
+
+  // Viewport scrolled into comment section: NO valid post header exists!
+  const snapshot: CollectorDomSnapshot = {
+    url: "https://www.facebook.com/groups/test",
+    capturedAt: new Date().toISOString(),
+    viewport: { width: 610, height: 800, scrollX: 0, scrollY: 3500, dpr: 1 },
+    elements: [
+      {
+        id: "comment_sec",
+        tagName: "DIV",
+        rect: { x: 16, y: 50, width: 577, height: 600 },
+        textSnippet: "Xem thêm bình luận\nKen\n24 / 47",
+        depth: 1,
+        attributes: { "aria-label": "Danh sách bình luận" },
+        childrenIds: ["exp", "c_art", "cnt"],
+      },
+      {
+        id: "exp",
+        tagName: "SPAN",
+        rect: { x: 30, y: 60, width: 300, height: 30 },
+        textSnippet: "Xem thêm bình luận",
+        depth: 2,
+        parentId: "comment_sec",
+        attributes: {},
+        childrenIds: [],
+      },
+      {
+        id: "c_art",
+        tagName: "DIV",
+        role: "article",
+        rect: { x: 74, y: 110, width: 500, height: 80 },
+        textSnippet: "Ken\n·\n18 giờ\nTạo token...",
+        depth: 2,
+        parentId: "comment_sec",
+        attributes: { "aria-label": "Bình luận của Ken" },
+        childrenIds: ["c_link"],
+      },
+      {
+        id: "c_link",
+        tagName: "A",
+        role: "link",
+        rect: { x: 74, y: 112, width: 100, height: 20 },
+        textSnippet: "Ken",
+        depth: 3,
+        parentId: "c_art",
+        attributes: { href: "/user/ken" },
+        childrenIds: [],
+      },
+      {
+        id: "cnt",
+        tagName: "DIV",
+        rect: { x: 50, y: 210, width: 200, height: 30 },
+        textSnippet: "24 / 47",
+        depth: 2,
+        parentId: "comment_sec",
+        attributes: {},
+        childrenIds: [],
+      },
+    ],
+  };
+
+  const res = executeLiveBrowserMatchTest(draft.regions!, snapshot, draft, { mode: "BEGIN_ONLY" });
+  // Must NOT force MATCHED: must cleanly report FAILED with 0 matched posts
+  assert.equal(res.status, "FAILED");
+  assert.equal(res.matchedPostCount, 0);
+  assert.equal(res.matchedItems?.filter((i) => i.domResolved).length, 0);
 });

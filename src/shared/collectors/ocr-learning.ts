@@ -49,6 +49,24 @@ export function isEngagementText(text: string): boolean {
   if (/^\d+([.,]\d+)?[km]?$/i.test(norm) && norm.length <= 6) {
     return true;
   }
+  // Counter / fraction patterns e.g. "33 / 52", "24 / 47"
+  if (/^\d+\s*[/]\s*\d+$/i.test(norm)) {
+    return true;
+  }
+  // Video playback timestamp e.g. "0:00 / 1:37", "1:37"
+  if (/^\d+:\d{2}(\s*[/]\s*\d+:\d{2})?$/i.test(norm)) {
+    return true;
+  }
+  // Comment expansion / controls
+  if (
+    /^(xem thêm|xem tất cả|xem các|view more|view all|view previous)\s+(bình luận|phản hồi|câu trả lời|comments?|replies)/i.test(
+      norm,
+    ) ||
+    /^(xem thêm bình luận|view more comments)$/i.test(norm) ||
+    /^(phù hợp nhất|tất cả bình luận|bình luận mới nhất|most relevant|all comments|newest comments)$/i.test(norm)
+  ) {
+    return true;
+  }
   return false;
 }
 
@@ -58,6 +76,10 @@ export function isAuthorCandidate(text: string): boolean {
   if (trimmed.length < 2 || trimmed.length > 60) return false;
   if (isTimestampText(trimmed) || isEngagementText(trimmed)) return false;
   if (/[.?!]$/.test(trimmed)) return false;
+  // Specific author exclusions
+  if (/^(xem thêm|view more|viết bình luận|write a comment|phù hợp nhất|tất cả bình luận)/i.test(trimmed)) return false;
+  if (/^\d+\s*[/]\s*\d+$/.test(trimmed)) return false;
+  if (/^\d+:\d{2}/.test(trimmed)) return false;
   return true;
 }
 
