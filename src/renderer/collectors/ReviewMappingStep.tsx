@@ -63,6 +63,7 @@ import {
   type CollectorInvoke,
 } from "./browser-capture";
 import { UiPopover } from "../ui-popover";
+import { LayoutTemplateReviewStep } from "./LayoutTemplateReviewStep.js";
 
 const STATUS_LABEL: Record<CaptureAuditStatus, string> = {
   unreviewed: "Unreviewed",
@@ -185,8 +186,8 @@ export function StepReviewMapping({ draft, locked, onChange, invoke }: Props) {
     height: active?.roi?.height || 600,
   });
 
-  // C2.8.1 — Sequential Step 2 Stages: 2A (Region Teaching) -> 2B (Field Mapping)
-  const [step2Stage, setStep2Stage] = useState<"regions" | "fields">("regions");
+  // C2.8.1 — Sequential Step 2 Stages: 2A (Region Teaching) -> 2B (Field Mapping) -> 2C (Layout Template B3)
+  const [step2Stage, setStep2Stage] = useState<"regions" | "fields" | "template">("regions");
   // FEED_ITEM / POST_DETAIL is frozen: maintained in data/state but UI selector is hidden
   const [layoutContext] = useState<LayoutContextKind>(draft.layoutContext || "FEED_ITEM");
 
@@ -1153,7 +1154,7 @@ export function StepReviewMapping({ draft, locked, onChange, invoke }: Props) {
           {isTeaching ? " · Teaching" : " · Simulated match"}
         </span>
 
-        {/* Sequential Stages: 2A Region Teaching ➔ 2B Field Mapping */}
+        {/* Sequential Stages: 2A Region Teaching ➔ 2B Field Mapping ➔ 2C Layout Template */}
         <div className="collector-stage-indicator" role="tablist" aria-label="Review stages">
           <button
             type="button"
@@ -1169,6 +1170,14 @@ export function StepReviewMapping({ draft, locked, onChange, invoke }: Props) {
             onClick={() => setStep2Stage("fields")}
           >
             <span className="stage-num">2B</span> Field Mapping
+          </button>
+          <span className="collector-stage-arrow">➔</span>
+          <button
+            type="button"
+            className={`collector-stage-pill ${step2Stage === "template" ? "active" : ""}`}
+            onClick={() => setStep2Stage("template")}
+          >
+            <span className="stage-num">2C</span> Layout Template
           </button>
         </div>
 
@@ -1234,27 +1243,29 @@ export function StepReviewMapping({ draft, locked, onChange, invoke }: Props) {
         </div>
       )}
 
-      <div className="collector-review-tabs" role="tablist" aria-label="Captured items">
-        {captures.map((item, index) => {
-          const st = auditForCapture(draft, item.id).status;
-          return (
-            <button
-              key={item.id}
-              type="button"
-              role="tab"
-              aria-selected={item.id === activeId}
-              className={`collector-review-tab status-${st}${item.id === activeId ? " active" : ""}`}
-              disabled={locked}
-              onClick={() => selectCapture(item.id)}
-            >
-              <span>#{index + 1}</span>
-              <small>{STATUS_LABEL[st]}</small>
-            </button>
-          );
-        })}
-      </div>
+      {step2Stage !== "template" && (
+        <div className="collector-review-tabs" role="tablist" aria-label="Captured items">
+          {captures.map((item, index) => {
+            const st = auditForCapture(draft, item.id).status;
+            return (
+              <button
+                key={item.id}
+                type="button"
+                role="tab"
+                aria-selected={item.id === activeId}
+                className={`collector-review-tab status-${st}${item.id === activeId ? " active" : ""}`}
+                disabled={locked}
+                onClick={() => selectCapture(item.id)}
+              >
+                <span>#{index + 1}</span>
+                <small>{STATUS_LABEL[st]}</small>
+              </button>
+            );
+          })}
+        </div>
+      )}
 
-      {active && audit && (
+      {step2Stage !== "template" && active && audit && (
         <div className="collector-review-workspace collector-review-workspace-3col collector-review-workspace-2pane">
           {/* Left Pane (~68%) — Screenshot & Overlay */}
           <div className="collector-review-image-pane" aria-label="Sample Data & OCR Mapping">
@@ -2920,6 +2931,19 @@ export function StepReviewMapping({ draft, locked, onChange, invoke }: Props) {
                     );
                   })}
                 </div>
+                {/* C2.11.14: Advance from 2B Field Mapping to 2C Layout Template */}
+                <div style={{ marginTop: "8px", borderTop: "1px solid #1e293b", paddingTop: "8px" }}>
+                  <button
+                    type="button"
+                    className="collector-advance-stage-btn"
+                    disabled={locked}
+                    onClick={() => setStep2Stage("template")}
+                    title="Inspect real B3 visual layout template generated from confirmed BEGIN anchors"
+                    style={{ width: "100%", justifyContent: "center" }}
+                  >
+                    Inspect Layout Template (2C) ➔
+                  </button>
+                </div>
               </>
             )}
 
@@ -3011,6 +3035,15 @@ export function StepReviewMapping({ draft, locked, onChange, invoke }: Props) {
             )}
           </div>
         </div>
+      )}
+
+      {/* C2.11.14: STAGE 2C — Layout Template (B3) Read-Only Review */}
+      {step2Stage === "template" && (
+        <LayoutTemplateReviewStep
+          draft={draft}
+          invoke={invoke}
+          onGoToStage={(stage) => setStep2Stage(stage)}
+        />
       )}
 
       {/* Safe Region Deletion Confirmation Popover Modal */}

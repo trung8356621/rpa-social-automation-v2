@@ -9,6 +9,7 @@ import {
   computeCosineSimilarity,
   CANON_W,
   CANON_H,
+  inspectBeginLayoutTemplate,
   type ReferenceBeginCrop,
 } from "../src/main/begin-layout-matcher.js";
 
@@ -581,4 +582,145 @@ test("Requirement 8: Distinguishes NO_REFERENCES from NO_VISUAL_MATCH", async ()
     "Valid references on unmatched viewport must return NO_MATCH",
   );
   assert.equal(noMatchResult.referenceBeginCount, 1);
+});
+
+test("Task C2.11.14 Review 2C: Single confirmed BEGIN sample template inspection", async () => {
+  const ref = await createReferenceBeginBuffer(560, 60, {
+    authorName: "Nguyễn Văn A",
+    timestamp: "1 giờ trước • 🌐",
+  });
+
+  const report = await inspectBeginLayoutTemplate([
+    {
+      sampleId: "sample_1",
+      regionId: "reg_begin_1",
+      groupTag: "post-main",
+      imageBuffer: ref,
+    },
+  ]);
+
+  assert.equal(report.canonicalDimensions.width, CANON_W);
+  assert.equal(report.canonicalDimensions.height, CANON_H);
+  assert.ok(report.allGroupTags.includes("post-main"));
+
+  const group = report.groups["post-main"];
+  assert.ok(group, "Group 'post-main' should exist");
+  assert.equal(group.status, "READY");
+  assert.equal(group.sampleCount, 1);
+  assert.equal(group.samples.length, 1);
+  assert.equal(group.nominalDimensions.width, 560);
+  assert.equal(group.nominalDimensions.height, 60);
+
+  const sample = group.samples[0]!;
+  assert.equal(sample.sampleId, "sample_1");
+  assert.equal(sample.rawDimensions.width, 560);
+  assert.equal(sample.rawDimensions.height, 60);
+  assert.ok(sample.normalizedDataUrl.startsWith("data:image/png;base64,"));
+  assert.ok(sample.edgesDataUrl.startsWith("data:image/png;base64,"));
+  assert.equal(sample.grid.length, 6);
+  assert.equal(sample.grid[0]!.length, 24);
+  for (const row of sample.grid) {
+    for (const val of row) {
+      assert.ok(val >= 0 && val <= 1, `Density cell ${val} must be in [0, 1]`);
+    }
+  }
+
+  // Template family checks on group
+  assert.equal(group.meanGrid.length, 6);
+  assert.equal(group.meanGrid[0]!.length, 24);
+  assert.equal(group.varianceGrid.length, 6);
+  assert.equal(group.varianceGrid[0]!.length, 24);
+  assert.ok(group.expectedAvatarDensity > 0, "Avatar zone should have edge density");
+  assert.ok(group.expectedBimodalContrast > 0, "Text bands should have bimodal contrast");
+  assert.ok(group.expectedMenuContrast > 0, "Action menu should have contrast");
+  assert.equal(group.dynamicLowWeightCellsCount, 0, "Single sample should have 0 dynamic/high-variance cells");
+});
+
+test("Task C2.11.14 Review 2C: Multiple confirmed BEGIN samples with variance downweighting", async () => {
+  const ref1 = await createReferenceBeginBuffer(560, 60, {
+    authorName: "Nguyễn Văn A",
+    timestamp: "1 giờ trước • 🌐",
+    avatarColor: "#ef4444",
+  });
+  const ref2 = await createReferenceBeginBuffer(540, 58, {
+    authorName: "Trần Thị Bích Ngọc - Nhóm Yêu Bếp",
+    timestamp: "Vừa xong • 👥",
+    avatarColor: "#10b981",
+  });
+
+  const report = await inspectBeginLayoutTemplate([
+    {
+      sampleId: "sample_1",
+      regionId: "reg_begin_1",
+      groupTag: "post-main",
+      imageBuffer: ref1,
+    },
+    {
+      sampleId: "sample_2",
+      regionId: "reg_begin_2",
+      groupTag: "post-main",
+      imageBuffer: ref2,
+    },
+  ]);
+
+  const group = report.groups["post-main"];
+  assert.ok(group);
+  assert.equal(group.status, "READY");
+  assert.equal(group.sampleCount, 2);
+  // Average width: (560 + 540) / 2 = 550
+  assert.equal(group.nominalDimensions.width, 550);
+  assert.equal(group.nominalDimensions.height, 59);
+
+  // Mean & Variance grids exist and have non-negative values
+  assert.equal(group.meanGrid.length, 6);
+  assert.equal(group.varianceGrid.length, 6);
+  for (const row of group.varianceGrid) {
+    for (const v of row) {
+      assert.ok(v >= 0, "Variance cannot be negative");
+    }
+  }
+});
+
+test("Task C2.11.14 Review 2C: Missing reference crops and error handling", async () => {
+  // Empty array with specific targetGroupTag -> NO_CONFIRMED_SAMPLES
+  const emptyReport = await inspectBeginLayoutTemplate([], "post-main");
+  const group = emptyReport.groups["post-main"];
+  assert.ok(group);
+  assert.equal(group.status, "NO_CONFIRMED_SAMPLES");
+  assert.ok(group.error?.includes("No usable confirmed BEGIN reference crops"));
+  assert.equal(group.sampleCount, 0);
+
+  // References with 0-byte or corrupted buffer -> sample error recorded and group marked NO_CONFIRMED_SAMPLES
+  const invalidReport = await inspectBeginLayoutTemplate([
+    {
+      sampleId: "bad_1",
+      regionId: "reg_bad",
+      groupTag: "post-main",
+      imageBuffer: Buffer.alloc(0),
+    },
+  ]);
+  const badGroup = invalidReport.groups["post-main"];
+  assert.ok(badGroup);
+  assert.equal(badGroup.status, "NO_CONFIRMED_SAMPLES");
+  assert.equal(badGroup.samples.length, 1);
+  assert.ok(badGroup.samples[0]!.error?.includes("empty"));
+});
+
+test("Task C2.11.14 Review 2C: Group filtering", async () => {
+  const ref1 = await createReferenceBeginBuffer(560, 60);
+  const ref2 = await createReferenceBeginBuffer(300, 40);
+
+  const report = await inspectBeginLayoutTemplate(
+    [
+      { sampleId: "s1", regionId: "r1", groupTag: "post-main", imageBuffer: ref1 },
+      { sampleId: "s2", regionId: "r2", groupTag: "sidebar", imageBuffer: ref2 },
+    ],
+    "sidebar",
+  );
+
+  const sidebarGroup = report.groups["sidebar"];
+  assert.ok(sidebarGroup);
+  assert.equal(sidebarGroup.status, "READY");
+  assert.equal(sidebarGroup.sampleCount, 1);
+  assert.equal(sidebarGroup.samples[0]!.sampleId, "s2");
 });

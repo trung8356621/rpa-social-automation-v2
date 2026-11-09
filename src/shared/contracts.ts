@@ -3,6 +3,7 @@ import type { NetworkSettings, NetworkRunSettings } from "./network-mode.js";
 import type {
   EndVisualCandidate,
   BeginLayoutCandidate,
+  BeginBlockCandidate,
   NormalizedRegionGeometry,
 } from "./collectors/types.js";
 export type { ScriptReleaseManifest } from "./script-release.js";
@@ -528,6 +529,52 @@ export type Command =
   | {
       type: "collectorHighlightBeginLayout";
       matches: BeginLayoutCandidate[];
+    }
+  | {
+      type: "collectorInspectBeginTemplate";
+      references: Array<{
+        sampleId?: string;
+        regionId?: string;
+        groupTag?: string;
+        referenceImage?: string;
+        assetId?: string;
+        captureId?: string;
+        originalRoi?: Rect;
+        geometry?: NormalizedRegionGeometry;
+      }>;
+      groupTag?: string;
+    }
+  | {
+      type: "collectorMatchBeginBlockLayout";
+      references: Array<{
+        sampleId?: string;
+        regionId?: string;
+        groupTag?: string;
+        referenceImage?: string;
+        assetId?: string;
+        captureId?: string;
+        originalRoi?: Rect;
+        geometry?: NormalizedRegionGeometry;
+      }>;
+      options?: { scaleVariants?: number[]; minConfidence?: number };
+    }
+  | {
+      type: "collectorHighlightBeginBlockLayout";
+      matches: BeginBlockCandidate[];
+    }
+  | {
+      type: "collectorInspectBeginBlockTemplate";
+      references: Array<{
+        sampleId?: string;
+        regionId?: string;
+        groupTag?: string;
+        referenceImage?: string;
+        assetId?: string;
+        captureId?: string;
+        originalRoi?: Rect;
+        geometry?: NormalizedRegionGeometry;
+      }>;
+      groupTag?: string;
     };
 export const DRAFT_KEYS = [
   "variableId",

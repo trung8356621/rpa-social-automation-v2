@@ -29,7 +29,9 @@ import { BrowserCore } from "./browser-core.js";
 import { CollectorScrollCaptureController } from "./collector-scroll-capture.js";
 import { BrowserSessions } from "./browser-sessions.js";
 import { matchEndVisual } from "./end-visual-matcher.js";
-import { matchBeginLayout } from "./begin-layout-matcher.js";
+import { matchBeginLayout, inspectBeginLayoutTemplate } from "./begin-layout-matcher.js";
+import { matchBeginBlockLayout, inspectBeginBlockTemplate } from "./begin-block-matcher.js";
+import type { NormalizedRegionGeometry } from "../shared/collectors/types.js";
 import { BrowserRecording } from "./browser-recording.js";
 import { TestRunEvidence } from "./test-run-evidence.js";
 import { TestLab } from "./test-lab.js";
@@ -808,6 +810,144 @@ async function boot() {
     store.setSetting(`videoDemo:${item.flowId}`, JSON.stringify(attachment));
     store.setSetting(`videoDemo:${item.flowId}:${scriptVersion}`, JSON.stringify(attachment));
     return attachment;
+  }
+
+  async function resolveBeginReferences(
+    rawRefs: Array<{
+      sampleId?: string;
+      regionId?: string;
+      groupTag?: string;
+      referenceImage?: string;
+      assetId?: string;
+      captureId?: string;
+      originalRoi?: Rect;
+      geometry?: NormalizedRegionGeometry;
+    }>,
+    targetAssetDir: string,
+    targetEvidenceDir: string,
+  ): Promise<Array<{ sampleId?: string; regionId?: string; groupTag?: string; imageBuffer: Buffer; roi?: Rect; originalDataUrl?: string; error?: string }>> {
+    const references: Array<{ sampleId?: string; regionId?: string; groupTag?: string; imageBuffer: Buffer; roi?: Rect; originalDataUrl?: string; error?: string }> = [];
+
+    for (const ref of rawRefs) {
+      let buf: Buffer | null = null;
+      let resolveReason = "NO_IMAGE_BUFFER";
+      let sourceDesc = "none";
+      let originalDataUrl: string | undefined = undefined;
+
+      // 1. Reuse existing reference crop from Review data (data URL)
+      if (typeof ref.referenceImage === "string" && ref.referenceImage.startsWith("data:")) {
+        originalDataUrl = ref.referenceImage;
+        const base64Data = ref.referenceImage.split(",")[1];
+        if (base64Data) {
+          try {
+            const decoded = Buffer.from(base64Data, "base64");
+            if (decoded.length > 0) {
+              buf = decoded;
+              sourceDesc = "inline_review_crop";
+            }
+          } catch {}
+        }
+      }
+
+      // 2. If no inline crop or decoded buffer empty, load screenshot from disk (targets/ or captures/) and extract exact ROI
+      if (!buf || buf.length === 0) {
+        const possiblePaths = [
+          ref.assetId && path.join(targetAssetDir, ref.assetId),
+          ref.assetId && !ref.assetId.endsWith(".png") && path.join(targetAssetDir, `${ref.assetId}.png`),
+          ref.assetId && path.join(targetEvidenceDir, ref.assetId),
+          ref.assetId && !ref.assetId.endsWith(".png") && path.join(targetEvidenceDir, `${ref.assetId}.png`),
+          (ref.captureId || ref.sampleId) && path.join(targetEvidenceDir, `${ref.captureId || ref.sampleId}.png`),
+          (ref.captureId || ref.sampleId) && path.join(targetAssetDir, `${ref.captureId || ref.sampleId}.png`),
+        ].filter((p): p is string => Boolean(p));
+
+        let rawScreenshot: Buffer | null = null;
+        let loadedPath: string | null = null;
+        for (const p of possiblePaths) {
+          try {
+            const b = await readFile(p);
+            if (b && b.length > 0) {
+              rawScreenshot = b;
+              loadedPath = p;
+              break;
+            }
+          } catch {}
+        }
+
+        if (rawScreenshot && rawScreenshot.length > 0) {
+          try {
+            const meta = await sharp(rawScreenshot).metadata();
+            const mW = meta.width || 1280;
+            const mH = meta.height || 800;
+
+            let left = 0;
+            let top = 0;
+            let width = 0;
+            let height = 0;
+
+            if (ref.originalRoi && ref.originalRoi.width >= 4 && ref.originalRoi.height >= 4) {
+              left = Math.max(0, Math.min(Math.round(ref.originalRoi.x), mW - 1));
+              top = Math.max(0, Math.min(Math.round(ref.originalRoi.y), mH - 1));
+              width = Math.min(Math.round(ref.originalRoi.width), mW - left);
+              height = Math.min(Math.round(ref.originalRoi.height), mH - top);
+            } else if (ref.geometry && ref.geometry.relW > 0 && ref.geometry.relH > 0) {
+              left = Math.max(0, Math.min(Math.round(ref.geometry.relX * mW), mW - 1));
+              top = Math.max(0, Math.min(Math.round(ref.geometry.relY * mH), mH - 1));
+              width = Math.min(Math.round(ref.geometry.relW * mW), mW - left);
+              height = Math.min(Math.round(ref.geometry.relH * mH), mH - top);
+            }
+
+            if (width >= 4 && height >= 4) {
+              buf = await sharp(rawScreenshot).extract({ left, top, width, height }).toBuffer();
+              sourceDesc = `disk_capture_roi (${path.basename(loadedPath || "")})`;
+              originalDataUrl = `data:image/png;base64,${buf.toString("base64")}`;
+            } else {
+              resolveReason = `INVALID_ROI: [w=${width}, h=${height}] on image [${mW}x${mH}]`;
+            }
+          } catch (cropErr) {
+            resolveReason = `CROP_EXTRACTION_ERROR: ${cropErr instanceof Error ? cropErr.message : String(cropErr)}`;
+          }
+        } else {
+          resolveReason = `ASSET_FILE_NOT_FOUND: tried [${possiblePaths.join(", ")}]`;
+        }
+      }
+
+      if (buf && buf.length > 0) {
+        let cW = 0;
+        let cH = 0;
+        try {
+          const meta = await sharp(buf).metadata();
+          cW = meta.width ?? 0;
+          cH = meta.height ?? 0;
+        } catch {}
+
+        console.info(
+          `[B3 Reference Resolution] Accepted: SampleId=${ref.sampleId || "unknown"}, RegionId=${ref.regionId || "unknown"}, Group=${ref.groupTag || "default"}, Source=${sourceDesc}, Dimensions=${cW}x${cH}`,
+        );
+        references.push({
+          sampleId: ref.sampleId,
+          regionId: ref.regionId,
+          groupTag: ref.groupTag,
+          imageBuffer: buf,
+          roi: ref.originalRoi,
+          originalDataUrl,
+        });
+      } else {
+        console.warn(
+          `[B3 Reference Resolution] Skipped: SampleId=${ref.sampleId || "unknown"}, RegionId=${ref.regionId || "unknown"}, Group=${ref.groupTag || "default"}, Reason=${resolveReason}`,
+        );
+        references.push({
+          sampleId: ref.sampleId,
+          regionId: ref.regionId,
+          groupTag: ref.groupTag,
+          imageBuffer: Buffer.alloc(0),
+          roi: ref.originalRoi,
+          originalDataUrl,
+          error: resolveReason,
+        });
+      }
+    }
+
+    return references;
   }
 
   ipcMain.handle("creator:command", async (event, command: Command) => {
@@ -2133,116 +2273,18 @@ async function boot() {
         const img = await wc.capturePage(undefined, { stayHidden: true });
         const screenshotBuffer = img.toPNG();
 
-        const references: Array<{ sampleId?: string; groupTag?: string; imageBuffer: Buffer; roi?: Rect }> = [];
         const rawRefs = Array.isArray(command.references) ? command.references : [];
-
-        for (const ref of rawRefs) {
-          let buf: Buffer | null = null;
-          let resolveReason = "NO_IMAGE_BUFFER";
-          let sourceDesc = "none";
-
-          // 1. Reuse existing reference crop from Review data (data URL)
-          if (typeof ref.referenceImage === "string" && ref.referenceImage.startsWith("data:")) {
-            const base64Data = ref.referenceImage.split(",")[1];
-            if (base64Data) {
-              try {
-                const decoded = Buffer.from(base64Data, "base64");
-                if (decoded.length > 0) {
-                  buf = decoded;
-                  sourceDesc = "inline_review_crop";
-                }
-              } catch {}
-            }
-          }
-
-          // 2. If no inline crop or decoded buffer empty, load screenshot from disk (targets/ or captures/) and extract exact ROI
-          if (!buf || buf.length === 0) {
-            const possiblePaths = [
-              ref.assetId && path.join(assetDir, ref.assetId),
-              ref.assetId && !ref.assetId.endsWith(".png") && path.join(assetDir, `${ref.assetId}.png`),
-              ref.assetId && path.join(evidenceDir, ref.assetId),
-              ref.assetId && !ref.assetId.endsWith(".png") && path.join(evidenceDir, `${ref.assetId}.png`),
-              (ref.captureId || ref.sampleId) && path.join(evidenceDir, `${ref.captureId || ref.sampleId}.png`),
-              (ref.captureId || ref.sampleId) && path.join(assetDir, `${ref.captureId || ref.sampleId}.png`),
-            ].filter((p): p is string => Boolean(p));
-
-            let rawScreenshot: Buffer | null = null;
-            let loadedPath: string | null = null;
-            for (const p of possiblePaths) {
-              try {
-                const b = await readFile(p);
-                if (b && b.length > 0) {
-                  rawScreenshot = b;
-                  loadedPath = p;
-                  break;
-                }
-              } catch {}
-            }
-
-            if (rawScreenshot && rawScreenshot.length > 0) {
-              try {
-                const meta = await sharp(rawScreenshot).metadata();
-                const mW = meta.width || 1280;
-                const mH = meta.height || 800;
-
-                let left = 0;
-                let top = 0;
-                let width = 0;
-                let height = 0;
-
-                if (ref.originalRoi && ref.originalRoi.width >= 4 && ref.originalRoi.height >= 4) {
-                  left = Math.max(0, Math.min(Math.round(ref.originalRoi.x), mW - 1));
-                  top = Math.max(0, Math.min(Math.round(ref.originalRoi.y), mH - 1));
-                  width = Math.min(Math.round(ref.originalRoi.width), mW - left);
-                  height = Math.min(Math.round(ref.originalRoi.height), mH - top);
-                } else if (ref.geometry && ref.geometry.relW > 0 && ref.geometry.relH > 0) {
-                  left = Math.max(0, Math.min(Math.round(ref.geometry.relX * mW), mW - 1));
-                  top = Math.max(0, Math.min(Math.round(ref.geometry.relY * mH), mH - 1));
-                  width = Math.min(Math.round(ref.geometry.relW * mW), mW - left);
-                  height = Math.min(Math.round(ref.geometry.relH * mH), mH - top);
-                }
-
-                if (width >= 4 && height >= 4) {
-                  buf = await sharp(rawScreenshot).extract({ left, top, width, height }).toBuffer();
-                  sourceDesc = `disk_capture_roi (${path.basename(loadedPath || "")})`;
-                } else {
-                  resolveReason = `INVALID_ROI: [w=${width}, h=${height}] on image [${mW}x${mH}]`;
-                }
-              } catch (cropErr) {
-                resolveReason = `CROP_EXTRACTION_ERROR: ${cropErr instanceof Error ? cropErr.message : String(cropErr)}`;
-              }
-            } else {
-              resolveReason = `ASSET_FILE_NOT_FOUND: tried [${possiblePaths.join(", ")}]`;
-            }
-          }
-
-          if (buf && buf.length > 0) {
-            let cW = 0;
-            let cH = 0;
-            try {
-              const meta = await sharp(buf).metadata();
-              cW = meta.width ?? 0;
-              cH = meta.height ?? 0;
-            } catch {}
-
-            console.info(
-              `[B3 Reference Resolution] Accepted: SampleId=${ref.sampleId || "unknown"}, RegionId=${ref.regionId || "unknown"}, Group=${ref.groupTag || "default"}, Source=${sourceDesc}, Dimensions=${cW}x${cH}`,
-            );
-            references.push({
-              sampleId: ref.sampleId,
-              groupTag: ref.groupTag,
-              imageBuffer: buf,
-              roi: ref.originalRoi,
-            });
-          } else {
-            console.warn(
-              `[B3 Reference Resolution] Skipped: SampleId=${ref.sampleId || "unknown"}, RegionId=${ref.regionId || "unknown"}, Group=${ref.groupTag || "default"}, Reason=${resolveReason}`,
-            );
-          }
-        }
+        const references = await resolveBeginReferences(rawRefs, assetDir, evidenceDir);
 
         const matchResult = await matchBeginLayout(screenshotBuffer, references, command.options);
         return matchResult;
+      }
+      case "collectorInspectBeginTemplate": {
+        isIdle();
+        const rawRefs = Array.isArray(command.references) ? command.references : [];
+        const references = await resolveBeginReferences(rawRefs, assetDir, evidenceDir);
+        const report = await inspectBeginLayoutTemplate(references, command.groupTag);
+        return report;
       }
       case "collectorHighlightBeginLayout": {
         isIdle();
@@ -2275,6 +2317,66 @@ async function boot() {
             const badge = document.createElement('div');
             badge.style.cssText = 'position:absolute;top:-20px;left:0;background:#0891b2;color:#ffffff;font-size:10px;font-weight:bold;padding:1px 6px;border-radius:2px;font-family:system-ui,sans-serif;box-shadow:0 1px 3px rgba(0,0,0,0.5);white-space:nowrap;';
             badge.textContent = '#' + (idx + 1) + ' B3 VISUAL CANDIDATE — NOT DOM VERIFIED (' + m.confidence + '%)';
+            box.appendChild(badge);
+            overlay.appendChild(box);
+          });
+
+          document.documentElement.appendChild(overlay);
+        })()`,
+          )
+          .catch(() => {});
+        return { success: true };
+      }
+      case "collectorMatchBeginBlockLayout": {
+        isIdle();
+        const wc = browser.view.webContents;
+        const img = await wc.capturePage(undefined, { stayHidden: true });
+        const screenshotBuffer = img.toPNG();
+
+        const rawRefs = Array.isArray(command.references) ? command.references : [];
+        const references = await resolveBeginReferences(rawRefs, assetDir, evidenceDir);
+
+        const matchResult = await matchBeginBlockLayout(screenshotBuffer, references, command.options);
+        return matchResult;
+      }
+      case "collectorInspectBeginBlockTemplate": {
+        isIdle();
+        const rawRefs = Array.isArray(command.references) ? command.references : [];
+        const references = await resolveBeginReferences(rawRefs, assetDir, evidenceDir);
+        const report = await inspectBeginBlockTemplate(references, command.groupTag);
+        return report;
+      }
+      case "collectorHighlightBeginBlockLayout": {
+        isIdle();
+        const wc = browser.view.webContents;
+        const matches = Array.isArray(command.matches) ? command.matches : [];
+        await wc
+          .executeJavaScript(
+            `(() => {
+          // Clear previous highlights
+          document.querySelectorAll('.__rpa_highlight_badge__').forEach((b) => b.remove());
+          document.querySelectorAll('[data-rpa-highlight]').forEach((el) => {
+            el.style.outline = el.getAttribute('data-rpa-orig-outline') || '';
+            el.style.boxShadow = el.getAttribute('data-rpa-orig-box-shadow') || '';
+          });
+          const old = document.getElementById('__rpa_match_test_overlay__');
+          if (old) old.remove();
+
+          const items = ${JSON.stringify(matches)};
+          if (!items || items.length === 0) return;
+
+          const overlay = document.createElement('div');
+          overlay.id = '__rpa_match_test_overlay__';
+          overlay.style.cssText = 'position:fixed;top:0;left:0;width:100vw;height:100vh;pointer-events:none;z-index:2147483647;';
+
+          items.forEach((m, idx) => {
+            const rect = m.rect;
+            if (!rect) return;
+            const box = document.createElement('div');
+            box.style.cssText = 'position:absolute;left:' + rect.x + 'px;top:' + rect.y + 'px;width:' + rect.width + 'px;height:' + rect.height + 'px;border:2px solid #10b981;box-shadow:0 0 10px rgba(16,185,129,0.5),inset 0 0 8px rgba(16,185,129,0.15);border-radius:3px;box-sizing:border-box;pointer-events:none;';
+            const badge = document.createElement('div');
+            badge.style.cssText = 'position:absolute;top:-20px;left:0;background:#059669;color:#ffffff;font-size:10px;font-weight:bold;padding:1px 6px;border-radius:2px;font-family:system-ui,sans-serif;box-shadow:0 1px 3px rgba(0,0,0,0.5);white-space:nowrap;';
+            badge.textContent = '#' + (idx + 1) + ' B3 V2 VISUAL CANDIDATE — NOT DOM VERIFIED (' + m.confidence + '%)';
             box.appendChild(badge);
             overlay.appendChild(box);
           });

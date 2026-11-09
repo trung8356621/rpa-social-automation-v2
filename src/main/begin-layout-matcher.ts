@@ -5,13 +5,19 @@ import type {
   BeginLayoutFeatureScores,
   BeginLayoutMatchResult,
   BeginLayoutTemplateInfo,
+  BeginLayoutInspectionReport,
+  BeginGroupTemplateInspection,
+  BeginSampleTemplateInspection,
 } from "../shared/collectors/types.js";
 
 export type ReferenceBeginCrop = {
   sampleId?: string;
+  regionId?: string;
   groupTag?: string;
   imageBuffer: Buffer;
   roi?: Rect;
+  originalDataUrl?: string;
+  error?: string;
 };
 
 export type BeginLayoutMatcherOptions = {
@@ -847,5 +853,239 @@ export async function matchBeginLayout(
             ? "Detected partial header truncated at viewport boundary; insufficient complete evidence."
             : "No post header matching reference structural layout template found in screenshot.",
     },
+  };
+}
+
+/**
+ * Phase 4 & Task C2.11.14: Inspects real B3 layout template data for confirmed BEGIN references.
+ * Uses the exact same feature extraction and multi-sample aggregation mathematics as runtime matching.
+ * Returns normalized preview images, edge maps, density grids, and multi-sample variance info.
+ */
+export async function inspectBeginLayoutTemplate(
+  references: ReferenceBeginCrop[],
+  targetGroupTag?: string,
+): Promise<BeginLayoutInspectionReport> {
+  const groups: Record<string, BeginGroupTemplateInspection> = {};
+  const allGroupTagsSet = new Set<string>();
+
+  const byGroup = new Map<string, ReferenceBeginCrop[]>();
+  for (const ref of references) {
+    const tag = ref.groupTag || "default";
+    allGroupTagsSet.add(tag);
+    const list = byGroup.get(tag) ?? [];
+    list.push(ref);
+    byGroup.set(tag, list);
+  }
+
+  if (targetGroupTag) {
+    allGroupTagsSet.add(targetGroupTag);
+    if (!byGroup.has(targetGroupTag)) {
+      byGroup.set(targetGroupTag, []);
+    }
+  }
+
+  const allGroupTags = Array.from(allGroupTagsSet);
+
+  for (const [tag, groupRefs] of byGroup.entries()) {
+    const validRefs = groupRefs.filter((r) => r.imageBuffer && r.imageBuffer.length > 0);
+
+    if (validRefs.length === 0) {
+      groups[tag] = {
+        groupTag: tag,
+        sampleCount: 0,
+        sampleIds: groupRefs.map((r) => r.sampleId || "").filter(Boolean),
+        canonicalDimensions: { width: CANON_W, height: CANON_H },
+        nominalDimensions: { width: CANON_W, height: CANON_H },
+        nominalAspectRatio: Math.round((CANON_W / CANON_H) * 100) / 100,
+        meanGrid: Array.from({ length: GRID_ROWS }, () => Array(GRID_COLS).fill(0)),
+        varianceGrid: Array.from({ length: GRID_ROWS }, () => Array(GRID_COLS).fill(0)),
+        dynamicLowWeightCellsCount: 0,
+        avatarBounds: { x: 0.02, y: 0.15, width: 0.12, height: 0.7 },
+        textBounds: { x: 0.16, y: 0.15, width: 0.65, height: 0.7 },
+        menuBounds: { x: 0.86, y: 0.15, width: 0.12, height: 0.45 },
+        expectedAvatarDensity: 0,
+        expectedBimodalContrast: 0,
+        expectedMenuContrast: 0,
+        samples: groupRefs.map((r) => ({
+          sampleId: r.sampleId || "unknown",
+          regionId: r.regionId,
+          groupTag: tag,
+          rawDimensions: { width: 0, height: 0 },
+          aspectRatio: 1.0,
+          originalCropDataUrl: r.originalDataUrl,
+          normalizedDataUrl: "",
+          edgesDataUrl: "",
+          grid: Array.from({ length: GRID_ROWS }, () => Array(GRID_COLS).fill(0)),
+          verticalProjection: Array(16).fill(0),
+          horizontalProjection: Array(GRID_COLS).fill(0),
+          avatar: { density: 0, squareness: 0, bounds: { x: 0.02, y: 0.15, width: 0.12, height: 0.7 } },
+          text: { upperDensity: 0, gapDensity: 0, lowerDensity: 0, bimodalContrast: 0, bounds: { x: 0.16, y: 0.15, width: 0.65, height: 0.7 } },
+          menu: { density: 0, voidDensity: 0, contrast: 0, bounds: { x: 0.86, y: 0.15, width: 0.12, height: 0.45 } },
+          isWideSinglePill: false,
+          error: r.error || "Reference crop image buffer is empty or unavailable.",
+        })),
+        status: "NO_CONFIRMED_SAMPLES",
+        error: "No usable confirmed BEGIN reference crops in this Anchor Group.",
+      };
+      continue;
+    }
+
+    const sampleInspections: BeginSampleTemplateInspection[] = [];
+    for (const ref of groupRefs) {
+      if (!ref.imageBuffer || ref.imageBuffer.length === 0) {
+        sampleInspections.push({
+          sampleId: ref.sampleId || "unknown",
+          regionId: ref.regionId,
+          groupTag: tag,
+          rawDimensions: { width: 0, height: 0 },
+          aspectRatio: 1.0,
+          originalCropDataUrl: ref.originalDataUrl,
+          normalizedDataUrl: "",
+          edgesDataUrl: "",
+          grid: Array.from({ length: GRID_ROWS }, () => Array(GRID_COLS).fill(0)),
+          verticalProjection: Array(16).fill(0),
+          horizontalProjection: Array(GRID_COLS).fill(0),
+          avatar: { density: 0, squareness: 0, bounds: { x: 0.02, y: 0.15, width: 0.12, height: 0.7 } },
+          text: { upperDensity: 0, gapDensity: 0, lowerDensity: 0, bimodalContrast: 0, bounds: { x: 0.16, y: 0.15, width: 0.65, height: 0.7 } },
+          menu: { density: 0, voidDensity: 0, contrast: 0, bounds: { x: 0.86, y: 0.15, width: 0.12, height: 0.45 } },
+          isWideSinglePill: false,
+          error: ref.error || "Reference crop image buffer is empty or unreadable.",
+        });
+        continue;
+      }
+
+      try {
+        const meta = await sharp(ref.imageBuffer).metadata();
+        const rawW = meta.width || CANON_W;
+        const rawH = meta.height || CANON_H;
+
+        const originalCropDataUrl =
+          ref.originalDataUrl ||
+          `data:image/png;base64,${(await sharp(ref.imageBuffer).png().toBuffer()).toString("base64")}`;
+
+        const normBuf = await sharp(ref.imageBuffer)
+          .grayscale()
+          .resize(CANON_W, CANON_H, { fit: "fill" })
+          .png()
+          .toBuffer();
+        const normalizedDataUrl = `data:image/png;base64,${normBuf.toString("base64")}`;
+
+        const features = await extractBeginStructuralFeatures(ref.imageBuffer);
+
+        const { data: pixels } = await sharp(ref.imageBuffer)
+          .grayscale()
+          .resize(CANON_W, CANON_H, { fit: "fill" })
+          .raw()
+          .toBuffer({ resolveWithObject: true });
+
+        const edgeBytes = Buffer.alloc(CANON_W * CANON_H);
+        for (let y = 1; y < CANON_H - 1; y++) {
+          const rowOffset = y * CANON_W;
+          for (let x = 1; x < CANON_W - 1; x++) {
+            const idx = rowOffset + x;
+            const dx = Math.abs(pixels[idx + 1]! - pixels[idx - 1]!);
+            const dy = Math.abs(pixels[idx + CANON_W]! - pixels[idx - CANON_W]!);
+            if (dx + dy >= 26) {
+              edgeBytes[idx] = 255;
+            }
+          }
+        }
+        const edgePng = await sharp(edgeBytes, {
+          raw: { width: CANON_W, height: CANON_H, channels: 1 },
+        })
+          .png()
+          .toBuffer();
+        const edgesDataUrl = `data:image/png;base64,${edgePng.toString("base64")}`;
+
+        sampleInspections.push({
+          sampleId: ref.sampleId || "unknown",
+          regionId: ref.regionId,
+          groupTag: tag,
+          rawDimensions: { width: rawW, height: rawH },
+          aspectRatio: Math.round(features.aspectRatio * 100) / 100,
+          originalCropDataUrl,
+          normalizedDataUrl,
+          edgesDataUrl,
+          grid: features.grid,
+          verticalProjection: features.verticalProjection,
+          horizontalProjection: features.horizontalProjection,
+          avatar: {
+            density: Math.round(features.avatarDensity * 100) / 100,
+            squareness: Math.round(features.avatarSquareness * 100) / 100,
+            bounds: features.avatarBounds,
+          },
+          text: {
+            upperDensity: Math.round(features.textUpperDensity * 100) / 100,
+            gapDensity: Math.round(features.textGapDensity * 100) / 100,
+            lowerDensity: Math.round(features.textLowerDensity * 100) / 100,
+            bimodalContrast: Math.round(features.textBimodalContrast * 100) / 100,
+            bounds: features.textBounds,
+          },
+          menu: {
+            density: Math.round(features.menuDensity * 100) / 100,
+            voidDensity: Math.round(features.menuVoidDensity * 100) / 100,
+            contrast: Math.round(features.menuContrast * 100) / 100,
+            bounds: features.menuBounds,
+          },
+          isWideSinglePill: features.isWideSinglePill,
+        });
+      } catch (err) {
+        sampleInspections.push({
+          sampleId: ref.sampleId || "unknown",
+          regionId: ref.regionId,
+          groupTag: tag,
+          rawDimensions: { width: 0, height: 0 },
+          aspectRatio: 1.0,
+          originalCropDataUrl: ref.originalDataUrl,
+          normalizedDataUrl: "",
+          edgesDataUrl: "",
+          grid: Array.from({ length: GRID_ROWS }, () => Array(GRID_COLS).fill(0)),
+          verticalProjection: Array(16).fill(0),
+          horizontalProjection: Array(GRID_COLS).fill(0),
+          avatar: { density: 0, squareness: 0, bounds: { x: 0.02, y: 0.15, width: 0.12, height: 0.7 } },
+          text: { upperDensity: 0, gapDensity: 0, lowerDensity: 0, bimodalContrast: 0, bounds: { x: 0.16, y: 0.15, width: 0.65, height: 0.7 } },
+          menu: { density: 0, voidDensity: 0, contrast: 0, bounds: { x: 0.86, y: 0.15, width: 0.12, height: 0.45 } },
+          isWideSinglePill: false,
+          error: `Feature extraction error: ${err instanceof Error ? err.message : String(err)}`,
+        });
+      }
+    }
+
+    const family = await buildLearnedLayoutFamily(validRefs, tag);
+    let dynamicLowWeightCount = 0;
+    for (let r = 0; r < GRID_ROWS; r++) {
+      for (let c = 0; c < GRID_COLS; c++) {
+        if (family.varianceGrid[r]![c]! > 0.04) {
+          dynamicLowWeightCount++;
+        }
+      }
+    }
+
+    groups[tag] = {
+      groupTag: tag,
+      sampleCount: family.sampleCount,
+      sampleIds: family.sampleIds,
+      canonicalDimensions: { width: CANON_W, height: CANON_H },
+      nominalDimensions: { width: family.nominalWidth, height: family.nominalHeight },
+      nominalAspectRatio: Math.round(family.nominalAspectRatio * 100) / 100,
+      meanGrid: family.meanGrid,
+      varianceGrid: family.varianceGrid,
+      dynamicLowWeightCellsCount: dynamicLowWeightCount,
+      avatarBounds: family.avatarBounds,
+      textBounds: family.textBounds,
+      menuBounds: family.menuBounds,
+      expectedAvatarDensity: Math.round(family.expectedAvatarDensity * 100) / 100,
+      expectedBimodalContrast: Math.round(family.expectedBimodalContrast * 100) / 100,
+      expectedMenuContrast: Math.round(family.expectedMenuContrast * 100) / 100,
+      samples: sampleInspections,
+      status: "READY",
+    };
+  }
+
+  return {
+    generatedAt: new Date().toISOString(),
+    canonicalDimensions: { width: CANON_W, height: CANON_H },
+    groups,
+    allGroupTags,
   };
 }

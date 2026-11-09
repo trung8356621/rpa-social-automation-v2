@@ -647,6 +647,70 @@ export type EndVisualMatchResult = {
   };
 };
 
+
+// C2.11.14: B3 Layout Template Review inspection types (Step 2C)
+export type BeginSampleTemplateInspection = {
+  sampleId: string;
+  regionId?: string;
+  groupTag: string;
+  rawDimensions: { width: number; height: number };
+  aspectRatio: number;
+  originalCropDataUrl?: string;
+  normalizedDataUrl: string; // 240x48 normalized grayscale PNG
+  edgesDataUrl: string; // 240x48 Sobel edge map PNG
+  grid: number[][]; // 6 rows x 24 cols edge density values [0..1]
+  verticalProjection: number[]; // 16 bins
+  horizontalProjection: number[]; // 24 bins
+  avatar: {
+    density: number;
+    squareness: number;
+    bounds: { x: number; y: number; width: number; height: number };
+  };
+  text: {
+    upperDensity: number;
+    gapDensity: number;
+    lowerDensity: number;
+    bimodalContrast: number;
+    bounds: { x: number; y: number; width: number; height: number };
+  };
+  menu: {
+    density: number;
+    voidDensity: number;
+    contrast: number;
+    bounds: { x: number; y: number; width: number; height: number };
+  };
+  isWideSinglePill: boolean;
+  error?: string;
+};
+
+export type BeginGroupTemplateInspection = {
+  groupTag: string;
+  sampleCount: number;
+  sampleIds: string[];
+  canonicalDimensions: { width: number; height: number }; // 240x48
+  nominalDimensions: { width: number; height: number };
+  nominalAspectRatio: number;
+  meanGrid: number[][]; // 6 rows x 24 cols mean edge density
+  varianceGrid: number[][]; // 6 rows x 24 cols variance
+  dynamicLowWeightCellsCount: number; // Cells with variance > 0.04
+  avatarBounds: { x: number; y: number; width: number; height: number };
+  textBounds: { x: number; y: number; width: number; height: number };
+  menuBounds: { x: number; y: number; width: number; height: number };
+  expectedAvatarDensity: number;
+  expectedBimodalContrast: number;
+  expectedMenuContrast: number;
+  samples: BeginSampleTemplateInspection[];
+  status: "READY" | "NO_CONFIRMED_SAMPLES" | "ERROR";
+  error?: string;
+};
+
+export type BeginLayoutInspectionReport = {
+  generatedAt: string;
+  canonicalDimensions: { width: number; height: number };
+  groups: Record<string, BeginGroupTemplateInspection>;
+  allGroupTags: string[];
+};
+
 // C2.11.13: BEGIN Layout Matching Experiment (B3) types
 export type BeginLayoutFeatureScores = {
   avatarFound: boolean;
@@ -705,6 +769,113 @@ export type BeginLayoutMatchResult = {
     durationMs: number;
     summary: string;
   };
+};
+
+// C2.11.15: B3 V2 Block-Level Layout Matching types
+export type BeginLayoutBlockType =
+  | "image_avatar"
+  | "primary_text"
+  | "secondary_text"
+  | "action_menu"
+  | "generic_block";
+
+export type BeginLayoutBlock = {
+  id: string;
+  type: BeginLayoutBlockType;
+  /** Normalized bounding box relative to candidate/header crop [0..1] */
+  normalizedBounds: {
+    x: number;
+    y: number;
+    width: number;
+    height: number;
+  };
+  aspectRatio: number;
+  density: number; // fill / edge density [0..1]
+  confidence: number; // [0..1]
+  required: boolean; // computed from multi-sample consistency or baseline threshold
+  label?: string;
+};
+
+export type BeginBlockVariant = {
+  variantId: string;
+  sampleCount: number;
+  sampleIds: string[];
+  nominalDimensions: { width: number; height: number };
+  nominalAspectRatio: number;
+  blocks: BeginLayoutBlock[];
+  consistencyScore: number;
+};
+
+export type BeginBlockCandidate = {
+  id: string;
+  rect: Rect;
+  confidence: number;
+  score: number;
+  status: "MATCHED" | "REJECTED" | "PARTIAL";
+  rejectionReason?: string;
+  matchedBlocksCount: number;
+  totalTemplateBlocks: number;
+  missingRequiredBlocks: string[];
+  extraBlocksCount: number;
+  geometryScore: number;
+  variantId: string;
+  cropDimensions: { width: number; height: number };
+  scale: number;
+  blocks?: BeginLayoutBlock[];
+};
+
+export type BeginBlockMatchResult = {
+  testedAt: string;
+  technique: "B3_V2_BLOCK_LEVEL_MATCHING";
+  referenceSampleIds: string[];
+  referenceBeginCount: number;
+  variantCount: number;
+  status: "MATCHED" | "NO_MATCH" | "PARTIAL" | "NO_REFERENCES";
+  screenshotDimensions: { width: number; height: number };
+  scale: number;
+  matchedCandidates: BeginBlockCandidate[];
+  rejectedCandidates: BeginBlockCandidate[];
+  diagnostics: {
+    decodeTimeMs: number;
+    preprocessTimeMs: number;
+    candidateGenerationTimeMs: number;
+    candidateComparisonTimeMs: number;
+    totalDurationMs: number;
+    evaluatedWindowsCount: number;
+    variants: Array<{ variantId: string; blockCount: number; sampleCount: number }>;
+  };
+};
+
+export type BeginSampleBlockInspection = {
+  sampleId: string;
+  regionId?: string;
+  groupTag: string;
+  rawDimensions: { width: number; height: number };
+  aspectRatio: number;
+  originalCropDataUrl?: string;
+  segmentedCropDataUrl?: string;
+  blocks: BeginLayoutBlock[];
+  error?: string;
+};
+
+export type BeginGroupBlockInspection = {
+  groupTag: string;
+  sampleCount: number;
+  sampleIds: string[];
+  canonicalDimensions: { width: number; height: number };
+  nominalDimensions: { width: number; height: number };
+  nominalAspectRatio: number;
+  variants: BeginBlockVariant[];
+  samples: BeginSampleBlockInspection[];
+  status: "READY" | "NO_CONFIRMED_SAMPLES" | "ERROR";
+  error?: string;
+};
+
+export type BeginBlockInspectionReport = {
+  generatedAt: string;
+  canonicalDimensions: { width: number; height: number };
+  groups: Record<string, BeginGroupBlockInspection>;
+  allGroupTags: string[];
 };
 
 export type LayoutContextKind = "FEED_ITEM" | "POST_DETAIL";

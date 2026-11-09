@@ -9,6 +9,8 @@ import type {
   EndVisualMatchResult,
   BeginLayoutCandidate,
   BeginLayoutMatchResult,
+  BeginBlockCandidate,
+  BeginBlockMatchResult,
   CollectorRegion,
 } from "../../shared/collectors/types.js";
 import {
@@ -27,6 +29,8 @@ import {
   collectorHighlightEndVisual,
   collectorMatchBeginLayout,
   collectorHighlightBeginLayout,
+  collectorMatchBeginBlockLayout,
+  collectorHighlightBeginBlockLayout,
   isElectronBrowserCoreAvailable,
   type CollectorInvoke,
 } from "./browser-capture.js";
@@ -55,13 +59,15 @@ export function StepMatchTest({
 
   // C2.11.12: Isolated END-only Visual Matching experiment mode
   // C2.11.13: Isolated BEGIN layout matching experiment (B3)
+  // C2.11.15: Isolated BEGIN block layout matching experiment (B3 V2)
   const [matchExperimentMode, setMatchExperimentMode] = useState<
-    "BEGIN_PRIMARY" | "END_ONLY_VISUAL" | "BEGIN_LAYOUT_B3"
+    "BEGIN_PRIMARY" | "END_ONLY_VISUAL" | "BEGIN_LAYOUT_B3" | "BEGIN_BLOCK_B3_V2"
   >("BEGIN_PRIMARY");
   const [endVisualResult, setEndVisualResult] = useState<EndVisualMatchResult | null>(null);
   const [beginLayoutResult, setBeginLayoutResult] = useState<BeginLayoutMatchResult | null>(null);
+  const [beginBlockResult, setBeginBlockResult] = useState<BeginBlockMatchResult | null>(null);
   const matchExperimentModeRef = useRef<
-    "BEGIN_PRIMARY" | "END_ONLY_VISUAL" | "BEGIN_LAYOUT_B3"
+    "BEGIN_PRIMARY" | "END_ONLY_VISUAL" | "BEGIN_LAYOUT_B3" | "BEGIN_BLOCK_B3_V2"
   >("BEGIN_PRIMARY");
   matchExperimentModeRef.current = matchExperimentMode;
 
@@ -106,19 +112,29 @@ export function StepMatchTest({
     matchTestResult?.error?.includes("Stale")
   );
   const displayStatus =
-    matchExperimentMode === "BEGIN_LAYOUT_B3" && beginLayoutResult
-      ? beginLayoutResult.status === "NO_REFERENCES"
+    matchExperimentMode === "BEGIN_BLOCK_B3_V2" && beginBlockResult
+      ? beginBlockResult.status === "NO_REFERENCES"
         ? "NO REFERENCES"
-        : beginLayoutResult.status === "NO_MATCH"
+        : beginBlockResult.status === "NO_MATCH"
           ? "NO MATCH"
-          : beginLayoutResult.status === "MATCHED"
+          : beginBlockResult.status === "MATCHED"
             ? "MATCHED"
-            : beginLayoutResult.status === "PARTIAL"
+            : beginBlockResult.status === "PARTIAL"
               ? "PARTIAL"
               : rawStatus
-      : rawStatus === "FAILED" && !isExecutionError && resolvedMatchedCount === 0
-        ? "NO MATCH"
-        : rawStatus;
+      : matchExperimentMode === "BEGIN_LAYOUT_B3" && beginLayoutResult
+        ? beginLayoutResult.status === "NO_REFERENCES"
+          ? "NO REFERENCES"
+          : beginLayoutResult.status === "NO_MATCH"
+            ? "NO MATCH"
+            : beginLayoutResult.status === "MATCHED"
+              ? "MATCHED"
+              : beginLayoutResult.status === "PARTIAL"
+                ? "PARTIAL"
+                : rawStatus
+        : rawStatus === "FAILED" && !isExecutionError && resolvedMatchedCount === 0
+          ? "NO MATCH"
+          : rawStatus;
 
   // Measure and report host frame bounds to Electron shell.
   // Suppresses redundant IPC calls if bounds have not changed.
@@ -464,6 +480,171 @@ export function StepMatchTest({
         return;
       }
 
+      // C2.11.15: Isolated BEGIN block layout matching experiment (B3 V2)
+      if (matchExperimentMode === "BEGIN_BLOCK_B3_V2") {
+        const captures = draftRef.current.captures ?? [];
+        const captureAuditMap = new Map(
+          (draftRef.current.captureAudits ?? []).map((a) => [a.captureItemId, a.status]),
+        );
+        const teachingCaptureId = draftRef.current.teachingCaptureId;
+
+        const regionMap = new Map<string, CollectorRegion>();
+        for (const r of [
+          ...(draftRef.current.regions ?? []),
+          ...captures.flatMap((c) => c.regions ?? []),
+        ]) {
+          if (!r?.id) continue;
+          const existing = regionMap.get(r.id);
+          if (!existing || (!existing.referenceImage && r.referenceImage)) {
+            regionMap.set(r.id, r);
+          }
+        }
+        const uniqueRegions = Array.from(regionMap.values());
+
+        const regionalLogs: Array<{
+          regionId: string;
+          sampleId: string;
+          groupTag: string;
+          confirmed: boolean;
+          hasDataUrl: boolean;
+          hasAssetId: boolean;
+          hasRoi: boolean;
+          accepted: boolean;
+          reason: string;
+          region: CollectorRegion;
+        }> = [];
+
+        for (const r of uniqueRegions) {
+          const parentCap = captures.find((c) => c.id === r.captureItemId);
+          const isBeginType =
+            r.type === "BEGIN" ||
+            (r.type === "STATIC" && r.role === "header") ||
+            r.role === "header";
+          const isConfirmed = Boolean(
+            r.confirmed ||
+            (parentCap ? captureAuditMap.get(parentCap.id) === "confirmed" : false) ||
+            (parentCap ? parentCap.id === teachingCaptureId : false)
+          );
+
+          if (!isBeginType) continue;
+
+          const hasDataUrl = Boolean(r.referenceImage && r.referenceImage.startsWith("data:"));
+          const hasAssetId = Boolean(parentCap?.imageAsset || r.referenceImageAsset);
+          const hasRoi = Boolean(
+            (r.originalRoi && r.originalRoi.width >= 4 && r.originalRoi.height >= 4) ||
+            (r.geometry && r.geometry.relW > 0 && r.geometry.relH > 0)
+          );
+          const isAccepted = isConfirmed && (hasDataUrl || (hasAssetId && hasRoi));
+
+          let reason = "ACCEPTED";
+          if (!isConfirmed) {
+            reason = "Region or parent capture is not confirmed";
+          } else if (!hasDataUrl && !hasAssetId) {
+            reason = "No reference crop image or parent screenshot asset available";
+          } else if (!hasDataUrl && !hasRoi) {
+            reason = "Has parent screenshot but missing valid ROI dimensions";
+          }
+
+          regionalLogs.push({
+            regionId: r.id,
+            sampleId: r.captureItemId,
+            groupTag: r.groupTag || "default",
+            confirmed: isConfirmed,
+            hasDataUrl,
+            hasAssetId,
+            hasRoi,
+            accepted: isAccepted,
+            reason,
+            region: r,
+          });
+        }
+
+        const acceptedRegions = regionalLogs
+          .filter((item) => item.accepted)
+          .map((item) => item.region);
+
+        if (acceptedRegions.length === 0) {
+          const detailReasons = regionalLogs
+            .map((item) => `[Region ${item.regionId} in Sample ${item.sampleId}]: ${item.reason}`)
+            .join("; ");
+          setErrorMsg(
+            detailReasons
+              ? `No usable confirmed BEGIN reference crops found: ${detailReasons}`
+              : "No confirmed BEGIN regions found in teaching samples. Please confirm a BEGIN region in Step 2A first.",
+          );
+          isRunningRef.current = false;
+          setIsRunning(false);
+          return;
+        }
+
+        const references = acceptedRegions.map((r) => {
+          const parentCap = captures.find((c) => c.id === r.captureItemId);
+          return {
+            sampleId: r.captureItemId,
+            regionId: r.id,
+            groupTag: r.groupTag,
+            referenceImage: r.referenceImage,
+            assetId: parentCap?.imageAsset || r.referenceImageAsset,
+            captureId: r.captureItemId,
+            originalRoi: r.originalRoi,
+            geometry: r.geometry,
+          };
+        });
+
+        const blockResult = await collectorMatchBeginBlockLayout(invoke, references);
+        setBeginBlockResult(blockResult);
+
+        // File-based structured diagnostic logging
+        try {
+          const diagRecord = {
+            timestamp: new Date().toISOString(),
+            matchRunId: `match_run_begin_block_${currentRunId}_${Date.now()}`,
+            mode: "BEGIN_BLOCK_B3_V2",
+            sessionId: draftRef.current.id,
+            url: currentUrl,
+            matchingTechnique: blockResult.technique,
+            referenceBeginSampleIds: blockResult.referenceSampleIds,
+            variantCount: blockResult.variantCount,
+            screenshotDimensions: blockResult.screenshotDimensions,
+            scale: blockResult.scale,
+            status: blockResult.status,
+            matchedCandidates: blockResult.matchedCandidates,
+            rejectedCandidates: blockResult.rejectedCandidates,
+            diagnostics: blockResult.diagnostics,
+          };
+          void collectorLogMatchDiagnostic(invoke, diagRecord);
+        } catch (logErr) {
+          console.error("Begin block layout match diagnostic logging failed", logErr);
+        }
+
+        if (!isMountedRef.current || currentRunId !== runIdRef.current || !matchModeRef.current) {
+          await collectorClearHighlights(invoke);
+          return;
+        }
+
+        if (blockResult.matchedCandidates.length > 0) {
+          await collectorHighlightBeginBlockLayout(invoke, blockResult.matchedCandidates);
+        } else {
+          await collectorClearHighlights(invoke);
+        }
+
+        const expTestResult: MatchTestResult = {
+          testedAt: blockResult.testedAt,
+          browserUrl: currentUrl,
+          status:
+            blockResult.status === "MATCHED"
+              ? "MATCHED"
+              : blockResult.status === "NO_REFERENCES"
+                ? ("NO_REFERENCES" as any)
+                : "FAILED",
+          matchedPostCount: blockResult.matchedCandidates.length,
+          groups: [],
+          summary: `B3 V2 Block Layout Match: ${blockResult.matchedCandidates.length} matched (${blockResult.status}), ${blockResult.diagnostics.evaluatedWindowsCount} windows in ${blockResult.diagnostics.totalDurationMs}ms`,
+        };
+        onChangeRef.current({ ...draftRef.current, matchTest: expTestResult, dirty: true });
+        return;
+      }
+
       const startTime = performance.now();
       // Real live DOM inspection strictly bounded to current visible viewport (NO SCROLL)
       const snapshot = await collectorInspectDom(invoke, currentUrl, draftRef.current.layoutContext);
@@ -693,12 +874,14 @@ export function StepMatchTest({
                 const nextMode = e.target.value as
                   | "BEGIN_PRIMARY"
                   | "END_ONLY_VISUAL"
-                  | "BEGIN_LAYOUT_B3";
+                  | "BEGIN_LAYOUT_B3"
+                  | "BEGIN_BLOCK_B3_V2";
                 setMatchExperimentMode(nextMode);
                 matchExperimentModeRef.current = nextMode;
                 // C2.11.13a: Reset stale experimental results and status when switching matching modes
                 setEndVisualResult(null);
                 setBeginLayoutResult(null);
+                setBeginBlockResult(null);
                 setErrorMsg(null);
                 if (invoke && isElectronBrowserCoreAvailable()) {
                   void collectorClearHighlights(invoke);
@@ -707,11 +890,13 @@ export function StepMatchTest({
               style={{
                 background: "#0f172a",
                 color:
-                  matchExperimentMode === "BEGIN_LAYOUT_B3"
-                    ? "#06b6d4"
-                    : matchExperimentMode === "END_ONLY_VISUAL"
-                      ? "#c084fc"
-                      : "#38bdf8",
+                  matchExperimentMode === "BEGIN_BLOCK_B3_V2"
+                    ? "#34d399"
+                    : matchExperimentMode === "BEGIN_LAYOUT_B3"
+                      ? "#06b6d4"
+                      : matchExperimentMode === "END_ONLY_VISUAL"
+                        ? "#c084fc"
+                        : "#38bdf8",
                 border: "1px solid #334155",
                 borderRadius: "3px",
                 padding: "3px 8px",
@@ -719,11 +904,12 @@ export function StepMatchTest({
                 fontWeight: 600,
                 cursor: "pointer",
               }}
-              title="Select matching mode: Production (Primary/BEGIN), Isolated END-Only, or B3 BEGIN Layout Experiment"
+              title="Select matching mode: Production, END Visual, B3 V1 Layout, or B3 V2 Block Layout"
             >
               <option value="BEGIN_PRIMARY">Production (Primary / BEGIN)</option>
               <option value="END_ONLY_VISUAL">🧪 END-Only Visual Experiment</option>
               <option value="BEGIN_LAYOUT_B3">🧪 BEGIN Layout Experiment (B3)</option>
+              <option value="BEGIN_BLOCK_B3_V2">🧪 BEGIN Block Layout Experiment (B3 V2)</option>
             </select>
           </div>
 
@@ -852,8 +1038,137 @@ export function StepMatchTest({
             )}
           </div>
 
-          {/* C2.11.13: BEGIN Layout Matching Experiment (B3) Results Card */}
-          {matchExperimentMode === "BEGIN_LAYOUT_B3" ? (
+          {/* C2.11.15: BEGIN Block Layout Matching Experiment (B3 V2) Results Card */}
+          {matchExperimentMode === "BEGIN_BLOCK_B3_V2" ? (
+            <div className="collector-match-items-section">
+              <div className="collector-match-items-head-row">
+                <h4 className="collector-section-title" style={{ margin: 0, color: "#10b981" }}>
+                  🧪 BEGIN Block Layout Experiment (B3 V2) (Screenshot Space)
+                </h4>
+                <span className="collector-count-pill matched has-matches" style={{ backgroundColor: "#065f46" }}>
+                  Matched: <b>{beginBlockResult?.matchedCandidates?.length ?? 0}</b>
+                </span>
+              </div>
+
+              <div
+                style={{
+                  background: "#064e3b",
+                  border: "1px solid #059669",
+                  borderRadius: "4px",
+                  padding: "8px 12px",
+                  marginBottom: "10px",
+                  fontSize: "11px",
+                  color: "#d1fae5",
+                }}
+              >
+                <b>Matching Technique:</b> {beginBlockResult?.technique || "B3_V2_BLOCK_LEVEL_MATCHING"}<br />
+                <b>Reference Crops:</b> {beginBlockResult?.referenceBeginCount ?? 0} sample(s) | <b>Variants:</b> {beginBlockResult?.variantCount ?? 0} | <b>Scale:</b> {beginBlockResult?.scale ?? 1.0}×<br />
+                {beginBlockResult?.diagnostics && (
+                  <div style={{ marginTop: "4px", fontSize: "10px", color: "#a7f3d0" }}>
+                    <b>Performance:</b> Decode: {beginBlockResult.diagnostics.decodeTimeMs}ms | Preprocess: {beginBlockResult.diagnostics.preprocessTimeMs}ms | Gen: {beginBlockResult.diagnostics.candidateGenerationTimeMs}ms | Compare: {beginBlockResult.diagnostics.candidateComparisonTimeMs}ms | <b>Total: {beginBlockResult.diagnostics.totalDurationMs}ms</b> ({beginBlockResult.diagnostics.evaluatedWindowsCount} windows)
+                  </div>
+                )}
+                <div style={{ marginTop: "4px", color: "#6ee7b7", fontWeight: 700 }}>
+                  ⚠️ B3 V2 VISUAL CANDIDATE — NOT DOM VERIFIED
+                </div>
+                <span style={{ color: "#a7f3d0", fontSize: "10px" }}>
+                  Note: Whole-layout block matching. Matches abstract geometry (avatar, text-line strips, action menu) instead of stroke/texture pixels, eliminating body text and media false positives.
+                </span>
+              </div>
+
+              {(!beginBlockResult?.matchedCandidates || beginBlockResult.matchedCandidates.length === 0) && (
+                <div className="collector-sample-empty">
+                  {displayStatus === "NOT TESTED"
+                    ? "Click 'Re-match Current Viewport' in Match Mode ON to test B3 V2 block-level layout matching."
+                    : beginBlockResult?.status === "NO_REFERENCES"
+                      ? "NO REFERENCES: 0 confirmed BEGIN reference crops found. Ensure at least one BEGIN anchor is confirmed in Review 2A."
+                      : beginBlockResult?.status === "PARTIAL"
+                        ? "Partial header detected at viewport boundary; insufficient complete block evidence."
+                        : "0 post headers matched by B3 V2. Ensure post headers are visible in viewport."}
+                </div>
+              )}
+
+              {beginBlockResult?.matchedCandidates?.map((cand, idx) => (
+                <div
+                  key={cand.id || `begin-block-${idx}`}
+                  className="collector-match-item-card resolved"
+                  style={{ borderLeftColor: "#10b981" }}
+                >
+                  <div className="collector-match-item-head">
+                    <div style={{ display: "flex", gap: "8px", alignItems: "center" }}>
+                      <span className="collector-match-num-badge" style={{ backgroundColor: "#059669" }}>
+                        #{idx + 1}
+                      </span>
+                      <b style={{ color: "#e2e8f0" }}>B3 V2 VISUAL CANDIDATE — NOT DOM VERIFIED</b>
+                      <span style={{ color: "#34d399", fontSize: "11px", fontFamily: "monospace" }}>
+                        [{cand.rect.x}, {cand.rect.y}, {cand.rect.width}×{cand.rect.height}]
+                      </span>
+                    </div>
+                    <span className="collector-match-pill small status-matched" style={{ background: "#065f46", color: "#6ee7b7" }}>
+                      {cand.confidence}% MATCH
+                    </span>
+                  </div>
+
+                  <div style={{ marginTop: "6px", fontSize: "11px", color: "#94a3b8", display: "flex", gap: "10px", flexWrap: "wrap" }}>
+                    <span>Matched Blocks: <b style={{ color: "#34d399" }}>{cand.matchedBlocksCount} / {cand.totalTemplateBlocks}</b></span>
+                    <span>Geometry Alignment: <b style={{ color: "#38bdf8" }}>{Math.round(cand.geometryScore * 100)}%</b></span>
+                    <span>Extra Blocks: <b>{cand.extraBlocksCount}</b></span>
+                    <span>Variant: <code style={{ color: "#cbd5e1" }}>{cand.variantId}</code></span>
+                  </div>
+
+                  {cand.blocks && cand.blocks.length > 0 && (
+                    <div style={{ display: "flex", gap: "4px", marginTop: "6px", flexWrap: "wrap" }}>
+                      {cand.blocks.map((b) => (
+                        <span
+                          key={b.id}
+                          style={{
+                            fontSize: "9px",
+                            padding: "1px 5px",
+                            background: "#091e17",
+                            border: "1px solid #059669",
+                            color: "#6ee7b7",
+                            borderRadius: "2px",
+                          }}
+                        >
+                          {b.label || b.type}
+                        </span>
+                      ))}
+                    </div>
+                  )}
+                </div>
+              ))}
+
+              {beginBlockResult?.rejectedCandidates && beginBlockResult.rejectedCandidates.length > 0 && (
+                <div style={{ marginTop: "12px" }}>
+                  <small style={{ color: "#94a3b8", fontWeight: 600 }}>
+                    Rejected Candidate Zones ({beginBlockResult.rejectedCandidates.length}):
+                  </small>
+                  <div style={{ display: "flex", flexDirection: "column", gap: "4px", marginTop: "4px" }}>
+                    {beginBlockResult.rejectedCandidates.map((rej, rIdx) => (
+                      <div
+                        key={rej.id || `blk-rej-${rIdx}`}
+                        style={{
+                          background: "#0f172a",
+                          border: "1px solid #1e293b",
+                          borderRadius: "3px",
+                          padding: "4px 8px",
+                          fontSize: "10px",
+                        }}
+                      >
+                        <span style={{ color: "#f87171", fontWeight: 600 }}>REJECTED at y={rej.rect.y}:</span>{" "}
+                        <span style={{ color: "#cbd5e1" }}>{rej.rejectionReason}</span>
+                        {rej.missingRequiredBlocks && rej.missingRequiredBlocks.length > 0 && (
+                          <span style={{ color: "#fca5a5", marginLeft: "6px" }}>
+                            [Missing: {rej.missingRequiredBlocks.join(", ")}]
+                          </span>
+                        )}
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              )}
+            </div>
+          ) : matchExperimentMode === "BEGIN_LAYOUT_B3" ? (
             <div className="collector-match-items-section">
               <div className="collector-match-items-head-row">
                 <h4 className="collector-section-title" style={{ margin: 0, color: "#06b6d4" }}>

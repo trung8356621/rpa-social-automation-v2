@@ -13,6 +13,10 @@ import type {
   EndVisualMatchResult,
   BeginLayoutCandidate,
   BeginLayoutMatchResult,
+  BeginLayoutInspectionReport,
+  BeginBlockCandidate,
+  BeginBlockMatchResult,
+  BeginBlockInspectionReport,
   NormalizedRegionGeometry,
 } from "../../shared/collectors/types";
 import { WEB_HEIGHT, WEB_WIDTH } from "../../shared/geometry";
@@ -309,5 +313,116 @@ export async function collectorHighlightBeginLayout(
 ): Promise<void> {
   if (!isElectronBrowserCoreAvailable()) return;
   await invoke({ type: "collectorHighlightBeginLayout", matches });
+}
+
+export async function collectorInspectBeginTemplate(
+  invoke: CollectorInvoke,
+  references: Array<{
+    sampleId?: string;
+    regionId?: string;
+    groupTag?: string;
+    referenceImage?: string;
+    assetId?: string;
+    captureId?: string;
+    originalRoi?: Rect;
+    geometry?: NormalizedRegionGeometry;
+  }>,
+  groupTag?: string,
+): Promise<BeginLayoutInspectionReport> {
+  if (!isElectronBrowserCoreAvailable()) {
+    return {
+      generatedAt: new Date().toISOString(),
+      canonicalDimensions: { width: 240, height: 48 },
+      groups: {},
+      allGroupTags: [],
+    };
+  }
+  return invoke<BeginLayoutInspectionReport>({
+    type: "collectorInspectBeginTemplate",
+    references,
+    groupTag,
+  });
+}
+
+// C2.11.15: B3 V2 Block-Level Layout Matching IPC Wrappers
+export async function collectorMatchBeginBlockLayout(
+  invoke: CollectorInvoke,
+  references: Array<{
+    sampleId?: string;
+    regionId?: string;
+    groupTag?: string;
+    referenceImage?: string;
+    assetId?: string;
+    captureId?: string;
+    originalRoi?: Rect;
+    geometry?: NormalizedRegionGeometry;
+  }>,
+  options?: { scaleVariants?: number[]; minConfidence?: number },
+): Promise<BeginBlockMatchResult> {
+  if (!isElectronBrowserCoreAvailable()) {
+    return {
+      testedAt: new Date().toISOString(),
+      technique: "B3_V2_BLOCK_LEVEL_MATCHING",
+      referenceSampleIds: references.map((r) => r.sampleId || "").filter(Boolean),
+      referenceBeginCount: references.length,
+      variantCount: 0,
+      status: "NO_MATCH",
+      screenshotDimensions: { width: 1280, height: 800 },
+      scale: 1.0,
+      matchedCandidates: [],
+      rejectedCandidates: [],
+      diagnostics: {
+        decodeTimeMs: 0,
+        preprocessTimeMs: 0,
+        candidateGenerationTimeMs: 0,
+        candidateComparisonTimeMs: 0,
+        totalDurationMs: 0,
+        evaluatedWindowsCount: 0,
+        variants: [],
+      },
+    };
+  }
+  return invoke<BeginBlockMatchResult>({
+    type: "collectorMatchBeginBlockLayout",
+    references,
+    options,
+  });
+}
+
+export async function collectorHighlightBeginBlockLayout(
+  invoke: CollectorInvoke,
+  matches: BeginBlockCandidate[],
+): Promise<void> {
+  if (!isElectronBrowserCoreAvailable()) return;
+  await invoke({ type: "collectorHighlightBeginBlockLayout", matches });
+}
+
+export async function collectorInspectBeginBlockTemplate(
+  invoke: CollectorInvoke,
+  references: Array<{
+    sampleId?: string;
+    regionId?: string;
+    groupTag?: string;
+    referenceImage?: string;
+    assetId?: string;
+    captureId?: string;
+    originalRoi?: Rect;
+    geometry?: NormalizedRegionGeometry;
+  }>,
+  groupTag?: string,
+): Promise<BeginBlockInspectionReport> {
+  if (!isElectronBrowserCoreAvailable()) {
+    return {
+      generatedAt: new Date().toISOString(),
+      canonicalDimensions: { width: 240, height: 48 },
+      groups: {},
+      allGroupTags: [],
+    };
+  }
+  return invoke<BeginBlockInspectionReport>({
+    type: "collectorInspectBeginBlockTemplate",
+    references,
+    groupTag,
+  });
 }
 
