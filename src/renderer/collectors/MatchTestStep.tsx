@@ -173,7 +173,12 @@ export function StepMatchTest({
         return;
       }
 
-      const result = executeLiveBrowserMatchTest(draftRef.current.regions ?? [], snapshot, draftRef.current);
+      const result = executeLiveBrowserMatchTest(
+        draftRef.current.regions ?? [],
+        snapshot,
+        draftRef.current,
+        { mode: "BEGIN_ONLY", isolateBeginOnly: true },
+      );
       const durationMs = Math.round(performance.now() - startTime);
 
       // Filter to highlight ONLY successfully resolved containers (never unresolved candidates)
@@ -181,12 +186,29 @@ export function StepMatchTest({
 
       // File-based structured diagnostic logging on manual Match Test / Re-match
       try {
+        const primaryGroup = result.groups[0];
+        const primaryDiag = primaryGroup?.candidateDiagnostics;
+
         const diagRecord = {
           timestamp: new Date().toISOString(),
           matchRunId: `match_run_${currentRunId}_${Date.now()}`,
+          mode: "BEGIN_ONLY",
           sessionId: draftRef.current.id,
           url: snapshot.url || currentUrl,
           viewport: snapshot.viewport,
+          groupTag: primaryGroup?.groupTag || "default",
+          trainingSampleCount: primaryDiag?.trainingSampleCount ?? 1,
+          learnedFeatures: primaryDiag?.learnedFeatures ?? [],
+          liveCandidates: {
+            beforeDeduplication: primaryDiag?.liveCandidatesBeforeDeduplication ?? 0,
+            afterDeduplication: primaryDiag?.liveCandidatesAfterDeduplication ?? 0,
+          },
+          topCandidates: primaryDiag?.topCandidates ?? [],
+          selectedCandidate: primaryDiag?.selectedCandidate ?? null,
+          rejectionReasons: primaryDiag?.rejectionReasons ?? [],
+          outerContainerDiagnostics: primaryDiag?.outerContainerDiagnostics ?? [],
+          deduplicationDecisions: primaryDiag?.deduplicationDecisions ?? [],
+          finalUniquePostCount: primaryDiag?.finalUniquePostCount ?? result.matchedPostCount,
           totalNodes: snapshot.elements?.length || 0,
           inViewportNodes: snapshot.elements?.filter((e) => e.rect.width > 0 && e.rect.height > 0).length || 0,
           articlesFound: snapshot.elements?.filter((e) => e.isArticleOrCard).length || 0,

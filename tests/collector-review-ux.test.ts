@@ -967,3 +967,43 @@ test("UX 21: C2.10.4 Early Validation & Live Browser Match Test", () => {
   assert.match(matchStepSource, /hasAutoRunRef/);
   assert.match(matchStepSource, /Re-run Match Test/);
 });
+
+// ---------------------------------------------------------------------------
+// C2.11.6: Floating Anchor Editor UX Tests
+// ---------------------------------------------------------------------------
+
+test("UX 22: C2.11.6 Floating Anchor Editor & Uniform Input Row Architecture", () => {
+  const cssSource = readFileSync(resolve("src/renderer/style.css"), "utf8");
+  const reviewStepSource = readFileSync(resolve("src/renderer/collectors/ReviewMappingStep.tsx"), "utf8");
+  const comboboxSource = readFileSync(resolve("src/renderer/collectors/GroupTagCombobox.tsx"), "utf8");
+
+  // 1. Floating anchor editor is absolutely positioned with high z-index inside positioned workspace
+  assert.match(cssSource, /\.collector-floating-anchor-editor\s*\{[^}]*position:\s*absolute/);
+  assert.match(cssSource, /\.collector-floating-anchor-editor\s*\{[^}]*z-index:\s*60/);
+  assert.match(cssSource, /\.collector-review-image-pane\s*\{[^}]*position:\s*relative/);
+  assert.match(cssSource, /\.collector-review-image-pane\s*\{[^}]*overflow:\s*hidden/);
+
+  // 2. Uniform input row aligns Type, Group Tag, and Label on one horizontal row
+  assert.match(cssSource, /\.collector-uniform-input-row\s*\{[^}]*display:\s*flex/);
+  assert.match(cssSource, /\.collector-uniform-input-col\.type-col/);
+  assert.match(cssSource, /\.collector-uniform-input-col\.group-col/);
+  assert.match(cssSource, /\.collector-uniform-input-col\.label-col/);
+
+  // 3. Candidate Variables container has dedicated max-height and overflow-y: auto
+  assert.match(cssSource, /\.collector-var-scroll-container\s*\{[^}]*max-height:\s*85px/);
+  assert.match(cssSource, /\.collector-var-scroll-container\s*\{[^}]*overflow-y:\s*auto/);
+
+  // 4. Footer actions row exists and stays visible
+  assert.match(cssSource, /\.collector-floating-actions\s*\{[^}]*display:\s*flex/);
+
+  // 5. ReviewMappingStep integrates floating editor and scrollable variable container
+  assert.match(reviewStepSource, /collector-floating-anchor-editor/);
+  assert.match(reviewStepSource, /collector-uniform-input-row/);
+  assert.match(reviewStepSource, /collector-var-scroll-container/);
+  assert.match(reviewStepSource, /collector-floating-actions/);
+  assert.match(reviewStepSource, /dropdownPlacement="top"/);
+
+  // 6. GroupTagCombobox supports dropdownPlacement
+  assert.match(comboboxSource, /dropdownPlacement/);
+  assert.match(comboboxSource, /openUpward/);
+});

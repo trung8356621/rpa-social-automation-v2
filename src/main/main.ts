@@ -1820,6 +1820,7 @@ async function boot() {
 
                 const id = 'dom_' + count;
                 nodeToId.set(node, id);
+                node.setAttribute('data-rpa-dom-id', id);
 
                 // Find nearest recorded ancestor ID
                 let parentId = undefined;
@@ -1898,10 +1899,65 @@ async function boot() {
         await wc
           .executeJavaScript(
             `(() => {
+          // Clear previous highlights
+          document.querySelectorAll('.__rpa_highlight_badge__').forEach((b) => b.remove());
+          document.querySelectorAll('[data-rpa-highlight]').forEach((el) => {
+            el.style.outline = el.getAttribute('data-rpa-orig-outline') || '';
+            el.style.boxShadow = el.getAttribute('data-rpa-orig-box-shadow') || '';
+            el.style.position = el.getAttribute('data-rpa-orig-position') || '';
+            el.removeAttribute('data-rpa-highlight');
+            el.removeAttribute('data-rpa-orig-outline');
+            el.removeAttribute('data-rpa-orig-box-shadow');
+            el.removeAttribute('data-rpa-orig-position');
+          });
           const old = document.getElementById('__rpa_match_test_overlay__');
           if (old) old.remove();
+
           const items = ${JSON.stringify(matches)};
           if (!items || items.length === 0) return;
+
+          let highlightedOnDom = false;
+
+          // 1. Direct DOM Element Highlighting (scrolls naturally with page)
+          items.forEach((m) => {
+            const containerId = m.containerId;
+            if (containerId) {
+              const targetEl = document.querySelector('[data-rpa-dom-id="' + containerId + '"]');
+              if (targetEl && targetEl instanceof HTMLElement) {
+                highlightedOnDom = true;
+                targetEl.setAttribute('data-rpa-highlight', 'container');
+                targetEl.setAttribute('data-rpa-orig-outline', targetEl.style.outline || '');
+                targetEl.setAttribute('data-rpa-orig-box-shadow', targetEl.style.boxShadow || '');
+                targetEl.setAttribute('data-rpa-orig-position', targetEl.style.position || '');
+                targetEl.style.outline = '3px solid #38bdf8';
+                targetEl.style.outlineOffset = '2px';
+                targetEl.style.boxShadow = '0 0 14px rgba(56, 189, 248, 0.45)';
+                if (getComputedStyle(targetEl).position === 'static') {
+                  targetEl.style.position = 'relative';
+                }
+                const badge = document.createElement('div');
+                badge.className = '__rpa_highlight_badge__';
+                badge.style.cssText =
+                  'position:absolute;top:-24px;left:0;background:#0284c7;color:#ffffff;font-size:11px;font-weight:bold;padding:1px 6px;border-radius:3px;font-family:system-ui,sans-serif;box-shadow:0 1px 3px rgba(0,0,0,0.5);white-space:nowrap;z-index:2147483647;pointer-events:none;';
+                badge.textContent = '#' + m.index + ' Post Container (' + (m.groupTag || 'default') + ')';
+                targetEl.appendChild(badge);
+              }
+            }
+
+            // Also highlight the inner BEGIN header element with a green dashed outline
+            if (m.beginElementId && m.beginElementId !== m.containerId) {
+              const beginEl = document.querySelector('[data-rpa-dom-id="' + m.beginElementId + '"]');
+              if (beginEl && beginEl instanceof HTMLElement) {
+                beginEl.setAttribute('data-rpa-highlight', 'begin');
+                beginEl.setAttribute('data-rpa-orig-outline', beginEl.style.outline || '');
+                beginEl.setAttribute('data-rpa-orig-box-shadow', beginEl.style.boxShadow || '');
+                beginEl.style.outline = '2px dashed #22c55e';
+                beginEl.style.outlineOffset = '1px';
+              }
+            }
+          });
+
+          // 2. Viewport Overlay Fallback / Supplementary Boxes
           const overlay = document.createElement('div');
           overlay.id = '__rpa_match_test_overlay__';
           overlay.style.cssText = 'position:fixed;top:0;left:0;width:100vw;height:100vh;pointer-events:none;z-index:2147483647;';
@@ -1910,16 +1966,27 @@ async function boot() {
             { border: '#818cf8', bg: 'rgba(129,140,248,0.25)', badge: '#4f46e5' },
             { border: '#a78bfa', bg: 'rgba(167,139,250,0.25)', badge: '#7c3aed' },
           ];
+
+          let addedOverlayCount = 0;
           items.forEach((m) => {
-            if (!m.containerRect) return;
+            const rect = m.containerRect || m.beginRect;
+            if (!rect) return;
+
+            // If already highlighted directly on the DOM node, skip duplicate box
+            if (m.containerId && document.querySelector('[data-rpa-dom-id="' + m.containerId + '"]')) {
+              return;
+            }
+
+            addedOverlayCount++;
             const theme = containerColors[(m.index - 1) % containerColors.length] || containerColors[0];
             const box = document.createElement('div');
-            box.style.cssText = 'position:absolute;left:' + m.containerRect.x + 'px;top:' + m.containerRect.y + 'px;width:' + m.containerRect.width + 'px;height:' + m.containerRect.height + 'px;border:2px solid ' + theme.border + ';box-shadow:0 0 0 1px rgba(0,0,0,0.8),inset 0 0 12px ' + theme.bg + ';border-radius:4px;box-sizing:border-box;pointer-events:none;';
+            box.style.cssText = 'position:absolute;left:' + rect.x + 'px;top:' + rect.y + 'px;width:' + rect.width + 'px;height:' + rect.height + 'px;border:2px solid ' + (m.beginRect && !m.containerRect ? '#22c55e' : theme.border) + ';box-shadow:0 0 0 1px rgba(0,0,0,0.8),inset 0 0 12px ' + theme.bg + ';border-radius:4px;box-sizing:border-box;pointer-events:none;';
             const badge = document.createElement('div');
-            badge.style.cssText = 'position:absolute;top:-22px;left:0;background:' + theme.badge + ';color:#ffffff;font-size:11px;font-weight:bold;padding:1px 6px;border-radius:3px;font-family:system-ui,sans-serif;box-shadow:0 1px 3px rgba(0,0,0,0.5);white-space:nowrap;';
-            badge.textContent = '#' + m.index + ' Post Container (' + (m.groupTag || 'default') + ')';
+            badge.style.cssText = 'position:absolute;top:-22px;left:0;background:' + (m.beginRect && !m.containerRect ? '#15803d' : theme.badge) + ';color:#ffffff;font-size:11px;font-weight:bold;padding:1px 6px;border-radius:3px;font-family:system-ui,sans-serif;box-shadow:0 1px 3px rgba(0,0,0,0.5);white-space:nowrap;';
+            badge.textContent = '#' + m.index + ' ' + (m.beginRect && !m.containerRect ? 'BEGIN Header' : 'Post Container') + ' (' + (m.groupTag || 'default') + ')';
             box.appendChild(badge);
-            if (m.beginRect) {
+
+            if (m.containerRect && m.beginRect) {
               const b = document.createElement('div');
               b.style.cssText = 'position:absolute;left:' + (m.beginRect.x - m.containerRect.x) + 'px;top:' + (m.beginRect.y - m.containerRect.y) + 'px;width:' + m.beginRect.width + 'px;height:' + m.beginRect.height + 'px;border:2px dashed #4ade80;background:rgba(74,222,128,0.2);box-sizing:border-box;pointer-events:none;';
               const bLabel = document.createElement('span');
@@ -1928,18 +1995,12 @@ async function boot() {
               b.appendChild(bLabel);
               box.appendChild(b);
             }
-            if (m.endRect) {
-              const e = document.createElement('div');
-              e.style.cssText = 'position:absolute;left:' + (m.endRect.x - m.containerRect.x) + 'px;top:' + (m.endRect.y - m.containerRect.y) + 'px;width:' + m.endRect.width + 'px;height:' + m.endRect.height + 'px;border:2px dashed #fb923c;background:rgba(251,146,60,0.2);box-sizing:border-box;pointer-events:none;';
-              const eLabel = document.createElement('span');
-              eLabel.style.cssText = 'position:absolute;bottom:-16px;left:0;background:#c2410c;color:#fff;font-size:9px;padding:0 3px;border-radius:2px;';
-              eLabel.textContent = 'END';
-              e.appendChild(eLabel);
-              box.appendChild(e);
-            }
             overlay.appendChild(box);
           });
-          document.documentElement.appendChild(overlay);
+
+          if (addedOverlayCount > 0) {
+            document.documentElement.appendChild(overlay);
+          }
         })()`,
           )
           .catch(() => {});
@@ -1951,6 +2012,16 @@ async function boot() {
         await wc
           .executeJavaScript(
             `(() => {
+          document.querySelectorAll('.__rpa_highlight_badge__').forEach((b) => b.remove());
+          document.querySelectorAll('[data-rpa-highlight]').forEach((el) => {
+            el.style.outline = el.getAttribute('data-rpa-orig-outline') || '';
+            el.style.boxShadow = el.getAttribute('data-rpa-orig-box-shadow') || '';
+            el.style.position = el.getAttribute('data-rpa-orig-position') || '';
+            el.removeAttribute('data-rpa-highlight');
+            el.removeAttribute('data-rpa-orig-outline');
+            el.removeAttribute('data-rpa-orig-box-shadow');
+            el.removeAttribute('data-rpa-orig-position');
+          });
           const old = document.getElementById('__rpa_match_test_overlay__');
           if (old) old.remove();
         })()`,

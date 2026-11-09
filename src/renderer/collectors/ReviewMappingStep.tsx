@@ -1759,9 +1759,9 @@ export function StepReviewMapping({ draft, locked, onChange, invoke }: Props) {
               )}
             </div>
 
-            {/* STAGE 2A — Docked Region Editor (New Region Creation) */}
+            {/* STAGE 2A — Floating Region Editor (New Region Creation) */}
             {step2Stage === "regions" && newRegionBox && (
-              <div className="collector-selected-segment-dock">
+              <div className="collector-floating-anchor-editor">
                 <div className="collector-dock-head">
                   <div style={{ display: "flex", gap: "8px", alignItems: "center" }}>
                     <b>Define Region Anchor</b>
@@ -1771,9 +1771,11 @@ export function StepReviewMapping({ draft, locked, onChange, invoke }: Props) {
                   </div>
                   <button type="button" className="close-btn" onClick={() => setNewRegionBox(null)}>✕</button>
                 </div>
-                <div style={{ display: "flex", gap: "10px", alignItems: "center", flexWrap: "wrap", marginTop: "4px" }}>
-                  <label style={{ display: "flex", gap: "4px", alignItems: "center", fontSize: "11px" }}>
-                    <b>Type:</b>
+
+                {/* Uniform Input Row: Type, Group Tag, Label */}
+                <div className="collector-uniform-input-row">
+                  <div className="collector-uniform-input-col type-col">
+                    <label>Type:</label>
                     <select
                       value={newRegionType}
                       onChange={(e) => {
@@ -1811,10 +1813,11 @@ export function StepReviewMapping({ draft, locked, onChange, invoke }: Props) {
                       <option value="END">END ANCHOR</option>
                       <option value="FREE">FREE REGION</option>
                     </select>
-                  </label>
+                  </div>
+
                   {newRegionType !== "FREE" && (
-                    <label style={{ display: "flex", gap: "4px", alignItems: "center", fontSize: "11px" }}>
-                      <b>Group Tag:</b>
+                    <div className="collector-uniform-input-col group-col">
+                      <label>Group Tag:</label>
                       <GroupTagCombobox
                         value={newRegionGroupTag}
                         onChange={(tag) => {
@@ -1831,59 +1834,64 @@ export function StepReviewMapping({ draft, locked, onChange, invoke }: Props) {
                         }}
                         suggestions={createGroupSuggestions}
                         placeholder="e.g. post-main"
+                        dropdownPlacement="top"
                       />
-                    </label>
+                    </div>
                   )}
-                  <label style={{ display: "flex", gap: "4px", alignItems: "center", fontSize: "11px", flex: 1, minWidth: "150px" }}>
-                    <b>Label:</b>
+
+                  <div className="collector-uniform-input-col label-col">
+                    <label>Label:</label>
                     <input
                       type="text"
                       value={newRegionLabel}
                       placeholder="e.g. Header Anchor"
                       onChange={(e) => setNewRegionLabel(e.target.value)}
-                      style={{ flex: 1, padding: "2px 6px", fontSize: "11px" }}
                     />
-                  </label>
+                  </div>
                 </div>
 
-                {/* Candidate Variable Checkbox UI — Compact Responsive Grid */}
+                {/* Candidate Variable Checkbox UI — Dedicated Scrollable Container */}
                 {draft.variables.length > 0 && (
-                  <div style={{ marginTop: "6px" }}>
-                    <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
-                      <small style={{ color: "#7f93ab" }}>Candidate Variables:</small>
+                  <div className="collector-var-section">
+                    <div className="collector-var-section-header">
+                      <span style={{ color: "#94a3b8", fontWeight: 600 }}>Candidate Variables:</span>
                       {learnedVarsNotice && (
-                        <small style={{ color: "#38bdf8", fontWeight: "bold" }}>
+                        <span style={{ color: "#38bdf8", fontWeight: "bold" }}>
                           ⚡ {learnedVarsNotice}
-                        </small>
+                        </span>
                       )}
                     </div>
-                    <div className="collector-var-checkbox-grid">
-                      {draft.variables.map((v) => {
-                        const checked = newRegionVars.includes(v.key);
-                        return (
-                          <label
-                            key={v.id}
-                            className={`collector-var-checkbox-item ${checked ? "checked" : ""}`}
-                            title={`${v.label} (${v.key})`}
-                          >
-                            <input
-                              type="checkbox"
-                              checked={checked}
-                              onChange={() => {
-                                setNewRegionVars((prev) =>
-                                  checked ? prev.filter((k) => k !== v.key) : [...prev, v.key],
-                                );
-                                setLearnedVarsNotice(null);
-                              }}
-                            />
-                            <span>{v.label}</span>
-                          </label>
-                        );
-                      })}
+                    <div className="collector-var-scroll-container">
+                      <div className="collector-var-checkbox-grid">
+                        {draft.variables.map((v) => {
+                          const checked = newRegionVars.includes(v.key);
+                          return (
+                            <label
+                              key={v.id}
+                              className={`collector-var-checkbox-item ${checked ? "checked" : ""}`}
+                              title={`${v.label} (${v.key})`}
+                            >
+                              <input
+                                type="checkbox"
+                                checked={checked}
+                                onChange={() => {
+                                  setNewRegionVars((prev) =>
+                                    checked ? prev.filter((k) => k !== v.key) : [...prev, v.key],
+                                  );
+                                  setLearnedVarsNotice(null);
+                                }}
+                              />
+                              <span>{v.label}</span>
+                            </label>
+                          );
+                        })}
+                      </div>
                     </div>
                   </div>
                 )}
-                <div style={{ display: "flex", gap: "6px", marginTop: "8px" }}>
+
+                {/* Footer Actions */}
+                <div className="collector-floating-actions">
                   <button type="button" className="primary" onClick={handleSaveRegion}>
                     Save Region
                   </button>
@@ -1894,11 +1902,11 @@ export function StepReviewMapping({ draft, locked, onChange, invoke }: Props) {
               </div>
             )}
 
-            {/* STAGE 2A — Selected Region Editor in Dock (Requirement 2) */}
+            {/* STAGE 2A — Selected Region Editor in Floating Panel */}
             {step2Stage === "regions" && !newRegionBox && selectedRegion && (
-              <div className="collector-selected-segment-dock">
+              <div className="collector-floating-anchor-editor">
                 <div className="collector-dock-head">
-                  <div style={{ display: "flex", gap: "6px", alignItems: "center" }}>
+                  <div style={{ display: "flex", gap: "6px", alignItems: "center", flexWrap: "wrap" }}>
                     <span className={`script-badge ${selectedRegion.type === "BEGIN" ? "badge-active" : selectedRegion.type === "END" ? "badge-draft" : ""}`}>
                       {selectedRegion.type}
                     </span>
@@ -1915,63 +1923,65 @@ export function StepReviewMapping({ draft, locked, onChange, invoke }: Props) {
                   <button type="button" className="close-btn" onClick={() => setSelectedRegionId(undefined)}>✕</button>
                 </div>
 
-                {/* Editable Properties Grid: Type, Group Tag, Label */}
-                <div className="collector-region-edit-grid">
-                  <div className="collector-region-edit-row">
-                    <label>
-                      <b>Type:</b>
-                      <select
-                        value={selectedRegion.type}
-                        onChange={(e) => {
-                          const nextType = e.target.value as CollectorRegionType;
-                          handleUpdateRegionProps(selectedRegion.id, {
-                            type: nextType,
-                            groupTag: nextType === "FREE" ? undefined : (selectedRegion.groupTag || "post-main"),
-                            role: nextType === "BEGIN" ? "header" : nextType === "END" ? "footer" : "custom",
-                          });
-                        }}
-                      >
-                        <option value="BEGIN">BEGIN ANCHOR</option>
-                        <option value="END">END ANCHOR</option>
-                        <option value="FREE">FREE REGION</option>
-                        {selectedRegion.type === "STATIC" && <option value="STATIC">STATIC (Legacy)</option>}
-                        {selectedRegion.type === "DYNAMIC" && <option value="DYNAMIC">DYNAMIC (Legacy)</option>}
-                      </select>
-                    </label>
-
-                    {selectedRegion.type !== "FREE" && (
-                      <label style={{ display: "flex", gap: "4px", alignItems: "center", fontSize: "11px" }}>
-                        <b>Group Tag:</b>
-                        <GroupTagCombobox
-                          value={selectedRegion.groupTag ?? ""}
-                          onChange={(tag) =>
-                            handleUpdateRegionProps(selectedRegion.id, {
-                              groupTag: tag.trim() || undefined,
-                            })
-                          }
-                          suggestions={editGroupSuggestions}
-                          placeholder="e.g. post-main"
-                        />
-                      </label>
-                    )}
-
-                    <label style={{ flex: 1, minWidth: "150px" }}>
-                      <b>Label:</b>
-                      <input
-                        type="text"
-                        value={selectedRegion.label}
-                        onChange={(e) =>
-                          handleUpdateRegionProps(selectedRegion.id, { label: e.target.value })
-                        }
-                        style={{ flex: 1, padding: "2px 6px", fontSize: "11px" }}
-                      />
-                    </label>
+                {/* Uniform Input Row: Type, Group Tag, Label */}
+                <div className="collector-uniform-input-row">
+                  <div className="collector-uniform-input-col type-col">
+                    <label>Type:</label>
+                    <select
+                      value={selectedRegion.type}
+                      onChange={(e) => {
+                        const nextType = e.target.value as CollectorRegionType;
+                        handleUpdateRegionProps(selectedRegion.id, {
+                          type: nextType,
+                          groupTag: nextType === "FREE" ? undefined : (selectedRegion.groupTag || "post-main"),
+                          role: nextType === "BEGIN" ? "header" : nextType === "END" ? "footer" : "custom",
+                        });
+                      }}
+                    >
+                      <option value="BEGIN">BEGIN ANCHOR</option>
+                      <option value="END">END ANCHOR</option>
+                      <option value="FREE">FREE REGION</option>
+                      {selectedRegion.type === "STATIC" && <option value="STATIC">STATIC (Legacy)</option>}
+                      {selectedRegion.type === "DYNAMIC" && <option value="DYNAMIC">DYNAMIC (Legacy)</option>}
+                    </select>
                   </div>
 
-                  {/* Candidate Variables Checkbox Grid (Requirement 3) */}
-                  {draft.variables.length > 0 && (
-                    <div>
-                      <small style={{ color: "#7f93ab" }}>Candidate Variables:</small>
+                  {selectedRegion.type !== "FREE" && (
+                    <div className="collector-uniform-input-col group-col">
+                      <label>Group Tag:</label>
+                      <GroupTagCombobox
+                        value={selectedRegion.groupTag ?? ""}
+                        onChange={(tag) =>
+                          handleUpdateRegionProps(selectedRegion.id, {
+                            groupTag: tag.trim() || undefined,
+                          })
+                        }
+                        suggestions={editGroupSuggestions}
+                        placeholder="e.g. post-main"
+                        dropdownPlacement="top"
+                      />
+                    </div>
+                  )}
+
+                  <div className="collector-uniform-input-col label-col">
+                    <label>Label:</label>
+                    <input
+                      type="text"
+                      value={selectedRegion.label}
+                      onChange={(e) =>
+                        handleUpdateRegionProps(selectedRegion.id, { label: e.target.value })
+                      }
+                    />
+                  </div>
+                </div>
+
+                {/* Candidate Variables Dedicated Scrollable Container */}
+                {draft.variables.length > 0 && (
+                  <div className="collector-var-section">
+                    <div className="collector-var-section-header">
+                      <span style={{ color: "#94a3b8", fontWeight: 600 }}>Candidate Variables:</span>
+                    </div>
+                    <div className="collector-var-scroll-container">
                       <div className="collector-var-checkbox-grid">
                         {draft.variables.map((v) => {
                           const checked = selectedRegion.candidateVariableKeys.includes(v.key);
@@ -1999,36 +2009,42 @@ export function StepReviewMapping({ draft, locked, onChange, invoke }: Props) {
                         })}
                       </div>
                     </div>
-                  )}
+                  </div>
+                )}
 
-                  {selectedRegion.evidence && (
-                    <span className="collector-evidence-badge">
-                      Evidence: {selectedRegion.evidence}
-                    </span>
-                  )}
-                  {selectedRegion.referenceImage && (
-                    <div style={{ marginTop: "6px" }}>
-                      <small style={{ color: "#7f93ab", display: "block", marginBottom: "2px" }}>
-                        Anchor Reference Crop:
-                      </small>
-                      <img
-                        src={selectedRegion.referenceImage}
-                        alt={`${selectedRegion.label} reference crop`}
-                        style={{
-                          maxWidth: "180px",
-                          maxHeight: "60px",
-                          objectFit: "contain",
-                          borderRadius: "3px",
-                          border: "1px solid #1e3a5f",
-                          background: "#0b131e",
-                          display: "block",
-                        }}
-                      />
-                    </div>
-                  )}
-                </div>
+                {/* Reference Crop Preview (Compact, No Distortion) & Evidence */}
+                {(selectedRegion.referenceImage || selectedRegion.evidence) && (
+                  <div style={{ display: "flex", alignItems: "center", gap: "10px", marginTop: "2px", flexWrap: "wrap" }}>
+                    {selectedRegion.referenceImage && (
+                      <div style={{ display: "flex", alignItems: "center", gap: "6px" }}>
+                        <small style={{ color: "#7f93ab", fontSize: "11px", whiteSpace: "nowrap" }}>
+                          Reference Crop:
+                        </small>
+                        <img
+                          src={selectedRegion.referenceImage}
+                          alt={`${selectedRegion.label} reference crop`}
+                          style={{
+                            maxHeight: "36px",
+                            maxWidth: "160px",
+                            objectFit: "contain",
+                            borderRadius: "3px",
+                            border: "1px solid #1e3a5f",
+                            background: "#0b131e",
+                            display: "block",
+                          }}
+                        />
+                      </div>
+                    )}
+                    {selectedRegion.evidence && (
+                      <span className="collector-evidence-badge" style={{ fontSize: "10px" }}>
+                        Evidence: {selectedRegion.evidence}
+                      </span>
+                    )}
+                  </div>
+                )}
 
-                <div style={{ display: "flex", gap: "6px", marginTop: "8px" }}>
+                {/* Footer Actions */}
+                <div className="collector-floating-actions">
                   {!selectedRegion.confirmed && (
                     <button type="button" className="primary" onClick={() => handleConfirmRegion(selectedRegion.id)}>
                       Confirm Anchor
@@ -2038,17 +2054,17 @@ export function StepReviewMapping({ draft, locked, onChange, invoke }: Props) {
                     Delete Region
                   </button>
                   <button type="button" onClick={() => setSelectedRegionId(undefined)}>
-                    Deselect
+                    Cancel
                   </button>
                 </div>
               </div>
             )}
 
-            {/* STAGE 2A — Dock Placeholder */}
+            {/* STAGE 2A — Floating Placeholder Hint */}
             {step2Stage === "regions" && !newRegionBox && !selectedRegion && (
-              <div className="collector-dock-placeholder">
+              <div className="collector-dock-placeholder floating">
                 <span>
-                  Switch to <b>DRAW (✏️)</b> to drag an anchor rectangle on the screenshot, or select an existing region in <b>VIEW (🔍)</b> / <b>EDIT (📐)</b> mode.
+                  Switch to <b>DRAW (✏️)</b> to drag an anchor rectangle, or click a region in <b>VIEW (🔍)</b> / <b>EDIT (📐)</b> mode.
                 </span>
               </div>
             )}

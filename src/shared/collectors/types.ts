@@ -330,10 +330,25 @@ export type AnchorReferenceExample = {
   referenceImage?: string;
 };
 
+export type AnchorLearnedFeature = {
+  feature:
+    | "header_layout"
+    | "author_link_structure"
+    | "timestamp_indicator"
+    | "avatar_presence"
+    | "semantic_role"
+    | "stable_text_tokens";
+  weight: number;
+  supportCount: number;
+  sampleCount: number;
+  details?: string;
+};
+
 export type LearnedAnchorRule = {
   groupTag: string;
   type: CollectorRegionType;
   role: CollectorRegionRole;
+  trainingSampleCount?: number;
   exampleCount: number;
   referenceExamples: AnchorReferenceExample[];
   geometryProfile: StableGeometryProfile;
@@ -344,6 +359,9 @@ export type LearnedAnchorRule = {
     roles: string[];
     hasAttributes: string[];
   };
+  features?: AnchorLearnedFeature[];
+  evidenceStrength?: number;
+  uncertainty?: number;
   associatedVariableKeys: string[];
 };
 
@@ -434,6 +452,63 @@ export type PostGroupMatch = {
   limitations?: string[];
   failureReason?: string;
   candidateDiagnostics?: {
+    mode?: "BEGIN_ONLY" | "PAIRED";
+    trainingSampleCount?: number;
+    learnedFeatures?: AnchorLearnedFeature[];
+    liveCandidatesBeforeDeduplication?: number;
+    liveCandidatesAfterDeduplication?: number;
+    topCandidates?: Array<{
+      id: string;
+      tagName: string;
+      role?: string;
+      textSnippet?: string;
+      rect: Rect;
+      score: number;
+      featureScores?: Record<string, number>;
+      method: string;
+      reasons: string;
+    }>;
+    selectedCandidate?: {
+      id: string;
+      tagName: string;
+      rect: Rect;
+      score: number;
+      featuresMatched: string[];
+    } | null;
+    rejectionReasons?: Array<{
+      id: string;
+      tagName: string;
+      textSnippet?: string;
+      reason: string;
+    }>;
+    outerContainerDiagnostics?: Array<{
+      beginElement: {
+        id: string;
+        tagName: string;
+        rect: Rect;
+        textSnippet?: string;
+      };
+      ancestorCandidates: Array<{
+        id: string;
+        tagName: string;
+        role?: string;
+        rect: Rect;
+        score: number;
+        reasons: string;
+        rejected?: boolean;
+        rejectionReason?: string;
+      }>;
+      selectedOuterContainer: {
+        id: string;
+        tagName: string;
+        role?: string;
+        rect: Rect;
+        selectionReason: string;
+        confidence: number;
+      };
+    }>;
+    deduplicationDecisions?: string[];
+    finalUniquePostCount?: number;
     topBeginCandidates: CandidateDiagnosticInfo[];
     topEndCandidates: CandidateDiagnosticInfo[];
     rejectedPairings: Array<{
@@ -467,6 +542,8 @@ export type MatchedPostItem = {
   endRect?: Rect;
   containerRect?: Rect;
   containerId?: string;
+  beginElementId?: string;
+  endElementId?: string;
   containerTagName?: string;
   beginMatched: boolean;
   endMatched: boolean;

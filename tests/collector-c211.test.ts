@@ -4,6 +4,7 @@ import type { Rect, OcrResult, OcrSegment } from "../src/shared/contracts.js";
 import type {
   CollectorDraft,
   CollectorDomSnapshot,
+  CollectorDomElement,
 } from "../src/shared/collectors/types.js";
 import { createEmptyDraft } from "../src/shared/collectors/fixtures.js";
 import {
@@ -19,6 +20,7 @@ import {
   assignSegmentMapping,
   buildLearnedAnchorRules,
   createCollectorRegion,
+  evaluateLiveBeginCandidates,
   executeLiveBrowserMatchTest,
   findAnchorCandidates,
   getGroupTagSuggestions,
@@ -1326,4 +1328,795 @@ test("C2.11.5: Successful BEGIN/END pairing resolves post container and generate
   assert.equal(grp.candidateDiagnostics.selectedPair?.beginId, "b_node");
   assert.equal(grp.candidateDiagnostics.selectedPair?.endId, "e_node");
   assert.equal(grp.candidateDiagnostics.selectedPair?.containerId, "post_container_1");
+});
+
+// ---------------------------------------------------------------------------
+// CHECKPOINT D: C2.11.8 BEGIN-Only Matching with Multi-Sample Learning
+// ---------------------------------------------------------------------------
+
+test("C2.11.8 TEST A: Multi-Sample Aggregation into ONE learned rule with trainingSampleCount: 3", () => {
+  const { draft: baseDraft, capIds } = makeTestDraftWithCaptures(3);
+  const [cap1, cap2, cap3] = capIds;
+  let draft = baseDraft;
+
+  // Add confirmed BEGIN regions across 3 distinct samples for groupTag "post-main"
+  const box1 = { x: 20, y: 30, width: 400, height: 60 };
+  const reg1 = createCollectorRegion({
+    id: "r1",
+    captureItemId: cap1,
+    type: "BEGIN",
+    groupTag: "post-main",
+    label: "Header 1",
+    box: box1,
+    imageWidth: 800,
+    imageHeight: 600,
+    confirmed: true,
+    candidateVariableKeys: ["authorName", "postTimestamp"],
+  });
+  reg1.ocr = makeRegionOcr([
+    { id: "s1", text: "Nguyễn Văn Hùng", bbox: { x: 70, y: 35, width: 140, height: 20 }, confidence: 95 },
+    { id: "s2", text: "2 giờ trước", bbox: { x: 70, y: 60, width: 70, height: 16 }, confidence: 93 },
+  ], box1);
+
+  const box2 = { x: 20, y: 35, width: 420, height: 65 };
+  const reg2 = createCollectorRegion({
+    id: "r2",
+    captureItemId: cap2,
+    type: "BEGIN",
+    groupTag: "post-main",
+    label: "Header 2",
+    box: box2,
+    imageWidth: 800,
+    imageHeight: 600,
+    confirmed: true,
+    candidateVariableKeys: ["authorName", "postTimestamp"],
+  });
+  reg2.ocr = makeRegionOcr([
+    { id: "s3", text: "Trần Thị Mai", bbox: { x: 75, y: 40, width: 130, height: 20 }, confidence: 96 },
+    { id: "s4", text: "Vừa xong", bbox: { x: 75, y: 65, width: 60, height: 16 }, confidence: 94 },
+  ], box2);
+
+  const box3 = { x: 18, y: 28, width: 410, height: 58 };
+  const reg3 = createCollectorRegion({
+    id: "r3",
+    captureItemId: cap3,
+    type: "BEGIN",
+    groupTag: "post-main",
+    label: "Header 3",
+    box: box3,
+    imageWidth: 800,
+    imageHeight: 600,
+    confirmed: true,
+    candidateVariableKeys: ["authorName", "postTimestamp"],
+  });
+  reg3.ocr = makeRegionOcr([
+    { id: "s5", text: "Lê Hoàng Long", bbox: { x: 72, y: 32, width: 135, height: 20 }, confidence: 97 },
+    { id: "s6", text: "Hôm qua lúc 10:00", bbox: { x: 72, y: 56, width: 95, height: 16 }, confidence: 92 },
+  ], box3);
+
+  draft = addRegionToDraft(draft, reg1);
+  draft = addRegionToDraft(draft, reg2);
+  draft = addRegionToDraft(draft, reg3);
+
+  const rulesMap = buildLearnedAnchorRules(draft);
+  assert.equal(rulesMap.size, 1);
+  assert.ok(rulesMap.has("post-main"));
+
+  const group = rulesMap.get("post-main")!;
+  assert.ok(group.beginRule);
+
+  const beginRule = group.beginRule;
+  // Multi-sample aggregation: ONE unified rule
+  assert.equal(beginRule.groupTag, "post-main");
+  assert.equal(beginRule.type, "BEGIN");
+  assert.equal(beginRule.trainingSampleCount, 3);
+  assert.equal(beginRule.exampleCount, 3);
+
+  // Features learned with weights & support count
+  assert.ok(beginRule.features && beginRule.features.length >= 4);
+  const featureNames = beginRule.features.map((f) => f.feature);
+  assert.ok(featureNames.includes("header_layout"));
+  assert.ok(featureNames.includes("author_link_structure"));
+  assert.ok(featureNames.includes("timestamp_indicator"));
+
+  // Dynamic characteristics strictly separated from stable tokens
+  const varTokens = beginRule.variableTokens;
+  assert.ok(varTokens.includes("nguyễn") || varTokens.includes("hùng"));
+  assert.ok(varTokens.includes("trần") || varTokens.includes("mai"));
+  assert.ok(varTokens.includes("lê") || varTokens.includes("long"));
+
+  // Author names must NEVER be in stableTokens
+  const stableTokens = beginRule.stableTokens;
+  assert.ok(!stableTokens.includes("nguyễn"));
+  assert.ok(!stableTokens.includes("trần"));
+  assert.ok(!stableTokens.includes("lê"));
+
+  // Evidence strength is high and uncertainty is low
+  assert.ok((beginRule.evidenceStrength ?? 0) >= 90);
+  assert.ok((beginRule.uncertainty ?? 100) <= 10);
+});
+
+test("C2.11.8 TEST B: Dynamic Robustness: Matches new author and timestamp without literal text match", () => {
+  const { draft: baseDraft, capIds } = makeTestDraftWithCaptures(2);
+  const [cap1, cap2] = capIds;
+  let draft = baseDraft;
+
+  const box1 = { x: 20, y: 30, width: 400, height: 60 };
+  const reg1 = createCollectorRegion({
+    id: "r1",
+    captureItemId: cap1,
+    type: "BEGIN",
+    groupTag: "post-main",
+    label: "Header 1",
+    box: box1,
+    imageWidth: 800,
+    imageHeight: 600,
+    confirmed: true,
+    candidateVariableKeys: ["authorName"],
+  });
+  reg1.ocr = makeRegionOcr([{ id: "s1", text: "Nguyễn Văn A", bbox: { x: 70, y: 35, width: 140, height: 20 }, confidence: 95 }], box1);
+
+  const box2 = { x: 20, y: 35, width: 420, height: 65 };
+  const reg2 = createCollectorRegion({
+    id: "r2",
+    captureItemId: cap2,
+    type: "BEGIN",
+    groupTag: "post-main",
+    label: "Header 2",
+    box: box2,
+    imageWidth: 800,
+    imageHeight: 600,
+    confirmed: true,
+    candidateVariableKeys: ["authorName"],
+  });
+  reg2.ocr = makeRegionOcr([{ id: "s2", text: "Trần Thị B", bbox: { x: 75, y: 40, width: 130, height: 20 }, confidence: 96 }], box2);
+
+  draft = addRegionToDraft(draft, reg1);
+  draft = addRegionToDraft(draft, reg2);
+
+  const rulesMap = buildLearnedAnchorRules(draft);
+  const beginRule = rulesMap.get("post-main")!.beginRule!;
+
+  // Live DOM with completely DIFFERENT author "Phạm Quốc Bảo" and timestamp "5 phút trước"
+  const elements: CollectorDomElement[] = [
+    {
+      id: "hdr_container",
+      tagName: "DIV",
+      rect: { x: 20, y: 120, width: 500, height: 55 },
+      textSnippet: "Phạm Quốc Bảo\n5 phút trước",
+      depth: 2,
+      attributes: {},
+      childrenIds: ["link_author", "link_time"],
+    },
+    {
+      id: "link_author",
+      tagName: "A",
+      role: "link",
+      rect: { x: 75, y: 125, width: 150, height: 20 },
+      textSnippet: "Phạm Quốc Bảo",
+      attributes: { href: "/groups/512/user/1000" },
+      parentId: "hdr_container",
+      depth: 3,
+      childrenIds: [],
+    },
+    {
+      id: "link_time",
+      tagName: "A",
+      role: "link",
+      rect: { x: 75, y: 150, width: 70, height: 16 },
+      textSnippet: "5 phút trước",
+      attributes: { href: "/permalink/123" },
+      parentId: "hdr_container",
+      depth: 3,
+      childrenIds: [],
+    },
+  ];
+
+  const evalResult = evaluateLiveBeginCandidates(beginRule, elements);
+  assert.ok(evalResult.deduplicatedCandidates.length >= 1);
+  const topCandidate = evalResult.deduplicatedCandidates[0]!;
+  assert.ok(topCandidate.score >= 70, `Expected score >= 70 but got ${topCandidate.score}`);
+  assert.ok(topCandidate.featuresMatched.includes("author_link_structure"));
+  assert.ok(topCandidate.featuresMatched.includes("timestamp_indicator"));
+});
+
+test("C2.11.8 TEST D: Header deduplication coalesces avatar, author, time, container into ONE candidate", () => {
+  const elements: CollectorDomElement[] = [
+    // Post 1 Header Cluster
+    {
+      id: "hdr_1",
+      tagName: "DIV",
+      rect: { x: 20, y: 100, width: 520, height: 60 },
+      textSnippet: "Nguyễn Văn Hùng\n2 giờ trước",
+      depth: 2,
+      attributes: {},
+      childrenIds: ["avt_1", "author_1", "time_1"],
+    },
+    {
+      id: "avt_1",
+      tagName: "IMG",
+      role: "img",
+      rect: { x: 25, y: 105, width: 40, height: 40 },
+      textSnippet: "",
+      depth: 3,
+      attributes: {},
+      parentId: "hdr_1",
+      childrenIds: [],
+    },
+    {
+      id: "author_1",
+      tagName: "A",
+      role: "link",
+      rect: { x: 75, y: 108, width: 130, height: 20 },
+      textSnippet: "Nguyễn Văn Hùng",
+      attributes: { href: "/user/1" },
+      depth: 3,
+      parentId: "hdr_1",
+      childrenIds: [],
+    },
+    {
+      id: "time_1",
+      tagName: "A",
+      role: "link",
+      rect: { x: 75, y: 130, width: 65, height: 16 },
+      textSnippet: "2 giờ trước",
+      attributes: { href: "/post/1" },
+      depth: 3,
+      parentId: "hdr_1",
+      childrenIds: [],
+    },
+
+    // Post 2 Header Cluster
+    {
+      id: "hdr_2",
+      tagName: "DIV",
+      rect: { x: 20, y: 350, width: 520, height: 60 },
+      textSnippet: "Trần Mai Anh\n15 phút trước",
+      depth: 2,
+      attributes: {},
+      childrenIds: ["avt_2", "author_2", "time_2"],
+    },
+    {
+      id: "avt_2",
+      tagName: "IMG",
+      role: "img",
+      rect: { x: 25, y: 355, width: 40, height: 40 },
+      textSnippet: "",
+      depth: 3,
+      attributes: {},
+      parentId: "hdr_2",
+      childrenIds: [],
+    },
+    {
+      id: "author_2",
+      tagName: "A",
+      role: "link",
+      rect: { x: 75, y: 358, width: 120, height: 20 },
+      textSnippet: "Trần Mai Anh",
+      attributes: { href: "/user/2" },
+      depth: 3,
+      parentId: "hdr_2",
+      childrenIds: [],
+    },
+    {
+      id: "time_2",
+      tagName: "A",
+      role: "link",
+      rect: { x: 75, y: 380, width: 75, height: 16 },
+      textSnippet: "15 phút trước",
+      attributes: { href: "/post/2" },
+      depth: 3,
+      parentId: "hdr_2",
+      childrenIds: [],
+    },
+  ];
+
+  const evalResult = evaluateLiveBeginCandidates(undefined, elements);
+  // Before deduplication: 8 atomic candidate elements
+  assert.ok(evalResult.allCandidatesBeforeDeduplication.length >= 6);
+
+  // After deduplication: exactly 2 logical BEGIN candidates (1 per post header)
+  assert.equal(evalResult.deduplicatedCandidates.length, 2);
+
+  const post1 = evalResult.deduplicatedCandidates[0]!;
+  const post2 = evalResult.deduplicatedCandidates[1]!;
+
+  assert.equal(post1.el.id, "hdr_1");
+  assert.equal(post2.el.id, "hdr_2");
+  assert.ok(post1.score >= 85);
+  assert.ok(post2.score >= 85);
+});
+
+test("C2.11.8 TEST E: False Positive Protection: Navigation tabs, sticky bar, composer, and comments rejected", () => {
+  const elements: CollectorDomElement[] = [
+    // 1. Sticky header
+    {
+      id: "sticky_nav",
+      tagName: "DIV",
+      isFixed: true,
+      rect: { x: 0, y: 0, width: 1200, height: 56 },
+      textSnippet: "Facebook Navigation",
+      depth: 1,
+      attributes: {},
+      childrenIds: [],
+    },
+    // 2. Global top nav (y < 45)
+    {
+      id: "top_icon",
+      tagName: "A",
+      role: "link",
+      rect: { x: 10, y: 10, width: 40, height: 30 },
+      textSnippet: "Facebook",
+      depth: 2,
+      attributes: {},
+      childrenIds: [],
+    },
+    // 3. Group navigation tab ("Bài viết", "Giới thiệu")
+    {
+      id: "tab_posts",
+      tagName: "SPAN",
+      role: "tab",
+      rect: { x: 20, y: 65, width: 80, height: 40 },
+      textSnippet: "Bài viết",
+      depth: 3,
+      attributes: {},
+      childrenIds: [],
+    },
+    {
+      id: "tab_about",
+      tagName: "A",
+      rect: { x: 110, y: 65, width: 80, height: 40 },
+      textSnippet: "Giới thiệu",
+      depth: 3,
+      attributes: {},
+      childrenIds: [],
+    },
+    // 4. Post composer box
+    {
+      id: "composer_box",
+      tagName: "DIV",
+      rect: { x: 20, y: 120, width: 500, height: 60 },
+      textSnippet: "Bạn đang nghĩ gì?",
+      depth: 2,
+      attributes: {},
+      childrenIds: [],
+    },
+    // 5. Comment author header
+    {
+      id: "comment_author",
+      tagName: "A",
+      role: "link",
+      className: "comment-author-link",
+      rect: { x: 80, y: 400, width: 120, height: 18 },
+      textSnippet: "Bình luận của Nguyễn Văn C",
+      depth: 5,
+      attributes: {},
+      childrenIds: [],
+    },
+  ];
+
+  const evalResult = evaluateLiveBeginCandidates(undefined, elements);
+  assert.equal(evalResult.deduplicatedCandidates.length, 0);
+  assert.ok(evalResult.rejectedElements.length >= 5);
+
+  const reasons = evalResult.rejectedElements.map((r) => r.reason);
+  assert.ok(reasons.some((r) => r.includes("Fixed/sticky")));
+  assert.ok(reasons.some((r) => r.includes("Top viewport")));
+  assert.ok(reasons.some((r) => r.includes("navigation tab")));
+  assert.ok(reasons.some((r) => r.includes("composer box")));
+  assert.ok(reasons.some((r) => r.includes("Comment")));
+});
+
+test("C2.11.8 TEST F: Step 3 BEGIN-only isolation passes without END defined", () => {
+  const { draft: baseDraft, capIds } = makeTestDraftWithCaptures(1);
+  const cap1 = capIds[0];
+  let draft = baseDraft;
+
+  // Add ONLY a BEGIN anchor (no END anchor at all)
+  const box1 = { x: 20, y: 30, width: 400, height: 60 };
+  const reg1 = createCollectorRegion({
+    id: "r1",
+    captureItemId: cap1,
+    type: "BEGIN",
+    groupTag: "post-main",
+    label: "Header",
+    box: box1,
+    imageWidth: 800,
+    imageHeight: 600,
+    confirmed: true,
+    candidateVariableKeys: ["authorName", "postTimestamp"],
+  });
+  reg1.ocr = makeRegionOcr([
+    { id: "s1", text: "Trịnh Thăng Bình", bbox: { x: 70, y: 35, width: 140, height: 20 }, confidence: 95 },
+    { id: "s2", text: "1 giờ trước", bbox: { x: 70, y: 60, width: 70, height: 16 }, confidence: 93 },
+  ], box1);
+
+  draft = addRegionToDraft(draft, reg1);
+
+  const snapshot: CollectorDomSnapshot = {
+    url: "https://facebook.com/groups/test",
+    capturedAt: new Date().toISOString(),
+    viewport: { width: 1200, height: 800, scrollX: 0, scrollY: 0, dpr: 1 },
+    elements: [
+      {
+        id: "hdr_div",
+        tagName: "DIV",
+        rect: { x: 20, y: 150, width: 500, height: 60 },
+        textSnippet: "Trịnh Thăng Bình\n1 giờ trước",
+        depth: 2,
+        attributes: {},
+        childrenIds: ["author_node", "time_node"],
+      },
+      {
+        id: "author_node",
+        tagName: "A",
+        role: "link",
+        rect: { x: 75, y: 155, width: 140, height: 20 },
+        textSnippet: "Trịnh Thăng Bình",
+        attributes: { href: "/user/99" },
+        depth: 3,
+        parentId: "hdr_div",
+        childrenIds: [],
+      },
+      {
+        id: "time_node",
+        tagName: "A",
+        role: "link",
+        rect: { x: 75, y: 180, width: 70, height: 16 },
+        textSnippet: "1 giờ trước",
+        attributes: { href: "/post/99" },
+        depth: 3,
+        parentId: "hdr_div",
+        childrenIds: [],
+      },
+    ],
+  };
+
+  const res = executeLiveBrowserMatchTest(draft.regions!, snapshot, draft, { mode: "BEGIN_ONLY" });
+  assert.equal(res.status, "MATCHED");
+  assert.equal(res.matchedPostCount, 1);
+  assert.equal(res.groups.length, 1);
+
+  const grp = res.groups[0]!;
+  assert.equal(grp.status, "MATCHED");
+  assert.equal(grp.domAssociationStatus, "CONFIRMED");
+  assert.ok(grp.beginMatch?.matched);
+  assert.equal(grp.beginMatch.matchedElementId, "hdr_div");
+  assert.equal(grp.candidateDiagnostics?.mode, "BEGIN_ONLY");
+  assert.equal(grp.candidateDiagnostics?.topEndCandidates.length, 0);
+});
+
+test("C2.11.9: Outer post container resolution walks up ancestors and stops at post boundary", () => {
+  let { draft, capIds } = makeTestDraftWithCaptures(1);
+  const cap1 = capIds[0]!;
+
+  const box1 = { x: 20, y: 30, width: 400, height: 60 };
+  const reg1 = createCollectorRegion({
+    id: "r1",
+    captureItemId: cap1,
+    type: "BEGIN",
+    groupTag: "post-main",
+    label: "Header",
+    box: box1,
+    imageWidth: 800,
+    imageHeight: 600,
+    confirmed: true,
+    candidateVariableKeys: ["authorName", "postTimestamp"],
+  });
+  reg1.ocr = makeRegionOcr([
+    { id: "s1", text: "Trần Anh Vũ", bbox: { x: 70, y: 35, width: 140, height: 20 }, confidence: 95 },
+    { id: "s2", text: "3 giờ trước", bbox: { x: 70, y: 60, width: 70, height: 16 }, confidence: 93 },
+  ], box1);
+
+  draft = addRegionToDraft(draft, reg1);
+
+  // Snapshot structure:
+  // feed_root (role="feed")
+  //   post_card_1 (role="article", y: 100, height: 350)
+  //     inner_wrapper (y: 100, height: 350)
+  //       hdr_div (BEGIN match: y: 100, height: 50)
+  //       body_div (y: 155, height: 200)
+  //       toolbar_div (role="toolbar", y: 360, height: 40, text: "Thích Bình luận Chia sẻ")
+  //   post_card_2 (role="article", y: 480, height: 300)
+  //     hdr_div_2 (y: 480, height: 50, text: "Lê Minh\n5 giờ trước")
+  const snapshot: CollectorDomSnapshot = {
+    url: "https://facebook.com/groups/test",
+    capturedAt: new Date().toISOString(),
+    viewport: { width: 1200, height: 1000, scrollX: 0, scrollY: 0, dpr: 1 },
+    elements: [
+      {
+        id: "feed_root",
+        tagName: "DIV",
+        role: "feed",
+        isFeedContainer: true,
+        rect: { x: 0, y: 0, width: 800, height: 1200 },
+        textSnippet: "",
+        depth: 0,
+        attributes: {},
+        childrenIds: ["post_card_1", "post_card_2"],
+      },
+      {
+        id: "post_card_1",
+        tagName: "DIV",
+        role: "article",
+        isArticleOrCard: true,
+        rect: { x: 50, y: 100, width: 600, height: 350 },
+        textSnippet: "Trần Anh Vũ\n3 giờ trước\nBài viết mẫu số 1\nThích Bình luận Chia sẻ",
+        depth: 1,
+        parentId: "feed_root",
+        attributes: {},
+        childrenIds: ["inner_wrapper"],
+      },
+      {
+        id: "inner_wrapper",
+        tagName: "DIV",
+        rect: { x: 50, y: 100, width: 600, height: 350 },
+        textSnippet: "",
+        depth: 2,
+        parentId: "post_card_1",
+        attributes: {},
+        childrenIds: ["hdr_div", "body_div", "toolbar_div"],
+      },
+      {
+        id: "hdr_div",
+        tagName: "DIV",
+        rect: { x: 60, y: 100, width: 400, height: 50 },
+        textSnippet: "Trần Anh Vũ\n3 giờ trước",
+        depth: 3,
+        parentId: "inner_wrapper",
+        attributes: {},
+        childrenIds: ["author_node"],
+      },
+      {
+        id: "author_node",
+        tagName: "SPAN",
+        rect: { x: 70, y: 105, width: 120, height: 20 },
+        textSnippet: "Trần Anh Vũ",
+        depth: 4,
+        parentId: "hdr_div",
+        attributes: {},
+        childrenIds: [],
+      },
+      {
+        id: "body_div",
+        tagName: "DIV",
+        rect: { x: 60, y: 155, width: 580, height: 200 },
+        textSnippet: "Bài viết mẫu số 1",
+        depth: 3,
+        parentId: "inner_wrapper",
+        attributes: {},
+        childrenIds: [],
+      },
+      {
+        id: "toolbar_div",
+        tagName: "DIV",
+        role: "toolbar",
+        rect: { x: 60, y: 360, width: 580, height: 40 },
+        textSnippet: "Thích Bình luận Chia sẻ",
+        depth: 3,
+        parentId: "inner_wrapper",
+        attributes: {},
+        childrenIds: [],
+      },
+      {
+        id: "post_card_2",
+        tagName: "DIV",
+        role: "article",
+        isArticleOrCard: true,
+        rect: { x: 50, y: 480, width: 600, height: 300 },
+        textSnippet: "Lê Minh\n5 giờ trước",
+        depth: 1,
+        parentId: "feed_root",
+        attributes: {},
+        childrenIds: ["hdr_div_2"],
+      },
+      {
+        id: "hdr_div_2",
+        tagName: "DIV",
+        rect: { x: 60, y: 480, width: 400, height: 50 },
+        textSnippet: "Lê Minh\n5 giờ trước",
+        depth: 2,
+        parentId: "post_card_2",
+        attributes: {},
+        childrenIds: [],
+      },
+    ],
+  };
+
+  const res = executeLiveBrowserMatchTest(draft.regions!, snapshot, draft, { mode: "BEGIN_ONLY" });
+  assert.equal(res.status, "MATCHED");
+  assert.equal(res.matchedPostCount, 2);
+  assert.equal(res.matchedItems?.length, 2);
+
+  const matchedItem1 = res.matchedItems![0]!;
+  assert.equal(matchedItem1.domResolved, true);
+  // Post 1 must resolve to post_card_1 (not hdr_div, not inner_wrapper, and not feed_root)
+  assert.equal(matchedItem1.containerId, "post_card_1");
+  assert.equal(matchedItem1.containerRect?.height, 350);
+  assert.equal(matchedItem1.containerRect?.y, 100);
+
+  const matchedItem2 = res.matchedItems![1]!;
+  assert.equal(matchedItem2.domResolved, true);
+  // Post 2 must resolve to post_card_2 (not feed_root)
+  assert.equal(matchedItem2.containerId, "post_card_2");
+  assert.equal(matchedItem2.containerRect?.height, 300);
+  assert.equal(matchedItem2.containerRect?.y, 480);
+
+  // Verify candidate diagnostics contain outer container resolution and deduplication
+  const grp = res.groups[0]!;
+  assert.ok(grp.candidateDiagnostics);
+  assert.equal(grp.candidateDiagnostics.finalUniquePostCount, 2);
+  assert.ok((grp.candidateDiagnostics.outerContainerDiagnostics?.length ?? 0) > 0);
+  const outerDiag = grp.candidateDiagnostics.outerContainerDiagnostics![0]!;
+  assert.equal(outerDiag.selectedOuterContainer?.id, "post_card_1");
+  assert.equal(outerDiag.selectedOuterContainer?.rect.height, 350);
+  assert.ok(outerDiag.ancestorCandidates.length >= 2);
+});
+
+test("C2.11.9: Deduplicates multiple nested BEGIN matches in same outer container", () => {
+  let { draft, capIds } = makeTestDraftWithCaptures(1);
+  const cap1 = capIds[0]!;
+
+  const box1 = { x: 20, y: 30, width: 400, height: 60 };
+  const reg1 = createCollectorRegion({
+    id: "r1",
+    captureItemId: cap1,
+    type: "BEGIN",
+    groupTag: "post-main",
+    label: "Header",
+    box: box1,
+    imageWidth: 800,
+    imageHeight: 600,
+    confirmed: true,
+  });
+  reg1.ocr = makeRegionOcr([
+    { id: "s1", text: "Nguyễn Hải", bbox: { x: 70, y: 35, width: 120, height: 20 }, confidence: 95 },
+    { id: "s2", text: "2 giờ trước", bbox: { x: 70, y: 55, width: 80, height: 16 }, confidence: 92 },
+  ], box1);
+
+  draft = addRegionToDraft(draft, reg1);
+
+  // Two elements in the same post both match BEGIN:
+  // inner header div and its parent wrapper
+  const snapshot: CollectorDomSnapshot = {
+    url: "https://facebook.com/groups/test",
+    capturedAt: new Date().toISOString(),
+    viewport: { width: 1200, height: 800, scrollX: 0, scrollY: 0, dpr: 1 },
+    elements: [
+      {
+        id: "post_root",
+        tagName: "DIV",
+        role: "article",
+        rect: { x: 40, y: 80, width: 600, height: 400 },
+        textSnippet: "Nguyễn Hải\n2 giờ trước\nNội dung chính\nThích Bình luận",
+        depth: 1,
+        attributes: {},
+        childrenIds: ["inner_row", "toolbar"],
+      },
+      {
+        id: "inner_row",
+        tagName: "DIV",
+        rect: { x: 50, y: 90, width: 300, height: 40 },
+        textSnippet: "Nguyễn Hải\n2 giờ trước",
+        depth: 2,
+        parentId: "post_root",
+        attributes: {},
+        childrenIds: ["inner_span"],
+      },
+      {
+        id: "inner_span",
+        tagName: "SPAN",
+        rect: { x: 50, y: 90, width: 280, height: 35 },
+        textSnippet: "Nguyễn Hải\n2 giờ trước",
+        depth: 3,
+        parentId: "inner_row",
+        attributes: {},
+        childrenIds: [],
+      },
+      {
+        id: "toolbar",
+        tagName: "DIV",
+        role: "toolbar",
+        rect: { x: 50, y: 440, width: 500, height: 35 },
+        textSnippet: "Thích Bình luận",
+        depth: 2,
+        parentId: "post_root",
+        attributes: {},
+        childrenIds: [],
+      },
+    ],
+  };
+
+  const res = executeLiveBrowserMatchTest(draft.regions!, snapshot, draft, { mode: "BEGIN_ONLY" });
+  assert.equal(res.status, "MATCHED");
+  // Should deduplicate multiple hits resolving to post_root into 1 unique post item
+  assert.equal(res.matchedPostCount, 1);
+  assert.equal(res.matchedItems?.length, 1);
+  assert.equal(res.matchedItems![0]!.containerId, "post_root");
+  assert.equal(res.matchedItems![0]!.containerRect?.height, 400);
+
+  const grp = res.groups[0]!;
+  assert.equal(grp.candidateDiagnostics?.finalUniquePostCount, 1);
+});
+
+test("C2.11.9: Outer post container resolution succeeds without role='article' using engagement and feed structure", () => {
+  let { draft, capIds } = makeTestDraftWithCaptures(1);
+  const cap1 = capIds[0]!;
+
+  const box1 = { x: 20, y: 30, width: 400, height: 60 };
+  const reg1 = createCollectorRegion({
+    id: "r1",
+    captureItemId: cap1,
+    type: "BEGIN",
+    groupTag: "post-main",
+    label: "Header",
+    box: box1,
+    imageWidth: 800,
+    imageHeight: 600,
+    confirmed: true,
+  });
+  reg1.ocr = makeRegionOcr([
+    { id: "s1", text: "Trang Thông Tin", bbox: { x: 70, y: 35, width: 150, height: 20 }, confidence: 95 },
+    { id: "s2", text: "10 phút trước", bbox: { x: 70, y: 55, width: 80, height: 16 }, confidence: 92 },
+  ], box1);
+
+  draft = addRegionToDraft(draft, reg1);
+
+  // No role="article" on any element, but feed_parent is role="feed"
+  // and outer_card is direct child of feed with engagement actions
+  const snapshot: CollectorDomSnapshot = {
+    url: "https://facebook.com/groups/test",
+    capturedAt: new Date().toISOString(),
+    viewport: { width: 1200, height: 800, scrollX: 0, scrollY: 0, dpr: 1 },
+    elements: [
+      {
+        id: "feed_parent",
+        tagName: "DIV",
+        role: "feed",
+        rect: { x: 0, y: 0, width: 900, height: 1500 },
+        textSnippet: "",
+        depth: 0,
+        attributes: {},
+        childrenIds: ["outer_card"],
+      },
+      {
+        id: "outer_card",
+        tagName: "DIV",
+        // NO role="article"
+        rect: { x: 50, y: 120, width: 620, height: 380 },
+        textSnippet: "Trang Thông Tin\n10 phút trước\nBản tin sáng\nThích Bình luận Chia sẻ",
+        depth: 1,
+        parentId: "feed_parent",
+        attributes: {},
+        childrenIds: ["card_header", "card_body"],
+      },
+      {
+        id: "card_header",
+        tagName: "DIV",
+        rect: { x: 60, y: 120, width: 400, height: 50 },
+        textSnippet: "Trang Thông Tin\n10 phút trước",
+        depth: 2,
+        parentId: "outer_card",
+        attributes: {},
+        childrenIds: [],
+      },
+      {
+        id: "card_body",
+        tagName: "DIV",
+        rect: { x: 60, y: 175, width: 600, height: 320 },
+        textSnippet: "Bản tin sáng\nThích Bình luận Chia sẻ",
+        depth: 2,
+        parentId: "outer_card",
+        attributes: {},
+        childrenIds: [],
+      },
+    ],
+  };
+
+  const res = executeLiveBrowserMatchTest(draft.regions!, snapshot, draft, { mode: "BEGIN_ONLY" });
+  assert.equal(res.status, "MATCHED");
+  assert.equal(res.matchedPostCount, 1);
+  const item = res.matchedItems![0]!;
+  assert.equal(item.containerId, "outer_card");
+  assert.equal(item.containerRect?.height, 380);
 });

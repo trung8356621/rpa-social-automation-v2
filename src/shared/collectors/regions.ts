@@ -38,11 +38,12 @@ import type {
   LearnedAnchorRule,
   LearnedAnchorGroup,
   AnchorReferenceExample,
+  AnchorLearnedFeature,
   StableGeometryProfile,
   QuickFillProposal,
   QuickFillResult,
 } from "./types.js";
-import { cryptoRandomId } from "./fixtures.js";
+import { cryptoRandomId, emptyParentRange, createEmptyDraft } from "./fixtures.js";
 import {
   isAuthorCandidate,
   isEngagementText,
@@ -1446,6 +1447,604 @@ export function executeHtmlFilter(
 // 9. C2.10 LIVE BROWSER MATCH TEST ENGINE
 // ---------------------------------------------------------------------------
 
+export type EvaluatedBeginCandidate = {
+  el: CollectorDomElement;
+  rect: Rect;
+  score: number;
+  featureScores: Record<string, number>;
+  featuresMatched: string[];
+  method: "text_dom" | "visual_projection";
+  reason: string;
+  clusterElements: CollectorDomElement[];
+};
+
+/**
+ * C2.11.8: Evaluates and deduplicates live DOM elements into unified BEGIN post header candidates.
+ *
+ * Requirements:
+ * - False positive protection: rejects global nav, sticky headers, group navigation tabs, composer, and comments.
+ * - Multi-sample learning features: scores author link structure, timestamp, avatar, layout, semantic role.
+ * - Dynamic robustness: never requires specific author name or timestamp text.
+ * - Deduplication: coalesces avatar, author link, timestamp span, and container into ONE logical candidate per visual post header.
+ */
+export function evaluateLiveBeginCandidates(
+  learnedRule: LearnedAnchorRule | undefined,
+  elements: CollectorDomElement[],
+): {
+  deduplicatedCandidates: EvaluatedBeginCandidate[];
+  allCandidatesBeforeDeduplication: Array<{ el: CollectorDomElement; score: number; reason: string }>;
+  rejectedElements: Array<{ id: string; tagName: string; textSnippet?: string; reason: string }>;
+} {
+  const allCandidatesBeforeDeduplication: Array<{ el: CollectorDomElement; score: number; reason: string }> = [];
+  const rejectedElements: Array<{ id: string; tagName: string; textSnippet?: string; reason: string }> = [];
+
+  const rawCandidateList: Array<{
+    el: CollectorDomElement;
+    score: number;
+    hasAuthorLink: boolean;
+    hasTimestamp: boolean;
+    hasAvatar: boolean;
+    hasHeaderLayout: boolean;
+    hasSemanticRole: boolean;
+    tokensMatched: string[];
+    reasons: string[];
+  }> = [];
+
+  const navTabRegex = /^(bài viết|giới thiệu|thành viên|đáng chú ý|sự kiện|file|phương tiện|discussion|featured|about|members|events|media|files|reels|photos|videos|home|trang chủ|thông báo|tin nhắn|xem thêm|see more)$/i;
+  const globalNavRegex = /^(facebook|trang chủ|bạn bè|video|watch|marketplace|nhóm|groups|gaming|thông báo|notifications|menu)$/i;
+  const composerRegex = /bạn đang nghĩ gì|tạo bài viết|viết bài|what's on your mind|create a post|ảnh\/video/i;
+
+  for (const el of elements) {
+    if (el.rect.width === 0 || el.rect.height === 0) {
+      continue;
+    }
+
+    // 1. False positive: Sticky / Fixed elements
+    if (el.isFixed) {
+      rejectedElements.push({ id: el.id, tagName: el.tagName, textSnippet: el.textSnippet?.slice(0, 40), reason: "Fixed/sticky chrome" });
+      continue;
+    }
+
+    // 2. False positive: Global top navigation boundary (y < 45)
+    if (el.rect.y < 45) {
+      rejectedElements.push({ id: el.id, tagName: el.tagName, textSnippet: el.textSnippet?.slice(0, 40), reason: "Top viewport chrome boundary (y < 45)" });
+      continue;
+    }
+
+    // 3. False positive: Facebook global top navigation / banner
+    if ((el.role === "banner" || (el.rect.y < 70 && el.depth <= 3)) && el.textSnippet && globalNavRegex.test(el.textSnippet.trim())) {
+      rejectedElements.push({ id: el.id, tagName: el.tagName, textSnippet: el.textSnippet?.slice(0, 40), reason: "Facebook global navigation item" });
+      continue;
+    }
+
+    // 4. False positive: Group navigation tabs ("Bài viết", "Giới thiệu", "Thành viên", etc.)
+    if (el.textSnippet && navTabRegex.test(el.textSnippet.trim()) && el.rect.height < 60) {
+      rejectedElements.push({ id: el.id, tagName: el.tagName, textSnippet: el.textSnippet?.slice(0, 40), reason: "Group navigation tab" });
+      continue;
+    }
+    if (el.role === "tab" || el.attributes?.role === "tab") {
+      rejectedElements.push({ id: el.id, tagName: el.tagName, textSnippet: el.textSnippet?.slice(0, 40), reason: "Navigation tab" });
+      continue;
+    }
+
+    // 5. False positive: Composer box ("Bạn đang nghĩ gì?")
+    if (el.textSnippet && composerRegex.test(el.textSnippet)) {
+      rejectedElements.push({ id: el.id, tagName: el.tagName, textSnippet: el.textSnippet?.slice(0, 40), reason: "Post composer box" });
+      continue;
+    }
+
+    // 6. False positive: Comment author headers (narrow width, nested inside comments)
+    const isCommentElement =
+      (el.rect.width < 250 && (/bình luận|comment|reply|trả lời/i.test(el.textSnippet || "") || el.className?.includes("comment") || el.attributes?.["aria-label"]?.includes("Bình luận"))) ||
+      (el.attributes?.["aria-label"]?.startsWith("Bình luận của") ?? false);
+
+    if (isCommentElement) {
+      rejectedElements.push({ id: el.id, tagName: el.tagName, textSnippet: el.textSnippet?.slice(0, 40), reason: "Comment author header / element" });
+      continue;
+    }
+
+    // Evaluate component features for this element
+    let elScore = 0;
+    const reasons: string[] = [];
+    const tokensMatched: string[] = [];
+
+    const isLinkTagOrRole = el.tagName === "A" || el.role === "link" || el.attributes?.role === "link";
+    const hasAuthorText = Boolean(el.textSnippet && isAuthorCandidate(el.textSnippet));
+    const hasProfileHref = Boolean(el.attributes?.href && /profile\.php|user|\/groups\/[^/]+\/user\//i.test(el.attributes.href));
+    const hasAuthorLink = isLinkTagOrRole && (hasAuthorText || hasProfileHref);
+
+    const hasTimestamp = Boolean(
+      (el.textSnippet && isTimestampText(el.textSnippet)) ||
+      (el.textSnippet && /\b(\d+\s*(giờ|phút|ngày|tháng|h|m|d|s)|vừa xong|just now|hôm qua)\b/i.test(el.textSnippet))
+    );
+
+    const hasAvatar = Boolean(
+      (el.tagName === "IMG" || el.role === "img" || el.hasMedia) &&
+      el.rect.width >= 24 &&
+      el.rect.width <= 65 &&
+      el.rect.height >= 24 &&
+      el.rect.height <= 65
+    );
+
+    const hasHeaderLayout = Boolean(
+      el.rect.width >= 250 &&
+      el.rect.height >= 25 &&
+      el.rect.height <= 120 &&
+      el.rect.y < 850
+    );
+
+    const hasSemanticRole = Boolean(el.tagName === "HEADER" || el.role === "heading" || el.role === "banner");
+
+    // Check stable tokens if available
+    if (learnedRule && learnedRule.stableTokens.length > 0 && el.textSnippet) {
+      const textNorm = normalizeVietnameseText(el.textSnippet).toLowerCase();
+      for (const tok of learnedRule.stableTokens) {
+        if (textNorm.includes(tok)) tokensMatched.push(tok);
+      }
+    }
+
+    if (hasAuthorLink) {
+      elScore += 35;
+      reasons.push("author link structure");
+    }
+    if (hasTimestamp) {
+      elScore += 25;
+      reasons.push("timestamp indicator");
+    }
+    if (hasAvatar) {
+      elScore += 20;
+      reasons.push("avatar presence");
+    }
+    if (hasHeaderLayout) {
+      elScore += 15;
+      reasons.push("header layout");
+    }
+    if (hasSemanticRole) {
+      elScore += 5;
+      reasons.push("semantic role");
+    }
+    if (tokensMatched.length > 0) {
+      elScore += 10;
+      reasons.push(`stable tokens: ${tokensMatched.join(", ")}`);
+    }
+
+    if (elScore >= 15) {
+      allCandidatesBeforeDeduplication.push({
+        el,
+        score: Math.min(100, elScore),
+        reason: reasons.join(", "),
+      });
+
+      rawCandidateList.push({
+        el,
+        score: Math.min(100, elScore),
+        hasAuthorLink,
+        hasTimestamp,
+        hasAvatar,
+        hasHeaderLayout,
+        hasSemanticRole,
+        tokensMatched,
+        reasons,
+      });
+    }
+  }
+
+  // Deduplication: Coalesce related elements into ONE logical BEGIN candidate per visual post header
+  type PostHeaderCluster = {
+    elements: CollectorDomElement[];
+    hasAuthorLink: boolean;
+    hasTimestamp: boolean;
+    hasAvatar: boolean;
+    hasHeaderLayout: boolean;
+    hasSemanticRole: boolean;
+    tokensMatched: string[];
+  };
+
+  const clusters: PostHeaderCluster[] = [];
+
+  for (const item of rawCandidateList) {
+    let matchedCluster = clusters.find((cluster) => {
+      return cluster.elements.some((other) => {
+        // Hierarchical relation (parent/child)
+        if (other.id === item.el.parentId || item.el.id === other.parentId) return true;
+        // Spatial proximity within same post header area (vertical diff <= 50, horizontal diff <= 250)
+        const vertDiff = Math.abs(other.rect.y - item.el.rect.y);
+        const horizDiff = Math.abs(other.rect.x - item.el.rect.x);
+        return vertDiff <= 50 && horizDiff <= 250;
+      });
+    });
+
+    if (!matchedCluster) {
+      matchedCluster = {
+        elements: [],
+        hasAuthorLink: false,
+        hasTimestamp: false,
+        hasAvatar: false,
+        hasHeaderLayout: false,
+        hasSemanticRole: false,
+        tokensMatched: [],
+      };
+      clusters.push(matchedCluster);
+    }
+
+    matchedCluster.elements.push(item.el);
+    if (item.hasAuthorLink) matchedCluster.hasAuthorLink = true;
+    if (item.hasTimestamp) matchedCluster.hasTimestamp = true;
+    if (item.hasAvatar) matchedCluster.hasAvatar = true;
+    if (item.hasHeaderLayout) matchedCluster.hasHeaderLayout = true;
+    if (item.hasSemanticRole) matchedCluster.hasSemanticRole = true;
+    if (item.tokensMatched.length > 0) {
+      matchedCluster.tokensMatched.push(...item.tokensMatched);
+    }
+  }
+
+  const deduplicatedCandidates: EvaluatedBeginCandidate[] = [];
+
+  for (const cluster of clusters) {
+    let clusterScore = 0;
+    const featureScores: Record<string, number> = {};
+    const featuresMatched: string[] = [];
+
+    if (cluster.hasAuthorLink) {
+      clusterScore += 35;
+      featureScores.author_link_structure = 35;
+      featuresMatched.push("author_link_structure");
+    }
+    if (cluster.hasTimestamp) {
+      clusterScore += 25;
+      featureScores.timestamp_indicator = 25;
+      featuresMatched.push("timestamp_indicator");
+    }
+    if (cluster.hasAvatar) {
+      clusterScore += 20;
+      featureScores.avatar_presence = 20;
+      featuresMatched.push("avatar_presence");
+    }
+    if (cluster.hasHeaderLayout) {
+      clusterScore += 15;
+      featureScores.header_layout = 15;
+      featuresMatched.push("header_layout");
+    }
+    if (cluster.hasSemanticRole) {
+      clusterScore += 5;
+      featureScores.semantic_role = 5;
+      featuresMatched.push("semantic_role");
+    }
+    if (cluster.tokensMatched.length > 0) {
+      clusterScore += 10;
+      featureScores.stable_text_tokens = 10;
+      featuresMatched.push("stable_text_tokens");
+    }
+
+    const finalScore = Math.min(100, clusterScore);
+    if (finalScore < 40) {
+      continue;
+    }
+
+    // Select the best representative element for the cluster
+    // Prefer enclosing container (DIV or HEADER with width >= 250)
+    let repEl = cluster.elements.find(
+      (e) => (e.tagName === "DIV" || e.tagName === "HEADER") && e.rect.width >= 250 && e.rect.height >= 25 && e.rect.height <= 120
+    );
+
+    if (!repEl) {
+      repEl = cluster.elements.find((e) => e.tagName === "A" || e.role === "link");
+    }
+    if (!repEl) {
+      repEl = cluster.elements[0]!;
+    }
+
+    // Enclosing bounding rectangle
+    let rect: Rect;
+    if (repEl.rect.width >= 250 && repEl.rect.height >= 25 && repEl.rect.height <= 120) {
+      rect = repEl.rect;
+    } else {
+      const minX = Math.min(...cluster.elements.map((e) => e.rect.x));
+      const minY = Math.min(...cluster.elements.map((e) => e.rect.y));
+      const maxX = Math.max(...cluster.elements.map((e) => e.rect.x + e.rect.width));
+      const maxY = Math.max(...cluster.elements.map((e) => e.rect.y + e.rect.height));
+      rect = {
+        x: minX,
+        y: minY,
+        width: Math.max(300, maxX - minX),
+        height: Math.max(35, maxY - minY),
+      };
+    }
+
+    const reason = `Features: ${featuresMatched.join(", ")} (score ${finalScore})`;
+
+    deduplicatedCandidates.push({
+      el: repEl,
+      rect,
+      score: finalScore,
+      featureScores,
+      featuresMatched,
+      method: "text_dom",
+      reason,
+      clusterElements: cluster.elements,
+    });
+  }
+
+  deduplicatedCandidates.sort((a, b) => b.score - a.score || a.rect.y - b.rect.y);
+
+  return {
+    deduplicatedCandidates,
+    allCandidatesBeforeDeduplication,
+    rejectedElements,
+  };
+}
+
+export type OuterContainerResolution = {
+  container: CollectorDomElement;
+  rect: Rect;
+  confidence: number;
+  selectionReason: string;
+  ancestorCandidates: Array<{
+    id: string;
+    tagName: string;
+    role?: string;
+    rect: Rect;
+    score: number;
+    reasons: string;
+    rejected?: boolean;
+    rejectionReason?: string;
+  }>;
+};
+
+/**
+ * C2.11.9: Resolves the outer individual post container by walking up DOM ancestors from a recognized BEGIN header.
+ *
+ * Requirements:
+ * - Selects the smallest suitable ancestor that:
+ *   1. Contains the detected BEGIN header.
+ *   2. Contains the main post content.
+ *   3. Contains the post engagement area when present.
+ *   4. Does NOT include neighboring posts.
+ *   5. Does NOT include the entire feed.
+ * - Does not simply choose parentElement unconditionally.
+ * - Does not require role="article", but utilizes it as supporting evidence.
+ */
+export function resolveOuterPostContainer(
+  beginEl: CollectorDomElement,
+  elementMap: Map<string, CollectorDomElement>,
+  allBeginElements: CollectorDomElement[] = [],
+  viewport?: { width: number; height: number },
+): OuterContainerResolution | null {
+  const ancestorCandidates: OuterContainerResolution["ancestorCandidates"] = [];
+
+  // Identify other distinct posts' BEGIN elements (different vertical zone)
+  const otherBegins = allBeginElements.filter(
+    (other) => other.id !== beginEl.id && Math.abs(other.rect.y - beginEl.rect.y) > 75,
+  );
+
+  // Helper to check if an element subtree contains engagement signals (like/comment/share, reaction counts, toolbar)
+  const hasEngagementSubtree = (el: CollectorDomElement): boolean => {
+    const queue = [...(el.childrenIds || [])];
+    const visited = new Set<string>();
+    const actionVerbs = /\b(thích|bình luận|chia sẻ|like|comment|share|reactions?|upvote|retweet)\b/i;
+
+    while (queue.length > 0) {
+      const childId = queue.shift()!;
+      if (visited.has(childId)) continue;
+      visited.add(childId);
+
+      const child = elementMap.get(childId);
+      if (!child) continue;
+
+      // Don't descend into a nested distinct post
+      if (otherBegins.some((b) => b.id === child.id)) continue;
+
+      if (
+        child.role === "toolbar" ||
+        child.role === "group" ||
+        (child.textSnippet && actionVerbs.test(child.textSnippet)) ||
+        (child.attributes?.["aria-label"] && actionVerbs.test(child.attributes["aria-label"])) ||
+        isEngagementText(child.textSnippet || "")
+      ) {
+        return true;
+      }
+
+      if (child.childrenIds && child.childrenIds.length > 0 && visited.size < 60) {
+        queue.push(...child.childrenIds);
+      }
+    }
+    return false;
+  };
+
+  let cur: CollectorDomElement | undefined = beginEl.parentId ? elementMap.get(beginEl.parentId) : undefined;
+  let depthSteps = 0;
+
+  while (cur && depthSteps < 15) {
+    depthSteps++;
+
+    // 1. Hard stopping boundaries: HTML / BODY
+    if (cur.tagName === "BODY" || cur.tagName === "HTML") {
+      ancestorCandidates.push({
+        id: cur.id,
+        tagName: cur.tagName,
+        rect: cur.rect,
+        score: 0,
+        reasons: "Root document element",
+        rejected: true,
+        rejectionReason: "Reached BODY/HTML root document element",
+      });
+      break;
+    }
+
+    // 2. Hard stopping boundaries: Broad Feed container
+    if (cur.isFeedContainer || cur.role === "feed" || /\b(feed|stream|wall)\b/i.test(cur.className || "")) {
+      ancestorCandidates.push({
+        id: cur.id,
+        tagName: cur.tagName,
+        role: cur.role,
+        rect: cur.rect,
+        score: 0,
+        reasons: "Broad feed container",
+        rejected: true,
+        rejectionReason: "Feed container encloses entire feed, not an individual post",
+      });
+      break;
+    }
+
+    // 3. Hard stopping boundary: Enclosing neighboring distinct post
+    const enclosesNeighbor = otherBegins.some((other) => {
+      const vertWithin =
+        other.rect.y >= cur!.rect.y - 10 && other.rect.y + other.rect.height <= cur!.rect.y + cur!.rect.height + 10;
+      const horizWithin =
+        other.rect.x >= cur!.rect.x - 30 && other.rect.x + other.rect.width <= cur!.rect.x + cur!.rect.width + 30;
+      return vertWithin && horizWithin;
+    });
+
+    if (enclosesNeighbor) {
+      ancestorCandidates.push({
+        id: cur.id,
+        tagName: cur.tagName,
+        rect: cur.rect,
+        score: 0,
+        reasons: "Multi-post ancestor",
+        rejected: true,
+        rejectionReason: "Ancestor expanded to enclose a neighboring post header",
+      });
+      break;
+    }
+
+    // 4. Oversized bounding box check
+    const maxAllowedHeight = viewport ? viewport.height * 3.5 : 3000;
+    if (cur.rect.height > maxAllowedHeight) {
+      ancestorCandidates.push({
+        id: cur.id,
+        tagName: cur.tagName,
+        rect: cur.rect,
+        score: 0,
+        reasons: "Oversized container",
+        rejected: true,
+        rejectionReason: `Height ${cur.rect.height}px exceeds maximum individual post threshold`,
+      });
+      break;
+    }
+
+    // Evaluate candidate suitability
+    let score = 0;
+    const reasons: string[] = [];
+    let rejected = false;
+    let rejectionReason: string | undefined;
+
+    // Check header enclosure
+    const enclosesBegin =
+      cur.rect.y <= beginEl.rect.y + 5 &&
+      cur.rect.y + cur.rect.height >= beginEl.rect.y + beginEl.rect.height - 5;
+
+    if (!enclosesBegin) {
+      rejected = true;
+      rejectionReason = "Does not fully enclose BEGIN header";
+    }
+
+    // Check height: must have space for post content below header
+    const extraHeight = cur.rect.height - beginEl.rect.height;
+    if (extraHeight < 25 || cur.rect.height < 85) {
+      rejected = true;
+      rejectionReason = `Height too small (${cur.rect.height}px); only covers header without post content`;
+    }
+
+    if (!rejected) {
+      // Score structural and content signals
+      const hasEngagement = hasEngagementSubtree(cur);
+
+      if (cur.isArticleOrCard || cur.role === "article") {
+        score += 35;
+        reasons.push("role=article or article card");
+      }
+
+      if (hasEngagement) {
+        score += 35;
+        reasons.push("contains engagement toolbar / actions");
+      }
+
+      if (
+        (cur.attributes?.["data-pagelet"] && /FeedUnit|GroupFeed|Story/i.test(cur.attributes["data-pagelet"])) ||
+        cur.attributes?.["aria-posinset"] ||
+        cur.attributes?.["data-ad-preview"]
+      ) {
+        score += 25;
+        reasons.push("feed unit / post story attribute");
+      }
+
+      if (cur.className && /\b(card|post|feed-item|userContentWrapper)\b/i.test(cur.className)) {
+        score += 20;
+        reasons.push("card/post class");
+      }
+
+      // Direct child of feed
+      const parentOfCur = cur.parentId ? elementMap.get(cur.parentId) : undefined;
+      if (parentOfCur && (parentOfCur.role === "feed" || parentOfCur.isFeedContainer)) {
+        score += 25;
+        reasons.push("direct child of feed container");
+      }
+
+      if (cur.rect.width >= 300 && cur.rect.height >= 120) {
+        score += 15;
+        reasons.push("post card dimensions");
+      }
+    }
+
+    ancestorCandidates.push({
+      id: cur.id,
+      tagName: cur.tagName,
+      role: cur.role,
+      rect: cur.rect,
+      score,
+      reasons: reasons.join(", ") || (rejected ? rejectionReason! : "generic ancestor"),
+      rejected,
+      rejectionReason,
+    });
+
+    cur = cur.parentId ? elementMap.get(cur.parentId) : undefined;
+  }
+
+  // Filter to valid non-rejected candidates
+  const validCandidates = ancestorCandidates.filter((c) => !c.rejected && c.score >= 20);
+
+  if (validCandidates.length === 0) {
+    // If no perfect ancestor with engagement was found, fallback to the largest valid enclosure
+    const unrejected = ancestorCandidates.filter((c) => !c.rejected);
+    if (unrejected.length > 0) {
+      const fallback = unrejected[0]!;
+      const el = elementMap.get(fallback.id)!;
+      return {
+        container: el,
+        rect: el.rect,
+        confidence: 65,
+        selectionReason: `Fallback enclosing ancestor (${el.tagName}#${el.id}, height ${el.rect.height}px)`,
+        ancestorCandidates,
+      };
+    }
+    return null;
+  }
+
+  // Prioritize candidates containing engagement if available
+  const withEngagement = validCandidates.filter((c) => c.reasons.includes("engagement"));
+  const pool = withEngagement.length > 0 ? withEngagement : validCandidates;
+
+  // Among the top-scoring candidates, select the SMALLEST one that satisfies the requirements
+  pool.sort((a, b) => {
+    // Primary: highest score
+    if (b.score !== a.score) return b.score - a.score;
+    // Secondary: smallest height (smallest suitable ancestor)
+    return a.rect.height - b.rect.height;
+  });
+
+  const winner = pool[0]!;
+  const containerEl = elementMap.get(winner.id)!;
+
+  return {
+    container: containerEl,
+    rect: containerEl.rect,
+    confidence: Math.min(100, winner.score + 20),
+    selectionReason: `Smallest suitable outer container (${containerEl.tagName}#${containerEl.id}): ${winner.reasons}`,
+    ancestorCandidates,
+  };
+}
+
 export function findAnchorCandidates(
   region: CollectorRegion,
   elements: CollectorDomElement[],
@@ -1616,6 +2215,10 @@ export function executeLiveBrowserMatchTest(
   regions: CollectorRegion[],
   snapshot: CollectorDomSnapshot,
   draft?: CollectorDraft,
+  options?: {
+    mode?: "BEGIN_ONLY" | "PAIRED";
+    isolateBeginOnly?: boolean;
+  },
 ): MatchTestResult {
   const testedAt = new Date().toISOString();
   const visualLimitations = [
@@ -1646,6 +2249,325 @@ export function executeLiveBrowserMatchTest(
       summary: "DOM snapshot belongs to a different URL or outdated page state.",
       limitations: visualLimitations,
       error: "Stale page state",
+    };
+  }
+
+  const learnedRules = draft ? buildLearnedAnchorRules(draft) : undefined;
+
+  const isBeginOnlyMode = Boolean(
+    options?.mode === "BEGIN_ONLY" ||
+    options?.isolateBeginOnly ||
+    (!regions.some((r) => r.type === "END" || (r.type === "STATIC" && r.role === "footer")) &&
+      regions.some((r) => r.type === "BEGIN" || (r.type === "STATIC" && r.role === "header")))
+  );
+
+  if (isBeginOnlyMode) {
+    // -------------------------------------------------------------------------
+    // C2.11.8: ISOLATED BEGIN-ONLY MATCHING WITH MULTI-SAMPLE LEARNING
+    // -------------------------------------------------------------------------
+    const beginRegions = regions.filter((r) => r.type === "BEGIN" || (r.type === "STATIC" && r.role === "header"));
+
+    const distinctTags = Array.from(
+      new Set(
+        [
+          ...beginRegions.map((r) => (r.groupTag || "default").trim()),
+          ...(learnedRules ? Array.from(learnedRules.keys()) : []),
+        ].filter(Boolean)
+      )
+    );
+
+    if (distinctTags.length === 0) {
+      return {
+        testedAt,
+        browserUrl: snapshot.url,
+        status: "FAILED",
+        matchedPostCount: 0,
+        groups: [],
+        summary: "No BEGIN anchors defined. Create a BEGIN anchor in Step 2A.",
+        limitations: visualLimitations,
+        error: "No BEGIN anchors defined",
+      };
+    }
+
+    const groupResults: PostGroupMatch[] = [];
+    const allMatchedItems: MatchedPostItem[] = [];
+
+    for (const tag of distinctTags) {
+      const ruleGroup = learnedRules?.get(tag);
+      let beginRule = ruleGroup?.beginRule;
+
+      if (!beginRule) {
+        const tagExamples = beginRegions.filter((r) => (r.groupTag || "default").trim() === tag);
+        if (tagExamples.length > 0) {
+          const fakeDraft: CollectorDraft = {
+            ...createEmptyDraft({ name: "Temp" }),
+            regions: tagExamples,
+          };
+          const derived = buildLearnedAnchorRules(fakeDraft);
+          beginRule = derived.get(tag)?.beginRule;
+        }
+      }
+
+      const evalResult = evaluateLiveBeginCandidates(beginRule, snapshot.elements);
+      const { deduplicatedCandidates, allCandidatesBeforeDeduplication, rejectedElements } = evalResult;
+
+      const buildCandidateDiagnostics = (selected: EvaluatedBeginCandidate | null) => ({
+        mode: "BEGIN_ONLY" as const,
+        trainingSampleCount: beginRule?.trainingSampleCount ?? 1,
+        learnedFeatures: beginRule?.features ?? [],
+        liveCandidatesBeforeDeduplication: allCandidatesBeforeDeduplication.length,
+        liveCandidatesAfterDeduplication: deduplicatedCandidates.length,
+        topCandidates: deduplicatedCandidates.slice(0, 5).map((c) => ({
+          id: c.el.id,
+          tagName: c.el.tagName,
+          role: c.el.role,
+          textSnippet: c.el.textSnippet ? c.el.textSnippet.slice(0, 60) : undefined,
+          rect: c.rect,
+          score: c.score,
+          featureScores: c.featureScores,
+          method: c.method,
+          reasons: c.reason,
+        })),
+        selectedCandidate: selected
+          ? {
+              id: selected.el.id,
+              tagName: selected.el.tagName,
+              rect: selected.rect,
+              score: selected.score,
+              featuresMatched: selected.featuresMatched,
+            }
+          : null,
+        rejectionReasons: rejectedElements.slice(0, 10),
+        topBeginCandidates: deduplicatedCandidates.slice(0, 5).map((c) => ({
+          id: c.el.id,
+          tagName: c.el.tagName,
+          role: c.el.role,
+          textSnippet: c.el.textSnippet ? c.el.textSnippet.slice(0, 60) : undefined,
+          rect: c.rect,
+          isViewportRelative: true,
+          isFixed: false,
+          score: c.score,
+          method: c.method,
+          reasons: c.reason,
+        })),
+        topEndCandidates: [],
+        rejectedPairings: [],
+        selectedPair: selected
+          ? {
+              beginId: selected.el.id,
+              beginTag: selected.el.tagName,
+              beginY: selected.rect.y,
+              endId: "",
+              endTag: "",
+              endY: 0,
+              containerId: selected.el.id,
+              containerTag: selected.el.tagName,
+              containerRect: selected.rect,
+              score: selected.score,
+            }
+          : null,
+      });
+
+      if (deduplicatedCandidates.length === 0) {
+        allMatchedItems.push({
+          index: allMatchedItems.length + 1,
+          groupTag: tag,
+          beginMatched: false,
+          endMatched: false,
+          paired: false,
+          domResolved: false,
+          confidence: 0,
+          failureReason: `No valid BEGIN post header matched for group "${tag}" in live DOM.`,
+        });
+
+        groupResults.push({
+          groupTag: tag,
+          status: "FAILED",
+          domAssociationStatus: "NOT_RESOLVED",
+          visualConfidence: 0,
+          limitations: visualLimitations,
+          failureReason: `No valid BEGIN post header matched for group "${tag}" in live DOM.`,
+          candidateDiagnostics: buildCandidateDiagnostics(null),
+        });
+        continue;
+      }
+
+      // C2.11.9: Walk up DOM ancestors from recognized BEGIN candidates to identify the OUTER individual post container
+      const elementMap = new Map<string, CollectorDomElement>();
+      for (const el of snapshot.elements) {
+        elementMap.set(el.id, el);
+      }
+
+      const allBeginElements = deduplicatedCandidates.map((c) => c.el);
+      const outerContainerDiags: Array<{
+        beginElement: {
+          id: string;
+          tagName: string;
+          rect: Rect;
+          textSnippet?: string;
+        };
+        ancestorCandidates: OuterContainerResolution["ancestorCandidates"];
+        selectedOuterContainer: {
+          id: string;
+          tagName: string;
+          role?: string;
+          rect: Rect;
+          selectionReason: string;
+          confidence: number;
+        };
+      }> = [];
+      const deduplicationDecisions: string[] = [];
+      const resolvedPostContainers: Array<{
+        cand: (typeof deduplicatedCandidates)[0];
+        containerResolution: OuterContainerResolution;
+      }> = [];
+
+      const seenContainerIds = new Set<string>();
+
+      for (const cand of deduplicatedCandidates) {
+        const resolution = resolveOuterPostContainer(
+          cand.el,
+          elementMap,
+          allBeginElements,
+          snapshot.viewport,
+        );
+
+        if (!resolution) {
+          if (!seenContainerIds.has(cand.el.id)) {
+            seenContainerIds.add(cand.el.id);
+            resolvedPostContainers.push({
+              cand,
+              containerResolution: {
+                container: cand.el,
+                rect: cand.rect,
+                confidence: cand.score,
+                selectionReason: "Direct BEGIN candidate (no distinct outer container found)",
+                ancestorCandidates: [],
+              },
+            });
+          }
+          continue;
+        }
+
+        outerContainerDiags.push({
+          beginElement: {
+            id: cand.el.id,
+            tagName: cand.el.tagName,
+            rect: cand.rect,
+            textSnippet: cand.el.textSnippet ? cand.el.textSnippet.slice(0, 60) : undefined,
+          },
+          ancestorCandidates: resolution.ancestorCandidates,
+          selectedOuterContainer: {
+            id: resolution.container.id,
+            tagName: resolution.container.tagName,
+            role: resolution.container.role,
+            rect: resolution.rect,
+            selectionReason: resolution.selectionReason,
+            confidence: resolution.confidence,
+          },
+        });
+
+        // Deduplicate BEGIN candidates that resolve to the same outer post container
+        if (seenContainerIds.has(resolution.container.id)) {
+          deduplicationDecisions.push(
+            `Deduplicated candidate ${cand.el.id} (<${cand.el.tagName}> at y=${cand.rect.y}) into existing outer post container ${resolution.container.id} (<${resolution.container.tagName}> at y=${resolution.rect.y}, height=${resolution.rect.height}).`,
+          );
+          continue;
+        }
+
+        seenContainerIds.add(resolution.container.id);
+        resolvedPostContainers.push({
+          cand,
+          containerResolution: resolution,
+        });
+      }
+
+      for (const { cand, containerResolution } of resolvedPostContainers) {
+        const postConfidence = Math.min(
+          100,
+          Math.round(cand.score * 0.5 + containerResolution.confidence * 0.5),
+        );
+
+        allMatchedItems.push({
+          index: allMatchedItems.length + 1,
+          groupTag: tag,
+          beginRect: cand.rect,
+          beginElementId: cand.el.id,
+          containerRect: containerResolution.rect,
+          containerId: containerResolution.container.id,
+          containerTagName: containerResolution.container.tagName,
+          beginMatched: true,
+          endMatched: false,
+          paired: false,
+          domResolved: true,
+          confidence: postConfidence,
+        });
+      }
+
+      const topResolved = resolvedPostContainers[0]!;
+      const topBegin = topResolved.cand;
+      const topContainer = topResolved.containerResolution;
+
+      groupResults.push({
+        groupTag: tag,
+        status: "MATCHED",
+        domAssociationStatus: "CONFIRMED",
+        visualConfidence: topBegin.score,
+        limitations: visualLimitations,
+        beginMatch: {
+          regionId: beginRule?.referenceExamples[0]?.regionId || beginRegions[0]?.id || "begin_learned",
+          role: "BEGIN",
+          groupTag: tag,
+          matched: true,
+          matchedElementId: topBegin.el.id,
+          matchedTagName: topBegin.el.tagName,
+          matchedRect: topBegin.rect,
+          confidence: topBegin.score,
+          method: topBegin.method,
+          evidence: topBegin.reason,
+        },
+        domContainer: {
+          containerId: topContainer.container.id,
+          tagName: topContainer.container.tagName,
+          role: topContainer.container.role,
+          depth: topContainer.container.depth,
+          isArticleOrCard: Boolean(topContainer.container.isArticleOrCard),
+        },
+        candidateDiagnostics: {
+          ...buildCandidateDiagnostics(topBegin),
+          outerContainerDiagnostics: outerContainerDiags,
+          deduplicationDecisions,
+          finalUniquePostCount: resolvedPostContainers.length,
+          selectedPair: {
+            beginId: topBegin.el.id,
+            beginTag: topBegin.el.tagName,
+            beginY: topBegin.rect.y,
+            endId: "",
+            endTag: "",
+            endY: 0,
+            containerId: topContainer.container.id,
+            containerTag: topContainer.container.tagName,
+            containerRect: topContainer.rect,
+            score: topBegin.score,
+          },
+        },
+      });
+    }
+
+    const anyMatched = groupResults.some((g) => g.status === "MATCHED");
+    const matchedCount = allMatchedItems.filter((i) => i.domResolved).length;
+
+    return {
+      testedAt,
+      browserUrl: snapshot.url,
+      status: anyMatched ? "MATCHED" : "FAILED",
+      matchedPostCount: matchedCount,
+      groups: groupResults,
+      matchedItems: allMatchedItems,
+      summary: anyMatched
+        ? `Recognized ${matchedCount} BEGIN post header(s) with multi-sample learning (isolated BEGIN mode).`
+        : "Failed to match BEGIN post headers in live browser.",
+      limitations: visualLimitations,
     };
   }
 
@@ -1724,8 +2646,6 @@ export function executeLiveBrowserMatchTest(
   const groupResults: PostGroupMatch[] = [];
   const allMatchedItems: MatchedPostItem[] = [];
   let totalMatchedPosts = 0;
-
-  const learnedRules = draft ? buildLearnedAnchorRules(draft) : undefined;
 
   for (const [tag, group] of analysis.groups.entries()) {
     const begin = group.begin;
@@ -2621,6 +3541,18 @@ export function buildLearnedAnchorRules(
           continue;
         }
 
+        // Section 2: Exclude author candidates, timestamps, numbers and relative time keywords from stable tokens for BEGIN anchors
+        if (
+          type === "BEGIN" &&
+          (isAuthorCandidate(tok) ||
+            isTimestampText(tok) ||
+            /^\d+$/.test(tok) ||
+            /^(hom|qua|truoc|vua|xong|luc|thang|nam|gio|phut|giay|am|pm|hrs?|mins?|days?|ago|just|now|yesterday)$/i.test(tok))
+        ) {
+          variableTokens.push(tok);
+          continue;
+        }
+
         if (sampleCount > 1) {
           let count = 0;
           for (const sSet of sampleTokensMap.values()) {
@@ -2632,11 +3564,7 @@ export function buildLearnedAnchorRules(
             variableTokens.push(tok);
           }
         } else {
-          if (isAuthorCandidate(tok) && (tok.length > 3 || /^[A-Z]/.test(tok))) {
-            variableTokens.push(tok);
-          } else {
-            stableTokens.push(tok);
-          }
+          stableTokens.push(tok);
         }
       }
 
@@ -2651,10 +3579,99 @@ export function buildLearnedAnchorRules(
         }
       }
 
+      const distinctSampleIds = new Set(examples.map((e) => e.captureItemId).filter(Boolean));
+      const trainingSampleCount = distinctSampleIds.size || examples.length;
+
+      // C2.11.8: Extract structured learned features with weights & support count
+      const features: AnchorLearnedFeature[] = [];
+
+      // 1. Header spatial layout
+      features.push({
+        feature: "header_layout",
+        weight: 0.25,
+        supportCount: trainingSampleCount,
+        sampleCount: trainingSampleCount,
+        details: `avgRelW=${geometryProfile.avgRelW.toFixed(2)}, avgRelH=${geometryProfile.avgRelH.toFixed(2)}, avgRelY=${geometryProfile.avgRelY.toFixed(2)}`,
+      });
+
+      // 2. Author link structure
+      const authorSupportCount = examples
+        .filter((ex) => {
+          const hasAuthorVar = (ex.candidateVariableKeys ?? []).some((k) => /author/i.test(k));
+          const hasLinkRole = ex.domEvidence?.role === "link" || ex.domEvidence?.tagName === "A";
+          const hasAuthorName = Boolean(ex.ocr?.text && isAuthorCandidate(ex.ocr.text));
+          return hasAuthorVar || hasLinkRole || hasAuthorName;
+        })
+        .map((e) => e.captureItemId)
+        .filter((id, i, arr) => arr.indexOf(id) === i).length || Math.min(1, trainingSampleCount);
+
+      features.push({
+        feature: "author_link_structure",
+        weight: 0.30,
+        supportCount: authorSupportCount,
+        sampleCount: trainingSampleCount,
+        details: `Author link / heading structure present in ${authorSupportCount}/${trainingSampleCount} samples`,
+      });
+
+      // 3. Timestamp indicator
+      const timeSupportCount = examples
+        .filter((ex) => {
+          const hasTimeVar = (ex.candidateVariableKeys ?? []).some((k) => /time|date/i.test(k));
+          const text = ex.ocr?.text || ex.ocrEvidence?.text || "";
+          return hasTimeVar || isTimestampText(text) || /\b(giờ|phút|ngày|hôm qua|vừa xong|mins?|hrs?|days?)\b/i.test(text);
+        })
+        .map((e) => e.captureItemId)
+        .filter((id, i, arr) => arr.indexOf(id) === i).length;
+
+      features.push({
+        feature: "timestamp_indicator",
+        weight: 0.20,
+        supportCount: timeSupportCount || Math.min(1, trainingSampleCount),
+        sampleCount: trainingSampleCount,
+        details: `Relative timestamp indicator present in ${timeSupportCount}/${trainingSampleCount} samples`,
+      });
+
+      // 4. Avatar presence
+      const avatarSupportCount = examples
+        .filter((ex) => {
+          const hasAvatarVar = (ex.candidateVariableKeys ?? []).some((k) => /avatar|profile|image/i.test(k));
+          const hasImgTag = ex.domEvidence?.tagName === "IMG" || ex.domEvidence?.role === "img";
+          return hasAvatarVar || hasImgTag || Boolean(ex.referenceImageAsset);
+        })
+        .map((e) => e.captureItemId)
+        .filter((id, i, arr) => arr.indexOf(id) === i).length || Math.min(1, trainingSampleCount);
+
+      features.push({
+        feature: "avatar_presence",
+        weight: 0.15,
+        supportCount: avatarSupportCount,
+        sampleCount: trainingSampleCount,
+        details: `Avatar profile image present in ${avatarSupportCount}/${trainingSampleCount} samples`,
+      });
+
+      // 5. Semantic role / tag
+      const roleSupportCount = examples
+        .filter((ex) => Boolean(ex.domEvidence?.role || ex.domEvidence?.tagName === "HEADER"))
+        .map((e) => e.captureItemId)
+        .filter((id, i, arr) => arr.indexOf(id) === i).length;
+
+      features.push({
+        feature: "semantic_role",
+        weight: 0.10,
+        supportCount: roleSupportCount,
+        sampleCount: trainingSampleCount,
+        details: `Semantic header role in ${roleSupportCount}/${trainingSampleCount} samples`,
+      });
+
+      // Overall evidence strength & uncertainty
+      const evidenceStrength = Math.min(100, Math.round(50 + trainingSampleCount * 15));
+      const uncertainty = Math.max(0, 100 - evidenceStrength);
+
       return {
         groupTag: tag,
         type,
         role: examples[0]?.role || defaultRole,
+        trainingSampleCount,
         exampleCount: examples.length,
         referenceExamples: refExamples,
         geometryProfile,
@@ -2665,6 +3682,9 @@ export function buildLearnedAnchorRules(
           roles,
           hasAttributes,
         },
+        features,
+        evidenceStrength,
+        uncertainty,
         associatedVariableKeys: associatedVars,
       };
     }

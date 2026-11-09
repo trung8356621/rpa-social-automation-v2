@@ -9,6 +9,7 @@ type Props = {
   disabled?: boolean;
   style?: React.CSSProperties;
   className?: string;
+  dropdownPlacement?: "top" | "bottom" | "auto";
 };
 
 export function GroupTagCombobox({
@@ -19,11 +20,27 @@ export function GroupTagCombobox({
   disabled = false,
   style,
   className = "",
+  dropdownPlacement = "auto",
 }: Props) {
   const [isOpen, setIsOpen] = useState(false);
+  const [openUpward, setOpenUpward] = useState(false);
   const [highlightedIndex, setHighlightedIndex] = useState<number>(-1);
   const containerRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLInputElement>(null);
+
+  useEffect(() => {
+    if (isOpen && containerRef.current) {
+      if (dropdownPlacement === "top") {
+        setOpenUpward(true);
+      } else if (dropdownPlacement === "bottom") {
+        setOpenUpward(false);
+      } else {
+        const rect = containerRef.current.getBoundingClientRect();
+        const spaceBelow = window.innerHeight - rect.bottom;
+        setOpenUpward(spaceBelow < 200 && rect.top > 160);
+      }
+    }
+  }, [isOpen, dropdownPlacement]);
 
   // Close when clicking outside
   useEffect(() => {
@@ -144,7 +161,8 @@ export function GroupTagCombobox({
           className="collector-group-combobox-dropdown"
           style={{
             position: "absolute",
-            top: "100%",
+            top: openUpward ? "auto" : "100%",
+            bottom: openUpward ? "100%" : "auto",
             left: 0,
             zIndex: 9999,
             minWidth: "220px",
@@ -152,8 +170,9 @@ export function GroupTagCombobox({
             background: "#0d1520",
             border: "1px solid #334155",
             borderRadius: "4px",
-            boxShadow: "0 6px 16px rgba(0,0,0,0.6)",
-            marginTop: "2px",
+            boxShadow: openUpward ? "0 -6px 16px rgba(0,0,0,0.6)" : "0 6px 16px rgba(0,0,0,0.6)",
+            marginTop: openUpward ? "0" : "4px",
+            marginBottom: openUpward ? "4px" : "0",
             maxHeight: "220px",
             overflowY: "auto",
             padding: "3px 0",
