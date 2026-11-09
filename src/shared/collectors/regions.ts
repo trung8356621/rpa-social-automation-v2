@@ -1446,7 +1446,7 @@ export function executeHtmlFilter(
 // 9. C2.10 LIVE BROWSER MATCH TEST ENGINE
 // ---------------------------------------------------------------------------
 
-function findAnchorCandidates(
+export function findAnchorCandidates(
   region: CollectorRegion,
   elements: CollectorDomElement[],
   learnedRule?: LearnedAnchorRule,

@@ -1736,56 +1736,108 @@ async function boot() {
         const snapshot = await wc
           .executeJavaScript(
             `(() => {
-          const visible = (el) => {
-            const r = el.getBoundingClientRect(), s = getComputedStyle(el);
-            return r.width > 0 && r.height > 0 && s.visibility !== 'hidden' && s.display !== 'none';
+          const vpW = window.innerWidth;
+          const vpH = window.innerHeight;
+
+          const inViewport = (r) => {
+            return r.bottom > 0 && r.top < vpH && r.right > 0 && r.left < vpW && r.width > 0 && r.height > 0;
           };
+
+          const isVisible = (el) => {
+            const r = el.getBoundingClientRect();
+            if (r.width === 0 && r.height === 0) return false;
+            const s = getComputedStyle(el);
+            return s.visibility !== 'hidden' && s.display !== 'none' && s.opacity !== '0';
+          };
+
           const elements = [];
-          const walker = document.createTreeWalker(document.body || document.documentElement, NodeFilter.SHOW_ELEMENT);
-          let node = walker.currentNode;
+          const nodeToId = new WeakMap();
+          const idToElement = new Map();
           let count = 0;
-          const maxNodes = 600;
-          
-          while (node && count < maxNodes) {
-            if (node instanceof HTMLElement && visible(node)) {
+          const maxNodes = 1200;
+
+          const walker = document.createTreeWalker(document.body || document.documentElement, NodeFilter.SHOW_ELEMENT, {
+            acceptNode(node) {
+              if (!(node instanceof HTMLElement)) return NodeFilter.FILTER_SKIP;
+              if (['SCRIPT', 'STYLE', 'NOSCRIPT', 'TEMPLATE'].includes(node.tagName)) return NodeFilter.FILTER_REJECT;
               const r = node.getBoundingClientRect();
-              const role = node.getAttribute('role') || undefined;
-              const className = typeof node.className === 'string' ? node.className.slice(0, 100) : '';
-              const isArticle = role === 'article' || /\\b(card|post|feed-item)\\b/i.test(className) || node.hasAttribute('data-pagelet');
-              const isFeed = role === 'feed' || /\\b(feed|stream|wall)\\b/i.test(className);
-              const isDialog = role === 'dialog' || node.getAttribute('aria-modal') === 'true';
-              
-              let depth = 0;
-              for (let p = node.parentElement; p; p = p.parentElement) depth++;
-              
-              const attrs = {};
-              for (const name of ['href', 'src', 'data-pagelet', 'aria-label', 'role']) {
-                if (node.hasAttribute(name)) attrs[name] = (node.getAttribute(name) || '').slice(0, 200);
+              // Accept if intersecting viewport or enclosing the viewport container
+              if (inViewport(r) || (r.width > 200 && r.height > 200 && r.top <= 0 && r.bottom >= vpH)) {
+                return NodeFilter.FILTER_ACCEPT;
               }
-              
-              elements.push({
-                id: 'dom_' + count,
-                tagName: node.tagName,
-                role,
-                className,
-                idAttr: node.id || undefined,
-                rect: { x: Math.round(r.x), y: Math.round(r.y), width: Math.round(r.width), height: Math.round(r.height) },
-                textSnippet: (node.innerText || node.textContent || '').trim().slice(0, 150),
-                attributes: attrs,
-                childrenIds: [],
-                parentId: undefined,
-                depth,
-                isArticleOrCard: Boolean(isArticle),
-                isFeedContainer: Boolean(isFeed),
-                isDialogOrModal: Boolean(isDialog),
-                hasMedia: Boolean(node.querySelector('img, video')),
-                outerHtmlSnippet: (node.outerHTML || '').slice(0, 300),
-              });
-              count++;
+              // Skip subtrees completely above or below viewport unless enclosing
+              if (r.bottom < -200 || r.top > vpH + 400) {
+                return NodeFilter.FILTER_SKIP;
+              }
+              return NodeFilter.FILTER_SKIP;
+            }
+          });
+
+          let node = walker.currentNode;
+
+          while (node && count < maxNodes) {
+            if (node instanceof HTMLElement && isVisible(node)) {
+              const r = node.getBoundingClientRect();
+              if (inViewport(r) || (r.width > 200 && r.height > 200)) {
+                const role = node.getAttribute('role') || undefined;
+                const className = typeof node.className === 'string' ? node.className.slice(0, 100) : '';
+                const isArticle = role === 'article' || /\\b(card|post|feed-item)\\b/i.test(className) || node.hasAttribute('data-pagelet');
+                const isFeed = role === 'feed' || /\\b(feed|stream|wall)\\b/i.test(className);
+                const isDialog = role === 'dialog' || node.getAttribute('aria-modal') === 'true';
+
+                let depth = 0;
+                for (let p = node.parentElement; p; p = p.parentElement) depth++;
+
+                const attrs = {};
+                for (const name of ['href', 'src', 'data-pagelet', 'aria-label', 'role']) {
+                  if (node.hasAttribute(name)) attrs[name] = (node.getAttribute(name) || '').slice(0, 200);
+                }
+
+                const id = 'dom_' + count;
+                nodeToId.set(node, id);
+
+                // Find nearest recorded ancestor ID
+                let parentId = undefined;
+                let p = node.parentElement;
+                while (p) {
+                  if (nodeToId.has(p)) {
+                    parentId = nodeToId.get(p);
+                    break;
+                  }
+                  p = p.parentElement;
+                }
+
+                const elObj = {
+                  id,
+                  tagName: node.tagName,
+                  role,
+                  className,
+                  idAttr: node.id || undefined,
+                  rect: { x: Math.round(r.x), y: Math.round(r.y), width: Math.round(r.width), height: Math.round(r.height) },
+                  textSnippet: (node.innerText || node.textContent || '').trim().slice(0, 150),
+                  attributes: attrs,
+                  childrenIds: [],
+                  parentId,
+                  depth,
+                  isArticleOrCard: Boolean(isArticle),
+                  isFeedContainer: Boolean(isFeed),
+                  isDialogOrModal: Boolean(isDialog),
+                  hasMedia: Boolean(node.querySelector('img, video')),
+                  outerHtmlSnippet: (node.outerHTML || '').slice(0, 300),
+                };
+
+                if (parentId && idToElement.has(parentId)) {
+                  idToElement.get(parentId).childrenIds.push(id);
+                }
+
+                elements.push(elObj);
+                idToElement.set(id, elObj);
+                count++;
+              }
             }
             node = walker.nextNode();
           }
-          
+
           return {
             url: window.location.href,
             capturedAt: new Date().toISOString(),

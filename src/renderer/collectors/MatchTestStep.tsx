@@ -6,7 +6,13 @@ import type {
   MatchedPostItem,
   PostGroupMatch,
 } from "../../shared/collectors/types.js";
-import { executeLiveBrowserMatchTest } from "../../shared/collectors/regions.js";
+import {
+  executeLiveBrowserMatchTest,
+  buildLearnedAnchorRules,
+  findAnchorCandidates,
+  findLowestCommonAncestor,
+  verifyAnchorGroups,
+} from "../../shared/collectors/regions.js";
 import { domRectToShellBounds } from "../../shared/collector-browser-host.js";
 import { readAdminUiZoom } from "../ui-zoom.js";
 import {
@@ -40,6 +46,28 @@ export function StepMatchTest({
   const [isRunning, setIsRunning] = useState<boolean>(false);
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
   const [browserConnected, setBrowserConnected] = useState<boolean>(false);
+  const [showDiagnostic, setShowDiagnostic] = useState<boolean>(false);
+  const [isDiagRunning, setIsDiagRunning] = useState<boolean>(false);
+  const [diagReport, setDiagReport] = useState<{
+    timestamp: string;
+    url: string;
+    viewport: { width: number; height: number };
+    totalNodes: number;
+    inViewportNodes: number;
+    parentLinkedNodes: number;
+    articlesFound: number;
+    feedsFound: number;
+    groups: Array<{
+      tag: string;
+      beginAnchor: string;
+      beginCandidates: Array<{ id: string; tag: string; score: number; text: string; rect: { x: number; y: number; width: number; height: number } }>;
+      endAnchor: string;
+      endCandidates: Array<{ id: string; tag: string; score: number; text: string; rect: { x: number; y: number; width: number; height: number } }>;
+      lcaResolved?: string;
+      status: string;
+      rejectionReason?: string;
+    }>;
+  } | null>(null);
 
   const hostRef = useRef<HTMLDivElement>(null);
   const lastBoundsRef = useRef<{ x: number; y: number; width: number; height: number } | null>(null);
@@ -215,6 +243,109 @@ export function StepMatchTest({
     }
   }, [invoke, currentUrl]);
 
+  // Run Opt-In Real DOM Diagnostic
+  const handleRunDiagnostic = useCallback(async () => {
+    if (!invoke || !isElectronBrowserCoreAvailable()) {
+      alert("Browser Core session unavailable. Live DOM Diagnostic requires an active Electron browser session.");
+      return;
+    }
+    setIsDiagRunning(true);
+    try {
+      const snapshot = await collectorInspectDom(invoke, currentUrl, draftRef.current.layoutContext);
+      const learnedRules = buildLearnedAnchorRules(draftRef.current);
+      const elementMap = new Map(snapshot.elements.map((e) => [e.id, e]));
+
+      const groupsDiag: Array<{
+        tag: string;
+        beginAnchor: string;
+        beginCandidates: Array<{ id: string; tag: string; score: number; text: string; rect: { x: number; y: number; width: number; height: number } }>;
+        endAnchor: string;
+        endCandidates: Array<{ id: string; tag: string; score: number; text: string; rect: { x: number; y: number; width: number; height: number } }>;
+        lcaResolved?: string;
+        status: string;
+        rejectionReason?: string;
+      }> = [];
+
+      const analysis = verifyAnchorGroups(draftRef.current.regions ?? []);
+      for (const [tag, group] of analysis.groups.entries()) {
+        if (!group.begin || !group.end) continue;
+        const ruleGroup = learnedRules.get(tag);
+        const bCands = findAnchorCandidates(group.begin, snapshot.elements, ruleGroup?.beginRule);
+        const eCands = findAnchorCandidates(group.end, snapshot.elements, ruleGroup?.endRule);
+
+        let lcaStr: string | undefined = undefined;
+        let pairStatus = "NO_CANDIDATES";
+        let rejReason: string | undefined = undefined;
+
+        if (bCands.length > 0 && eCands.length > 0) {
+          const b = bCands[0]!;
+          const e = eCands[0]!;
+          const isVert = e.el.rect.y > b.el.rect.y + b.el.rect.height - 5;
+          if (!isVert) {
+            pairStatus = "INVERTED_ORDER";
+            rejReason = `END (<${e.el.tagName}> at y:${e.el.rect.y}) is above BEGIN (<${b.el.tagName}> at y:${b.el.rect.y})`;
+          } else {
+            const lca = findLowestCommonAncestor(b.el.id, e.el.id, elementMap);
+            if (!lca) {
+              pairStatus = "DISJOINT_DOM";
+              rejReason = "No common ancestor between BEGIN and END candidates";
+            } else if (lca.isFeedContainer || lca.role === "feed" || lca.tagName === "BODY" || lca.tagName === "HTML") {
+              pairStatus = "BROAD_FEED";
+              rejReason = `Lowest common ancestor <${lca.tagName}> is a broad feed container`;
+            } else {
+              pairStatus = "RESOLVED";
+              lcaStr = `<${lca.tagName}> [${lca.id}] (${lca.rect.width}×${lca.rect.height} at y:${lca.rect.y})`;
+            }
+          }
+        } else {
+          rejReason = `BEGIN cands: ${bCands.length}, END cands: ${eCands.length}`;
+        }
+
+        groupsDiag.push({
+          tag,
+          beginAnchor: group.begin.label,
+          beginCandidates: bCands.slice(0, 3).map((c: (typeof bCands)[number]) => ({
+            id: c.el.id,
+            tag: c.el.tagName,
+            score: c.score,
+            text: c.el.textSnippet.slice(0, 40),
+            rect: c.el.rect,
+          })),
+          endAnchor: group.end.label,
+          endCandidates: eCands.slice(0, 3).map((c: (typeof eCands)[number]) => ({
+            id: c.el.id,
+            tag: c.el.tagName,
+            score: c.score,
+            text: c.el.textSnippet.slice(0, 40),
+            rect: c.el.rect,
+          })),
+          lcaResolved: lcaStr,
+          status: pairStatus,
+          rejectionReason: rejReason,
+        });
+      }
+
+      setDiagReport({
+        timestamp: new Date().toISOString(),
+        url: snapshot.url,
+        viewport: { width: snapshot.viewport.width, height: snapshot.viewport.height },
+        totalNodes: snapshot.elements.length,
+        inViewportNodes: snapshot.elements.filter(
+          (e) => e.rect.y >= 0 && e.rect.y <= snapshot.viewport.height && e.rect.width > 0 && e.rect.height > 0,
+        ).length,
+        parentLinkedNodes: snapshot.elements.filter((e) => e.parentId !== undefined).length,
+        articlesFound: snapshot.elements.filter((e) => e.isArticleOrCard || e.role === "article").length,
+        feedsFound: snapshot.elements.filter((e) => e.isFeedContainer || e.role === "feed").length,
+        groups: groupsDiag,
+      });
+      setShowDiagnostic(true);
+    } catch (err) {
+      alert("Diagnostic inspection failed: " + String(err));
+    } finally {
+      setIsDiagRunning(false);
+    }
+  }, [invoke, currentUrl]);
+
   // Alias for backward compatibility
   const handleRunMatchTest = runViewportMatch;
 
@@ -342,6 +473,25 @@ export function StepMatchTest({
             title="Re-run Match Test on current visible viewport"
           >
             {isRunning ? "Testing Viewport..." : "↻ Re-match Current Viewport"}
+          </button>
+
+          <button
+            type="button"
+            className="collector-btn-diag"
+            disabled={locked || isDiagRunning}
+            onClick={() => void handleRunDiagnostic()}
+            title="Inspect real Facebook/page DOM nodes in viewport and export diagnostic report"
+            style={{
+              padding: "6px 12px",
+              background: "#1c2538",
+              border: "1px solid #3b4c68",
+              color: "#9eb4d0",
+              borderRadius: "4px",
+              cursor: "pointer",
+              fontSize: "12px",
+            }}
+          >
+            {isDiagRunning ? "Inspecting DOM..." : "🔍 DOM Diagnostic"}
           </button>
         </div>
       </div>
@@ -612,6 +762,97 @@ export function StepMatchTest({
           )}
         </div>
       </div>
+
+      {/* Opt-in Runtime DOM Diagnostic Modal */}
+      {showDiagnostic && diagReport && (
+        <div className="collector-capture-library-layer" role="dialog" aria-modal="true" aria-label="Real DOM Diagnostic">
+          <button
+            type="button"
+            className="collector-versions-backdrop"
+            aria-label="Close Diagnostic"
+            onClick={() => setShowDiagnostic(false)}
+          />
+          <div
+            className="collector-capture-library-drawer"
+            style={{ maxWidth: "720px", background: "#111827", color: "#e5e7eb", padding: "20px", overflowY: "auto", maxHeight: "90vh" }}
+          >
+            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: "16px" }}>
+              <h3 style={{ margin: 0, fontSize: "16px" }}>🔬 Real Electron DOM Diagnostic Report</h3>
+              <div style={{ display: "flex", gap: "8px" }}>
+                <button
+                  type="button"
+                  style={{ padding: "4px 10px", fontSize: "12px", background: "#2563eb", color: "#fff", border: "none", borderRadius: "4px", cursor: "pointer" }}
+                  onClick={() => {
+                    void navigator.clipboard.writeText(JSON.stringify(diagReport, null, 2));
+                    alert("Diagnostic report copied to clipboard!");
+                  }}
+                >
+                  📋 Copy JSON
+                </button>
+                <button
+                  type="button"
+                  style={{ padding: "4px 10px", fontSize: "12px", background: "#374151", color: "#fff", border: "none", borderRadius: "4px", cursor: "pointer" }}
+                  onClick={() => setShowDiagnostic(false)}
+                >
+                  ✕ Close
+                </button>
+              </div>
+            </div>
+
+            <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "10px", marginBottom: "16px", background: "#1f2937", padding: "12px", borderRadius: "6px", fontSize: "12px" }}>
+              <div><b>Captured At:</b> {diagReport.timestamp.slice(11, 19)}</div>
+              <div><b>Viewport:</b> {diagReport.viewport.width} × {diagReport.viewport.height}</div>
+              <div><b>Total Viewport Nodes:</b> {diagReport.totalNodes}</div>
+              <div><b>Parent-Linked Nodes:</b> {diagReport.parentLinkedNodes} / {diagReport.totalNodes}</div>
+              <div><b>Post Articles in Viewport:</b> {diagReport.articlesFound}</div>
+              <div><b>Feed Containers:</b> {diagReport.feedsFound}</div>
+            </div>
+
+            <h4 style={{ fontSize: "14px", margin: "12px 0 8px 0" }}>Anchor Candidate Evaluation:</h4>
+            {diagReport.groups.map((g) => (
+              <div
+                key={g.tag}
+                style={{ background: "#1f2937", border: "1px solid #374151", borderRadius: "6px", padding: "12px", marginBottom: "12px", fontSize: "12px" }}
+              >
+                <div style={{ display: "flex", justifyContent: "space-between", marginBottom: "6px" }}>
+                  <b>Group #{g.tag}</b>
+                  <span style={{ color: g.status === "RESOLVED" ? "#10b981" : "#ef4444", fontWeight: "bold" }}>
+                    Status: {g.status}
+                  </span>
+                </div>
+                {g.rejectionReason && (
+                  <div style={{ color: "#f87171", marginBottom: "6px" }}>
+                    <b>Rejection:</b> {g.rejectionReason}
+                  </div>
+                )}
+                {g.lcaResolved && (
+                  <div style={{ color: "#34d399", marginBottom: "6px" }}>
+                    <b>Resolved Container (LCA):</b> {g.lcaResolved}
+                  </div>
+                )}
+
+                <div style={{ marginTop: "8px" }}>
+                  <div style={{ color: "#93c5fd" }}><b>BEGIN:</b> "{g.beginAnchor}" ({g.beginCandidates.length} candidates)</div>
+                  {g.beginCandidates.map((c) => (
+                    <div key={c.id} style={{ marginLeft: "12px", color: "#9ca3af" }}>
+                      • &lt;{c.tag}&gt; [{c.id}] score={c.score} y={c.rect.y} text="{c.text}"
+                    </div>
+                  ))}
+                </div>
+
+                <div style={{ marginTop: "8px" }}>
+                  <div style={{ color: "#c084fc" }}><b>END:</b> "{g.endAnchor}" ({g.endCandidates.length} candidates)</div>
+                  {g.endCandidates.map((c) => (
+                    <div key={c.id} style={{ marginLeft: "12px", color: "#9ca3af" }}>
+                      • &lt;{c.tag}&gt; [{c.id}] score={c.score} y={c.rect.y} text="{c.text}"
+                    </div>
+                  ))}
+                </div>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
     </div>
   );
 }
