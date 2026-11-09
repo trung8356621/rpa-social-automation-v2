@@ -481,7 +481,7 @@ export function StepMatchTest({
       }
 
       // C2.11.15: Isolated BEGIN block layout matching experiment (B3 V2)
-      if (matchExperimentMode === "BEGIN_BLOCK_B3_V2") {
+      if (matchExperimentModeRef.current === "BEGIN_BLOCK_B3_V2") {
         const captures = draftRef.current.captures ?? [];
         const captureAuditMap = new Map(
           (draftRef.current.captureAudits ?? []).map((a) => [a.captureItemId, a.status]),
@@ -502,62 +502,84 @@ export function StepMatchTest({
         const uniqueRegions = Array.from(regionMap.values());
 
         const regionalLogs: Array<{
-          regionId: string;
+          collectorId: string;
           sampleId: string;
-          groupTag: string;
-          confirmed: boolean;
-          hasDataUrl: boolean;
-          hasAssetId: boolean;
-          hasRoi: boolean;
-          accepted: boolean;
+          regionId: string;
+          anchorGroup: string;
+          confirmationStatus: string;
+          referenceImageAvailability: string;
+          cropDimensions: string;
           reason: string;
+          accepted: boolean;
           region: CollectorRegion;
         }> = [];
 
         for (const r of uniqueRegions) {
-          const parentCap = captures.find((c) => c.id === r.captureItemId);
           const isBeginType =
             r.type === "BEGIN" ||
             (r.type === "STATIC" && r.role === "header") ||
             r.role === "header";
-          const isConfirmed = Boolean(
-            r.confirmed ||
-            (parentCap ? captureAuditMap.get(parentCap.id) === "confirmed" : false) ||
-            (parentCap ? parentCap.id === teachingCaptureId : false)
-          );
+          const parentCap = captures.find((c) => c.id === r.captureItemId);
+          const isConfirmedAudit = parentCap
+            ? captureAuditMap.get(parentCap.id) === "confirmed"
+            : false;
+          const isTeaching = parentCap ? parentCap.id === teachingCaptureId : false;
+          const isConfirmed = Boolean(r.confirmed || isConfirmedAudit || isTeaching);
 
-          if (!isBeginType) continue;
+          const w =
+            r.originalRoi?.width ??
+            (r.geometry ? Math.round(r.geometry.relW * 1280) : 0);
+          const h =
+            r.originalRoi?.height ??
+            (r.geometry ? Math.round(r.geometry.relH * 800) : 0);
+          const cropDims = `${w}x${h}`;
 
-          const hasDataUrl = Boolean(r.referenceImage && r.referenceImage.startsWith("data:"));
-          const hasAssetId = Boolean(parentCap?.imageAsset || r.referenceImageAsset);
-          const hasRoi = Boolean(
-            (r.originalRoi && r.originalRoi.width >= 4 && r.originalRoi.height >= 4) ||
-            (r.geometry && r.geometry.relW > 0 && r.geometry.relH > 0)
-          );
-          const isAccepted = isConfirmed && (hasDataUrl || (hasAssetId && hasRoi));
+          const hasRefImage = Boolean(r.referenceImage);
+          const hasAsset = Boolean(parentCap?.imageAsset || r.referenceImageAsset);
+          const refImgAvail = hasRefImage
+            ? "inline_data_url"
+            : hasAsset
+              ? "parent_capture_asset"
+              : "none";
 
-          let reason = "ACCEPTED";
-          if (!isConfirmed) {
-            reason = "Region or parent capture is not confirmed";
-          } else if (!hasDataUrl && !hasAssetId) {
-            reason = "No reference crop image or parent screenshot asset available";
-          } else if (!hasDataUrl && !hasRoi) {
-            reason = "Has parent screenshot but missing valid ROI dimensions";
+          let accepted = false;
+          let reason = "";
+
+          if (!isBeginType) {
+            reason = `Skipped: region type '${r.type}' (role: ${r.role || "none"}) is not a BEGIN/header`;
+          } else if (!isConfirmed) {
+            reason = "Skipped: region and parent sample are both unconfirmed";
+          } else if (!hasRefImage && !hasAsset) {
+            reason = "Skipped: neither inline referenceImage nor parent screenshot asset found";
+          } else {
+            accepted = true;
+            reason = `Accepted: confirmed BEGIN anchor (${hasRefImage ? "inline crop" : "parent capture asset"})`;
           }
 
           regionalLogs.push({
-            regionId: r.id,
+            collectorId: draftRef.current.id,
             sampleId: r.captureItemId,
-            groupTag: r.groupTag || "default",
-            confirmed: isConfirmed,
-            hasDataUrl,
-            hasAssetId,
-            hasRoi,
-            accepted: isAccepted,
+            regionId: r.id,
+            anchorGroup: r.groupTag || "default",
+            confirmationStatus: r.confirmed
+              ? "confirmed_region"
+              : isTeaching
+                ? "teaching_sample"
+                : isConfirmedAudit
+                  ? "confirmed_audit"
+                  : "unconfirmed",
+            referenceImageAvailability: refImgAvail,
+            cropDimensions: cropDims,
             reason,
+            accepted,
             region: r,
           });
         }
+
+        console.info(
+          `[B3 V2 Pipeline Stage 1] BEGIN Reference Candidates (evaluated ${uniqueRegions.length} region(s), accepted ${regionalLogs.filter((l) => l.accepted).length}):`,
+          regionalLogs,
+        );
 
         const acceptedRegions = regionalLogs
           .filter((item) => item.accepted)
@@ -592,6 +614,7 @@ export function StepMatchTest({
         });
 
         const blockResult = await collectorMatchBeginBlockLayout(invoke, references);
+        blockResult.runId = currentRunId;
         setBeginBlockResult(blockResult);
 
         // File-based structured diagnostic logging
@@ -1062,10 +1085,16 @@ export function StepMatchTest({
                 }}
               >
                 <b>Matching Technique:</b> {beginBlockResult?.technique || "B3_V2_BLOCK_LEVEL_MATCHING"}<br />
-                <b>Reference Crops:</b> {beginBlockResult?.referenceBeginCount ?? 0} sample(s) | <b>Variants:</b> {beginBlockResult?.variantCount ?? 0} | <b>Scale:</b> {beginBlockResult?.scale ?? 1.0}×<br />
+                <b>Reference Crops:</b> {beginBlockResult?.validReferenceCount ?? beginBlockResult?.referenceBeginCount ?? 0} valid / {beginBlockResult?.inputReferenceCount ?? beginBlockResult?.referenceBeginCount ?? 0} input ({beginBlockResult?.skippedReferenceCount ?? 0} skipped) | <b>Variants:</b> {beginBlockResult?.variantCount ?? 0} | <b>Scale:</b> {beginBlockResult?.scale ?? 1.0}×
+                {beginBlockResult?.runId ? <span> | <b>Run ID:</b> #{beginBlockResult.runId}</span> : null}<br />
                 {beginBlockResult?.diagnostics && (
                   <div style={{ marginTop: "4px", fontSize: "10px", color: "#a7f3d0" }}>
                     <b>Performance:</b> Decode: {beginBlockResult.diagnostics.decodeTimeMs}ms | Preprocess: {beginBlockResult.diagnostics.preprocessTimeMs}ms | Gen: {beginBlockResult.diagnostics.candidateGenerationTimeMs}ms | Compare: {beginBlockResult.diagnostics.candidateComparisonTimeMs}ms | <b>Total: {beginBlockResult.diagnostics.totalDurationMs}ms</b> ({beginBlockResult.diagnostics.evaluatedWindowsCount} windows)
+                  </div>
+                )}
+                {beginBlockResult?.diagnostics?.pipelineSummary && (
+                  <div style={{ marginTop: "3px", fontSize: "10px", color: "#6ee7b7" }}>
+                    <b>Pipeline:</b> {beginBlockResult.diagnostics.pipelineSummary}
                   </div>
                 )}
                 <div style={{ marginTop: "4px", color: "#6ee7b7", fontWeight: 700 }}>
@@ -1076,12 +1105,35 @@ export function StepMatchTest({
                 </span>
               </div>
 
+              {beginBlockResult?.skipReasons && beginBlockResult.skipReasons.length > 0 && (
+                <div
+                  style={{
+                    background: "#451a03",
+                    border: "1px solid #b45309",
+                    borderRadius: "4px",
+                    padding: "6px 10px",
+                    marginBottom: "10px",
+                    fontSize: "10px",
+                    color: "#fde68a",
+                  }}
+                >
+                  <b>Skipped Reference Crops ({beginBlockResult.skipReasons.length}):</b>
+                  <ul style={{ margin: "2px 0 0 16px", padding: 0 }}>
+                    {beginBlockResult.skipReasons.map((sr, idx) => (
+                      <li key={idx}>
+                        [Sample {sr.sampleId || "unknown"}]: {sr.reason}
+                      </li>
+                    ))}
+                  </ul>
+                </div>
+              )}
+
               {(!beginBlockResult?.matchedCandidates || beginBlockResult.matchedCandidates.length === 0) && (
                 <div className="collector-sample-empty">
                   {displayStatus === "NOT TESTED"
                     ? "Click 'Re-match Current Viewport' in Match Mode ON to test B3 V2 block-level layout matching."
                     : beginBlockResult?.status === "NO_REFERENCES"
-                      ? "NO REFERENCES: 0 confirmed BEGIN reference crops found. Ensure at least one BEGIN anchor is confirmed in Review 2A."
+                      ? beginBlockResult.diagnostics?.pipelineSummary || "NO REFERENCES: 0 usable confirmed BEGIN reference crops found. Ensure at least one BEGIN anchor is confirmed in Review 2A."
                       : beginBlockResult?.status === "PARTIAL"
                         ? "Partial header detected at viewport boundary; insufficient complete block evidence."
                         : "0 post headers matched by B3 V2. Ensure post headers are visible in viewport."}

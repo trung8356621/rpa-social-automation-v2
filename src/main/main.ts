@@ -2336,6 +2336,10 @@ async function boot() {
         const rawRefs = Array.isArray(command.references) ? command.references : [];
         const references = await resolveBeginReferences(rawRefs, assetDir, evidenceDir);
 
+        console.info(
+          `[B3 V2 Pipeline Stage 2] Main IPC resolveBeginReferences: Input=${rawRefs.length}, Resolved=${references.length}, Skipped=${rawRefs.length - references.length}`,
+        );
+
         const matchResult = await matchBeginBlockLayout(screenshotBuffer, references, command.options);
         return matchResult;
       }

@@ -827,8 +827,13 @@ export type BeginBlockCandidate = {
 export type BeginBlockMatchResult = {
   testedAt: string;
   technique: "B3_V2_BLOCK_LEVEL_MATCHING";
+  runId?: number | string;
   referenceSampleIds: string[];
   referenceBeginCount: number;
+  inputReferenceCount?: number;
+  validReferenceCount?: number;
+  skippedReferenceCount?: number;
+  skipReasons?: Array<{ sampleId?: string; regionId?: string; reason: string }>;
   variantCount: number;
   status: "MATCHED" | "NO_MATCH" | "PARTIAL" | "NO_REFERENCES";
   screenshotDimensions: { width: number; height: number };
@@ -843,6 +848,7 @@ export type BeginBlockMatchResult = {
     totalDurationMs: number;
     evaluatedWindowsCount: number;
     variants: Array<{ variantId: string; blockCount: number; sampleCount: number }>;
+    pipelineSummary?: string;
   };
 };
 

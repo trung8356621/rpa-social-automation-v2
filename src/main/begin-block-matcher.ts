@@ -523,7 +523,18 @@ export async function matchBeginBlockLayout(
   options?: BeginBlockMatcherOptions,
 ): Promise<BeginBlockMatchResult> {
   const startTime = performance.now();
+  const inputReferenceCount = referenceCrops.length;
   const validRefs = referenceCrops.filter((r) => r.imageBuffer && r.imageBuffer.length > 0);
+  const skippedRefs = referenceCrops.filter((r) => !r.imageBuffer || r.imageBuffer.length === 0);
+  const skipReasons = skippedRefs.map((r) => ({
+    sampleId: r.sampleId,
+    regionId: r.regionId,
+    reason: r.error || "Reference image buffer empty or unreadable",
+  }));
+
+  console.info(
+    `[B3 V2 Pipeline Stage 3] matchBeginBlockLayout: Input=${inputReferenceCount}, Valid=${validRefs.length}, Skipped=${skippedRefs.length}`,
+  );
 
   if (validRefs.length === 0) {
     return {
@@ -531,6 +542,10 @@ export async function matchBeginBlockLayout(
       technique: "B3_V2_BLOCK_LEVEL_MATCHING",
       referenceSampleIds: [],
       referenceBeginCount: 0,
+      inputReferenceCount,
+      validReferenceCount: 0,
+      skippedReferenceCount: skippedRefs.length,
+      skipReasons,
       variantCount: 0,
       status: "NO_REFERENCES",
       screenshotDimensions: { width: 0, height: 0 },
@@ -545,6 +560,10 @@ export async function matchBeginBlockLayout(
         totalDurationMs: 0,
         evaluatedWindowsCount: 0,
         variants: [],
+        pipelineSummary:
+          inputReferenceCount === 0
+            ? "No BEGIN references provided"
+            : `All ${inputReferenceCount} reference(s) skipped: ${skipReasons.map((s) => s.reason).join("; ")}`,
       },
     };
   }
@@ -576,8 +595,12 @@ export async function matchBeginBlockLayout(
       technique: "B3_V2_BLOCK_LEVEL_MATCHING",
       referenceSampleIds: validRefs.map((r) => r.sampleId || "").filter(Boolean),
       referenceBeginCount: validRefs.length,
+      inputReferenceCount,
+      validReferenceCount: validRefs.length,
+      skippedReferenceCount: skippedRefs.length,
+      skipReasons,
       variantCount: 0,
-      status: "NO_MATCH",
+      status: "NO_REFERENCES",
       screenshotDimensions: { width: sW, height: sH },
       scale: 1.0,
       matchedCandidates: [],
@@ -590,6 +613,7 @@ export async function matchBeginBlockLayout(
         totalDurationMs: Math.round((performance.now() - startTime) * 100) / 100,
         evaluatedWindowsCount: 0,
         variants: [],
+        pipelineSummary: `References available (${validRefs.length}) but failed to extract any valid layout blocks`,
       },
     };
   }
@@ -865,6 +889,10 @@ export async function matchBeginBlockLayout(
     technique: "B3_V2_BLOCK_LEVEL_MATCHING",
     referenceSampleIds: validRefs.map((r) => r.sampleId || "").filter(Boolean),
     referenceBeginCount: validRefs.length,
+    inputReferenceCount,
+    validReferenceCount: validRefs.length,
+    skippedReferenceCount: skippedRefs.length,
+    skipReasons,
     variantCount: variants.length,
     status: finalStatus,
     screenshotDimensions: { width: sW, height: sH },

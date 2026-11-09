@@ -439,3 +439,51 @@ test("B3 V2 Review 2C: inspectBeginBlockTemplate returns structured block inspec
   assert.ok(sample.originalCropDataUrl?.startsWith("data:image/png;base64,"));
   assert.ok(sample.segmentedCropDataUrl?.startsWith("data:image/png;base64,"));
 });
+
+test("Task C2.11.15a: Pipeline Reference Diagnostic - distinguishes NO_REFERENCES from NO_MATCH and logs reasons", async () => {
+  const dummyScreen = await sharp({
+    create: {
+      width: 1200,
+      height: 800,
+      channels: 4,
+      background: { r: 240, g: 242, b: 245, alpha: 1 },
+    },
+  })
+    .png()
+    .toBuffer();
+
+  // Case 1: Empty reference list -> NO_REFERENCES
+  const emptyRes = await matchBeginBlockLayout(dummyScreen, []);
+  assert.equal(emptyRes.status, "NO_REFERENCES");
+  assert.equal(emptyRes.referenceBeginCount, 0);
+  assert.equal(emptyRes.inputReferenceCount, 0);
+  assert.equal(emptyRes.validReferenceCount, 0);
+
+  // Case 2: Reference provided but corrupted/empty buffer -> NO_REFERENCES (never silently reported as NO_MATCH)
+  const invalidRes = await matchBeginBlockLayout(dummyScreen, [
+    {
+      sampleId: "bad_ref",
+      regionId: "reg_bad",
+      imageBuffer: Buffer.alloc(0),
+      error: "Corrupted asset file",
+    },
+  ]);
+  assert.equal(invalidRes.status, "NO_REFERENCES", "Invalid references must return NO_REFERENCES, not NO_MATCH");
+  assert.equal(invalidRes.referenceBeginCount, 0);
+  assert.equal(invalidRes.inputReferenceCount, 1);
+  assert.equal(invalidRes.validReferenceCount, 0);
+  assert.equal(invalidRes.skippedReferenceCount, 1);
+  assert.ok(invalidRes.skipReasons && invalidRes.skipReasons.length === 1);
+  assert.equal(invalidRes.skipReasons[0]?.sampleId, "bad_ref");
+
+  // Case 3: Valid reference provided, but viewport does not contain post -> NO_MATCH
+  const ref = await createReferenceBeginBuffer(560, 60);
+  const noMatchRes = await matchBeginBlockLayout(dummyScreen, [
+    { sampleId: "good_ref", imageBuffer: ref },
+  ]);
+  assert.equal(noMatchRes.status, "NO_MATCH", "Valid reference on blank page must return NO_MATCH");
+  assert.equal(noMatchRes.referenceBeginCount, 1);
+  assert.equal(noMatchRes.inputReferenceCount, 1);
+  assert.equal(noMatchRes.validReferenceCount, 1);
+  assert.equal(noMatchRes.skippedReferenceCount, 0);
+});
