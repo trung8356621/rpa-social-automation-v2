@@ -4,7 +4,7 @@
  * Does not create a second browser engine or session store.
  */
 import type { Capture, Command, OcrResult, Rect } from "../../shared/contracts";
-import type { CollectorDomSnapshot, LayoutContextKind, SampleRoi } from "../../shared/collectors/types";
+import type { CollectorDomSnapshot, LayoutContextKind, MatchedPostItem, SampleRoi } from "../../shared/collectors/types";
 import { WEB_HEIGHT, WEB_WIDTH } from "../../shared/geometry";
 
 declare global {
@@ -189,4 +189,19 @@ export async function collectorInspectDom(
     };
   }
   return invoke<CollectorDomSnapshot>({ type: "collectorInspectDom", url, layoutContext });
+}
+
+export async function collectorHighlightMatches(
+  invoke: CollectorInvoke,
+  matches: MatchedPostItem[],
+): Promise<void> {
+  if (!isElectronBrowserCoreAvailable()) return;
+  await invoke({ type: "collectorHighlightMatches", matches });
+}
+
+export async function collectorClearHighlights(
+  invoke: CollectorInvoke,
+): Promise<void> {
+  if (!isElectronBrowserCoreAvailable()) return;
+  await invoke({ type: "collectorClearHighlights" });
 }

@@ -485,6 +485,13 @@ export type Command =
       type: "collectorInspectDom";
       url?: string;
       layoutContext?: "FEED_ITEM" | "POST_DETAIL";
+    }
+  | {
+      type: "collectorHighlightMatches";
+      matches: unknown[];
+    }
+  | {
+      type: "collectorClearHighlights";
     };
 export const DRAFT_KEYS = [
   "variableId",

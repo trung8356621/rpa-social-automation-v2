@@ -3521,6 +3521,148 @@ body[data-panel="shell"] .collector-capture-split > aside.collector-capture-tool
   gap: 16px;
 }
 
+.collector-match-split-view {
+  display: flex;
+  gap: 16px;
+  min-height: 620px;
+  align-items: stretch;
+}
+
+.collector-match-browser-area {
+  flex: 1 1 60%;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  background: #0b1120;
+  border: 1px solid #1e293b;
+  border-radius: 8px;
+  overflow: hidden;
+}
+
+.collector-match-browser-toolbar {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 8px 12px;
+  background: #0f172a;
+  border-bottom: 1px solid #1e293b;
+}
+
+.collector-match-limit-tag {
+  font-size: 10px;
+  color: #38bdf8;
+  background: rgba(56, 189, 248, 0.12);
+  border: 1px solid rgba(56, 189, 248, 0.3);
+  padding: 2px 8px;
+  border-radius: 10px;
+  font-weight: 500;
+}
+
+.collector-browser-host-frame {
+  flex: 1;
+  min-height: 560px;
+  position: relative;
+  background: #020617;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.collector-browser-disconnected-placeholder {
+  text-align: center;
+  color: #64748b;
+  padding: 24px;
+}
+
+.collector-browser-disconnected-placeholder p {
+  font-size: 13px;
+  color: #94a3b8;
+  margin-bottom: 6px;
+}
+
+.collector-match-diagnostics-dock {
+  flex: 1 1 40%;
+  max-width: 520px;
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+  overflow-y: auto;
+  max-height: 680px;
+  padding-right: 4px;
+}
+
+.collector-match-items-section {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.collector-match-item-card {
+  background: #0f172a;
+  border: 1px solid #1e293b;
+  border-left-width: 4px;
+  border-radius: 6px;
+  padding: 10px 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.collector-match-item-card.resolved {
+  border-color: #1e293b;
+}
+
+.collector-match-item-card.failed {
+  border-color: #3b1d1d;
+  background: #150d12;
+}
+
+.collector-match-item-head {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+}
+
+.collector-match-num-badge {
+  color: #ffffff;
+  font-size: 10px;
+  font-weight: 700;
+  padding: 1px 6px;
+  border-radius: 3px;
+}
+
+.collector-match-item-stages {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  background: #090d16;
+  border: 1px solid #162032;
+  border-radius: 4px;
+  padding: 6px 10px;
+  font-size: 11px;
+}
+
+.collector-stage-row {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+}
+
+.collector-stage-label {
+  color: #7f93ab;
+  font-weight: 500;
+}
+
+.collector-stage-status.success {
+  color: #4ade80;
+  font-weight: 500;
+}
+
+.collector-stage-status.error {
+  color: #f87171;
+  font-weight: 500;
+}
+
 .collector-match-summary-card {
   background: #1e293b;
   border: 1px solid #334155;
@@ -3750,4 +3892,41 @@ body[data-panel="shell"] .collector-capture-split > aside.collector-capture-tool
   padding: 6px 10px;
   border-radius: 4px;
   font-size: 11px;
+}
+
+/* C2.10.3 — Multi-Variable Mapping From One OCR Segment */
+.collector-segment-mappings-section {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  margin: 6px 0;
+  padding: 6px 0;
+  border-top: 1px solid #1e293b;
+}
+
+.collector-segment-mapping-item {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  background: #090d14;
+  padding: 4px 8px;
+  border-radius: 4px;
+  border: 1px solid #1e2d42;
+  font-size: 11px;
+}
+
+.collector-segment-mapping-item:hover {
+  border-color: #334e68;
+}
+
+.collector-multi-var-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 1px 6px;
+  border-radius: 3px;
+  background: #14283b;
+  border: 1px solid #254a6e;
+  color: #7dd3fc;
+  font-size: 10px;
 }

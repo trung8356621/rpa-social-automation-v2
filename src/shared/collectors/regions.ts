@@ -16,12 +16,16 @@ import type {
   AnchorMatchDetail,
   CollectorDomElement,
   CollectorDomSnapshot,
+  CollectorDraft,
+  CollectorExtractionMethod,
   CollectorRegion,
   CollectorRegionRole,
   CollectorRegionType,
   CollectorVariable,
+  CollectorVariableMapping,
   DynamicHtmlExtractionResult,
   LayoutContextKind,
+  MatchedPostItem,
   MatchTestResult,
   MatchTestStatus,
   NormalizedRegionGeometry,
@@ -1438,6 +1442,7 @@ export function executeLiveBrowserMatchTest(
   }
 
   const groupResults: PostGroupMatch[] = [];
+  const allMatchedItems: MatchedPostItem[] = [];
   let totalMatchedPosts = 0;
 
   for (const [tag, group] of analysis.groups.entries()) {
@@ -1451,6 +1456,16 @@ export function executeLiveBrowserMatchTest(
     const endCandidates = findAnchorCandidates(end, snapshot.elements);
 
     if (beginCandidates.length === 0 && endCandidates.length === 0) {
+      allMatchedItems.push({
+        index: allMatchedItems.length + 1,
+        groupTag: tag,
+        beginMatched: false,
+        endMatched: false,
+        paired: false,
+        domResolved: false,
+        confidence: 0,
+        failureReason: `Neither BEGIN anchor (${begin.label}) nor END anchor (${end.label}) matched in live DOM.`,
+      });
       groupResults.push({
         groupTag: tag,
         status: "FAILED",
@@ -1464,6 +1479,17 @@ export function executeLiveBrowserMatchTest(
 
     if (beginCandidates.length > 0 && endCandidates.length === 0) {
       const topBegin = beginCandidates[0]!;
+      allMatchedItems.push({
+        index: allMatchedItems.length + 1,
+        groupTag: tag,
+        beginRect: topBegin.el.rect,
+        beginMatched: true,
+        endMatched: false,
+        paired: false,
+        domResolved: false,
+        confidence: topBegin.score,
+        failureReason: `BEGIN anchor matched <${topBegin.el.tagName}>, but END anchor (${end.label}) was not found in live DOM.`,
+      });
       groupResults.push({
         groupTag: tag,
         status: "PARTIAL",
@@ -1489,6 +1515,17 @@ export function executeLiveBrowserMatchTest(
 
     if (beginCandidates.length === 0 && endCandidates.length > 0) {
       const topEnd = endCandidates[0]!;
+      allMatchedItems.push({
+        index: allMatchedItems.length + 1,
+        groupTag: tag,
+        endRect: topEnd.el.rect,
+        beginMatched: false,
+        endMatched: true,
+        paired: false,
+        domResolved: false,
+        confidence: topEnd.score,
+        failureReason: `END anchor matched <${topEnd.el.tagName}>, but BEGIN anchor (${begin.label}) was not found in live DOM.`,
+      });
       groupResults.push({
         groupTag: tag,
         status: "PARTIAL",
@@ -1631,6 +1668,20 @@ export function executeLiveBrowserMatchTest(
     if (validPairs.length === 0) {
       const primaryRejection =
         rejectedPairs[0]?.reason || "No valid pairing between BEGIN and END anchors.";
+      allMatchedItems.push({
+        index: allMatchedItems.length + 1,
+        groupTag: tag,
+        beginRect: beginCandidates[0]?.el.rect,
+        endRect: endCandidates[0]?.el.rect,
+        beginMatched: beginCandidates.length > 0,
+        endMatched: endCandidates.length > 0,
+        paired: false,
+        domResolved: false,
+        confidence: Math.round(
+          ((beginCandidates[0]?.score ?? 0) + (endCandidates[0]?.score ?? 0)) / 2,
+        ),
+        failureReason: primaryRejection,
+      });
       groupResults.push({
         groupTag: tag,
         status: "FAILED",
@@ -1677,6 +1728,33 @@ export function executeLiveBrowserMatchTest(
         usedBegins.add(vp.beginCandidate.el.id);
         usedEnds.add(vp.endCandidate.el.id);
       }
+    }
+
+    // Sort distinct posts top-to-bottom strictly by BEGIN anchor vertical position
+    distinctPosts.sort((a, b) => a.beginCandidate.el.rect.y - b.beginCandidate.el.rect.y);
+
+    for (const post of distinctPosts) {
+      // Capped at 3 posts strictly
+      if (allMatchedItems.filter((item) => item.domResolved).length >= 3) break;
+      const dyn = computeMatchedDynamicBounds(
+        post.beginCandidate.el.rect,
+        post.endCandidate.el.rect,
+        snapshot.viewport.width,
+      );
+      allMatchedItems.push({
+        index: allMatchedItems.length + 1,
+        groupTag: tag,
+        beginRect: post.beginCandidate.el.rect,
+        endRect: post.endCandidate.el.rect,
+        containerRect: post.lca?.rect ?? dyn.bounds,
+        containerId: post.lca?.id,
+        containerTagName: post.lca?.tagName,
+        beginMatched: true,
+        endMatched: true,
+        paired: true,
+        domResolved: Boolean(post.lca),
+        confidence: post.score,
+      });
     }
 
     const primaryPair = distinctPosts[0]!;
@@ -1760,8 +1838,281 @@ export function executeLiveBrowserMatchTest(
     status: overallStatus,
     matchedPostCount: totalMatchedPosts,
     groups: groupResults,
+    matchedItems: allMatchedItems,
     summary,
     limitations: visualLimitations,
     error: overallStatus === "FAILED" ? summary : undefined,
+  };
+}
+
+// ---------------------------------------------------------------------------
+// 8. MULTI-VARIABLE MAPPING HELPERS (C2.10.3)
+// ---------------------------------------------------------------------------
+
+/**
+ * Returns all variables associated with a given OCR segment on a specific capture.
+ */
+export function getMappedVariablesForSegment(
+  variables: CollectorVariable[],
+  captureId: string,
+  segmentId: string,
+  regionId?: string,
+  segmentText?: string,
+): Array<{ variable: CollectorVariable; mapping: CollectorVariableMapping }> {
+  const results: Array<{ variable: CollectorVariable; mapping: CollectorVariableMapping }> = [];
+  for (const v of variables) {
+    const m = v.mappings.find(
+      (entry) =>
+        entry.sampleId === captureId &&
+        (!entry.regionId || !regionId || entry.regionId === regionId) &&
+        entry.presence === "mapped",
+    );
+    if (!m) continue;
+    if (m.segmentId === segmentId) {
+      results.push({ variable: v, mapping: m });
+    } else if (
+      segmentText &&
+      m.text &&
+      m.text.trim() === segmentText.trim() &&
+      (!m.method || m.method === "OCR_TEXT")
+    ) {
+      results.push({ variable: v, mapping: m });
+    }
+  }
+  return results;
+}
+
+/**
+ * Assigns or updates a variable mapping to an OCR segment with a specified extraction method.
+ * Enforces deduplication of identical variable + method + attribute combinations.
+ */
+export function assignSegmentMapping(
+  draft: CollectorDraft,
+  captureItemId: string,
+  variableId: string,
+  segment: { id: string; text?: string; confidence?: number; bbox: Rect },
+  regionId: string | undefined,
+  method: CollectorExtractionMethod = "OCR_TEXT",
+  attribute?: string,
+  screenshotBbox?: Rect,
+): CollectorDraft {
+  const targetVar = draft.variables.find((v) => v.id === variableId);
+  if (!targetVar) return draft;
+
+  const cleanAttr = method === "DOM_ATTRIBUTE" ? (attribute?.trim() || "href") : undefined;
+  const isOcr = method === "OCR_TEXT";
+
+  // Prevent duplicate mapping of the same variable/method/attribute combination
+  const existingExact = targetVar.mappings.find(
+    (m) =>
+      m.sampleId === captureItemId &&
+      m.presence === "mapped" &&
+      m.segmentId === segment.id &&
+      (m.method || "OCR_TEXT") === method &&
+      (m.attribute || undefined) === cleanAttr,
+  );
+  if (existingExact) {
+    return draft;
+  }
+
+  const newMapping: CollectorVariableMapping = {
+    sampleId: captureItemId,
+    regionId,
+    presence: "mapped",
+    confirmed: true,
+    method,
+    attribute: cleanAttr,
+    text: isOcr ? segment.text : undefined,
+    confidence: isOcr ? segment.confidence : undefined,
+    bbox: screenshotBbox || segment.bbox,
+    segmentId: segment.id,
+    evidence: isOcr
+      ? (draft.teachingCaptureId === captureItemId ? "Manual teaching assignment (Reference)" : "Manual user correction")
+      : "Configured / Awaiting DOM Match",
+  };
+
+  const variables = draft.variables.map((v) => {
+    if (v.id !== variableId) return v;
+    const otherMappings = v.mappings.filter(
+      (m) => !(m.sampleId === captureItemId && (m.regionId === regionId || !m.regionId)),
+    );
+    return {
+      ...v,
+      source: isOcr ? ("ocr_image" as const) : ("visual_dom" as const),
+      expectedValue: isOcr ? segment.text : v.expectedValue,
+      mappings: [...otherMappings, newMapping],
+    };
+  });
+
+  let nextRegions = draft.regions;
+  if (regionId && draft.regions) {
+    nextRegions = draft.regions.map((r) =>
+      r.id === regionId
+        ? {
+            ...r,
+            candidateVariableKeys: Array.from(new Set([...r.candidateVariableKeys, targetVar.key])),
+            updatedAt: new Date().toISOString(),
+          }
+        : r,
+    );
+  }
+
+  return {
+    ...draft,
+    variables,
+    regions: nextRegions,
+    dirty: true,
+  };
+}
+
+// ---------------------------------------------------------------------------
+// 9. STAGE 2B CONFIGURATION VALIDATION (C2.10.4)
+// ---------------------------------------------------------------------------
+
+export type MappingConfigStatus =
+  | "CONFIGURED"
+  | "MATCHED"
+  | "EXTRACTED"
+  | "VALIDATED"
+  | "UNMAPPED"
+  | "INVALID";
+
+export interface MappingConfigState {
+  status: MappingConfigStatus;
+  isConfigured: boolean;
+  isValid: boolean;
+  badgeLabel: string;
+  badgeStyle: "neutral" | "info" | "success" | "warning" | "error";
+  description: string;
+}
+
+/**
+ * Validates mapping configuration for Stage 2B.
+ * Separates CONFIGURED from MATCHED / EXTRACTED / VALIDATED.
+ * Stage 2B only requires configuration completeness (region/segment, attribute name).
+ * It does NOT demand that DOM matching has already succeeded.
+ */
+export function getMappingConfigState(
+  mapping: CollectorVariableMapping | undefined,
+): MappingConfigState {
+  if (!mapping || mapping.presence === "unmapped") {
+    return {
+      status: "UNMAPPED",
+      isConfigured: false,
+      isValid: false,
+      badgeLabel: "Unmapped",
+      badgeStyle: "neutral",
+      description: "No mapping assigned to this variable.",
+    };
+  }
+
+  if (mapping.presence === "not_present") {
+    return {
+      status: "CONFIGURED",
+      isConfigured: true,
+      isValid: true,
+      badgeLabel: "Not Present",
+      badgeStyle: "neutral",
+      description: "Explicitly marked not present in this reference.",
+    };
+  }
+
+  const method = mapping.method || "OCR_TEXT";
+
+  if (method === "OCR_TEXT") {
+    const hasSegment = Boolean(
+      mapping.segmentId ||
+      mapping.observedValueId ||
+      (mapping.text && mapping.text.trim().length > 0),
+    );
+    if (!hasSegment) {
+      return {
+        status: "INVALID",
+        isConfigured: false,
+        isValid: false,
+        badgeLabel: "Invalid OCR Mapping",
+        badgeStyle: "error",
+        description: "OCR_TEXT mapping requires a valid OCR segment to be selected.",
+      };
+    }
+    return {
+      status: mapping.text ? "EXTRACTED" : "CONFIGURED",
+      isConfigured: true,
+      isValid: true,
+      badgeLabel: mapping.text ? "Mapped (OCR)" : "Configured (OCR)",
+      badgeStyle: "success",
+      description: mapping.text ? `Extracted text: "${mapping.text}"` : "OCR segment selected.",
+    };
+  }
+
+  if (method === "DOM_TEXT") {
+    const hasRegionOrSegment = Boolean(
+      mapping.regionId || mapping.segmentId,
+    );
+    if (!hasRegionOrSegment) {
+      return {
+        status: "INVALID",
+        isConfigured: false,
+        isValid: false,
+        badgeLabel: "Missing Anchor Region",
+        badgeStyle: "error",
+        description: "DOM_TEXT mapping requires an anchor or region to be selected.",
+      };
+    }
+    return {
+      status: "CONFIGURED",
+      isConfigured: true,
+      isValid: true,
+      badgeLabel: "Awaiting DOM Match",
+      badgeStyle: "info",
+      description: "Anchor configured. Live text will be extracted during browser match test.",
+    };
+  }
+
+  if (method === "DOM_ATTRIBUTE") {
+    const hasRegionOrSegment = Boolean(
+      mapping.regionId || mapping.segmentId,
+    );
+    const hasAttribute = Boolean(mapping.attribute && mapping.attribute.trim().length > 0);
+
+    if (!hasRegionOrSegment) {
+      return {
+        status: "INVALID",
+        isConfigured: false,
+        isValid: false,
+        badgeLabel: "Missing Anchor Region",
+        badgeStyle: "error",
+        description: "DOM_ATTRIBUTE mapping requires an anchor or region to be selected.",
+      };
+    }
+
+    if (!hasAttribute) {
+      return {
+        status: "INVALID",
+        isConfigured: false,
+        isValid: false,
+        badgeLabel: "Missing Attribute Name",
+        badgeStyle: "error",
+        description: "DOM_ATTRIBUTE mapping requires an attribute name (e.g. href, src).",
+      };
+    }
+
+    return {
+      status: "CONFIGURED",
+      isConfigured: true,
+      isValid: true,
+      badgeLabel: "Awaiting DOM Match",
+      badgeStyle: "info",
+      description: `Configured for attribute @${mapping.attribute}. Value will be extracted during browser match test.`,
+    };
+  }
+
+  return {
+    status: "CONFIGURED",
+    isConfigured: true,
+    isValid: true,
+    badgeLabel: "Configured",
+    badgeStyle: "info",
+    description: "Mapping configured.",
   };
 }

@@ -1,4 +1,5 @@
 import { buildValidationRun, cryptoRandomId, sampleById } from "./fixtures.js";
+import { getMappingConfigState } from "./regions.js";
 import type {
   AuditMatchState,
   AuditRecordAction,
@@ -688,7 +689,13 @@ export function confirmCaptureAudit(
   const requiredBad = variables.filter((v) => {
     if (!v.required) return false;
     const m = getMapping(v, capture);
-    return !m || (m.presence !== "mapped" && m.presence !== "not_present");
+    if (!m) return true;
+    if (m.presence === "not_present") return false;
+    if (m.presence === "mapped") {
+      const cfg = getMappingConfigState(m);
+      return !cfg.isValid;
+    }
+    return true;
   });
   if (requiredBad.length) return working;
 

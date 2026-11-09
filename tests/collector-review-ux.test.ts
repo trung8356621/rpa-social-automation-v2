@@ -7,7 +7,10 @@ import {
   addCaptureItem,
   addRegionToDraft,
   confirmRegionInDraft,
+  confirmCaptureAudit,
+  stepValidationErrors,
   regionsForCapture,
+  revertDraftToVersion,
   saveAsVersion,
   updateRegionInDraft,
 } from "../src/shared/collectors/ops.js";
@@ -16,7 +19,12 @@ import {
   denormalizeGeometry,
   findVerifiedPostContainer,
   normalizeGeometry,
+  assignSegmentMapping,
+  getMappedVariablesForSegment,
+  getMappingConfigState,
+  executeLiveBrowserMatchTest,
 } from "../src/shared/collectors/regions.js";
+import { unmapVariableForCapture } from "../src/shared/collectors/ocr-learning.js";
 import {
   MemoryStorage,
   loadCollectorStore,
@@ -452,4 +460,496 @@ test("UX 19: C2.10.2 Region OCR Pipeline, Status Feedback, and Coordinate Mappin
 
   // 6. Atomic variable creation from segment sets mapping directly
   assert.match(reviewSource, /function handleCreateVariableFromSegment[\s\S]*?mappings:\s*\[newMapping\]/);
+});
+
+test("UX 20: C2.10.3 Multi-Variable Mapping From One OCR Segment & Extraction Methods", () => {
+  // --- A. UI Template & Markup Checks ---
+  // 1. Extraction method selector exists with OCR_TEXT, DOM_TEXT, DOM_ATTRIBUTE
+  assert.match(reviewSource, /<option value="OCR_TEXT">OCR_TEXT<\/option>/);
+  assert.match(reviewSource, /<option value="DOM_TEXT">DOM_TEXT<\/option>/);
+  assert.match(reviewSource, /<option value="DOM_ATTRIBUTE">DOM_ATTRIBUTE<\/option>/);
+
+  // 2. Attribute input shown when DOM_ATTRIBUTE is selected
+  assert.match(reviewSource, /assignMethod === ["']DOM_ATTRIBUTE["']/);
+  assert.match(reviewSource, /placeholder=["']e\.g\. href, src["']/);
+
+  // 3. Mapped variables section and remove action
+  assert.match(reviewSource, /collector-segment-mappings-section/);
+  assert.match(reviewSource, /collector-segment-mapping-item/);
+  assert.match(reviewSource, /Mapped Variables \(/);
+  assert.match(reviewSource, /unmapVariableForCapture/);
+
+  // 4. Pending DOM match status badge in UI
+  assert.match(reviewSource, /Configured \/ Awaiting DOM Match/);
+  assert.match(reviewSource, /Awaiting DOM Match/);
+
+  // 5. CSS definitions exist
+  assert.match(cssSource, /\.collector-segment-mappings-section/);
+  assert.match(cssSource, /\.collector-segment-mapping-item/);
+
+  // --- B. Acceptance Tests Criteria 1-10 ---
+  let draft = createEmptyDraft({ name: "Multi-Variable Mapping Test" });
+  draft = addCaptureItem(draft, {
+    captureUrl: "https://example.com/post/1",
+    imageAsset: "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee.png",
+    roi: { x: 0, y: 0, width: 800, height: 600, containerWidth: 800, containerHeight: 600 },
+  });
+  const capId = draft.captures[0]!.id;
+
+  const beginRegion = createCollectorRegion({
+    captureItemId: capId,
+    type: "BEGIN",
+    groupTag: "post-main",
+    label: "Header Anchor",
+    box: { x: 20, y: 20, width: 300, height: 80 },
+    imageWidth: 800,
+    imageHeight: 600,
+    referenceImage: "data:image/png;base64,mockBeginCrop",
+  });
+  draft = addRegionToDraft(draft, beginRegion);
+
+  const varCreatedAt = {
+    id: "var_created_at",
+    key: "created_at",
+    label: "Created At",
+    valueType: "string" as const,
+    required: false,
+    mappings: [],
+  };
+  const varPostUrl = {
+    id: "var_post_url",
+    key: "post_url",
+    label: "Post URL",
+    valueType: "string" as const,
+    required: false,
+    mappings: [],
+  };
+  draft = { ...draft, variables: [varCreatedAt, varPostUrl] };
+
+  const timestampSegment = {
+    id: "seg_timestamp_01",
+    text: "15 mins ago",
+    confidence: 96,
+    bbox: { x: 10, y: 35, width: 90, height: 18 },
+  };
+
+  // Criterion 1 & 2: Map timestamp OCR segment to created_at using OCR_TEXT
+  draft = assignSegmentMapping(
+    draft,
+    capId,
+    varCreatedAt.id,
+    timestampSegment,
+    beginRegion.id,
+    "OCR_TEXT",
+  );
+
+  const createdAtMapping = draft.variables.find((v) => v.id === varCreatedAt.id)!.mappings.find((m) => m.sampleId === capId);
+  assert.ok(createdAtMapping, "created_at mapping must exist");
+  assert.equal(createdAtMapping.presence, "mapped");
+  assert.equal(createdAtMapping.method, "OCR_TEXT");
+  assert.equal(createdAtMapping.text, "15 mins ago");
+  assert.equal(createdAtMapping.confidence, 96);
+  assert.equal(createdAtMapping.segmentId, "seg_timestamp_01");
+
+  // Criterion 3: Add post_url to the SAME segment using DOM_ATTRIBUTE(href)
+  draft = assignSegmentMapping(
+    draft,
+    capId,
+    varPostUrl.id,
+    timestampSegment,
+    beginRegion.id,
+    "DOM_ATTRIBUTE",
+    "href",
+  );
+
+  const postUrlMapping = draft.variables.find((v) => v.id === varPostUrl.id)!.mappings.find((m) => m.sampleId === capId);
+  assert.ok(postUrlMapping, "post_url mapping must exist");
+  assert.equal(postUrlMapping.presence, "mapped");
+  assert.equal(postUrlMapping.method, "DOM_ATTRIBUTE");
+  assert.equal(postUrlMapping.attribute, "href");
+  assert.equal(postUrlMapping.segmentId, "seg_timestamp_01");
+  // Criterion 4 & Section 4: Do not invent URL from visible text
+  assert.equal(postUrlMapping.text, undefined, "DOM_ATTRIBUTE must not copy visible OCR text");
+  assert.equal(postUrlMapping.confidence, undefined, "DOM_ATTRIBUTE confidence is pending DOM match");
+  assert.equal(postUrlMapping.evidence, "Configured / Awaiting DOM Match");
+
+  // Criterion 4: Both mappings remain associated with the same segment
+  let mappedToTimestamp = getMappedVariablesForSegment(
+    draft.variables,
+    capId,
+    timestampSegment.id,
+    beginRegion.id,
+  );
+  assert.equal(mappedToTimestamp.length, 2, "Both variables must be associated with the same timestamp segment");
+  assert.equal(mappedToTimestamp[0]!.variable.key, "created_at");
+  assert.equal(mappedToTimestamp[1]!.variable.key, "post_url");
+
+  // Criterion 7 (Deduplication): Re-assigning the same variable/method/attribute combination does not duplicate
+  const beforeCount = draft.variables.find((v) => v.id === varPostUrl.id)!.mappings.length;
+  draft = assignSegmentMapping(
+    draft,
+    capId,
+    varPostUrl.id,
+    timestampSegment,
+    beginRegion.id,
+    "DOM_ATTRIBUTE",
+    "href",
+  );
+  assert.equal(
+    draft.variables.find((v) => v.id === varPostUrl.id)!.mappings.length,
+    beforeCount,
+    "Duplicate mapping of same variable/method combination must be prevented"
+  );
+
+  // Criterion 5: Removing post_url does not remove created_at
+  draft = unmapVariableForCapture(draft, capId, varPostUrl.id);
+  mappedToTimestamp = getMappedVariablesForSegment(
+    draft.variables,
+    capId,
+    timestampSegment.id,
+    beginRegion.id,
+  );
+  assert.equal(mappedToTimestamp.length, 1, "Only created_at should remain mapped");
+  assert.equal(mappedToTimestamp[0]!.variable.key, "created_at");
+
+  // Re-add post_url for persistent checks
+  draft = assignSegmentMapping(
+    draft,
+    capId,
+    varPostUrl.id,
+    timestampSegment,
+    beginRegion.id,
+    "DOM_ATTRIBUTE",
+    "href",
+  );
+
+  // Criterion 6: Switching BEGIN/END preserves mappings
+  const endRegion = createCollectorRegion({
+    captureItemId: capId,
+    type: "END",
+    groupTag: "post-main",
+    label: "Footer Anchor",
+    box: { x: 20, y: 500, width: 300, height: 60 },
+    imageWidth: 800,
+    imageHeight: 600,
+  });
+  draft = addRegionToDraft(draft, endRegion);
+
+  // Querying in END region returns empty
+  const inEnd = getMappedVariablesForSegment(draft.variables, capId, timestampSegment.id, endRegion.id);
+  assert.equal(inEnd.length, 0, "No mappings in END region for this segment");
+
+  // Switching back to BEGIN returns both mappings intact
+  const inBeginAgain = getMappedVariablesForSegment(draft.variables, capId, timestampSegment.id, beginRegion.id);
+  assert.equal(inBeginAgain.length, 2, "Both mappings preserved when switching back to BEGIN region");
+
+  // Criterion 7: Save & Reload preserves both mappings
+  const storage = new MemoryStorage();
+  const store = loadCollectorStore(storage);
+  const updatedStore = upsertCollector(store, draft);
+  saveCollectorStore(storage, updatedStore);
+
+  const reloaded = loadCollectorStore(storage).collectors.find((c) => c.id === draft.id);
+  assert.ok(reloaded, "Reloaded collector must exist");
+  const reloadedVars = getMappedVariablesForSegment(
+    reloaded.variables,
+    capId,
+    timestampSegment.id,
+    beginRegion.id,
+  );
+  assert.equal(reloadedVars.length, 2, "Save and reload must preserve both multi-variable mappings");
+  assert.equal(reloadedVars[0]!.mapping.method, "OCR_TEXT");
+  assert.equal(reloadedVars[1]!.mapping.method, "DOM_ATTRIBUTE");
+  assert.equal(reloadedVars[1]!.mapping.attribute, "href");
+
+  // Criterion 8: Version snapshot and restore preserves both mappings
+  const versioned = saveAsVersion(draft, "Snapshot with multi-mapping");
+  assert.equal(versioned.versions.length, 1);
+  const snapId = versioned.versions[0]!.id;
+
+  // Unmap both in draft
+  let corruptedDraft = unmapVariableForCapture(versioned, capId, varCreatedAt.id);
+  corruptedDraft = unmapVariableForCapture(corruptedDraft, capId, varPostUrl.id);
+  assert.equal(
+    getMappedVariablesForSegment(corruptedDraft.variables, capId, timestampSegment.id, beginRegion.id).length,
+    0
+  );
+
+  // Restore snapshot
+  const restoredDraft = revertDraftToVersion(corruptedDraft, snapId);
+  assert.ok(restoredDraft, "Version restore must succeed");
+  const restoredVars = getMappedVariablesForSegment(
+    restoredDraft.variables,
+    capId,
+    timestampSegment.id,
+    beginRegion.id,
+  );
+  assert.equal(restoredVars.length, 2, "Version restore must fully recover both mappings");
+  assert.equal(restoredVars[0]!.variable.key, "created_at");
+  assert.equal(restoredVars[1]!.variable.key, "post_url");
+
+  // Criterion 9: Existing legacy single-variable mappings still work
+  const legacyVar = {
+    id: "var_legacy",
+    key: "legacy_author",
+    label: "Legacy Author",
+    valueType: "string" as const,
+    required: false,
+    mappings: [
+      {
+        sampleId: capId,
+        regionId: beginRegion.id,
+        segmentId: "seg_legacy_01",
+        presence: "mapped" as const,
+        confirmed: true,
+        text: "John Doe",
+      },
+    ],
+  };
+  const legacyMapped = getMappedVariablesForSegment([legacyVar], capId, "seg_legacy_01", beginRegion.id);
+  assert.equal(legacyMapped.length, 1);
+  assert.equal(legacyMapped[0]!.mapping.method ?? "OCR_TEXT", "OCR_TEXT", "Legacy mappings default to OCR_TEXT");
+  assert.equal(legacyMapped[0]!.mapping.text, "John Doe");
+
+  // Criterion 10: DOM_ATTRIBUTE remains pending until actual DOM association
+  assert.equal(restoredVars[1]!.mapping.evidence, "Configured / Awaiting DOM Match");
+  assert.equal(restoredVars[1]!.mapping.text, undefined);
+});
+
+test("UX 21: C2.10.4 Early Validation & Live Browser Match Test", () => {
+  // --- PART A: Early Validation Separation (CONFIGURED vs MATCHED/EXTRACTED) ---
+
+  // 1. Unmapped status
+  const unmappedState = getMappingConfigState(undefined);
+  assert.equal(unmappedState.status, "UNMAPPED");
+  assert.equal(unmappedState.isValid, false);
+
+  // 2. Not present status
+  const notPresentState = getMappingConfigState({
+    sampleId: "s1",
+    presence: "not_present",
+    confirmed: true,
+  });
+  assert.equal(notPresentState.status, "CONFIGURED");
+  assert.equal(notPresentState.isValid, true);
+
+  // 3. OCR_TEXT requires segment/text
+  const invalidOcr = getMappingConfigState({
+    sampleId: "s1",
+    presence: "mapped",
+    method: "OCR_TEXT",
+  });
+  assert.equal(invalidOcr.status, "INVALID");
+  assert.equal(invalidOcr.isValid, false);
+
+  const validOcr = getMappingConfigState({
+    sampleId: "s1",
+    presence: "mapped",
+    method: "OCR_TEXT",
+    segmentId: "seg_1",
+    text: "Extracted Text",
+  });
+  assert.equal(validOcr.status, "EXTRACTED");
+  assert.equal(validOcr.isValid, true);
+
+  // 4. DOM_TEXT requires region/segment
+  const invalidDomText = getMappingConfigState({
+    sampleId: "s1",
+    presence: "mapped",
+    method: "DOM_TEXT",
+  });
+  assert.equal(invalidDomText.status, "INVALID");
+  assert.equal(invalidDomText.isValid, false);
+
+  const validDomText = getMappingConfigState({
+    sampleId: "s1",
+    presence: "mapped",
+    method: "DOM_TEXT",
+    regionId: "reg_1",
+  });
+  assert.equal(validDomText.status, "CONFIGURED");
+  assert.equal(validDomText.isValid, true);
+  assert.match(validDomText.badgeLabel, /Awaiting DOM Match/i);
+
+  // 5. DOM_ATTRIBUTE requires region/segment AND attribute name
+  const missingAttr = getMappingConfigState({
+    sampleId: "s1",
+    presence: "mapped",
+    method: "DOM_ATTRIBUTE",
+    regionId: "reg_1",
+  });
+  assert.equal(missingAttr.status, "INVALID");
+  assert.equal(missingAttr.isValid, false);
+  assert.match(missingAttr.badgeLabel, /Missing Attribute/i);
+
+  const validDomAttr = getMappingConfigState({
+    sampleId: "s1",
+    presence: "mapped",
+    method: "DOM_ATTRIBUTE",
+    regionId: "reg_1",
+    attribute: "href",
+  });
+  assert.equal(validDomAttr.status, "CONFIGURED");
+  assert.equal(validDomAttr.isValid, true);
+  assert.match(validDomAttr.badgeLabel, /Awaiting DOM Match/i);
+
+  // 6. Stage 2B Audit Confirmation with DOM_ATTRIBUTE
+  let draft = createEmptyDraft({ name: "C2.10.4 Validation Draft" });
+  draft = addCaptureItem(draft, {
+    captureUrl: "https://example.com/post/1",
+    imageAsset: "11111111-2222-3333-4444-555555555555.png",
+    roi: { x: 0, y: 0, width: 800, height: 600, containerWidth: 800, containerHeight: 600 },
+  });
+  const capId = draft.captures[0]!.id;
+
+  const beginRegion = createCollectorRegion({
+    captureItemId: capId,
+    type: "BEGIN",
+    groupTag: "post-group",
+    label: "Header",
+    box: { x: 10, y: 10, width: 200, height: 40 },
+    imageWidth: 800,
+    imageHeight: 600,
+  });
+  const endRegion = createCollectorRegion({
+    captureItemId: capId,
+    type: "END",
+    groupTag: "post-group",
+    label: "Footer",
+    box: { x: 10, y: 300, width: 200, height: 40 },
+    imageWidth: 800,
+    imageHeight: 600,
+  });
+  draft = addRegionToDraft(draft, beginRegion);
+  draft = addRegionToDraft(draft, endRegion);
+
+  // Add required variable mapped to DOM_ATTRIBUTE(href) without extracted text
+  draft.variables = [
+    {
+      id: "var_post_url",
+      key: "post_url",
+      label: "Post URL",
+      valueType: "url",
+      required: true,
+      source: "visual_dom",
+      mappings: [
+        {
+          sampleId: capId,
+          regionId: beginRegion.id,
+          presence: "mapped",
+          confirmed: true,
+          method: "DOM_ATTRIBUTE",
+          attribute: "href",
+          text: undefined, // NOT extracted yet
+        },
+      ],
+    },
+  ];
+
+  // Confirming audit MUST SUCCEED (not blocked by missing extracted value)
+  const confirmedDraft = confirmCaptureAudit(draft, capId);
+  const audit = confirmedDraft.captureAudits?.find((a) => a.captureItemId === capId);
+  assert.equal(audit?.status, "confirmed", "Audit must confirm with CONFIGURED DOM_ATTRIBUTE mapping");
+
+  // Step 2 validation errors must be empty
+  const step2Errors = stepValidationErrors(confirmedDraft, 2);
+  assert.deepEqual(step2Errors, [], "Step 2 validation must pass without errors");
+
+  // --- PART B: Live Browser Match Test Viewport Bounding (Max 3 Items) ---
+
+  // Build a snapshot with 5 post containers rendered vertically
+  const elements = [
+    // Post 1
+    { id: "b1", tagName: "div", parentId: "card1", rect: { x: 10, y: 10, width: 200, height: 40 }, textSnippet: "Header 1" },
+    { id: "e1", tagName: "div", parentId: "card1", rect: { x: 10, y: 100, width: 200, height: 40 }, textSnippet: "Footer 1" },
+    { id: "card1", tagName: "article", isArticleOrCard: true, rect: { x: 5, y: 5, width: 300, height: 150 }, textSnippet: "Card 1" },
+
+    // Post 2
+    { id: "b2", tagName: "div", parentId: "card2", rect: { x: 10, y: 200, width: 200, height: 40 }, textSnippet: "Header 2" },
+    { id: "e2", tagName: "div", parentId: "card2", rect: { x: 10, y: 290, width: 200, height: 40 }, textSnippet: "Footer 2" },
+    { id: "card2", tagName: "article", isArticleOrCard: true, rect: { x: 5, y: 195, width: 300, height: 150 }, textSnippet: "Card 2" },
+
+    // Post 3
+    { id: "b3", tagName: "div", parentId: "card3", rect: { x: 10, y: 380, width: 200, height: 40 }, textSnippet: "Header 3" },
+    { id: "e3", tagName: "div", parentId: "card3", rect: { x: 10, y: 470, width: 200, height: 40 }, textSnippet: "Footer 3" },
+    { id: "card3", tagName: "article", isArticleOrCard: true, rect: { x: 5, y: 375, width: 300, height: 150 }, textSnippet: "Card 3" },
+
+    // Post 4
+    { id: "b4", tagName: "div", parentId: "card4", rect: { x: 10, y: 560, width: 200, height: 40 }, textSnippet: "Header 4" },
+    { id: "e4", tagName: "div", parentId: "card4", rect: { x: 10, y: 650, width: 200, height: 40 }, textSnippet: "Footer 4" },
+    { id: "card4", tagName: "article", isArticleOrCard: true, rect: { x: 5, y: 555, width: 300, height: 150 }, textSnippet: "Card 4" },
+
+    // Post 5
+    { id: "b5", tagName: "div", parentId: "card5", rect: { x: 10, y: 740, width: 200, height: 40 }, textSnippet: "Header 5" },
+    { id: "e5", tagName: "div", parentId: "card5", rect: { x: 10, y: 830, width: 200, height: 40 }, textSnippet: "Footer 5" },
+    { id: "card5", tagName: "article", isArticleOrCard: true, rect: { x: 5, y: 735, width: 300, height: 150 }, textSnippet: "Card 5" },
+  ];
+
+  const snapshot: CollectorDomSnapshot = {
+    url: "https://example.com/feed",
+    capturedAt: new Date().toISOString(),
+    viewport: { width: 1280, height: 800, scrollX: 0, scrollY: 0, dpr: 1 },
+    elements,
+    isStale: false,
+  };
+
+  const matchResult = executeLiveBrowserMatchTest(draft.regions!, snapshot);
+  assert.equal(matchResult.status, "MATCHED");
+  assert.ok(matchResult.matchedItems, "matchedItems array must be returned");
+  // Strictly bounded to AT MOST 3 posts
+  assert.equal(matchResult.matchedItems.length, 3, "Must strictly match at most 3 post containers");
+  assert.equal(matchResult.matchedItems[0]!.index, 1);
+  assert.equal(matchResult.matchedItems[1]!.index, 2);
+  assert.equal(matchResult.matchedItems[2]!.index, 3);
+  // Strictly top-to-bottom order
+  assert.ok(matchResult.matchedItems[0]!.beginRect!.y < matchResult.matchedItems[1]!.beginRect!.y);
+  assert.ok(matchResult.matchedItems[1]!.beginRect!.y < matchResult.matchedItems[2]!.beginRect!.y);
+
+  // Each item records granular stages
+  const item1 = matchResult.matchedItems[0]!;
+  assert.equal(item1.beginMatched, true);
+  assert.equal(item1.endMatched, true);
+  assert.equal(item1.paired, true);
+  assert.equal(item1.domResolved, true);
+  assert.equal(item1.containerTagName, "article");
+  assert.ok(item1.confidence > 0);
+
+  // --- Honest Diagnostics: 0 matches reports FAILED, not PASS ---
+  const emptySnapshot: CollectorDomSnapshot = {
+    url: "https://example.com/feed",
+    capturedAt: new Date().toISOString(),
+    viewport: { width: 1280, height: 800, scrollX: 0, scrollY: 0, dpr: 1 },
+    elements: [],
+    isStale: false,
+  };
+  const failedResult = executeLiveBrowserMatchTest(draft.regions!, emptySnapshot);
+  assert.equal(failedResult.status, "FAILED", "Zero matches must report FAILED, never PASS");
+  assert.equal(failedResult.matchedPostCount, 0);
+  assert.ok(failedResult.summary.includes("No DOM elements found") || failedResult.summary.includes("Match Test failed"));
+
+  const unmatchingSnapshot: CollectorDomSnapshot = {
+    url: "https://example.com/feed",
+    capturedAt: new Date().toISOString(),
+    viewport: { width: 1280, height: 800, scrollX: 0, scrollY: 0, dpr: 1 },
+    elements: [
+      { id: "other", tagName: "div", rect: { x: 0, y: 0, width: 100, height: 20 }, textSnippet: "completely unrelated content" },
+    ],
+    isStale: false,
+  };
+  const unmatchingResult = executeLiveBrowserMatchTest(draft.regions!, unmatchingSnapshot);
+  assert.equal(unmatchingResult.status, "FAILED", "Unmatching anchors must report FAILED, never PASS");
+  assert.equal(unmatchingResult.matchedPostCount, 0);
+  assert.ok(unmatchingResult.summary.includes("Neither BEGIN anchor"));
+
+  // --- Step 3 Component source checks ---
+  const matchStepSource = readFileSync(
+    resolve("src/renderer/collectors/MatchTestStep.tsx"),
+    "utf8"
+  );
+  assert.match(matchStepSource, /collectorReportBrowserHost/);
+  assert.match(matchStepSource, /collectorSetBrowserVisible/);
+  assert.match(matchStepSource, /collectorHighlightMatches/);
+  assert.match(matchStepSource, /collectorClearHighlights/);
+  assert.match(matchStepSource, /hasAutoRunRef/);
+  assert.match(matchStepSource, /Re-run Match Test/);
 });

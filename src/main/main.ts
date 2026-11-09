@@ -1813,6 +1813,73 @@ async function boot() {
         }
         return snapshot;
       }
+      case "collectorHighlightMatches": {
+        isIdle();
+        const wc = browser.view.webContents;
+        const matches = Array.isArray(command.matches) ? command.matches : [];
+        await wc
+          .executeJavaScript(
+            `(() => {
+          const old = document.getElementById('__rpa_match_test_overlay__');
+          if (old) old.remove();
+          const items = ${JSON.stringify(matches)};
+          if (!items || items.length === 0) return;
+          const overlay = document.createElement('div');
+          overlay.id = '__rpa_match_test_overlay__';
+          overlay.style.cssText = 'position:fixed;top:0;left:0;width:100vw;height:100vh;pointer-events:none;z-index:2147483647;';
+          const containerColors = [
+            { border: '#38bdf8', bg: 'rgba(56,189,248,0.25)', badge: '#0284c7' },
+            { border: '#818cf8', bg: 'rgba(129,140,248,0.25)', badge: '#4f46e5' },
+            { border: '#a78bfa', bg: 'rgba(167,139,250,0.25)', badge: '#7c3aed' },
+          ];
+          items.forEach((m) => {
+            if (!m.containerRect) return;
+            const theme = containerColors[(m.index - 1) % containerColors.length] || containerColors[0];
+            const box = document.createElement('div');
+            box.style.cssText = 'position:absolute;left:' + m.containerRect.x + 'px;top:' + m.containerRect.y + 'px;width:' + m.containerRect.width + 'px;height:' + m.containerRect.height + 'px;border:2px solid ' + theme.border + ';box-shadow:0 0 0 1px rgba(0,0,0,0.8),inset 0 0 12px ' + theme.bg + ';border-radius:4px;box-sizing:border-box;pointer-events:none;';
+            const badge = document.createElement('div');
+            badge.style.cssText = 'position:absolute;top:-22px;left:0;background:' + theme.badge + ';color:#ffffff;font-size:11px;font-weight:bold;padding:1px 6px;border-radius:3px;font-family:system-ui,sans-serif;box-shadow:0 1px 3px rgba(0,0,0,0.5);white-space:nowrap;';
+            badge.textContent = '#' + m.index + ' Post Container (' + (m.groupTag || 'default') + ')';
+            box.appendChild(badge);
+            if (m.beginRect) {
+              const b = document.createElement('div');
+              b.style.cssText = 'position:absolute;left:' + (m.beginRect.x - m.containerRect.x) + 'px;top:' + (m.beginRect.y - m.containerRect.y) + 'px;width:' + m.beginRect.width + 'px;height:' + m.beginRect.height + 'px;border:2px dashed #4ade80;background:rgba(74,222,128,0.2);box-sizing:border-box;pointer-events:none;';
+              const bLabel = document.createElement('span');
+              bLabel.style.cssText = 'position:absolute;top:-16px;left:0;background:#15803d;color:#fff;font-size:9px;padding:0 3px;border-radius:2px;';
+              bLabel.textContent = 'BEGIN';
+              b.appendChild(bLabel);
+              box.appendChild(b);
+            }
+            if (m.endRect) {
+              const e = document.createElement('div');
+              e.style.cssText = 'position:absolute;left:' + (m.endRect.x - m.containerRect.x) + 'px;top:' + (m.endRect.y - m.containerRect.y) + 'px;width:' + m.endRect.width + 'px;height:' + m.endRect.height + 'px;border:2px dashed #fb923c;background:rgba(251,146,60,0.2);box-sizing:border-box;pointer-events:none;';
+              const eLabel = document.createElement('span');
+              eLabel.style.cssText = 'position:absolute;bottom:-16px;left:0;background:#c2410c;color:#fff;font-size:9px;padding:0 3px;border-radius:2px;';
+              eLabel.textContent = 'END';
+              e.appendChild(eLabel);
+              box.appendChild(e);
+            }
+            overlay.appendChild(box);
+          });
+          document.documentElement.appendChild(overlay);
+        })()`,
+          )
+          .catch(() => {});
+        return { success: true };
+      }
+      case "collectorClearHighlights": {
+        isIdle();
+        const wc = browser.view.webContents;
+        await wc
+          .executeJavaScript(
+            `(() => {
+          const old = document.getElementById('__rpa_match_test_overlay__');
+          if (old) old.remove();
+        })()`,
+          )
+          .catch(() => {});
+        return { success: true };
+      }
       default:
         throw new Error("Command không hỗ trợ.");
     }

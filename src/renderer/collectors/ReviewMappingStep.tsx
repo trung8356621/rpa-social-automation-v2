@@ -32,10 +32,14 @@ import {
   verifyAnchorGroups,
   normalizeCollectorRegions,
   resolveRegionCropBox,
+  assignSegmentMapping,
+  getMappedVariablesForSegment,
+  getMappingConfigState,
 } from "../../shared/collectors/regions";
 import type {
   CaptureAuditStatus,
   CollectorDraft,
+  CollectorExtractionMethod,
   CollectorRegion,
   CollectorRegionRole,
   CollectorRegionType,
@@ -136,6 +140,9 @@ export function StepReviewMapping({ draft, locked, onChange, invoke }: Props) {
   const [selectedSegmentId, setSelectedSegmentId] = useState<string>();
   const [segmentSearch, setSegmentSearch] = useState("");
   const [assignTargetVarId, setAssignTargetVarId] = useState("");
+  const [assignMethod, setAssignMethod] = useState<CollectorExtractionMethod>("OCR_TEXT");
+  const [assignAttribute, setAssignAttribute] = useState<string>("href");
+  const [newVarName, setNewVarName] = useState<string>("");
   const [imageDims, setImageDims] = useState<{ width: number; height: number }>({
     width: active?.roi?.width || 800,
     height: active?.roi?.height || 600,
@@ -440,17 +447,14 @@ export function StepReviewMapping({ draft, locked, onChange, invoke }: Props) {
 
   function getMappedVariableForSegment(segment: OcrSegment) {
     if (!active) return undefined;
-    return draft.variables.find((v) => {
-      const m = v.mappings.find(
-        (entry) =>
-          entry.sampleId === active.id &&
-          (!entry.regionId || !currentRegion || entry.regionId === currentRegion.id),
-      );
-      if (!m || m.presence !== "mapped") return false;
-      if (m.segmentId === segment.id) return true;
-      if (m.text && segment.text && m.text.trim() === segment.text.trim()) return true;
-      return false;
-    });
+    const mapped = getMappedVariablesForSegment(
+      draft.variables,
+      active.id,
+      segment.id,
+      currentRegion?.id,
+      segment.text,
+    );
+    return mapped[0]?.variable;
   }
 
   const selectedSegment = useMemo(() => {
@@ -458,7 +462,12 @@ export function StepReviewMapping({ draft, locked, onChange, invoke }: Props) {
     return activeSegments.find((s) => s.id === selectedSegmentId);
   }, [activeSegments, selectedSegmentId]);
 
-  function handleAssignSegment(segment: OcrSegment, varId: string) {
+  function handleAssignSegment(
+    segment: OcrSegment,
+    varId: string,
+    method: CollectorExtractionMethod = assignMethod,
+    attributeName: string = assignAttribute,
+  ) {
     if (!active || !varId) return;
     const cropBox = currentRegion ? resolveRegionCropBox(currentRegion, imageDims.width, imageDims.height).box : undefined;
     const roiX = currentRegion?.originalRoi?.x ?? cropBox?.x ?? 0;
@@ -470,52 +479,27 @@ export function StepReviewMapping({ draft, locked, onChange, invoke }: Props) {
       height: segment.bbox.height,
     };
 
-    const variables = draft.variables.map((v) => {
-      if (v.id !== varId) return v;
-      const otherMappings = v.mappings.filter(
-        (m) => !(m.sampleId === active.id && (m.regionId === currentRegion?.id || !m.regionId)),
-      );
-      const newMapping: CollectorVariableMapping = {
-        sampleId: active.id,
-        regionId: currentRegion?.id,
-        presence: "mapped",
-        confirmed: true,
-        text: segment.text,
-        confidence: segment.confidence,
-        bbox: screenshotBbox,
-        segmentId: segment.id,
-      };
-      return {
-        ...v,
-        mappings: [...otherMappings, newMapping],
-      };
-    });
-
-    let nextRegions = draft.regions;
-    const targetVar = draft.variables.find((v) => v.id === varId);
-    if (currentRegion && targetVar) {
-      nextRegions = (draft.regions ?? []).map((r) =>
-        r.id === currentRegion.id
-          ? {
-              ...r,
-              candidateVariableKeys: Array.from(new Set([...r.candidateVariableKeys, targetVar.key])),
-              updatedAt: new Date().toISOString(),
-            }
-          : r,
-      );
-    }
-
-    onChange({
-      ...draft,
-      variables,
-      regions: nextRegions,
-      dirty: true,
-    });
+    const nextDraft = assignSegmentMapping(
+      draft,
+      active.id,
+      varId,
+      segment,
+      currentRegion?.id,
+      method,
+      attributeName,
+      screenshotBbox,
+    );
+    onChange(nextDraft);
   }
 
-  function handleCreateVariableFromSegment(segment: OcrSegment) {
+  function handleCreateVariableFromSegment(
+    segment: OcrSegment,
+    customName?: string,
+    method: CollectorExtractionMethod = assignMethod,
+    attributeName: string = assignAttribute,
+  ) {
     if (!active) return;
-    const rawKey = segment.text
+    const rawKey = (customName || segment.text)
       .normalize("NFD")
       .replace(/[\u0300-\u036f]/g, "")
       .toLowerCase()
@@ -523,6 +507,12 @@ export function StepReviewMapping({ draft, locked, onChange, invoke }: Props) {
       .replace(/^_+|_+$/g, "")
       .slice(0, 20);
     const key = rawKey || `var_${draft.variables.length + 1}`;
+    const cleanAttr = method === "DOM_ATTRIBUTE" ? (attributeName?.trim() || "href") : undefined;
+    const label =
+      customName?.trim() ||
+      (method === "DOM_ATTRIBUTE" ? `${key} (${cleanAttr})` : segment.text.slice(0, 30));
+    const isOcr = method === "OCR_TEXT";
+
     const cropBox = currentRegion ? resolveRegionCropBox(currentRegion, imageDims.width, imageDims.height).box : undefined;
     const roiX = currentRegion?.originalRoi?.x ?? cropBox?.x ?? 0;
     const roiY = currentRegion?.originalRoi?.y ?? cropBox?.y ?? 0;
@@ -537,19 +527,24 @@ export function StepReviewMapping({ draft, locked, onChange, invoke }: Props) {
       regionId: currentRegion?.id,
       presence: "mapped",
       confirmed: true,
-      text: segment.text,
-      confidence: segment.confidence,
+      method,
+      attribute: cleanAttr,
+      text: isOcr ? segment.text : undefined,
+      confidence: isOcr ? segment.confidence : undefined,
       bbox: screenshotBbox,
       segmentId: segment.id,
+      evidence: isOcr
+        ? (isTeaching ? "Manual teaching assignment (Reference)" : "Manual user correction")
+        : "Configured / Awaiting DOM Match",
     };
     const newVar: CollectorVariable = {
       id: cryptoRandomId(),
       key,
-      label: segment.text.slice(0, 30),
-      valueType: /^\d+$/.test(segment.text.trim()) ? "number" : "string",
+      label,
+      valueType: isOcr && /^\d+$/.test(segment.text.trim()) ? "number" : "string",
       required: false,
-      source: "ocr_image",
-      expectedValue: segment.text,
+      source: isOcr ? "ocr_image" : "visual_dom",
+      expectedValue: isOcr ? segment.text : undefined,
       mappings: [newMapping],
     };
     let nextRegions = draft.regions;
@@ -1403,20 +1398,31 @@ export function StepReviewMapping({ draft, locked, onChange, invoke }: Props) {
                             {step2Stage === "fields" && (currentRegion?.ocr || active.ocr) && (
                               <div className="collector-ocr-overlay">
                                 {activeSegments.map((s) => {
-                                  const mappedVar = getMappedVariableForSegment(s);
+                                  const mappedVars = getMappedVariablesForSegment(
+                                    draft.variables,
+                                    active.id,
+                                    s.id,
+                                    currentRegion?.id,
+                                    s.text,
+                                  );
+                                  const mappedVar = mappedVars[0]?.variable;
                                   const m = mappedVar?.mappings.find((entry) => entry.sampleId === active.id);
                                   const isProposed = Boolean(m?.simulatedProposal && !m?.confirmed);
                                   const isSelected = selectedSegmentId === s.id;
+                                  const isMapped = mappedVars.length > 0;
                                   const isSearchMatch =
                                     !segmentSearch.trim() ||
                                     normalizeVietnameseText(s.text).includes(normalizeVietnameseText(segmentSearch.trim()));
                                   const resolvedBox = resolveRegionCropBox(currentRegion, imageDims.width, imageDims.height).box;
                                   const cropW = Math.max(1, currentRegion.originalRoi?.width || currentRegion.ocr?.containerCrop?.width || resolvedBox?.width || 300);
                                   const cropH = Math.max(1, currentRegion.originalRoi?.height || currentRegion.ocr?.containerCrop?.height || resolvedBox?.height || 60);
+                                  const titleText = isMapped
+                                    ? `${s.text} (${mappedVars.map((mv) => `${mv.variable.label} [${mv.mapping.method || "OCR_TEXT"}]`).join(", ")})`
+                                    : `${s.text} (${Math.round(s.confidence)}%)`;
                                   return (
                                     <div
                                       key={s.id}
-                                      className={`collector-ocr-box ${isSelected ? "selected" : ""} ${mappedVar && !isProposed ? "mapped" : ""} ${isProposed ? "proposed" : ""} ${!isSearchMatch ? "dimmed" : ""}`}
+                                      className={`collector-ocr-box ${isSelected ? "selected" : ""} ${isMapped && !isProposed ? "mapped" : ""} ${isProposed ? "proposed" : ""} ${!isSearchMatch ? "dimmed" : ""}`}
                                       style={{
                                         position: "absolute",
                                         left: `${(s.bbox.x / cropW) * 100}%`,
@@ -1425,7 +1431,7 @@ export function StepReviewMapping({ draft, locked, onChange, invoke }: Props) {
                                         height: `${(s.bbox.height / cropH) * 100}%`,
                                       }}
                                       onClick={() => setSelectedSegmentId(s.id)}
-                                      title={`${s.text} (${Math.round(s.confidence)}%)`}
+                                      title={titleText}
                                     />
                                   );
                                 })}
@@ -1944,64 +1950,203 @@ export function StepReviewMapping({ draft, locked, onChange, invoke }: Props) {
                   <div className="collector-dock-text">
                     {selectedSegment.text}
                   </div>
-                  <div className="collector-dock-assign-row">
-                    <button
-                      type="button"
-                      onClick={() => void navigator.clipboard?.writeText(selectedSegment.text)}
-                    >
-                      Copy
-                    </button>
-                    {isTeaching && (
+
+                  {/* Existing Variable Mappings for this Segment (C2.10.3 Multi-Variable Mapping) */}
+                  <div className="collector-segment-mappings-section">
+                    <div style={{ fontSize: "11px", fontWeight: "bold", color: "#94a3b8", display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+                      <span>Mapped Variables ({getMappedVariablesForSegment(draft.variables, active.id, selectedSegment.id, currentRegion?.id, selectedSegment.text).length}):</span>
                       <button
                         type="button"
-                        disabled={locked}
-                        onClick={() => handleCreateVariableFromSegment(selectedSegment)}
+                        style={{ fontSize: "10px", padding: "1px 6px" }}
+                        onClick={() => void navigator.clipboard?.writeText(selectedSegment.text)}
                       >
-                        + Create Variable
+                        Copy Text
                       </button>
-                    )}
-                    {draft.variables.length > 0 && (
-                      <div style={{ display: "flex", gap: "4px", alignItems: "center", flex: 1 }}>
-                        <select
-                          disabled={locked}
-                          value={assignTargetVarId}
-                          onChange={(e) => setAssignTargetVarId(e.target.value)}
-                          style={{ flex: 1, fontSize: "11px" }}
-                        >
-                          <option value="">— Assign to Variable —</option>
-                          {draft.variables.map((v) => (
-                            <option key={v.id} value={v.id}>
-                              {v.label} ({v.key})
-                            </option>
-                          ))}
-                        </select>
-                        <button
-                          type="button"
-                          className="primary"
-                          disabled={locked || !assignTargetVarId}
-                          onClick={() => {
-                            if (assignTargetVarId) handleAssignSegment(selectedSegment, assignTargetVarId);
-                          }}
-                        >
-                          Assign
-                        </button>
-                      </div>
-                    )}
+                    </div>
+
                     {(() => {
-                      const mappedVar = getMappedVariableForSegment(selectedSegment);
-                      if (mappedVar) {
+                      const mappedList = getMappedVariablesForSegment(
+                        draft.variables,
+                        active.id,
+                        selectedSegment.id,
+                        currentRegion?.id,
+                        selectedSegment.text,
+                      );
+                      if (mappedList.length === 0) {
+                        return (
+                          <div style={{ fontSize: "11px", color: "#64748b", fontStyle: "italic", padding: "2px 0" }}>
+                            No variables mapped to this segment yet. Use the controls below to add a mapping.
+                          </div>
+                        );
+                      }
+                      return (
+                        <div style={{ display: "flex", flexDirection: "column", gap: "4px" }}>
+                          {mappedList.map(({ variable, mapping }) => {
+                            const method = mapping.method || "OCR_TEXT";
+                            const isOcr = method === "OCR_TEXT";
+                            return (
+                              <div
+                                key={`${variable.id}-${method}-${mapping.attribute || ""}`}
+                                className="collector-segment-mapping-item"
+                              >
+                                <div style={{ display: "flex", gap: "6px", alignItems: "center", flexWrap: "wrap" }}>
+                                  <b style={{ color: "#e2e8f0" }}>{variable.label}</b>
+                                  <code style={{ fontSize: "10px", color: "#7f93ab" }}>({variable.key})</code>
+                                  <span className={`script-badge ${isOcr ? "badge-active" : "badge-draft"}`} style={{ fontSize: "10px" }}>
+                                    {method}{method === "DOM_ATTRIBUTE" ? `(${mapping.attribute || "href"})` : ""}
+                                  </span>
+                                  {isOcr ? (
+                                    <small style={{ color: "#68d6a6" }}>Recognized</small>
+                                  ) : (
+                                    <small style={{ color: "#e0b35a" }}>Configured / Awaiting DOM Match</small>
+                                  )}
+                                </div>
+                                <button
+                                  type="button"
+                                  disabled={locked}
+                                  style={{ fontSize: "10px", padding: "1px 6px", color: "#f87171" }}
+                                  onClick={() => onChange(unmapVariableForCapture(draft, active.id, variable.id))}
+                                  title={`Remove mapping for ${variable.label}`}
+                                >
+                                  ✕ Remove
+                                </button>
+                              </div>
+                            );
+                          })}
+                        </div>
+                      );
+                    })()}
+                  </div>
+
+                  {/* Add / Assign Mapping Controls */}
+                  <div className="collector-dock-assign-row" style={{ display: "flex", flexDirection: "column", gap: "6px", alignItems: "stretch" }}>
+                    <div style={{ display: "flex", gap: "6px", alignItems: "center", flexWrap: "wrap" }}>
+                      <select
+                        disabled={locked}
+                        value={assignTargetVarId}
+                        onChange={(e) => {
+                          const val = e.target.value;
+                          setAssignTargetVarId(val);
+                          if (val === "__NEW__") {
+                            setNewVarName(selectedSegment.text.slice(0, 30));
+                          }
+                        }}
+                        style={{ flex: 1, minWidth: "140px", fontSize: "11px" }}
+                      >
+                        <option value="">— Select Target Variable —</option>
+                        {draft.variables.map((v) => (
+                          <option key={v.id} value={v.id}>
+                            {v.label} ({v.key})
+                          </option>
+                        ))}
+                        {isTeaching && <option value="__NEW__">+ Create New Variable...</option>}
+                      </select>
+
+                      <select
+                        disabled={locked}
+                        value={assignMethod}
+                        onChange={(e) => setAssignMethod(e.target.value as CollectorExtractionMethod)}
+                        style={{ width: "130px", fontSize: "11px" }}
+                        title="Extraction Method"
+                      >
+                        <option value="OCR_TEXT">OCR_TEXT</option>
+                        <option value="DOM_TEXT">DOM_TEXT</option>
+                        <option value="DOM_ATTRIBUTE">DOM_ATTRIBUTE</option>
+                      </select>
+
+                      {assignMethod === "DOM_ATTRIBUTE" && (
+                        <input
+                          type="text"
+                          disabled={locked}
+                          value={assignAttribute}
+                          placeholder="e.g. href, src"
+                          onChange={(e) => setAssignAttribute(e.target.value)}
+                          style={{ width: "90px", fontSize: "11px", padding: "2px 6px" }}
+                          title="Attribute Name"
+                        />
+                      )}
+
+                      {assignTargetVarId !== "__NEW__" && (() => {
+                        const targetVar = draft.variables.find((v) => v.id === assignTargetVarId);
+                        const isAlreadyMapped = Boolean(
+                          targetVar &&
+                            targetVar.mappings.some(
+                              (m) =>
+                                m.sampleId === active.id &&
+                                m.presence === "mapped" &&
+                                m.segmentId === selectedSegment.id &&
+                                (m.method || "OCR_TEXT") === assignMethod &&
+                                (m.attribute || undefined) === (assignMethod === "DOM_ATTRIBUTE" ? (assignAttribute?.trim() || "href") : undefined),
+                            ),
+                        );
                         return (
                           <button
                             type="button"
-                            disabled={locked}
-                            onClick={() => onChange(unmapVariableForCapture(draft, active.id, mappedVar.id))}
+                            className="primary"
+                            disabled={locked || !assignTargetVarId || isAlreadyMapped}
+                            onClick={() => {
+                              if (assignTargetVarId) {
+                                handleAssignSegment(selectedSegment, assignTargetVarId, assignMethod, assignAttribute);
+                              }
+                            }}
+                            title={isAlreadyMapped ? "Variable already mapped with this method" : "Add or update mapping"}
                           >
-                            Unmap ({mappedVar.label})
+                            {isAlreadyMapped ? "Already Mapped" : "Add Mapping"}
                           </button>
                         );
-                      }
-                      return null;
-                    })()}
+                      })()}
+                    </div>
+
+                    {assignTargetVarId === "__NEW__" && (
+                      <div style={{ display: "flex", gap: "6px", alignItems: "center", background: "#0b1320", padding: "6px", borderRadius: "4px", border: "1px dashed #2b394a" }}>
+                        <input
+                          type="text"
+                          disabled={locked}
+                          value={newVarName}
+                          placeholder="Variable Name / Key (e.g. post_url)"
+                          onChange={(e) => setNewVarName(e.target.value)}
+                          style={{ flex: 1, fontSize: "11px", padding: "3px 6px" }}
+                          autoFocus
+                        />
+                        <button
+                          type="button"
+                          className="primary"
+                          disabled={locked || !newVarName.trim()}
+                          onClick={() => {
+                            if (newVarName.trim()) {
+                              handleCreateVariableFromSegment(selectedSegment, newVarName.trim(), assignMethod, assignAttribute);
+                              setNewVarName("");
+                              setAssignTargetVarId("");
+                            }
+                          }}
+                        >
+                          Create &amp; Map
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => {
+                            setAssignTargetVarId("");
+                            setNewVarName("");
+                          }}
+                        >
+                          Cancel
+                        </button>
+                      </div>
+                    )}
+
+                    {isTeaching && assignTargetVarId !== "__NEW__" && (
+                      <div style={{ display: "flex", gap: "6px", alignItems: "center" }}>
+                        <button
+                          type="button"
+                          disabled={locked}
+                          onClick={() => handleCreateVariableFromSegment(selectedSegment, undefined, assignMethod, assignAttribute)}
+                          style={{ fontSize: "11px" }}
+                          title={`Create variable with ${assignMethod}`}
+                        >
+                          + Create Variable ({assignMethod})
+                        </button>
+                      </div>
+                    )}
                   </div>
                 </div>
               ) : (
@@ -2220,7 +2365,10 @@ export function StepReviewMapping({ draft, locked, onChange, invoke }: Props) {
                     const mapping = getMapping(variable, active);
                     const open = editingId === variable.id;
                     const isProposed = Boolean(mapping?.simulatedProposal && !mapping?.confirmed);
-                    const isMapped = Boolean(mapping?.presence === "mapped" && mapping?.text);
+                    const method = mapping?.method || "OCR_TEXT";
+                    const isOcr = method === "OCR_TEXT";
+                    const configState = getMappingConfigState(mapping);
+                    const isMapped = configState.isValid;
                     return (
                       <div className="collector-variable-card" key={variable.id}>
                         <div className="collector-variable-head">
@@ -2232,7 +2380,20 @@ export function StepReviewMapping({ draft, locked, onChange, invoke }: Props) {
                             {open ? "▾" : "▸"} {variable.label} <code>{variable.key}</code>
                           </button>
                           {isMapped && !isProposed && (
-                            <span className="script-badge badge-active">Mapped</span>
+                            <span
+                              className={`script-badge ${
+                                isOcr
+                                  ? "badge-active"
+                                  : "badge-draft"
+                              }`}
+                              style={
+                                !isOcr
+                                  ? { backgroundColor: "#1e3a5f", color: "#93c5fd", border: "1px solid #2563eb" }
+                                  : undefined
+                              }
+                            >
+                              {configState.badgeLabel}
+                            </span>
                           )}
                           {isProposed && (
                             <span className="script-badge badge-draft">Proposed</span>
@@ -2254,18 +2415,41 @@ export function StepReviewMapping({ draft, locked, onChange, invoke }: Props) {
                         {isMapped && (
                           <div className="collector-compact-var-text" style={{ borderColor: isProposed ? "#c9a227" : "#2b394a" }}>
                             <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
-                              <b style={{ fontSize: "11px", color: isProposed ? "#e0b35a" : "#68d6a6" }}>
-                                {isProposed ? "Suggested Value:" : "Mapped Value:"}
+                              <b style={{ fontSize: "11px", color: isProposed ? "#e0b35a" : isOcr ? "#68d6a6" : "#93c5fd" }}>
+                                {isProposed ? "Suggested Value:" : isOcr ? "Mapped OCR Text:" : "Configured Extraction:"}
                               </b>
-                              {mapping?.confidence != null && (
-                                <small style={{ color: "#7f93ab" }}>
-                                  {mapping.confidence}% match
-                                </small>
+                              {isOcr ? (
+                                mapping?.confidence != null && (
+                                  <small style={{ color: "#7f93ab" }}>
+                                    {mapping.confidence}% match
+                                  </small>
+                                )
+                              ) : (
+                                <span
+                                  className="script-badge"
+                                  style={{ backgroundColor: "#1e3a5f", color: "#93c5fd", border: "1px solid #2563eb", fontSize: "10px" }}
+                                >
+                                  Awaiting browser match
+                                </span>
                               )}
                             </div>
-                            <code style={{ fontSize: "11px", display: "block", margin: "4px 0", whiteSpace: "pre-wrap", wordBreak: "break-word" }}>
-                              "{mapping?.text}"
-                            </code>
+                            {isOcr ? (
+                              <code style={{ fontSize: "11px", display: "block", margin: "4px 0", whiteSpace: "pre-wrap", wordBreak: "break-word" }}>
+                                "{mapping?.text}"
+                              </code>
+                            ) : (
+                              <div style={{ margin: "4px 0", fontSize: "11px", color: "#cbd5e1" }}>
+                                <span>Method: <b>{method}</b></span>
+                                {method === "DOM_ATTRIBUTE" && (
+                                  <span style={{ marginLeft: "4px" }}>
+                                    (attribute: <code>{mapping?.attribute || "href"}</code>)
+                                  </span>
+                                )}
+                                <div style={{ fontSize: "10px", color: "#93c5fd", marginTop: "2px" }}>
+                                  ℹ Configured · Awaiting live browser match test
+                                </div>
+                              </div>
+                            )}
                             {mapping?.evidence && (
                               <span className="collector-evidence-badge">
                                 Evidence: {mapping.evidence}
@@ -2302,10 +2486,10 @@ export function StepReviewMapping({ draft, locked, onChange, invoke }: Props) {
                               <button
                                 type="button"
                                 disabled={locked}
-                                onClick={() => handleAssignSegment(selectedSegment, variable.id)}
-                                title={`Assign "${selectedSegment.text}" to ${variable.label}`}
+                                onClick={() => handleAssignSegment(selectedSegment, variable.id, assignMethod, assignAttribute)}
+                                title={`Assign "${selectedSegment.text}" to ${variable.label} via ${assignMethod}`}
                               >
-                                Map Selected {groupingLevel.toUpperCase()}
+                                Map Selected {groupingLevel.toUpperCase()} ({assignMethod})
                               </button>
                             )}
                             {!isTeaching && mapping?.presence !== "not_present" && (

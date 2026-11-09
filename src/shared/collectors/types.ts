@@ -80,6 +80,8 @@ export type AuditRecordAction = {
   note?: string;
 };
 
+export type CollectorExtractionMethod = "OCR_TEXT" | "DOM_TEXT" | "DOM_ATTRIBUTE";
+
 export type CollectorVariableMapping = {
   /**
    * Mapping identity key.
@@ -110,6 +112,9 @@ export type CollectorVariableMapping = {
     prevLineText?: string;
     nextLineText?: string;
   };
+  // C2.10.3: Extraction method per mapping & multi-variable mapping
+  method?: CollectorExtractionMethod;
+  attribute?: string;
 };
 
 /** Per-capture review/audit state — independent of fixed Sample A/B/C roles. */
@@ -318,12 +323,29 @@ export type PostGroupMatch = {
   failureReason?: string;
 };
 
+export type MatchedPostItem = {
+  index: number; // 1, 2, 3
+  groupTag: string;
+  beginRect?: Rect;
+  endRect?: Rect;
+  containerRect?: Rect;
+  containerId?: string;
+  containerTagName?: string;
+  beginMatched: boolean;
+  endMatched: boolean;
+  paired: boolean;
+  domResolved: boolean;
+  confidence: number;
+  failureReason?: string;
+};
+
 export type MatchTestResult = {
   testedAt: string;
   browserUrl: string;
   status: MatchTestStatus;
   matchedPostCount: number;
   groups: PostGroupMatch[];
+  matchedItems?: MatchedPostItem[];
   summary: string;
   limitations?: string[];
   error?: string;
