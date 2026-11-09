@@ -5,6 +5,8 @@ import type {
   MatchTestResult,
   MatchedPostItem,
   PostGroupMatch,
+  EndVisualCandidate,
+  EndVisualMatchResult,
 } from "../../shared/collectors/types.js";
 import {
   executeLiveBrowserMatchTest,
@@ -18,6 +20,8 @@ import {
   collectorHighlightMatches,
   collectorClearHighlights,
   collectorLogMatchDiagnostic,
+  collectorMatchEndVisual,
+  collectorHighlightEndVisual,
   isElectronBrowserCoreAvailable,
   type CollectorInvoke,
 } from "./browser-capture.js";
@@ -43,6 +47,12 @@ export function StepMatchTest({
   const [isRunning, setIsRunning] = useState<boolean>(false);
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
   const [browserConnected, setBrowserConnected] = useState<boolean>(false);
+
+  // C2.11.12: Isolated END-only Visual Matching experiment mode
+  const [matchExperimentMode, setMatchExperimentMode] = useState<"BEGIN_PRIMARY" | "END_ONLY_VISUAL">("BEGIN_PRIMARY");
+  const [endVisualResult, setEndVisualResult] = useState<EndVisualMatchResult | null>(null);
+  const matchExperimentModeRef = useRef<"BEGIN_PRIMARY" | "END_ONLY_VISUAL">("BEGIN_PRIMARY");
+  matchExperimentModeRef.current = matchExperimentMode;
 
   const hostRef = useRef<HTMLDivElement>(null);
   const lastBoundsRef = useRef<{ x: number; y: number; width: number; height: number } | null>(null);
@@ -165,6 +175,82 @@ export function StepMatchTest({
         return;
       }
 
+      // C2.11.12: Isolated END-Only Visual Matching Experiment
+      if (matchExperimentModeRef.current === "END_ONLY_VISUAL") {
+        const allRegions = [
+          ...(draftRef.current.regions ?? []),
+          ...(draftRef.current.captures ?? []).flatMap((c) => c.regions ?? []),
+        ];
+        const endRegions = allRegions.filter(
+          (r) => r.confirmed && (r.type === "END" || (r.type === "STATIC" && r.role === "footer")),
+        );
+
+        if (endRegions.length === 0) {
+          setErrorMsg(
+            "No confirmed END regions found in teaching samples. Please confirm an END region in Step 2A first.",
+          );
+          isRunningRef.current = false;
+          setIsRunning(false);
+          return;
+        }
+
+        const references = endRegions.map((r) => ({
+          sampleId: r.captureItemId,
+          referenceImage: r.referenceImage,
+          assetId: r.referenceImageAsset,
+          originalRoi: r.originalRoi,
+        }));
+
+        const visualResult = await collectorMatchEndVisual(invoke, references);
+        setEndVisualResult(visualResult);
+
+        // File-based structured diagnostic logging
+        try {
+          const diagRecord = {
+            timestamp: new Date().toISOString(),
+            matchRunId: `match_run_end_visual_${currentRunId}_${Date.now()}`,
+            mode: "END_ONLY_VISUAL",
+            sessionId: draftRef.current.id,
+            url: currentUrl,
+            matchingTechnique: visualResult.technique,
+            referenceEndSampleIds: visualResult.referenceSampleIds,
+            referenceCropDimensions: visualResult.diagnostics.referenceCropDimensions,
+            screenshotDimensions: visualResult.screenshotDimensions,
+            scale: visualResult.scale,
+            status: visualResult.status,
+            matchedFooters: visualResult.matchedFooters,
+            rejectedCandidates: visualResult.rejectedCandidates,
+            durationMs: visualResult.diagnostics.durationMs,
+          };
+          void collectorLogMatchDiagnostic(invoke, diagRecord);
+        } catch (logErr) {
+          console.error("End visual match diagnostic logging failed", logErr);
+        }
+
+        if (!isMountedRef.current || currentRunId !== runIdRef.current || !matchModeRef.current) {
+          await collectorClearHighlights(invoke);
+          return;
+        }
+
+        if (visualResult.matchedFooters.length > 0) {
+          await collectorHighlightEndVisual(invoke, visualResult.matchedFooters);
+        } else {
+          await collectorClearHighlights(invoke);
+        }
+
+        const expTestResult: MatchTestResult = {
+          testedAt: visualResult.testedAt,
+          browserUrl: currentUrl,
+          status: visualResult.status === "MATCHED" ? "MATCHED" : "FAILED",
+          matchedPostCount: visualResult.matchedFooters.length,
+          groups: [],
+          summary: visualResult.diagnostics.summary,
+          endVisualExperiment: visualResult,
+        };
+        onChangeRef.current({ ...draftRef.current, matchTest: expTestResult, dirty: true });
+        return;
+      }
+
       const startTime = performance.now();
       // Real live DOM inspection strictly bounded to current visible viewport (NO SCROLL)
       const snapshot = await collectorInspectDom(invoke, currentUrl, draftRef.current.layoutContext);
@@ -209,6 +295,13 @@ export function StepMatchTest({
           outerContainerDiagnostics: primaryDiag?.outerContainerDiagnostics ?? [],
           deduplicationDecisions: primaryDiag?.deduplicationDecisions ?? [],
           finalUniquePostCount: primaryDiag?.finalUniquePostCount ?? result.matchedPostCount,
+          configuredPrimaryVariable: primaryDiag?.configuredPrimaryVariable ?? null,
+          primaryCandidatesFound: primaryDiag?.primaryCandidatesFound ?? 0,
+          primaryCandidateEvidence: primaryDiag?.primaryCandidateEvidence ?? [],
+          primaryCandidateRejectionReasons: primaryDiag?.primaryCandidateRejectionReasons ?? [],
+          selectedPrimaryDOM: primaryDiag?.selectedPrimaryDOM ?? null,
+          resolvedOuterContainer: primaryDiag?.resolvedOuterContainer ?? null,
+          primaryMatchStatus: primaryDiag?.primaryMatchStatus ?? null,
           totalNodes: snapshot.elements?.length || 0,
           inViewportNodes: snapshot.elements?.filter((e) => e.rect.width > 0 && e.rect.height > 0).length || 0,
           articlesFound: snapshot.elements?.filter((e) => e.isArticleOrCard).length || 0,
@@ -229,6 +322,8 @@ export function StepMatchTest({
           matchedItems: (result.matchedItems || []).map((item) => ({
             index: item.index,
             groupTag: item.groupTag,
+            primaryElementId: item.primaryElementId,
+            primaryVariableKey: item.primaryVariableKey,
             beginMatched: item.beginMatched,
             endMatched: item.endMatched,
             paired: item.paired,
@@ -375,6 +470,37 @@ export function StepMatchTest({
         </div>
 
         <div className="collector-match-actions">
+          {/* C2.11.12: Experiment Mode Selector */}
+          <div className="collector-match-mode-control">
+            <span className="collector-match-mode-label">Mode:</span>
+            <select
+              value={matchExperimentMode}
+              disabled={locked || isRunning}
+              onChange={(e) => {
+                const nextMode = e.target.value as "BEGIN_PRIMARY" | "END_ONLY_VISUAL";
+                setMatchExperimentMode(nextMode);
+                matchExperimentModeRef.current = nextMode;
+                if (invoke && isElectronBrowserCoreAvailable()) {
+                  void collectorClearHighlights(invoke);
+                }
+              }}
+              style={{
+                background: "#0f172a",
+                color: matchExperimentMode === "END_ONLY_VISUAL" ? "#c084fc" : "#38bdf8",
+                border: "1px solid #334155",
+                borderRadius: "3px",
+                padding: "3px 8px",
+                fontSize: "11px",
+                fontWeight: 600,
+                cursor: "pointer",
+              }}
+              title="Select matching mode: Production (Primary/BEGIN) or Isolated END-Only Visual Experiment"
+            >
+              <option value="BEGIN_PRIMARY">Production (Primary / BEGIN)</option>
+              <option value="END_ONLY_VISUAL">🧪 END-Only Visual Experiment</option>
+            </select>
+          </div>
+
           {/* Prominent Match Mode Toggle (OFF / ON) */}
           <div className="collector-match-mode-control">
             <span className="collector-match-mode-label">Match Mode:</span>
@@ -500,8 +626,84 @@ export function StepMatchTest({
             )}
           </div>
 
-          {/* Viewport Candidates (Max 3) */}
-          <div className="collector-match-items-section">
+          {/* C2.11.12: END-Only Visual Matching Experiment Results Card */}
+          {matchExperimentMode === "END_ONLY_VISUAL" ? (
+            <div className="collector-match-items-section">
+              <div className="collector-match-items-head-row">
+                <h4 className="collector-section-title" style={{ margin: 0, color: "#c084fc" }}>
+                  🧪 END-Only Visual Experiment (Screenshot Space)
+                </h4>
+                <span className="collector-count-pill matched has-matches">
+                  Matched: <b>{endVisualResult?.matchedFooters?.length ?? 0}</b>
+                </span>
+              </div>
+
+              <div style={{ background: "#1e1b4b", border: "1px solid #4338ca", borderRadius: "4px", padding: "8px 12px", marginBottom: "10px", fontSize: "11px", color: "#c7d2fe" }}>
+                <b>Visual Technique:</b> {endVisualResult?.technique || "Tripartite Multi-Cluster Visual Template Correlation"}<br />
+                <b>Reference Crops:</b> {endVisualResult?.referenceEndCount ?? 0} confirmed END sample(s) | <b>Scale:</b> {endVisualResult?.scale ?? 1.0}×<br />
+                <span style={{ color: "#a5b4fc" }}>Note: Isolated END recognition. Does not resolve outer post containers; does not pair with BEGIN.</span>
+              </div>
+
+              {(!endVisualResult?.matchedFooters || endVisualResult.matchedFooters.length === 0) && (
+                <div className="collector-sample-empty">
+                  {displayStatus === "NOT TESTED"
+                    ? "Click 'Re-match Current Viewport' in Match Mode ON to test END visual matching."
+                    : endVisualResult?.status === "PARTIAL"
+                      ? "Partial footer detected at viewport boundary; insufficient complete evidence."
+                      : "0 post engagement footers matched. Check that post action buttons (Like/Comment/Share) are visible in the viewport."}
+                </div>
+              )}
+
+              {endVisualResult?.matchedFooters?.map((cand, idx) => (
+                <div
+                  key={cand.id || `end-footer-${idx}`}
+                  className="collector-match-item-card resolved"
+                  style={{ borderLeftColor: "#8b5cf6" }}
+                >
+                  <div className="collector-match-item-head">
+                    <div style={{ display: "flex", gap: "8px", alignItems: "center" }}>
+                      <span className="collector-match-num-badge" style={{ backgroundColor: "#8b5cf6" }}>
+                        #{idx + 1}
+                      </span>
+                      <b style={{ color: "#e2e8f0" }}>END Visual Anchor</b>
+                      <span style={{ color: "#a78bfa", fontSize: "11px", fontFamily: "monospace" }}>
+                        [{cand.rect.x}, {cand.rect.y}, {cand.rect.width}×{cand.rect.height}]
+                      </span>
+                    </div>
+                    <span className="collector-match-pill small status-matched">
+                      {cand.confidence}% MATCH
+                    </span>
+                  </div>
+
+                  <div style={{ marginTop: "6px", fontSize: "11px", color: "#94a3b8", display: "flex", gap: "10px", flexWrap: "wrap" }}>
+                    <span>Like: <b style={{ color: "#38bdf8" }}>{cand.features.likeConfidence}%</b></span>
+                    <span>Comment: <b style={{ color: "#38bdf8" }}>{cand.features.commentConfidence}%</b></span>
+                    <span>Share: <b style={{ color: "#38bdf8" }}>{cand.features.shareConfidence}%</b></span>
+                    <span>Tripartite Layout: <b style={{ color: "#4ade80" }}>{cand.features.tripartiteLayout ? "YES" : "NO"}</b></span>
+                  </div>
+                </div>
+              ))}
+
+              {endVisualResult?.rejectedCandidates && endVisualResult.rejectedCandidates.length > 0 && (
+                <div style={{ marginTop: "12px" }}>
+                  <small style={{ color: "#94a3b8", fontWeight: 600 }}>Rejected Candidate Zones ({endVisualResult.rejectedCandidates.length}):</small>
+                  <div style={{ display: "flex", flexDirection: "column", gap: "4px", marginTop: "4px" }}>
+                    {endVisualResult.rejectedCandidates.map((rej, rIdx) => (
+                      <div
+                        key={rej.id || `rej-${rIdx}`}
+                        style={{ background: "#0f172a", border: "1px solid #1e293b", borderRadius: "3px", padding: "4px 8px", fontSize: "10px" }}
+                      >
+                        <span style={{ color: "#f87171", fontWeight: 600 }}>REJECTED at y={rej.rect.y}:</span>{" "}
+                        <span style={{ color: "#cbd5e1" }}>{rej.rejectionReason}</span>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              )}
+            </div>
+          ) : (
+            /* Viewport Candidates (Max 3) - Production BEGIN / Primary Mode */
+            <div className="collector-match-items-section">
             <div className="collector-match-items-head-row">
               <h4 className="collector-section-title" style={{ margin: 0 }}>
                 Viewport Candidates (Limit: 3)
@@ -626,6 +828,7 @@ export function StepMatchTest({
               );
             })}
           </div>
+          )}
 
           {/* Group Verification Details */}
           {matchTestResult?.groups && matchTestResult.groups.length > 0 && (

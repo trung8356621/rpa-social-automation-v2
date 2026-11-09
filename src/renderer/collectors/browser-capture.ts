@@ -4,7 +4,14 @@
  * Does not create a second browser engine or session store.
  */
 import type { Capture, Command, OcrResult, Rect } from "../../shared/contracts";
-import type { CollectorDomSnapshot, LayoutContextKind, MatchedPostItem, SampleRoi } from "../../shared/collectors/types";
+import type {
+  CollectorDomSnapshot,
+  LayoutContextKind,
+  MatchedPostItem,
+  SampleRoi,
+  EndVisualCandidate,
+  EndVisualMatchResult,
+} from "../../shared/collectors/types";
 import { WEB_HEIGHT, WEB_WIDTH } from "../../shared/geometry";
 
 declare global {
@@ -212,4 +219,43 @@ export async function collectorLogMatchDiagnostic(
 ): Promise<void> {
   if (!isElectronBrowserCoreAvailable()) return;
   await invoke({ type: "collectorLogMatchDiagnostic", payload });
+}
+
+export async function collectorMatchEndVisual(
+  invoke: CollectorInvoke,
+  references: Array<{ sampleId?: string; referenceImage?: string; assetId?: string; originalRoi?: Rect }>,
+  options?: { scaleVariants?: number[]; minConfidence?: number },
+): Promise<EndVisualMatchResult> {
+  if (!isElectronBrowserCoreAvailable()) {
+    return {
+      testedAt: new Date().toISOString(),
+      technique: "Tripartite Multi-Cluster Visual Template Correlation (Sharp)",
+      screenshotDimensions: { width: 1280, height: 800 },
+      scale: 1.0,
+      referenceEndCount: references.length,
+      referenceSampleIds: references.map((r) => r.sampleId || "").filter(Boolean),
+      status: "NO_MATCH",
+      matchedFooters: [],
+      rejectedCandidates: [],
+      diagnostics: {
+        referenceCropDimensions: [],
+        totalEvaluated: 0,
+        durationMs: 0,
+        summary: "Electron Browser Core unavailable in preview mode.",
+      },
+    };
+  }
+  return invoke<EndVisualMatchResult>({
+    type: "collectorMatchEndVisual",
+    references,
+    options,
+  });
+}
+
+export async function collectorHighlightEndVisual(
+  invoke: CollectorInvoke,
+  matches: EndVisualCandidate[],
+): Promise<void> {
+  if (!isElectronBrowserCoreAvailable()) return;
+  await invoke({ type: "collectorHighlightEndVisual", matches });
 }

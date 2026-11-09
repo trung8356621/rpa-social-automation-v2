@@ -28,6 +28,7 @@ import { CreatorOverlays } from "./creator-overlays.js";
 import { BrowserCore } from "./browser-core.js";
 import { CollectorScrollCaptureController } from "./collector-scroll-capture.js";
 import { BrowserSessions } from "./browser-sessions.js";
+import { matchEndVisual } from "./end-visual-matcher.js";
 import { BrowserRecording } from "./browser-recording.js";
 import { TestRunEvidence } from "./test-run-evidence.js";
 import { TestLab } from "./test-lab.js";
@@ -56,7 +57,7 @@ import {
 import { shouldShowBrowserForPage } from "../shared/collector-browser-host.js";
 import { effectiveMatchTo, matchToLabel, matchToLogLabel } from "../shared/match-to.js";
 import { DRAFT_KEYS } from "../shared/contracts.js";
-import type { Command, State, CaseResult, Step } from "../shared/contracts.js";
+import type { Command, State, CaseResult, Step, Rect } from "../shared/contracts.js";
 import { executeManualSync } from "../shared/sync-ipc.js";
 import {
   buildScriptPublishBody,
@@ -1955,6 +1956,28 @@ async function boot() {
                 beginEl.style.outlineOffset = '1px';
               }
             }
+
+            // Also highlight Primary Variable element if present with an amber outline and badge
+            if (m.primaryElementId) {
+              const primaryEl = document.querySelector('[data-rpa-dom-id="' + m.primaryElementId + '"]');
+              if (primaryEl && primaryEl instanceof HTMLElement) {
+                primaryEl.setAttribute('data-rpa-highlight', 'primary');
+                primaryEl.setAttribute('data-rpa-orig-outline', primaryEl.style.outline || '');
+                primaryEl.setAttribute('data-rpa-orig-box-shadow', primaryEl.style.boxShadow || '');
+                primaryEl.setAttribute('data-rpa-orig-position', primaryEl.style.position || '');
+                primaryEl.style.outline = '2px solid #f59e0b';
+                primaryEl.style.outlineOffset = '1px';
+                if (getComputedStyle(primaryEl).position === 'static') {
+                  primaryEl.style.position = 'relative';
+                }
+                const pBadge = document.createElement('div');
+                pBadge.className = '__rpa_highlight_badge__';
+                pBadge.style.cssText =
+                  'position:absolute;top:-18px;left:0;background:#d97706;color:#ffffff;font-size:10px;font-weight:bold;padding:1px 5px;border-radius:2px;font-family:system-ui,sans-serif;box-shadow:0 1px 2px rgba(0,0,0,0.5);white-space:nowrap;z-index:2147483647;pointer-events:none;';
+                pBadge.textContent = '★ Primary: ' + (m.primaryVariableKey || 'primary');
+                primaryEl.appendChild(pBadge);
+              }
+            }
           });
 
           // 2. Viewport Overlay Fallback / Supplementary Boxes
@@ -2024,6 +2047,80 @@ async function boot() {
           });
           const old = document.getElementById('__rpa_match_test_overlay__');
           if (old) old.remove();
+        })()`,
+          )
+          .catch(() => {});
+        return { success: true };
+      }
+      case "collectorMatchEndVisual": {
+        isIdle();
+        const wc = browser.view.webContents;
+        const img = await wc.capturePage(undefined, { stayHidden: true });
+        const screenshotBuffer = img.toPNG();
+
+        const references: Array<{ sampleId?: string; imageBuffer: Buffer; roi?: Rect }> = [];
+        const rawRefs = Array.isArray(command.references) ? command.references : [];
+
+        for (const ref of rawRefs) {
+          let buf: Buffer | null = null;
+          if (typeof ref.referenceImage === "string" && ref.referenceImage.startsWith("data:")) {
+            const base64Data = ref.referenceImage.split(",")[1];
+            if (base64Data) buf = Buffer.from(base64Data, "base64");
+          } else if (ref.assetId && typeof ref.assetId === "string") {
+            const assetPath = path.join(evidenceDir, `${ref.assetId}.png`);
+            try {
+              buf = await readFile(assetPath);
+            } catch {}
+          }
+          if (buf && buf.length > 0) {
+            references.push({
+              sampleId: ref.sampleId,
+              imageBuffer: buf,
+              roi: ref.originalRoi,
+            });
+          }
+        }
+
+        const matchResult = await matchEndVisual(screenshotBuffer, references, command.options);
+        return matchResult;
+      }
+      case "collectorHighlightEndVisual": {
+        isIdle();
+        const wc = browser.view.webContents;
+        const matches = Array.isArray(command.matches) ? command.matches : [];
+        await wc
+          .executeJavaScript(
+            `(() => {
+          // Clear previous highlights
+          document.querySelectorAll('.__rpa_highlight_badge__').forEach((b) => b.remove());
+          document.querySelectorAll('[data-rpa-highlight]').forEach((el) => {
+            el.style.outline = el.getAttribute('data-rpa-orig-outline') || '';
+            el.style.boxShadow = el.getAttribute('data-rpa-orig-box-shadow') || '';
+            el.removeAttribute('data-rpa-highlight');
+          });
+          const old = document.getElementById('__rpa_match_test_overlay__');
+          if (old) old.remove();
+
+          const items = ${JSON.stringify(matches)};
+          if (!items || items.length === 0) return;
+
+          const overlay = document.createElement('div');
+          overlay.id = '__rpa_match_test_overlay__';
+          overlay.style.cssText = 'position:fixed;top:0;left:0;width:100vw;height:100vh;pointer-events:none;z-index:2147483647;';
+
+          items.forEach((m, idx) => {
+            const rect = m.rect;
+            if (!rect) return;
+            const box = document.createElement('div');
+            box.style.cssText = 'position:absolute;left:' + rect.x + 'px;top:' + rect.y + 'px;width:' + rect.width + 'px;height:' + rect.height + 'px;border:2px solid #8b5cf6;box-shadow:0 0 10px rgba(139,92,246,0.5),inset 0 0 8px rgba(139,92,246,0.15);border-radius:3px;box-sizing:border-box;pointer-events:none;';
+            const badge = document.createElement('div');
+            badge.style.cssText = 'position:absolute;top:-20px;left:0;background:#7c3aed;color:#ffffff;font-size:10px;font-weight:bold;padding:1px 6px;border-radius:2px;font-family:system-ui,sans-serif;box-shadow:0 1px 3px rgba(0,0,0,0.5);white-space:nowrap;';
+            badge.textContent = '#' + (idx + 1) + ' Screenshot Test Result: END Visual Anchor (' + m.confidence + '%)';
+            box.appendChild(badge);
+            overlay.appendChild(box);
+          });
+
+          document.documentElement.appendChild(overlay);
         })()`,
           )
           .catch(() => {});

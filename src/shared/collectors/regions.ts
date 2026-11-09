@@ -2204,6 +2204,300 @@ export function resolveOuterPostContainer(
   };
 }
 
+/** Helper to locate the enclosing post article or card element for an element */
+export function findEnclosingPostCard(
+  el: CollectorDomElement,
+  elementMap: Map<string, CollectorDomElement>,
+): CollectorDomElement | undefined {
+  let cur = el.parentId ? elementMap.get(el.parentId) : undefined;
+  let postCard: CollectorDomElement | undefined;
+  while (cur) {
+    if (cur.role === "article" || cur.isArticleOrCard) {
+      if (!postCard) postCard = cur;
+      break;
+    } else if (!postCard && cur.rect.width >= 350 && cur.rect.height >= 180) {
+      postCard = cur;
+    }
+    cur = cur.parentId ? elementMap.get(cur.parentId) : undefined;
+  }
+  return postCard;
+}
+
+export type PrimaryCandidateResult = {
+  el: CollectorDomElement;
+  score: number;
+  evidence: string;
+  href?: string;
+  textSnippet?: string;
+  reasons: string[];
+};
+
+/**
+ * C2.11.11: Finds DOM candidates for a user-configured Primary Variable (e.g. Post URL, Created At, Author).
+ *
+ * Requirements:
+ * - Matcher identifies DOM element matching the variable's semantic type/role without literal sample text matching.
+ * - Rejects comment permalinks (`comment_id=`, nested `role="article"`, comment `aria-label`).
+ * - Rejects author profile links when matching Post URL.
+ * - Rejects fixed/sticky chrome and top viewport zone (y < 45).
+ * - Sorts candidates from top to bottom and deduplicates nested elements.
+ */
+export function findPrimaryVariableCandidates(
+  primaryVarKey: string,
+  elements: CollectorDomElement[],
+  elementMap: Map<string, CollectorDomElement>,
+  draft?: CollectorDraft,
+  viewport?: { width: number; height: number },
+): {
+  candidates: PrimaryCandidateResult[];
+  rejections: Array<{ id: string; tagName: string; textSnippet?: string; reason: string }>;
+} {
+  const candidates: PrimaryCandidateResult[] = [];
+  const rejections: Array<{ id: string; tagName: string; textSnippet?: string; reason: string }> = [];
+
+  const targetVar = draft?.variables?.find((v) => v.key === primaryVarKey || v.id === primaryVarKey);
+  const varKey = (primaryVarKey || "").toLowerCase();
+  const varLabel = (targetVar?.label || "").toLowerCase();
+
+  const isPostUrl =
+    /url|link|permalink|href/i.test(varKey) ||
+    /url|link|permalink/i.test(varLabel);
+
+  const isTimestamp =
+    /time|date|created|timestamp/i.test(varKey) ||
+    /thời gian|ngày|giờ|time|date/i.test(varLabel);
+
+  const isAuthor =
+    /author|user|creator|poster/i.test(varKey) ||
+    /tác giả|người đăng|author|user/i.test(varLabel);
+
+  for (const el of elements) {
+    // 1. Basic geometry & visibility filtering
+    if (el.rect.width === 0 || el.rect.height === 0) {
+      continue;
+    }
+    if (el.isFixed) {
+      rejections.push({ id: el.id, tagName: el.tagName, textSnippet: el.textSnippet?.slice(0, 40), reason: "Fixed/sticky element" });
+      continue;
+    }
+    if (el.rect.y < 45) {
+      rejections.push({ id: el.id, tagName: el.tagName, textSnippet: el.textSnippet?.slice(0, 40), reason: "Top chrome zone (y < 45)" });
+      continue;
+    }
+
+    // 2. Reject comment containers / elements
+    let isComment = false;
+    let commentReason = "";
+
+    const href = el.attributes?.href || "";
+    if (isPostUrl && /(?:comment_id=|reply_comment_id=|#comment|\/comments\/)/i.test(href)) {
+      isComment = true;
+      commentReason = "Comment permalink (comment_id in href)";
+    }
+
+    if (!isComment) {
+      let cur: CollectorDomElement | undefined = el;
+      let depth = 0;
+      let articleCount = 0;
+      while (cur && depth < 8) {
+        if (cur.role === "article" || cur.isArticleOrCard) {
+          articleCount++;
+          if (articleCount >= 2) {
+            isComment = true;
+            commentReason = "Inside nested article container (comment)";
+            break;
+          }
+        }
+        if (
+          cur.attributes?.["data-comment-id"] ||
+          cur.attributes?.["data-rpa-comment"] ||
+          (cur.attributes?.["aria-label"] && /bình luận|comment|trả lời|reply/i.test(cur.attributes["aria-label"]))
+        ) {
+          isComment = true;
+          commentReason = "Inside comment container / comment element";
+          break;
+        }
+        cur = cur.parentId ? elementMap.get(cur.parentId) : undefined;
+        depth++;
+      }
+    }
+
+    if (isComment) {
+      rejections.push({ id: el.id, tagName: el.tagName, textSnippet: el.textSnippet?.slice(0, 40), reason: commentReason });
+      continue;
+    }
+
+    // Check if element is indented below a post actions toolbar (comment section)
+    const postCard = findEnclosingPostCard(el, elementMap);
+    if (postCard) {
+      for (const other of elementMap.values()) {
+        if (
+          other.rect.y > postCard.rect.y &&
+          other.rect.y + other.rect.height <= postCard.rect.y + postCard.rect.height &&
+          other.rect.x >= postCard.rect.x - 20 &&
+          other.rect.x + other.rect.width <= postCard.rect.x + postCard.rect.width + 20
+        ) {
+          const isToolbar =
+            other.role === "toolbar" ||
+            (other.textSnippet &&
+              /\b(thích|like)\b/i.test(other.textSnippet) &&
+              /\b(bình luận|comment)\b/i.test(other.textSnippet) &&
+              other.rect.width >= 200);
+
+          if (isToolbar && other.rect.height < 80) {
+            const isNarrowOrIndented = el.rect.width < 320 || el.rect.x > postCard.rect.x + 35;
+            if (el.rect.y >= other.rect.y + 10 && isNarrowOrIndented) {
+              rejections.push({
+                id: el.id,
+                tagName: el.tagName,
+                textSnippet: el.textSnippet?.slice(0, 40),
+                reason: `Below post actions toolbar (y:${el.rect.y} >= toolbar.y:${other.rect.y}) in comment area`,
+              });
+              isComment = true;
+              break;
+            }
+          }
+        }
+      }
+    }
+    if (isComment) continue;
+
+    // 3. Variable-specific matching logic
+    let score = 0;
+    const reasons: string[] = [];
+
+    if (isPostUrl) {
+      const isLink = el.tagName === "A" || el.role === "link" || el.attributes?.role === "link" || Boolean(el.attributes?.href);
+      if (!isLink) {
+        continue;
+      }
+
+      // Reject global navigation links
+      if (/(?:\/messages\/|\/notifications\/|\/friends\/|\/marketplace\/|\/events\/|\/groups\/[^/]+$)/i.test(href)) {
+        rejections.push({ id: el.id, tagName: el.tagName, textSnippet: el.textSnippet?.slice(0, 40), reason: "Global navigation link" });
+        continue;
+      }
+
+      // Check author profile link vs post permalink
+      const isProfileLinkOnly =
+        /(?:profile\.php\?id=|\/user\/)/i.test(href) &&
+        !/(?:posts|permalink|story_fbid)/i.test(href);
+
+      if (isProfileLinkOnly && (!el.textSnippet || !isTimestampText(el.textSnippet))) {
+        rejections.push({ id: el.id, tagName: el.tagName, textSnippet: el.textSnippet?.slice(0, 40), reason: "Author profile link (not post permalink)" });
+        continue;
+      }
+
+      // Post permalink URL patterns
+      const isPostUrlPattern =
+        /(?:\/posts\/\d+|\/permalink\/\d+|\/permalink\.php\?story_fbid=|\/story\.php\?story_fbid=|\/watch\/\?v=|\/reel\/)/i.test(href) ||
+        /(?:\/groups\/[^/]+\/posts\/\d+|\/groups\/[^/]+\/permalink\/\d+)/i.test(href);
+
+      if (isPostUrlPattern) {
+        score += 55;
+        reasons.push("post permalink URL pattern");
+      }
+
+      // Link text or aria-label matching timestamp (Facebook standard pattern for post URL)
+      const fullText = [el.textSnippet, el.attributes?.["aria-label"]].filter(Boolean).join(" ");
+      if (fullText && isTimestampText(fullText)) {
+        score += 45;
+        reasons.push("timestamp text on permalink");
+      } else if (fullText && /\b(\d+\s*(giờ|phút|ngày|tháng|h|m|d)|vừa xong|just now|hôm qua)\b/i.test(fullText)) {
+        score += 35;
+        reasons.push("relative time text on permalink");
+      }
+
+      // Tag & role bonus
+      if (el.tagName === "A") {
+        score += 10;
+        reasons.push("anchor tag");
+      }
+    } else if (isTimestamp) {
+      const fullText = [el.textSnippet, el.attributes?.["aria-label"]].filter(Boolean).join(" ");
+      if (fullText && isTimestampText(fullText)) {
+        score += 65;
+        reasons.push("timestamp text pattern");
+      } else if (fullText && /\b(\d+\s*(giờ|phút|ngày|tháng|h|m|d)|vừa xong|just now|hôm qua)\b/i.test(fullText)) {
+        score += 45;
+        reasons.push("relative time pattern");
+      }
+      if (el.tagName === "TIME" || el.tagName === "ABBR") {
+        score += 20;
+        reasons.push("semantic time tag");
+      }
+      if (el.tagName === "A") {
+        score += 15;
+        reasons.push("linked timestamp");
+      }
+    } else if (isAuthor) {
+      const text = el.textSnippet?.trim() || "";
+      if (text && isAuthorCandidate(text)) {
+        score += 50;
+        reasons.push("author name candidate");
+      }
+      if (el.tagName === "A" && (href.includes("user") || href.includes("profile"))) {
+        score += 30;
+        reasons.push("author profile link");
+      }
+      if (el.tagName === "STRONG" || el.tagName === "H2" || el.tagName === "H3" || el.tagName === "H4") {
+        score += 20;
+        reasons.push("heading / strong tag");
+      }
+    } else {
+      // Generic variable matching against confirmed reference mappings
+      const confirmedMappings = (targetVar?.mappings ?? []).filter((m) => m.confirmed);
+      if (confirmedMappings.length > 0) {
+        for (const m of confirmedMappings) {
+          if (m.attribute && el.attributes?.[m.attribute]) {
+            score += 40;
+            reasons.push(`attribute @${m.attribute}`);
+          }
+          if (m.text && el.textSnippet && el.textSnippet.includes(m.text)) {
+            score += 30;
+            reasons.push("text snippet match");
+          }
+        }
+      }
+    }
+
+    if (score >= 35) {
+      candidates.push({
+        el,
+        score: Math.min(100, score),
+        evidence: reasons.join(", "),
+        href: el.attributes?.href,
+        textSnippet: el.textSnippet?.slice(0, 60),
+        reasons,
+      });
+    }
+  }
+
+  // Deduplicate candidates that are nested within each other (e.g. <span> inside <a> for same link)
+  const filteredCandidates: PrimaryCandidateResult[] = [];
+  for (const c of candidates) {
+    const isEnclosedByOther = candidates.some(
+      (other) =>
+        other.el.id !== c.el.id &&
+        (other.el.id === c.el.parentId ||
+          (other.score >= c.score &&
+            Math.abs(other.el.rect.y - c.el.rect.y) <= 15 &&
+            Math.abs(other.el.rect.x - c.el.rect.x) <= 25)),
+    );
+    if (!isEnclosedByOther) {
+      filteredCandidates.push(c);
+    }
+  }
+
+  // Sort candidates by vertical position (top to bottom)
+  filteredCandidates.sort((a, b) => a.el.rect.y - b.el.rect.y);
+
+  return {
+    candidates: filteredCandidates,
+    rejections,
+  };
+}
+
 export function findAnchorCandidates(
   region: CollectorRegion,
   elements: CollectorDomElement[],
@@ -2463,6 +2757,298 @@ export function executeLiveBrowserMatchTest(
 
     for (const tag of distinctTags) {
       const ruleGroup = learnedRules?.get(tag);
+      const configuredPrimaryVar =
+        draft?.primaryVariableKeysByGroup?.[tag] ||
+        ruleGroup?.primaryVariableKey ||
+        beginRegions.find((r) => (r.groupTag || "default").trim() === tag)?.primaryVariableKey;
+
+      if (configuredPrimaryVar) {
+        // C2.11.11: Manual Primary Variable Matching Branch
+        const elementMap = new Map<string, CollectorDomElement>();
+        for (const el of snapshot.elements) {
+          elementMap.set(el.id, el);
+        }
+
+        const { candidates: primaryCandidates, rejections: primaryRejections } = findPrimaryVariableCandidates(
+          configuredPrimaryVar,
+          snapshot.elements,
+          elementMap,
+          draft,
+          snapshot.viewport,
+        );
+
+        if (primaryCandidates.length === 0) {
+          const failureReason = `PRIMARY_NOT_FOUND: No DOM element matching Primary Variable "${configuredPrimaryVar}" found in live viewport.`;
+          allMatchedItems.push({
+            index: allMatchedItems.length + 1,
+            groupTag: tag,
+            primaryVariableKey: configuredPrimaryVar,
+            beginMatched: false,
+            endMatched: false,
+            paired: false,
+            domResolved: false,
+            confidence: 0,
+            failureReason,
+          });
+
+          groupResults.push({
+            groupTag: tag,
+            status: "FAILED",
+            domAssociationStatus: "NOT_RESOLVED",
+            visualConfidence: 0,
+            limitations: visualLimitations,
+            failureReason,
+            candidateDiagnostics: {
+              mode: "BEGIN_ONLY",
+              configuredPrimaryVariable: configuredPrimaryVar,
+              primaryCandidatesFound: 0,
+              primaryCandidateEvidence: [],
+              primaryCandidateRejectionReasons: primaryRejections.slice(0, 15),
+              selectedPrimaryDOM: null,
+              resolvedOuterContainer: null,
+              primaryMatchStatus: "PRIMARY_NOT_FOUND",
+              topBeginCandidates: [],
+              topEndCandidates: [],
+              rejectedPairings: [],
+            },
+          });
+          continue;
+        }
+
+        // Resolve outer containers for each Primary candidate
+        const allPrimaryEls = primaryCandidates.map((c) => c.el);
+        const outerContainerDiags: Array<{
+          beginElement: {
+            id: string;
+            tagName: string;
+            rect: Rect;
+            textSnippet?: string;
+          };
+          ancestorCandidates: OuterContainerResolution["ancestorCandidates"];
+          selectedOuterContainer: {
+            id: string;
+            tagName: string;
+            role?: string;
+            rect: Rect;
+            selectionReason: string;
+            confidence: number;
+          };
+        }> = [];
+        const deduplicationDecisions: string[] = [];
+        const resolvedPostContainers: Array<{
+          cand: (typeof primaryCandidates)[0];
+          containerResolution: OuterContainerResolution;
+        }> = [];
+
+        const seenContainerIds = new Set<string>();
+
+        for (const cand of primaryCandidates) {
+          const resolution = resolveOuterPostContainer(
+            cand.el,
+            elementMap,
+            allPrimaryEls,
+            snapshot.viewport,
+          );
+
+          if (!resolution) {
+            continue;
+          }
+
+          outerContainerDiags.push({
+            beginElement: {
+              id: cand.el.id,
+              tagName: cand.el.tagName,
+              rect: cand.el.rect,
+              textSnippet: cand.textSnippet,
+            },
+            ancestorCandidates: resolution.ancestorCandidates,
+            selectedOuterContainer: {
+              id: resolution.container.id,
+              tagName: resolution.container.tagName,
+              role: resolution.container.role,
+              rect: resolution.rect,
+              selectionReason: resolution.selectionReason,
+              confidence: resolution.confidence,
+            },
+          });
+
+          if (seenContainerIds.has(resolution.container.id)) {
+            deduplicationDecisions.push(
+              `Deduplicated candidate ${cand.el.id} (<${cand.el.tagName}> at y=${cand.el.rect.y}) into existing outer post container ${resolution.container.id} (<${resolution.container.tagName}> at y=${resolution.rect.y}, height=${resolution.rect.height}).`,
+            );
+            continue;
+          }
+
+          seenContainerIds.add(resolution.container.id);
+          resolvedPostContainers.push({
+            cand,
+            containerResolution: resolution,
+          });
+        }
+
+        if (resolvedPostContainers.length === 0) {
+          const failureReason = `CONTAINER_NOT_RESOLVED: Identified ${primaryCandidates.length} Primary Variable candidate(s), but could not resolve an enclosing outer post container.`;
+          allMatchedItems.push({
+            index: allMatchedItems.length + 1,
+            groupTag: tag,
+            primaryVariableKey: configuredPrimaryVar,
+            primaryElementId: primaryCandidates[0]?.el.id,
+            beginMatched: true,
+            endMatched: false,
+            paired: false,
+            domResolved: false,
+            confidence: 0,
+            failureReason,
+          });
+
+          groupResults.push({
+            groupTag: tag,
+            status: "FAILED",
+            domAssociationStatus: "NOT_RESOLVED",
+            visualConfidence: primaryCandidates[0]?.score ?? 0,
+            limitations: visualLimitations,
+            failureReason,
+            candidateDiagnostics: {
+              mode: "BEGIN_ONLY",
+              configuredPrimaryVariable: configuredPrimaryVar,
+              primaryCandidatesFound: primaryCandidates.length,
+              primaryCandidateEvidence: primaryCandidates.map((c) => ({
+                id: c.el.id,
+                tagName: c.el.tagName,
+                href: c.href,
+                textSnippet: c.textSnippet,
+                score: c.score,
+                reasons: c.evidence,
+              })),
+              primaryCandidateRejectionReasons: primaryRejections.slice(0, 15),
+              selectedPrimaryDOM: {
+                id: primaryCandidates[0]!.el.id,
+                tagName: primaryCandidates[0]!.el.tagName,
+                href: primaryCandidates[0]!.href,
+                textSnippet: primaryCandidates[0]!.textSnippet,
+              },
+              resolvedOuterContainer: null,
+              primaryMatchStatus: "CONTAINER_NOT_RESOLVED",
+              topBeginCandidates: [],
+              topEndCandidates: [],
+              rejectedPairings: [],
+            },
+          });
+          continue;
+        }
+
+        for (const { cand, containerResolution } of resolvedPostContainers) {
+          const postConfidence = Math.min(
+            100,
+            Math.round(cand.score * 0.5 + containerResolution.confidence * 0.5),
+          );
+
+          allMatchedItems.push({
+            index: allMatchedItems.length + 1,
+            groupTag: tag,
+            beginRect: cand.el.rect,
+            beginElementId: cand.el.id,
+            primaryElementId: cand.el.id,
+            primaryVariableKey: configuredPrimaryVar,
+            containerRect: containerResolution.rect,
+            containerId: containerResolution.container.id,
+            containerTagName: containerResolution.container.tagName,
+            beginMatched: true,
+            endMatched: false,
+            paired: false,
+            domResolved: true,
+            confidence: postConfidence,
+          });
+        }
+
+        const topResolved = resolvedPostContainers[0]!;
+        const topPrimary = topResolved.cand;
+        const topContainer = topResolved.containerResolution;
+
+        groupResults.push({
+          groupTag: tag,
+          status: "MATCHED",
+          domAssociationStatus: "CONFIRMED",
+          visualConfidence: topPrimary.score,
+          limitations: visualLimitations,
+          beginMatch: {
+            regionId: beginRegions[0]?.id || "primary_variable_match",
+            role: "BEGIN",
+            groupTag: tag,
+            matched: true,
+            matchedElementId: topPrimary.el.id,
+            matchedTagName: topPrimary.el.tagName,
+            matchedRect: topPrimary.el.rect,
+            confidence: topPrimary.score,
+            method: "text_dom",
+            evidence: `Primary Variable [${configuredPrimaryVar}]: ${topPrimary.evidence}`,
+          },
+          domContainer: {
+            containerId: topContainer.container.id,
+            tagName: topContainer.container.tagName,
+            role: topContainer.container.role,
+            depth: topContainer.container.depth,
+            isArticleOrCard: Boolean(topContainer.container.isArticleOrCard),
+          },
+          candidateDiagnostics: {
+            mode: "BEGIN_ONLY",
+            configuredPrimaryVariable: configuredPrimaryVar,
+            primaryCandidatesFound: primaryCandidates.length,
+            primaryCandidateEvidence: primaryCandidates.map((c) => ({
+              id: c.el.id,
+              tagName: c.el.tagName,
+              href: c.href,
+              textSnippet: c.textSnippet,
+              score: c.score,
+              reasons: c.evidence,
+            })),
+            primaryCandidateRejectionReasons: primaryRejections.slice(0, 15),
+            selectedPrimaryDOM: {
+              id: topPrimary.el.id,
+              tagName: topPrimary.el.tagName,
+              href: topPrimary.href,
+              textSnippet: topPrimary.textSnippet,
+            },
+            resolvedOuterContainer: {
+              id: topContainer.container.id,
+              tagName: topContainer.container.tagName,
+              rect: topContainer.rect,
+            },
+            primaryMatchStatus: "MATCHED",
+            outerContainerDiagnostics: outerContainerDiags,
+            deduplicationDecisions,
+            finalUniquePostCount: resolvedPostContainers.length,
+            topBeginCandidates: primaryCandidates.slice(0, 5).map((c) => ({
+              id: c.el.id,
+              tagName: c.el.tagName,
+              role: c.el.role,
+              textSnippet: c.textSnippet,
+              rect: c.el.rect,
+              isViewportRelative: true,
+              isFixed: false,
+              score: c.score,
+              method: "text_dom",
+              reasons: c.evidence,
+            })),
+            topEndCandidates: [],
+            rejectedPairings: [],
+            selectedPair: {
+              beginId: topPrimary.el.id,
+              beginTag: topPrimary.el.tagName,
+              beginY: topPrimary.el.rect.y,
+              endId: "",
+              endTag: "",
+              endY: 0,
+              containerId: topContainer.container.id,
+              containerTag: topContainer.container.tagName,
+              containerRect: topContainer.rect,
+              score: topPrimary.score,
+            },
+          },
+        });
+        continue;
+      }
+
       let beginRule = ruleGroup?.beginRule;
 
       if (!beginRule) {
@@ -2822,9 +3408,26 @@ export function executeLiveBrowserMatchTest(
     if (!begin || !end) continue;
 
     const ruleGroup = learnedRules?.get(tag);
+    const configuredPrimaryVar =
+      draft?.primaryVariableKeysByGroup?.[tag] ||
+      ruleGroup?.primaryVariableKey ||
+      begin.primaryVariableKey;
 
     // 1. Find candidates for BEGIN
-    const beginCandidates = findAnchorCandidates(begin, snapshot.elements, ruleGroup?.beginRule);
+    const beginCandidates = configuredPrimaryVar
+      ? findPrimaryVariableCandidates(
+          configuredPrimaryVar,
+          snapshot.elements,
+          new Map(snapshot.elements.map((e) => [e.id, e])),
+          draft,
+          snapshot.viewport,
+        ).candidates.map((c) => ({
+          el: c.el,
+          score: c.score,
+          method: "text_dom" as const,
+          reason: c.evidence,
+        }))
+      : findAnchorCandidates(begin, snapshot.elements, ruleGroup?.beginRule);
     // 2. Find candidates for END
     const endCandidates = findAnchorCandidates(end, snapshot.elements, ruleGroup?.endRule);
 
@@ -3836,6 +4439,10 @@ export function buildLearnedAnchorRules(
       const evidenceStrength = Math.min(100, Math.round(50 + trainingSampleCount * 15));
       const uncertainty = Math.max(0, 100 - evidenceStrength);
 
+      const groupPrimaryVar =
+        draft.primaryVariableKeysByGroup?.[tag] ||
+        tagRegions.find((r) => r.primaryVariableKey)?.primaryVariableKey;
+
       return {
         groupTag: tag,
         type,
@@ -3855,6 +4462,7 @@ export function buildLearnedAnchorRules(
         evidenceStrength,
         uncertainty,
         associatedVariableKeys: associatedVars,
+        primaryVariableKey: groupPrimaryVar,
       };
     }
 
@@ -3867,9 +4475,13 @@ export function buildLearnedAnchorRules(
     }
 
     const sampleIds = Array.from(new Set(tagRegions.map((r) => r.captureItemId)));
+    const primaryVariableKey =
+      draft.primaryVariableKeysByGroup?.[tag] ||
+      tagRegions.find((r) => r.primaryVariableKey)?.primaryVariableKey;
 
     groups.set(tag, {
       groupTag: tag,
+      primaryVariableKey,
       beginRule,
       endRule,
       freeRules,

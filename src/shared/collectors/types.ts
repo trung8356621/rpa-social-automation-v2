@@ -265,6 +265,7 @@ export type CollectorRegion = {
   geometry: NormalizedRegionGeometry;
   originalRoi?: Rect;
   candidateVariableKeys: string[];
+  primaryVariableKey?: string;
   confirmed: boolean;
   simulatedProposal?: boolean;
   confidence?: number;
@@ -326,6 +327,7 @@ export type AnchorReferenceExample = {
   ocrEvidenceText?: string;
   ocrText?: string;
   candidateVariableKeys: string[];
+  primaryVariableKey?: string;
   referenceImageAsset?: string;
   referenceImage?: string;
 };
@@ -363,10 +365,12 @@ export type LearnedAnchorRule = {
   evidenceStrength?: number;
   uncertainty?: number;
   associatedVariableKeys: string[];
+  primaryVariableKey?: string;
 };
 
 export type LearnedAnchorGroup = {
   groupTag: string;
+  primaryVariableKey?: string;
   beginRule?: LearnedAnchorRule;
   endRule?: LearnedAnchorRule;
   freeRules: LearnedAnchorRule[];
@@ -509,6 +513,35 @@ export type PostGroupMatch = {
     }>;
     deduplicationDecisions?: string[];
     finalUniquePostCount?: number;
+    // C2.11.11: Primary Variable Matching diagnostics
+    configuredPrimaryVariable?: string;
+    primaryCandidatesFound?: number;
+    primaryCandidateEvidence?: Array<{
+      id: string;
+      tagName: string;
+      href?: string;
+      textSnippet?: string;
+      score: number;
+      reasons: string;
+    }>;
+    primaryCandidateRejectionReasons?: Array<{
+      id: string;
+      tagName: string;
+      textSnippet?: string;
+      reason: string;
+    }>;
+    selectedPrimaryDOM?: {
+      id: string;
+      tagName: string;
+      href?: string;
+      textSnippet?: string;
+    } | null;
+    resolvedOuterContainer?: {
+      id: string;
+      tagName: string;
+      rect: Rect;
+    } | null;
+    primaryMatchStatus?: "PRIMARY_NOT_FOUND" | "PRIMARY_AMBIGUOUS" | "CONTAINER_NOT_RESOLVED" | "MATCHED";
     topBeginCandidates: CandidateDiagnosticInfo[];
     topEndCandidates: CandidateDiagnosticInfo[];
     rejectedPairings: Array<{
@@ -544,6 +577,8 @@ export type MatchedPostItem = {
   containerId?: string;
   beginElementId?: string;
   endElementId?: string;
+  primaryElementId?: string;
+  primaryVariableKey?: string;
   containerTagName?: string;
   beginMatched: boolean;
   endMatched: boolean;
@@ -563,6 +598,51 @@ export type MatchTestResult = {
   summary: string;
   limitations?: string[];
   error?: string;
+  // C2.11.12: Isolated END-only visual matching experiment
+  endVisualExperiment?: EndVisualMatchResult;
+};
+
+// C2.11.12: END-Only Visual Matching Experiment types
+export type EndVisualFeatureScores = {
+  likeFound: boolean;
+  likeConfidence: number;
+  commentFound: boolean;
+  commentConfidence: number;
+  shareFound: boolean;
+  shareConfidence: number;
+  tripartiteLayout: boolean;
+  hasDividerLine?: boolean;
+};
+
+export type EndVisualCandidate = {
+  id: string;
+  rect: Rect;
+  confidence: number;
+  score: number;
+  status: "MATCHED" | "REJECTED" | "PARTIAL";
+  rejectionReason?: string;
+  features: EndVisualFeatureScores;
+  referenceSampleIds: string[];
+  cropDimensions: { width: number; height: number };
+  scale: number;
+};
+
+export type EndVisualMatchResult = {
+  testedAt: string;
+  technique: string;
+  screenshotDimensions: { width: number; height: number };
+  scale: number;
+  referenceEndCount: number;
+  referenceSampleIds: string[];
+  status: "MATCHED" | "NO_MATCH" | "PARTIAL";
+  matchedFooters: EndVisualCandidate[];
+  rejectedCandidates: EndVisualCandidate[];
+  diagnostics: {
+    referenceCropDimensions: Array<{ width: number; height: number; sampleId: string }>;
+    totalEvaluated: number;
+    durationMs: number;
+    summary: string;
+  };
 };
 
 export type LayoutContextKind = "FEED_ITEM" | "POST_DETAIL";
@@ -773,6 +853,8 @@ export type CollectorDraft = {
   auditActions: AuditRecordAction[];
   /** Visual & DOM region anchors across the collector (C2.8) */
   regions?: CollectorRegion[];
+  /** C2.11.11: Configured Primary Variable key per anchor group tag */
+  primaryVariableKeysByGroup?: Record<string, string>;
   /** Layout context: feed stream item vs single post detail page (C2.8) */
   layoutContext?: LayoutContextKind;
   /** Live Browser Match Test results (C2.10) */

@@ -15,6 +15,7 @@ import {
   deleteRegionFromDraft,
   confirmRegionInDraft,
   regionsForCapture,
+  setGroupPrimaryVariable,
 } from "../../shared/collectors/ops";
 import {
   assignOcrSegmentToVariable,
@@ -1855,6 +1856,33 @@ export function StepReviewMapping({ draft, locked, onChange, invoke }: Props) {
                   <div className="collector-var-section">
                     <div className="collector-var-section-header">
                       <span style={{ color: "#94a3b8", fontWeight: 600 }}>Candidate Variables:</span>
+                      <div style={{ display: "flex", alignItems: "center", gap: "6px" }}>
+                        <span style={{ color: "#f59e0b", fontSize: "11px", fontWeight: "bold" }}>★ Primary:</span>
+                        <select
+                          value={draft.primaryVariableKeysByGroup?.[(newRegionGroupTag || "default").trim()] || ""}
+                          onChange={(e) => {
+                            const val = e.target.value.trim() || undefined;
+                            onChange(setGroupPrimaryVariable(draft, newRegionGroupTag || "default", val));
+                          }}
+                          style={{
+                            background: "#0f172a",
+                            color: draft.primaryVariableKeysByGroup?.[(newRegionGroupTag || "default").trim()] ? "#f59e0b" : "#94a3b8",
+                            border: "1px solid #334155",
+                            borderRadius: "3px",
+                            padding: "2px 6px",
+                            fontSize: "11px",
+                            cursor: "pointer",
+                          }}
+                          title="Select ONE Primary Variable for this Anchor Group to guide live matching"
+                        >
+                          <option value="">(None - infer signals)</option>
+                          {draft.variables.map((v) => (
+                            <option key={v.id} value={v.key}>
+                              {v.label} ({v.key})
+                            </option>
+                          ))}
+                        </select>
+                      </div>
                       {learnedVarsNotice && (
                         <span style={{ color: "#38bdf8", fontWeight: "bold" }}>
                           ⚡ {learnedVarsNotice}
@@ -1865,6 +1893,7 @@ export function StepReviewMapping({ draft, locked, onChange, invoke }: Props) {
                       <div className="collector-var-checkbox-grid">
                         {draft.variables.map((v) => {
                           const checked = newRegionVars.includes(v.key);
+                          const isPrimary = draft.primaryVariableKeysByGroup?.[(newRegionGroupTag || "default").trim()] === v.key;
                           return (
                             <label
                               key={v.id}
@@ -1882,6 +1911,19 @@ export function StepReviewMapping({ draft, locked, onChange, invoke }: Props) {
                                 }}
                               />
                               <span>{v.label}</span>
+                              {isPrimary && (
+                                <span
+                                  style={{
+                                    marginLeft: "4px",
+                                    color: "#f59e0b",
+                                    fontWeight: "bold",
+                                    fontSize: "11px",
+                                  }}
+                                  title="Configured Primary Variable for this group"
+                                >
+                                  ★ Primary
+                                </span>
+                              )}
                             </label>
                           );
                         })}
@@ -1980,11 +2022,49 @@ export function StepReviewMapping({ draft, locked, onChange, invoke }: Props) {
                   <div className="collector-var-section">
                     <div className="collector-var-section-header">
                       <span style={{ color: "#94a3b8", fontWeight: 600 }}>Candidate Variables:</span>
+                      <div style={{ display: "flex", alignItems: "center", gap: "6px" }}>
+                        <span style={{ color: "#f59e0b", fontSize: "11px", fontWeight: "bold" }}>★ Primary:</span>
+                        <select
+                          value={
+                            draft.primaryVariableKeysByGroup?.[(selectedRegion.groupTag || "default").trim()] ||
+                            selectedRegion.primaryVariableKey ||
+                            ""
+                          }
+                          onChange={(e) => {
+                            const val = e.target.value.trim() || undefined;
+                            onChange(setGroupPrimaryVariable(draft, selectedRegion.groupTag || "default", val));
+                          }}
+                          style={{
+                            background: "#0f172a",
+                            color:
+                              draft.primaryVariableKeysByGroup?.[(selectedRegion.groupTag || "default").trim()] ||
+                              selectedRegion.primaryVariableKey
+                                ? "#f59e0b"
+                                : "#94a3b8",
+                            border: "1px solid #334155",
+                            borderRadius: "3px",
+                            padding: "2px 6px",
+                            fontSize: "11px",
+                            cursor: "pointer",
+                          }}
+                          title="Select ONE Primary Variable for this Anchor Group to guide live matching"
+                        >
+                          <option value="">(None - infer signals)</option>
+                          {draft.variables.map((v) => (
+                            <option key={v.id} value={v.key}>
+                              {v.label} ({v.key})
+                            </option>
+                          ))}
+                        </select>
+                      </div>
                     </div>
                     <div className="collector-var-scroll-container">
                       <div className="collector-var-checkbox-grid">
                         {draft.variables.map((v) => {
                           const checked = selectedRegion.candidateVariableKeys.includes(v.key);
+                          const isPrimary =
+                            (draft.primaryVariableKeysByGroup?.[(selectedRegion.groupTag || "default").trim()] ||
+                              selectedRegion.primaryVariableKey) === v.key;
                           return (
                             <label
                               key={v.id}
@@ -2004,6 +2084,19 @@ export function StepReviewMapping({ draft, locked, onChange, invoke }: Props) {
                                 }}
                               />
                               <span>{v.label}</span>
+                              {isPrimary && (
+                                <span
+                                  style={{
+                                    marginLeft: "4px",
+                                    color: "#f59e0b",
+                                    fontWeight: "bold",
+                                    fontSize: "11px",
+                                  }}
+                                  title="Configured Primary Variable for this group"
+                                >
+                                  ★ Primary
+                                </span>
+                              )}
                             </label>
                           );
                         })}

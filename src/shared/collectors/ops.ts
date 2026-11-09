@@ -1039,10 +1039,16 @@ export function regionsForCapture(draft: CollectorDraft, captureId: string): Col
 
 export function addRegionToDraft(draft: CollectorDraft, region: CollectorRegion): CollectorDraft {
   const current = ensureDraftRegions(draft);
-  const regions = [...current, region];
+  const groupTag = (region.groupTag || "default").trim();
+  const configuredPrimary = draft.primaryVariableKeysByGroup?.[groupTag];
+  const finalRegion = configuredPrimary && !region.primaryVariableKey
+    ? { ...region, primaryVariableKey: configuredPrimary }
+    : region;
+
+  const regions = [...current, finalRegion];
   const captures = (draft.captures ?? []).map((c) =>
-    c.id === region.captureItemId
-      ? { ...c, regions: [...(c.regions ?? []).filter((r) => r.id !== region.id), region] }
+    c.id === finalRegion.captureItemId
+      ? { ...c, regions: [...(c.regions ?? []).filter((r) => r.id !== finalRegion.id), finalRegion] }
       : c,
   );
   return markValidationOutdated({
@@ -1126,6 +1132,59 @@ export function confirmRegionInDraft(draft: CollectorDraft, regionId: string): C
   return updateRegionInDraft(draft, regionId, {
     confirmed: true,
     simulatedProposal: false,
+  });
+}
+
+/**
+ * C2.11.11: Manually designates exactly ONE Primary Variable within an Anchor Group.
+ * Applies across all samples sharing the anchor group tag without modifying existing sample data.
+ */
+export function setGroupPrimaryVariable(
+  draft: CollectorDraft,
+  groupTag: string,
+  primaryKey: string | undefined,
+): CollectorDraft {
+  const normalizedTag = (groupTag || "default").trim();
+  const nextKeysByGroup = { ...(draft.primaryVariableKeysByGroup || {}) };
+
+  if (primaryKey && primaryKey.trim()) {
+    nextKeysByGroup[normalizedTag] = primaryKey.trim();
+  } else {
+    delete nextKeysByGroup[normalizedTag];
+  }
+
+  const currentRegions = ensureDraftRegions(draft);
+  const updatedRegions = currentRegions.map((r) => {
+    if ((r.groupTag || "default").trim() === normalizedTag) {
+      return {
+        ...r,
+        primaryVariableKey: primaryKey && primaryKey.trim() ? primaryKey.trim() : undefined,
+        updatedAt: new Date().toISOString(),
+      };
+    }
+    return r;
+  });
+
+  const updatedCaptures = (draft.captures ?? []).map((c) => ({
+    ...c,
+    regions: (c.regions ?? []).map((r) => {
+      if ((r.groupTag || "default").trim() === normalizedTag) {
+        return {
+          ...r,
+          primaryVariableKey: primaryKey && primaryKey.trim() ? primaryKey.trim() : undefined,
+          updatedAt: new Date().toISOString(),
+        };
+      }
+      return r;
+    }),
+  }));
+
+  return markValidationOutdated({
+    ...draft,
+    primaryVariableKeysByGroup: nextKeysByGroup,
+    regions: updatedRegions,
+    captures: updatedCaptures,
+    dirty: true,
   });
 }
 

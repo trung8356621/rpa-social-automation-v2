@@ -15,6 +15,7 @@ import {
   confirmCaptureAudit,
   auditForCapture,
   applyAuditActionAndAdvance,
+  setGroupPrimaryVariable,
 } from "../src/shared/collectors/ops.js";
 import {
   assignSegmentMapping,
@@ -24,6 +25,7 @@ import {
   checkBeginCandidateEligibility,
   executeLiveBrowserMatchTest,
   findAnchorCandidates,
+  findPrimaryVariableCandidates,
   getGroupTagSuggestions,
   getLearnedCandidateVariablesForGroup,
   proposeRegionQuickFill,
@@ -2516,4 +2518,640 @@ test("C2.11.10: Does not force a MATCHED result when ONLY comments and controls 
   assert.equal(res.status, "FAILED");
   assert.equal(res.matchedPostCount, 0);
   assert.equal(res.matchedItems?.filter((i) => i.domResolved).length, 0);
+});
+
+// =============================================================================
+// TASK C2.11.11: MANUAL PRIMARY VARIABLE MATCHING (ISOLATED POC)
+// =============================================================================
+
+function makeMockSnapshot(elements: CollectorDomElement[], url = "https://www.facebook.com/groups/123"): CollectorDomSnapshot {
+  return {
+    url,
+    capturedAt: new Date().toISOString(),
+    viewport: { width: 1280, height: 800, scrollX: 0, scrollY: 0, dpr: 1 },
+    elements,
+  };
+}
+
+test("C2.11.11 Case 1: Primary Variable set to Post URL matches <a> tag with /posts/ or story_fbid", () => {
+  let { draft, capIds } = makeTestDraftWithCaptures(1);
+  draft.variables = [
+    {
+      id: "v_url",
+      key: "postUrl",
+      label: "Post URL",
+      valueType: "string",
+      required: true,
+      mappings: [],
+    },
+  ];
+
+  draft = setGroupPrimaryVariable(draft, "post-main", "postUrl");
+  assert.equal(draft.primaryVariableKeysByGroup?.["post-main"], "postUrl");
+
+  const region = createCollectorRegion({
+    id: "r_begin",
+    captureItemId: capIds[0],
+    type: "BEGIN",
+    groupTag: "post-main",
+    label: "Post Header",
+    box: { x: 50, y: 100, width: 500, height: 60 },
+    imageWidth: 800,
+    imageHeight: 600,
+    confirmed: true,
+    candidateVariableKeys: ["postUrl"],
+  });
+  draft = addRegionToDraft(draft, region);
+
+  const elements: CollectorDomElement[] = [
+    {
+      id: "post_card",
+      tagName: "DIV",
+      role: "article",
+      rect: { x: 50, y: 100, width: 550, height: 350 },
+      textSnippet: "",
+      attributes: {},
+      isArticleOrCard: true,
+      depth: 1,
+      childrenIds: ["post_link", "post_body"],
+    },
+    {
+      id: "post_link",
+      tagName: "A",
+      role: "link",
+      rect: { x: 120, y: 130, width: 140, height: 20 },
+      textSnippet: "14 giờ trước",
+      depth: 2,
+      parentId: "post_card",
+      attributes: { href: "https://www.facebook.com/groups/123/posts/999888777" },
+      childrenIds: [],
+    },
+    {
+      id: "post_body",
+      tagName: "DIV",
+      rect: { x: 50, y: 160, width: 500, height: 120 },
+      textSnippet: "Nội dung bài viết...",
+      attributes: {},
+      depth: 2,
+      parentId: "post_card",
+      childrenIds: [],
+    },
+  ];
+
+  const snapshot = makeMockSnapshot(elements);
+
+  const res = executeLiveBrowserMatchTest(draft.regions!, snapshot, draft, { mode: "BEGIN_ONLY" });
+  assert.equal(res.status, "MATCHED");
+  assert.equal(res.matchedPostCount, 1);
+  const item = res.matchedItems![0]!;
+  assert.equal(item.primaryElementId, "post_link");
+  assert.equal(item.primaryVariableKey, "postUrl");
+  assert.equal(item.containerId, "post_card");
+  assert.equal(res.groups[0]?.candidateDiagnostics?.primaryMatchStatus, "MATCHED");
+  assert.equal(res.groups[0]?.candidateDiagnostics?.configuredPrimaryVariable, "postUrl");
+});
+
+test("C2.11.11 Case 2: Primary Variable matches timestamp-linked post URL", () => {
+  let { draft, capIds } = makeTestDraftWithCaptures(1);
+  draft.variables = [
+    { id: "v_url", key: "postUrl", label: "Post URL", valueType: "string", required: true, mappings: [] },
+  ];
+  draft = setGroupPrimaryVariable(draft, "post-main", "postUrl");
+
+  const region = createCollectorRegion({
+    id: "r1",
+    captureItemId: capIds[0],
+    type: "BEGIN",
+    groupTag: "post-main",
+    label: "Header",
+    box: { x: 50, y: 80, width: 450, height: 60 },
+    imageWidth: 800,
+    imageHeight: 600,
+    confirmed: true,
+  });
+  draft = addRegionToDraft(draft, region);
+
+  const elements: CollectorDomElement[] = [
+    {
+      id: "post_art",
+      tagName: "DIV",
+      role: "article",
+      rect: { x: 40, y: 80, width: 600, height: 400 },
+      textSnippet: "",
+      attributes: {},
+      depth: 1,
+      childrenIds: ["time_link"],
+    },
+    {
+      id: "time_link",
+      tagName: "A",
+      role: "link",
+      rect: { x: 100, y: 110, width: 120, height: 18 },
+      textSnippet: "Hôm qua lúc 15:30",
+      depth: 2,
+      parentId: "post_art",
+      attributes: { href: "/groups/nodejs/permalink/555444333/" },
+      childrenIds: [],
+    },
+  ];
+
+  const snapshot = makeMockSnapshot(elements, "https://www.facebook.com/groups/nodejs");
+
+  const res = executeLiveBrowserMatchTest(draft.regions!, snapshot, draft, { mode: "BEGIN_ONLY" });
+  assert.equal(res.status, "MATCHED");
+  assert.equal(res.matchedPostCount, 1);
+  assert.equal(res.matchedItems![0]!.primaryElementId, "time_link");
+  assert.equal(res.matchedItems![0]!.containerId, "post_art");
+});
+
+test("C2.11.11 Case 3: Rejects comment permalinks with comment_id", () => {
+  let { draft, capIds } = makeTestDraftWithCaptures(1);
+  draft.variables = [
+    { id: "v_url", key: "postUrl", label: "Post URL", valueType: "string", required: true, mappings: [] },
+  ];
+  draft = setGroupPrimaryVariable(draft, "post-main", "postUrl");
+
+  const region = createCollectorRegion({
+    id: "r1",
+    captureItemId: capIds[0],
+    type: "BEGIN",
+    groupTag: "post-main",
+    label: "Header",
+    box: { x: 50, y: 50, width: 450, height: 60 },
+    imageWidth: 800,
+    imageHeight: 600,
+    confirmed: true,
+  });
+  draft = addRegionToDraft(draft, region);
+
+  const elements: CollectorDomElement[] = [
+    {
+      id: "post_art",
+      tagName: "DIV",
+      role: "article",
+      rect: { x: 40, y: 60, width: 600, height: 500 },
+      textSnippet: "",
+      attributes: {},
+      depth: 1,
+      childrenIds: ["comment_link"],
+    },
+    {
+      id: "comment_link",
+      tagName: "A",
+      role: "link",
+      rect: { x: 120, y: 400, width: 100, height: 18 },
+      textSnippet: "2 giờ trước",
+      depth: 2,
+      parentId: "post_art",
+      attributes: { href: "/groups/123/posts/111/?comment_id=999888" },
+      childrenIds: [],
+    },
+  ];
+
+  const snapshot = makeMockSnapshot(elements);
+
+  const res = executeLiveBrowserMatchTest(draft.regions!, snapshot, draft, { mode: "BEGIN_ONLY" });
+  assert.equal(res.status, "FAILED");
+  assert.equal(res.matchedPostCount, 0);
+  assert.equal(res.groups[0]?.candidateDiagnostics?.primaryMatchStatus, "PRIMARY_NOT_FOUND");
+});
+
+test("C2.11.11 Case 4: Rejects nested comment article elements", () => {
+  let { draft, capIds } = makeTestDraftWithCaptures(1);
+  draft.variables = [
+    { id: "v_url", key: "postUrl", label: "Post URL", valueType: "string", required: true, mappings: [] },
+  ];
+  draft = setGroupPrimaryVariable(draft, "post-main", "postUrl");
+
+  const region = createCollectorRegion({
+    id: "r1",
+    captureItemId: capIds[0],
+    type: "BEGIN",
+    groupTag: "post-main",
+    label: "Header",
+    box: { x: 50, y: 50, width: 450, height: 60 },
+    imageWidth: 800,
+    imageHeight: 600,
+    confirmed: true,
+  });
+  draft = addRegionToDraft(draft, region);
+
+  const elements: CollectorDomElement[] = [
+    {
+      id: "outer_post",
+      tagName: "DIV",
+      role: "article",
+      rect: { x: 50, y: 60, width: 600, height: 600 },
+      textSnippet: "",
+      attributes: {},
+      depth: 1,
+      childrenIds: ["comment_card"],
+    },
+    {
+      id: "comment_card",
+      tagName: "DIV",
+      role: "article",
+      rect: { x: 100, y: 350, width: 450, height: 100 },
+      textSnippet: "",
+      depth: 2,
+      parentId: "outer_post",
+      attributes: { "data-comment-id": "c_123" },
+      childrenIds: ["nested_link"],
+    },
+    {
+      id: "nested_link",
+      tagName: "A",
+      role: "link",
+      rect: { x: 120, y: 360, width: 120, height: 20 },
+      textSnippet: "15 phút trước",
+      depth: 3,
+      parentId: "comment_card",
+      attributes: { href: "/groups/123/posts/111/" },
+      childrenIds: [],
+    },
+  ];
+
+  const snapshot = makeMockSnapshot(elements);
+
+  const res = executeLiveBrowserMatchTest(draft.regions!, snapshot, draft, { mode: "BEGIN_ONLY" });
+  assert.equal(res.status, "FAILED");
+  assert.equal(res.matchedPostCount, 0);
+  assert.equal(res.groups[0]?.candidateDiagnostics?.primaryMatchStatus, "PRIMARY_NOT_FOUND");
+});
+
+test("C2.11.11 Case 5: Rejects author profile link when Post URL is Primary", () => {
+  let { draft, capIds } = makeTestDraftWithCaptures(1);
+  draft.variables = [
+    { id: "v_url", key: "postUrl", label: "Post URL", valueType: "string", required: true, mappings: [] },
+  ];
+  draft = setGroupPrimaryVariable(draft, "post-main", "postUrl");
+
+  const region = createCollectorRegion({
+    id: "r1",
+    captureItemId: capIds[0],
+    type: "BEGIN",
+    groupTag: "post-main",
+    label: "Header",
+    box: { x: 50, y: 50, width: 450, height: 60 },
+    imageWidth: 800,
+    imageHeight: 600,
+    confirmed: true,
+  });
+  draft = addRegionToDraft(draft, region);
+
+  const elements: CollectorDomElement[] = [
+    {
+      id: "outer_post",
+      tagName: "DIV",
+      role: "article",
+      rect: { x: 50, y: 60, width: 600, height: 300 },
+      textSnippet: "",
+      attributes: {},
+      depth: 1,
+      childrenIds: ["author_link"],
+    },
+    {
+      id: "author_link",
+      tagName: "A",
+      role: "link",
+      rect: { x: 100, y: 80, width: 150, height: 20 },
+      textSnippet: "Nguyễn Văn A",
+      depth: 2,
+      parentId: "outer_post",
+      attributes: { href: "https://www.facebook.com/user/nguyen.van.a" },
+      childrenIds: [],
+    },
+  ];
+
+  const snapshot = makeMockSnapshot(elements);
+
+  const res = executeLiveBrowserMatchTest(draft.regions!, snapshot, draft, { mode: "BEGIN_ONLY" });
+  assert.equal(res.status, "FAILED");
+  assert.equal(res.matchedPostCount, 0);
+  assert.equal(res.groups[0]?.candidateDiagnostics?.primaryMatchStatus, "PRIMARY_NOT_FOUND");
+});
+
+test("C2.11.11 Case 6: Resolves outer container enclosing Primary Variable element", () => {
+  let { draft, capIds } = makeTestDraftWithCaptures(1);
+  draft.variables = [
+    { id: "v_url", key: "postUrl", label: "Post URL", valueType: "string", required: true, mappings: [] },
+  ];
+  draft = setGroupPrimaryVariable(draft, "post-main", "postUrl");
+
+  const region = createCollectorRegion({
+    id: "r1",
+    captureItemId: capIds[0],
+    type: "BEGIN",
+    groupTag: "post-main",
+    label: "Header",
+    box: { x: 50, y: 50, width: 450, height: 60 },
+    imageWidth: 800,
+    imageHeight: 600,
+    confirmed: true,
+  });
+  draft = addRegionToDraft(draft, region);
+
+  const elements: CollectorDomElement[] = [
+    {
+      id: "feed",
+      tagName: "DIV",
+      role: "feed",
+      rect: { x: 40, y: 50, width: 700, height: 1200 },
+      textSnippet: "",
+      attributes: {},
+      depth: 0,
+      childrenIds: ["card_wrapper"],
+    },
+    {
+      id: "card_wrapper",
+      tagName: "DIV",
+      role: "article",
+      rect: { x: 50, y: 60, width: 620, height: 420 },
+      textSnippet: "",
+      attributes: {},
+      depth: 1,
+      parentId: "feed",
+      isArticleOrCard: true,
+      childrenIds: ["inner_header"],
+    },
+    {
+      id: "inner_header",
+      tagName: "DIV",
+      rect: { x: 60, y: 70, width: 580, height: 50 },
+      textSnippet: "",
+      attributes: {},
+      depth: 2,
+      parentId: "card_wrapper",
+      childrenIds: ["post_url_link"],
+    },
+    {
+      id: "post_url_link",
+      tagName: "A",
+      role: "link",
+      rect: { x: 120, y: 90, width: 140, height: 20 },
+      textSnippet: "2 giờ trước",
+      depth: 3,
+      parentId: "inner_header",
+      attributes: { href: "/groups/dev/posts/10203040/" },
+      childrenIds: [],
+    },
+  ];
+
+  const snapshot = makeMockSnapshot(elements, "https://www.facebook.com/groups/dev");
+
+  const res = executeLiveBrowserMatchTest(draft.regions!, snapshot, draft, { mode: "BEGIN_ONLY" });
+  assert.equal(res.status, "MATCHED");
+  assert.equal(res.matchedPostCount, 1);
+  // Outer container must be card_wrapper (smallest suitable outer container), NOT the broad feed
+  assert.equal(res.matchedItems![0]!.containerId, "card_wrapper");
+  assert.equal(res.matchedItems![0]!.containerTagName, "DIV");
+});
+
+test("C2.11.11 Case 7: Multiple posts each produce distinct matched item", () => {
+  let { draft, capIds } = makeTestDraftWithCaptures(1);
+  draft.variables = [
+    { id: "v_url", key: "postUrl", label: "Post URL", valueType: "string", required: true, mappings: [] },
+  ];
+  draft = setGroupPrimaryVariable(draft, "post-main", "postUrl");
+
+  const region = createCollectorRegion({
+    id: "r1",
+    captureItemId: capIds[0],
+    type: "BEGIN",
+    groupTag: "post-main",
+    label: "Header",
+    box: { x: 50, y: 50, width: 450, height: 60 },
+    imageWidth: 800,
+    imageHeight: 600,
+    confirmed: true,
+  });
+  draft = addRegionToDraft(draft, region);
+
+  const elements: CollectorDomElement[] = [
+    // Post 1
+    {
+      id: "post_card_1",
+      tagName: "DIV",
+      role: "article",
+      rect: { x: 50, y: 60, width: 600, height: 300 },
+      textSnippet: "",
+      attributes: {},
+      depth: 1,
+      isArticleOrCard: true,
+      childrenIds: ["url_1"],
+    },
+    {
+      id: "url_1",
+      tagName: "A",
+      role: "link",
+      rect: { x: 120, y: 80, width: 130, height: 18 },
+      textSnippet: "1 giờ trước",
+      depth: 2,
+      parentId: "post_card_1",
+      attributes: { href: "/groups/dev/posts/111/" },
+      childrenIds: [],
+    },
+    // Post 2
+    {
+      id: "post_card_2",
+      tagName: "DIV",
+      role: "article",
+      rect: { x: 50, y: 380, width: 600, height: 350 },
+      textSnippet: "",
+      attributes: {},
+      depth: 1,
+      isArticleOrCard: true,
+      childrenIds: ["url_2"],
+    },
+    {
+      id: "url_2",
+      tagName: "A",
+      role: "link",
+      rect: { x: 120, y: 400, width: 130, height: 18 },
+      textSnippet: "3 giờ trước",
+      depth: 2,
+      parentId: "post_card_2",
+      attributes: { href: "/groups/dev/posts/222/" },
+      childrenIds: [],
+    },
+  ];
+
+  const snapshot = makeMockSnapshot(elements, "https://www.facebook.com/groups/dev");
+
+  const res = executeLiveBrowserMatchTest(draft.regions!, snapshot, draft, { mode: "BEGIN_ONLY" });
+  assert.equal(res.status, "MATCHED");
+  assert.equal(res.matchedPostCount, 2);
+  assert.equal(res.matchedItems!.length, 2);
+  assert.equal(res.matchedItems![0]!.containerId, "post_card_1");
+  assert.equal(res.matchedItems![1]!.containerId, "post_card_2");
+});
+
+test("C2.11.11 Case 8: Deduplicates multiple candidates within same outer post", () => {
+  let { draft, capIds } = makeTestDraftWithCaptures(1);
+  draft.variables = [
+    { id: "v_url", key: "postUrl", label: "Post URL", valueType: "string", required: true, mappings: [] },
+  ];
+  draft = setGroupPrimaryVariable(draft, "post-main", "postUrl");
+
+  const region = createCollectorRegion({
+    id: "r1",
+    captureItemId: capIds[0],
+    type: "BEGIN",
+    groupTag: "post-main",
+    label: "Header",
+    box: { x: 50, y: 50, width: 450, height: 60 },
+    imageWidth: 800,
+    imageHeight: 600,
+    confirmed: true,
+  });
+  draft = addRegionToDraft(draft, region);
+
+  const elements: CollectorDomElement[] = [
+    {
+      id: "post_card",
+      tagName: "DIV",
+      role: "article",
+      rect: { x: 50, y: 60, width: 600, height: 350 },
+      textSnippet: "",
+      attributes: {},
+      depth: 1,
+      isArticleOrCard: true,
+      childrenIds: ["url_a", "url_b"],
+    },
+    {
+      id: "url_a",
+      tagName: "A",
+      role: "link",
+      rect: { x: 120, y: 80, width: 130, height: 18 },
+      textSnippet: "14 giờ trước",
+      depth: 2,
+      parentId: "post_card",
+      attributes: { href: "/groups/dev/posts/111/" },
+      childrenIds: [],
+    },
+    {
+      id: "url_b",
+      tagName: "A",
+      role: "link",
+      rect: { x: 120, y: 100, width: 130, height: 18 },
+      textSnippet: "14 giờ trước (copy)",
+      depth: 2,
+      parentId: "post_card",
+      attributes: { href: "/groups/dev/posts/111/?ref=share" },
+      childrenIds: [],
+    },
+  ];
+
+  const snapshot = makeMockSnapshot(elements, "https://www.facebook.com/groups/dev");
+
+  const res = executeLiveBrowserMatchTest(draft.regions!, snapshot, draft, { mode: "BEGIN_ONLY" });
+  assert.equal(res.status, "MATCHED");
+  assert.equal(res.matchedPostCount, 1);
+  assert.equal(res.matchedItems!.length, 1);
+  assert.ok(
+    res.groups[0]?.candidateDiagnostics?.deduplicationDecisions &&
+      res.groups[0].candidateDiagnostics.deduplicationDecisions.length > 0,
+  );
+});
+
+test("C2.11.11 Case 9: Fallback to learned matching when no Primary Variable is configured", () => {
+  let { draft, capIds } = makeTestDraftWithCaptures(1);
+  // No primary variable set on draft
+  const region = createCollectorRegion({
+    id: "r1",
+    captureItemId: capIds[0],
+    type: "BEGIN",
+    groupTag: "post-main",
+    label: "Header",
+    box: { x: 50, y: 50, width: 450, height: 60 },
+    imageWidth: 800,
+    imageHeight: 600,
+    confirmed: true,
+  });
+  draft = addRegionToDraft(draft, region);
+
+  const elements: CollectorDomElement[] = [
+    {
+      id: "post_art",
+      tagName: "DIV",
+      role: "article",
+      rect: { x: 50, y: 60, width: 600, height: 350 },
+      textSnippet: "",
+      attributes: {},
+      depth: 1,
+      isArticleOrCard: true,
+      childrenIds: ["auth_link", "time_span"],
+    },
+    {
+      id: "auth_link",
+      tagName: "A",
+      role: "link",
+      rect: { x: 100, y: 70, width: 120, height: 20 },
+      textSnippet: "Nguyễn Văn B",
+      depth: 2,
+      parentId: "post_art",
+      attributes: { href: "/user/b" },
+      childrenIds: [],
+    },
+    {
+      id: "time_span",
+      tagName: "SPAN",
+      rect: { x: 100, y: 92, width: 100, height: 16 },
+      textSnippet: "5 giờ trước",
+      attributes: {},
+      depth: 2,
+      parentId: "post_art",
+      childrenIds: [],
+    },
+  ];
+
+  const snapshot = makeMockSnapshot(elements, "https://www.facebook.com/groups/dev");
+
+  const res = executeLiveBrowserMatchTest(draft.regions!, snapshot, draft, { mode: "BEGIN_ONLY" });
+  assert.equal(res.status, "MATCHED");
+  assert.equal(res.matchedPostCount, 1);
+  // When no primary variable is configured, candidateDiagnostics.configuredPrimaryVariable is undefined/null
+  assert.equal(res.groups[0]?.candidateDiagnostics?.configuredPrimaryVariable, undefined);
+});
+
+test("C2.11.11 Case 10: Returns PRIMARY_NOT_FOUND when Primary Variable element is absent", () => {
+  let { draft, capIds } = makeTestDraftWithCaptures(1);
+  draft.variables = [
+    { id: "v_url", key: "postUrl", label: "Post URL", valueType: "string", required: true, mappings: [] },
+  ];
+  draft = setGroupPrimaryVariable(draft, "post-main", "postUrl");
+
+  const region = createCollectorRegion({
+    id: "r1",
+    captureItemId: capIds[0],
+    type: "BEGIN",
+    groupTag: "post-main",
+    label: "Header",
+    box: { x: 50, y: 50, width: 450, height: 60 },
+    imageWidth: 800,
+    imageHeight: 600,
+    confirmed: true,
+  });
+  draft = addRegionToDraft(draft, region);
+
+  // Viewport contains elements but none match Post URL
+  const elements: CollectorDomElement[] = [
+    {
+      id: "div_noise",
+      tagName: "DIV",
+      rect: { x: 50, y: 60, width: 600, height: 100 },
+      textSnippet: "Chỉ là chữ thông thường, không có link bài viết",
+      attributes: {},
+      depth: 1,
+      childrenIds: [],
+    },
+  ];
+
+  const snapshot = makeMockSnapshot(elements, "https://www.facebook.com/groups/dev");
+
+  const res = executeLiveBrowserMatchTest(draft.regions!, snapshot, draft, { mode: "BEGIN_ONLY" });
+  assert.equal(res.status, "FAILED");
+  assert.equal(res.matchedPostCount, 0);
+  assert.equal(res.groups[0]?.candidateDiagnostics?.primaryMatchStatus, "PRIMARY_NOT_FOUND");
+  assert.ok(res.groups[0]?.failureReason?.includes("PRIMARY_NOT_FOUND"));
 });
