@@ -99,6 +99,28 @@ function cropRegionReference(imgElement: HTMLImageElement | null, box: Rect): st
   }
 }
 
+// Module-level in-memory cache for loaded capture screenshot assets (bounded to 50 items)
+const assetDataUrlCache = new Map<string, string>();
+const MAX_ASSET_CACHE_ENTRIES = 50;
+
+export function getCachedAssetUrl(assetName: string): string | undefined {
+  return assetDataUrlCache.get(assetName);
+}
+
+export function setCachedAssetUrl(assetName: string, url: string): void {
+  if (assetDataUrlCache.size >= MAX_ASSET_CACHE_ENTRIES) {
+    const firstKey = assetDataUrlCache.keys().next().value;
+    if (firstKey) assetDataUrlCache.delete(firstKey);
+  }
+  assetDataUrlCache.set(assetName, url);
+}
+
+export function clearAssetUrlCache(): void {
+  assetDataUrlCache.clear();
+}
+
+type AssetLoadStatus = "IDLE" | "LOADING" | "READY" | "FAILED";
+
 export function StepReviewMapping({ draft, locked, onChange, invoke }: Props) {
   const captures = draft.captures ?? [];
   const audits = ensureCaptureAudits(draft);
@@ -114,11 +136,19 @@ export function StepReviewMapping({ draft, locked, onChange, invoke }: Props) {
     active && !realCapture && active.linkedMockSampleId
       ? sampleById(active.linkedMockSampleId)
       : undefined;
-  const [realImageUrl, setRealImageUrl] = useState<string>();
+  const [assetStatus, setAssetStatus] = useState<AssetLoadStatus>(() => {
+    if (!active?.imageAsset) return "IDLE";
+    return getCachedAssetUrl(active.imageAsset) ? "READY" : "IDLE";
+  });
+  const [realImageUrl, setRealImageUrl] = useState<string | undefined>(() => {
+    if (!active?.imageAsset) return undefined;
+    return getCachedAssetUrl(active.imageAsset);
+  });
   const [assetLoading, setAssetLoading] = useState(false);
   const [assetError, setAssetError] = useState<string | null>(null);
   const [cropRecoveryError, setCropRecoveryError] = useState<string | null>(null);
   const [isRecoveringCrop, setIsRecoveringCrop] = useState(false);
+  const loadSequenceRef = useRef<number>(0);
   const isTeaching =
     Boolean(active) &&
     (draft.teachingCaptureId === active!.id ||
@@ -888,35 +918,54 @@ export function StepReviewMapping({ draft, locked, onChange, invoke }: Props) {
   }
 
   useEffect(() => {
-    let cancelled = false;
-    setRealImageUrl(undefined);
-    setAssetError(null);
-    if (!active?.imageAsset) {
+    const seq = ++loadSequenceRef.current;
+    const asset = active?.imageAsset;
+
+    if (!asset) {
+      setRealImageUrl(undefined);
+      setAssetStatus("IDLE");
       setAssetLoading(false);
+      setAssetError(null);
       return;
     }
+
+    const cached = getCachedAssetUrl(asset);
+    if (cached) {
+      setRealImageUrl(cached);
+      setAssetStatus("READY");
+      setAssetLoading(false);
+      setAssetError(null);
+      return;
+    }
+
     if (!invoke || !isElectronBrowserCoreAvailable()) {
+      setRealImageUrl(undefined);
+      setAssetStatus("FAILED");
       setAssetLoading(false);
       return;
     }
+
+    setAssetStatus("LOADING");
     setAssetLoading(true);
-    void collectorLoadImageAsset(invoke, active.imageAsset)
+    setAssetError(null);
+
+    void collectorLoadImageAsset(invoke, asset)
       .then((url) => {
-        if (!cancelled) {
+        if (loadSequenceRef.current === seq) {
+          setCachedAssetUrl(asset, url);
           setRealImageUrl(url);
+          setAssetStatus("READY");
           setAssetLoading(false);
         }
       })
       .catch((err) => {
-        if (!cancelled) {
+        if (loadSequenceRef.current === seq) {
           setRealImageUrl(undefined);
+          setAssetStatus("FAILED");
           setAssetLoading(false);
           setAssetError(err instanceof Error ? err.message : String(err));
         }
       });
-    return () => {
-      cancelled = true;
-    };
   }, [active?.id, active?.imageAsset, invoke]);
 
   const previewSrcUrl = useMemo(() => {
@@ -1649,9 +1698,14 @@ export function StepReviewMapping({ draft, locked, onChange, invoke }: Props) {
                     </div>
                   )}
                 </div>
+              ) : assetStatus === "LOADING" ? (
+                <div className="collector-sample-empty collector-asset-loading">
+                  <span style={{ marginRight: "8px" }}>⏳</span>
+                  <span>Loading screenshot...</span>
+                </div>
               ) : (
                 <div className="collector-sample-empty">
-                  {realCapture ? "Real image unavailable in this preview" : "No preview asset"}
+                  {assetError ? `Failed to load capture screenshot: ${assetError}` : realCapture ? "Real image unavailable in this preview" : "No preview asset"}
                 </div>
               )}
             </div>

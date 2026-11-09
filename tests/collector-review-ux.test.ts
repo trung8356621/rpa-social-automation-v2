@@ -32,7 +32,8 @@ import {
   saveCollectorStore,
   upsertCollector,
 } from "../src/shared/collectors/store.js";
-import type { CollectorDomSnapshot } from "../src/shared/collectors/types.js";
+import type { CollectorDomElement, CollectorDomSnapshot } from "../src/shared/collectors/types.js";
+import type { Rect } from "../src/shared/contracts.js";
 
 const reviewSource = readFileSync(
   resolve("src/renderer/collectors/ReviewMappingStep.tsx"),
@@ -737,6 +738,7 @@ test("UX 21: C2.10.4 Early Validation & Live Browser Match Test", () => {
   const invalidOcr = getMappingConfigState({
     sampleId: "s1",
     presence: "mapped",
+    confirmed: true,
     method: "OCR_TEXT",
   });
   assert.equal(invalidOcr.status, "INVALID");
@@ -745,6 +747,7 @@ test("UX 21: C2.10.4 Early Validation & Live Browser Match Test", () => {
   const validOcr = getMappingConfigState({
     sampleId: "s1",
     presence: "mapped",
+    confirmed: true,
     method: "OCR_TEXT",
     segmentId: "seg_1",
     text: "Extracted Text",
@@ -756,6 +759,7 @@ test("UX 21: C2.10.4 Early Validation & Live Browser Match Test", () => {
   const invalidDomText = getMappingConfigState({
     sampleId: "s1",
     presence: "mapped",
+    confirmed: true,
     method: "DOM_TEXT",
   });
   assert.equal(invalidDomText.status, "INVALID");
@@ -764,6 +768,7 @@ test("UX 21: C2.10.4 Early Validation & Live Browser Match Test", () => {
   const validDomText = getMappingConfigState({
     sampleId: "s1",
     presence: "mapped",
+    confirmed: true,
     method: "DOM_TEXT",
     regionId: "reg_1",
   });
@@ -775,6 +780,7 @@ test("UX 21: C2.10.4 Early Validation & Live Browser Match Test", () => {
   const missingAttr = getMappingConfigState({
     sampleId: "s1",
     presence: "mapped",
+    confirmed: true,
     method: "DOM_ATTRIBUTE",
     regionId: "reg_1",
   });
@@ -785,6 +791,7 @@ test("UX 21: C2.10.4 Early Validation & Live Browser Match Test", () => {
   const validDomAttr = getMappingConfigState({
     sampleId: "s1",
     presence: "mapped",
+    confirmed: true,
     method: "DOM_ATTRIBUTE",
     regionId: "reg_1",
     attribute: "href",
@@ -858,31 +865,39 @@ test("UX 21: C2.10.4 Early Validation & Live Browser Match Test", () => {
   // --- PART B: Live Browser Match Test Viewport Bounding (Max 3 Items) ---
 
   // Build a snapshot with 5 post containers rendered vertically
-  const elements = [
+  const makeDomEl = (p: Partial<CollectorDomElement> & { id: string; tagName: string; rect: Rect }): CollectorDomElement => ({
+    attributes: {},
+    childrenIds: [],
+    depth: 1,
+    textSnippet: "",
+    ...p,
+  });
+
+  const elements: CollectorDomElement[] = [
     // Post 1
-    { id: "b1", tagName: "div", parentId: "card1", rect: { x: 10, y: 10, width: 200, height: 40 }, textSnippet: "Header 1" },
-    { id: "e1", tagName: "div", parentId: "card1", rect: { x: 10, y: 100, width: 200, height: 40 }, textSnippet: "Footer 1" },
-    { id: "card1", tagName: "article", isArticleOrCard: true, rect: { x: 5, y: 5, width: 300, height: 150 }, textSnippet: "Card 1" },
+    makeDomEl({ id: "b1", tagName: "div", parentId: "card1", rect: { x: 10, y: 10, width: 200, height: 40 }, textSnippet: "Header 1" }),
+    makeDomEl({ id: "e1", tagName: "div", parentId: "card1", rect: { x: 10, y: 100, width: 200, height: 40 }, textSnippet: "Footer 1" }),
+    makeDomEl({ id: "card1", tagName: "article", isArticleOrCard: true, rect: { x: 5, y: 5, width: 300, height: 150 }, textSnippet: "Card 1" }),
 
     // Post 2
-    { id: "b2", tagName: "div", parentId: "card2", rect: { x: 10, y: 200, width: 200, height: 40 }, textSnippet: "Header 2" },
-    { id: "e2", tagName: "div", parentId: "card2", rect: { x: 10, y: 290, width: 200, height: 40 }, textSnippet: "Footer 2" },
-    { id: "card2", tagName: "article", isArticleOrCard: true, rect: { x: 5, y: 195, width: 300, height: 150 }, textSnippet: "Card 2" },
+    makeDomEl({ id: "b2", tagName: "div", parentId: "card2", rect: { x: 10, y: 200, width: 200, height: 40 }, textSnippet: "Header 2" }),
+    makeDomEl({ id: "e2", tagName: "div", parentId: "card2", rect: { x: 10, y: 290, width: 200, height: 40 }, textSnippet: "Footer 2" }),
+    makeDomEl({ id: "card2", tagName: "article", isArticleOrCard: true, rect: { x: 5, y: 195, width: 300, height: 150 }, textSnippet: "Card 2" }),
 
     // Post 3
-    { id: "b3", tagName: "div", parentId: "card3", rect: { x: 10, y: 380, width: 200, height: 40 }, textSnippet: "Header 3" },
-    { id: "e3", tagName: "div", parentId: "card3", rect: { x: 10, y: 470, width: 200, height: 40 }, textSnippet: "Footer 3" },
-    { id: "card3", tagName: "article", isArticleOrCard: true, rect: { x: 5, y: 375, width: 300, height: 150 }, textSnippet: "Card 3" },
+    makeDomEl({ id: "b3", tagName: "div", parentId: "card3", rect: { x: 10, y: 380, width: 200, height: 40 }, textSnippet: "Header 3" }),
+    makeDomEl({ id: "e3", tagName: "div", parentId: "card3", rect: { x: 10, y: 470, width: 200, height: 40 }, textSnippet: "Footer 3" }),
+    makeDomEl({ id: "card3", tagName: "article", isArticleOrCard: true, rect: { x: 5, y: 375, width: 300, height: 150 }, textSnippet: "Card 3" }),
 
     // Post 4
-    { id: "b4", tagName: "div", parentId: "card4", rect: { x: 10, y: 560, width: 200, height: 40 }, textSnippet: "Header 4" },
-    { id: "e4", tagName: "div", parentId: "card4", rect: { x: 10, y: 650, width: 200, height: 40 }, textSnippet: "Footer 4" },
-    { id: "card4", tagName: "article", isArticleOrCard: true, rect: { x: 5, y: 555, width: 300, height: 150 }, textSnippet: "Card 4" },
+    makeDomEl({ id: "b4", tagName: "div", parentId: "card4", rect: { x: 10, y: 560, width: 200, height: 40 }, textSnippet: "Header 4" }),
+    makeDomEl({ id: "e4", tagName: "div", parentId: "card4", rect: { x: 10, y: 650, width: 200, height: 40 }, textSnippet: "Footer 4" }),
+    makeDomEl({ id: "card4", tagName: "article", isArticleOrCard: true, rect: { x: 5, y: 555, width: 300, height: 150 }, textSnippet: "Card 4" }),
 
     // Post 5
-    { id: "b5", tagName: "div", parentId: "card5", rect: { x: 10, y: 740, width: 200, height: 40 }, textSnippet: "Header 5" },
-    { id: "e5", tagName: "div", parentId: "card5", rect: { x: 10, y: 830, width: 200, height: 40 }, textSnippet: "Footer 5" },
-    { id: "card5", tagName: "article", isArticleOrCard: true, rect: { x: 5, y: 735, width: 300, height: 150 }, textSnippet: "Card 5" },
+    makeDomEl({ id: "b5", tagName: "div", parentId: "card5", rect: { x: 10, y: 740, width: 200, height: 40 }, textSnippet: "Header 5" }),
+    makeDomEl({ id: "e5", tagName: "div", parentId: "card5", rect: { x: 10, y: 830, width: 200, height: 40 }, textSnippet: "Footer 5" }),
+    makeDomEl({ id: "card5", tagName: "article", isArticleOrCard: true, rect: { x: 5, y: 735, width: 300, height: 150 }, textSnippet: "Card 5" }),
   ];
 
   const snapshot: CollectorDomSnapshot = {
@@ -932,7 +947,7 @@ test("UX 21: C2.10.4 Early Validation & Live Browser Match Test", () => {
     capturedAt: new Date().toISOString(),
     viewport: { width: 1280, height: 800, scrollX: 0, scrollY: 0, dpr: 1 },
     elements: [
-      { id: "other", tagName: "div", rect: { x: 0, y: 0, width: 100, height: 20 }, textSnippet: "completely unrelated content" },
+      makeDomEl({ id: "other", tagName: "div", rect: { x: 0, y: 0, width: 100, height: 20 }, textSnippet: "completely unrelated content" }),
     ],
     isStale: false,
   };

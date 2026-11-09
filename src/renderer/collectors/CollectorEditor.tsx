@@ -45,7 +45,28 @@ type Props = {
   report?: (handle: CollectorEditorHandle | undefined) => void;
 };
 
-const WARN_DISMISS_KEY = "rpa.collectors.prototype.warnDismissed";
+const DISMISSED_WARNINGS_KEY = "rpa.collectors.dismissedWarnings";
+
+function getDismissedWarningKeys(): Set<string> {
+  try {
+    const raw = sessionStorage.getItem(DISMISSED_WARNINGS_KEY);
+    if (!raw) return new Set();
+    const parsed = JSON.parse(raw);
+    return new Set(Array.isArray(parsed) ? parsed : []);
+  } catch {
+    return new Set();
+  }
+}
+
+function recordDismissedWarningKey(key: string): void {
+  try {
+    const set = getDismissedWarningKeys();
+    set.add(key);
+    sessionStorage.setItem(DISMISSED_WARNINGS_KEY, JSON.stringify(Array.from(set)));
+  } catch {
+    /* ignore */
+  }
+}
 
 function useVersionsDrawerMode() {
   const [drawer, setDrawer] = useState(
@@ -78,13 +99,7 @@ export function CollectorEditor({
   const [errors, setErrors] = useState<string[]>([]);
   const [savedFlash, setSavedFlash] = useState("");
   const [versionsOpen, setVersionsOpen] = useState(false);
-  const [warnDismissed, setWarnDismissed] = useState(() => {
-    try {
-      return sessionStorage.getItem(WARN_DISMISS_KEY) === "1";
-    } catch {
-      return false;
-    }
-  });
+  const [dismissedWarnings, setDismissedWarnings] = useState<Set<string>>(() => getDismissedWarningKeys());
   const drawerMode = useVersionsDrawerMode();
   const currentStep = useMemo(
     () => WIZARD_STEPS.find((s) => s.id === draft.wizardStep) ?? WIZARD_STEPS[0]!,
@@ -176,13 +191,28 @@ export function CollectorEditor({
     return () => report(undefined);
   }, [report, draft, onSave, initial]);
 
+  // Filter warnings relevant to this collector or general storage failures
+  const relevantWarnings = useMemo(() => {
+    return storageWarnings.filter((w) => {
+      // General corruption or storage error applies to all
+      if (!w.startsWith("Migrated collector")) return true;
+      // Migration warning applies only to the named collector
+      const match = w.match(/^Migrated collector "([^"]+)"/);
+      if (!match) return true;
+      const targetName = match[1];
+      return targetName === draft.name || targetName === initial.name;
+    });
+  }, [storageWarnings, draft.name, initial.name]);
+
+  const activeWarnings = useMemo(() => {
+    return relevantWarnings.filter((w) => !dismissedWarnings.has(w));
+  }, [relevantWarnings, dismissedWarnings]);
+
   function dismissWarnings() {
-    setWarnDismissed(true);
-    try {
-      sessionStorage.setItem(WARN_DISMISS_KEY, "1");
-    } catch {
-      /* ignore */
+    for (const w of activeWarnings) {
+      recordDismissedWarningKey(w);
     }
+    setDismissedWarnings((prev) => new Set([...prev, ...activeWarnings]));
   }
 
   const versionsPanel = (
@@ -195,7 +225,7 @@ export function CollectorEditor({
     />
   );
 
-  const showStorageWarn = !warnDismissed && storageWarnings.length > 0;
+  const showStorageWarn = activeWarnings.length > 0;
 
   return (
     <section
@@ -206,9 +236,9 @@ export function CollectorEditor({
       <div className="collector-editor-chrome">
         {showStorageWarn && (
           <div className="collector-banner warn collector-banner-compact" role="status">
-            <span className="collector-banner-text" title={storageWarnings.join(" · ")}>
-              Storage: {storageWarnings[0]}
-              {storageWarnings.length > 1 ? ` (+${storageWarnings.length - 1})` : ""}
+            <span className="collector-banner-text" title={activeWarnings.join(" · ")}>
+              Storage: {activeWarnings[0]}
+              {activeWarnings.length > 1 ? ` (+${activeWarnings.length - 1})` : ""}
             </span>
             <button type="button" className="collector-banner-dismiss" onClick={dismissWarnings}>
               Dismiss

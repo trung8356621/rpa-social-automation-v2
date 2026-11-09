@@ -40,7 +40,18 @@ export function StepMatchTest({
   const [browserConnected, setBrowserConnected] = useState<boolean>(false);
 
   const hostRef = useRef<HTMLDivElement>(null);
+  const lastBoundsRef = useRef<{ x: number; y: number; width: number; height: number } | null>(null);
   const hasAutoRunRef = useRef<boolean>(false);
+  const isMountedRef = useRef<boolean>(true);
+  const isRunningRef = useRef<boolean>(false);
+
+  // Keep latest mutable props in refs to decouple browser lifecycle from state changes
+  const draftRef = useRef(draft);
+  draftRef.current = draft;
+  const onChangeRef = useRef(onChange);
+  onChangeRef.current = onChange;
+  const lockedRef = useRef(locked);
+  lockedRef.current = locked;
 
   const sessionId = state?.activeBrowserSessionId;
   const session = sessionId
@@ -51,24 +62,49 @@ export function StepMatchTest({
   const matchTestResult: MatchTestResult | undefined = draft.matchTest;
   const status = matchTestResult?.status ?? "NOT TESTED";
 
+  // Counts: clearly separate inspected viewport candidates from actually resolved post matches
+  const inspectedCount = matchTestResult?.matchedItems?.length ?? 0;
+  const resolvedMatchedCount =
+    matchTestResult?.matchedPostCount ??
+    matchTestResult?.matchedItems?.filter((item) => item.domResolved).length ??
+    0;
+
+  // Measure and report host frame bounds to Electron shell.
+  // Suppresses redundant IPC calls if bounds have not changed.
   const publishHost = useCallback(() => {
     if (!invoke || !isElectronBrowserCoreAvailable()) return;
     const el = hostRef.current;
     if (!el) {
-      void collectorReportBrowserHost(invoke, null);
+      if (lastBoundsRef.current !== null) {
+        lastBoundsRef.current = null;
+        void collectorReportBrowserHost(invoke, null);
+      }
       return;
     }
     const rect = el.getBoundingClientRect();
     const zoom = readAdminUiZoom();
     const next = domRectToShellBounds(rect, zoom);
+    const prev = lastBoundsRef.current;
+    if (
+      prev &&
+      prev.x === next.x &&
+      prev.y === next.y &&
+      prev.width === next.width &&
+      prev.height === next.height
+    ) {
+      return;
+    }
+    lastBoundsRef.current = next;
     void collectorReportBrowserHost(invoke, { ...next, active: true });
   }, [invoke]);
 
+  // Execute Match Test logic: decoupled from the WebContentsView lifecycle
   const handleRunMatchTest = useCallback(async () => {
-    if (locked || isRunning) return;
+    if (lockedRef.current || isRunningRef.current) return;
     setErrorMsg(null);
 
     if (!isElectronBrowserCoreAvailable() || !invoke) {
+      if (!isMountedRef.current) return;
       setErrorMsg(
         "Browser Core session unavailable. Live Browser Match Test requires an active Electron browser session.",
       );
@@ -85,26 +121,35 @@ export function StepMatchTest({
         ],
         error: "Browser Core unavailable",
       };
-      onChange({ ...draft, matchTest: failedResult, dirty: true });
+      onChangeRef.current({ ...draftRef.current, matchTest: failedResult, dirty: true });
       return;
     }
 
+    isRunningRef.current = true;
     setIsRunning(true);
     try {
       // Clear previous highlights before fresh run
       await collectorClearHighlights(invoke);
 
-      // Real live DOM inspection strictly bounded to current visible viewport
-      const snapshot = await collectorInspectDom(invoke, currentUrl, draft.layoutContext);
-      const result = executeLiveBrowserMatchTest(draft.regions ?? [], snapshot);
+      if (!isMountedRef.current) return;
+
+      // Real live DOM inspection strictly bounded to current visible viewport (no scroll)
+      const snapshot = await collectorInspectDom(invoke, currentUrl, draftRef.current.layoutContext);
+
+      if (!isMountedRef.current) return;
+
+      const result = executeLiveBrowserMatchTest(draftRef.current.regions ?? [], snapshot);
 
       // Inject live visual highlights on WebContentsView
-      if (result.matchedItems && result.matchedItems.length > 0) {
+      if (result.matchedItems && result.matchedItems.length > 0 && isMountedRef.current) {
         await collectorHighlightMatches(invoke, result.matchedItems);
       }
 
-      onChange({ ...draft, matchTest: result, dirty: true });
+      if (isMountedRef.current) {
+        onChangeRef.current({ ...draftRef.current, matchTest: result, dirty: true });
+      }
     } catch (err) {
+      if (!isMountedRef.current) return;
       const msg = err instanceof Error ? err.message : String(err);
       setErrorMsg(`Match Test failed: ${msg}`);
       const failedResult: MatchTestResult = {
@@ -117,14 +162,19 @@ export function StepMatchTest({
         summary: `Match Test failed: ${msg}`,
         error: msg,
       };
-      onChange({ ...draft, matchTest: failedResult, dirty: true });
+      onChangeRef.current({ ...draftRef.current, matchTest: failedResult, dirty: true });
     } finally {
-      setIsRunning(false);
+      isRunningRef.current = false;
+      if (isMountedRef.current) {
+        setIsRunning(false);
+      }
     }
-  }, [locked, isRunning, invoke, currentUrl, draft, onChange]);
+  }, [invoke, currentUrl]);
 
-  // Manage WebContentsView attachment & initial auto-run
+  // 1. Browser Host Lifecycle: Mounted ONCE when entering Step 3, unmounted ONCE when leaving Step 3.
+  // Independent of isRunning, draft updates, match results, or React re-renders.
   useEffect(() => {
+    isMountedRef.current = true;
     const isAvailable = isElectronBrowserCoreAvailable();
     setBrowserConnected(isAvailable);
 
@@ -132,44 +182,47 @@ export function StepMatchTest({
 
     // Attach native WebContentsView to hostRef
     publishHost();
-    void collectorSetBrowserVisible(invoke, true).then(publishHost);
+    void collectorSetBrowserVisible(invoke, true).then(() => {
+      if (isMountedRef.current) publishHost();
+    });
 
     const el = hostRef.current;
     const ro =
       typeof ResizeObserver !== "undefined"
-        ? new ResizeObserver(() => publishHost())
+        ? new ResizeObserver(() => {
+            if (isMountedRef.current) publishHost();
+          })
         : null;
     if (el && ro) ro.observe(el);
-    window.addEventListener("resize", publishHost);
 
-    // Automatic initial match test: execute once upon entering ready state
-    if (!hasAutoRunRef.current) {
-      hasAutoRunRef.current = true;
-      const timer = setTimeout(() => {
-        void handleRunMatchTest();
-      }, 300);
-      return () => clearTimeout(timer);
-    }
+    const onResize = () => {
+      if (isMountedRef.current) publishHost();
+    };
+    window.addEventListener("resize", onResize);
 
     return () => {
+      isMountedRef.current = false;
       ro?.disconnect();
-      window.removeEventListener("resize", publishHost);
+      window.removeEventListener("resize", onResize);
+      lastBoundsRef.current = null;
       void collectorClearHighlights(invoke);
       void collectorReportBrowserHost(invoke, null);
       void collectorSetBrowserVisible(invoke, false);
     };
-  }, [invoke, publishHost, handleRunMatchTest]);
+  }, [invoke, publishHost]);
 
-  // Clean up on component unmount
+  // 2. Initial Match Execution Lifecycle: Runs exactly ONCE when the browser session is ready.
   useEffect(() => {
-    return () => {
-      if (invoke && isElectronBrowserCoreAvailable()) {
-        void collectorClearHighlights(invoke);
-        void collectorReportBrowserHost(invoke, null);
-        void collectorSetBrowserVisible(invoke, false);
-      }
-    };
-  }, [invoke]);
+    if (!hasAutoRunRef.current && isElectronBrowserCoreAvailable() && invoke) {
+      hasAutoRunRef.current = true;
+      const timer = setTimeout(() => {
+        if (isMountedRef.current) {
+          void handleRunMatchTest();
+        }
+      }, 300);
+      return () => clearTimeout(timer);
+    }
+  }, [invoke, handleRunMatchTest]);
 
   return (
     <div className="collector-match-test-stage">
@@ -270,11 +323,25 @@ export function StepMatchTest({
             )}
           </div>
 
-          {/* Matched Viewport Posts List (Max 3) */}
+          {/* Viewport Candidates (Max 3) */}
           <div className="collector-match-items-section">
-            <h4 className="collector-section-title">
-              Matched Viewport Posts ({matchTestResult?.matchedItems?.length ?? 0} / 3 max)
-            </h4>
+            <div className="collector-match-items-head-row">
+              <h4 className="collector-section-title" style={{ margin: 0 }}>
+                Viewport Candidates (Limit: 3)
+              </h4>
+              <div className="collector-candidate-counts">
+                <span className="collector-count-pill inspected">
+                  Inspected: <b>{inspectedCount}</b>
+                </span>
+                <span
+                  className={`collector-count-pill matched ${
+                    resolvedMatchedCount > 0 ? "has-matches" : "zero"
+                  }`}
+                >
+                  Matched: <b>{resolvedMatchedCount}</b>
+                </span>
+              </div>
+            </div>
 
             {(!matchTestResult?.matchedItems || matchTestResult.matchedItems.length === 0) && (
               <div className="collector-sample-empty">

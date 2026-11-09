@@ -28,7 +28,14 @@ export function useCollectorStore() {
 
   const saveCollector = useCallback(
     (collector: CollectorDraft) => {
-      persist(upsertCollector(envelope, { ...collector, dirty: false, updatedAt: new Date().toISOString() }));
+      // Remove any migration warnings for the collector being saved, since it's now saved in current schema
+      const remainingWarnings = envelope.parseWarnings?.filter(
+        (w) => !w.includes(`Migrated collector "${collector.name}"`),
+      );
+      persist({
+        ...upsertCollector(envelope, { ...collector, dirty: false, updatedAt: new Date().toISOString() }),
+        parseWarnings: remainingWarnings && remainingWarnings.length > 0 ? remainingWarnings : undefined,
+      });
     },
     [envelope, persist],
   );

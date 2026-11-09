@@ -3597,6 +3597,59 @@ body[data-panel="shell"] .collector-capture-split > aside.collector-capture-tool
   gap: 10px;
 }
 
+.collector-match-items-head-row {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+}
+
+.collector-candidate-counts {
+  display: flex;
+  gap: 6px;
+  align-items: center;
+}
+
+.collector-count-pill {
+  font-size: 11px;
+  padding: 2px 8px;
+  border-radius: 4px;
+  background: #1e293b;
+  border: 1px solid #334155;
+  color: #94a3b8;
+}
+
+.collector-count-pill b {
+  color: #f1f5f9;
+}
+
+.collector-count-pill.matched.has-matches {
+  background: #064e3b;
+  border-color: #059669;
+  color: #6ee7b7;
+}
+
+.collector-count-pill.matched.has-matches b {
+  color: #a7f3d0;
+}
+
+.collector-count-pill.matched.zero {
+  background: #451a1a;
+  border-color: #7f1d1d;
+  color: #fca5a5;
+}
+
+.collector-count-pill.matched.zero b {
+  color: #fecaca;
+}
+
+.collector-asset-loading {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: #93c5fd;
+  font-size: 13px;
+}
+
 .collector-match-item-card {
   background: #0f172a;
   border: 1px solid #1e293b;

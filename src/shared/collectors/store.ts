@@ -472,8 +472,12 @@ export function parseEnvelope(raw: string | null): CollectorStoreEnvelope {
 }
 
 export function serializeEnvelope(envelope: CollectorStoreEnvelope): string {
+  // Strip transient migration event notices when saving the envelope in current schema version.
+  // Genuine corruption / integrity warnings (e.g. JSON parse failure) remain.
+  const cleanWarnings = envelope.parseWarnings?.filter((w) => !w.startsWith("Migrated collector"));
   const next: CollectorStoreEnvelope = {
     ...envelope,
+    parseWarnings: cleanWarnings && cleanWarnings.length > 0 ? cleanWarnings : undefined,
     schemaVersion: COLLECTOR_SCHEMA_VERSION,
     updatedAt: new Date().toISOString(),
   };
