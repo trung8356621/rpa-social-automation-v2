@@ -1774,12 +1774,21 @@ async function boot() {
             }
           });
 
+          const fixedNodes = new WeakSet();
           let node = walker.currentNode;
 
           while (node && count < maxNodes) {
             if (node instanceof HTMLElement && isVisible(node)) {
               const r = node.getBoundingClientRect();
               if (inViewport(r) || (r.width > 200 && r.height > 200)) {
+                const s = getComputedStyle(node);
+                const isSelfFixed = s.position === 'fixed' || s.position === 'sticky';
+                const isParentFixed = node.parentElement ? fixedNodes.has(node.parentElement) : false;
+                const isFixed = isSelfFixed || isParentFixed;
+                if (isFixed) {
+                  fixedNodes.add(node);
+                }
+
                 const role = node.getAttribute('role') || undefined;
                 const className = typeof node.className === 'string' ? node.className.slice(0, 100) : '';
                 const isFeed = role === 'feed' || /\\b(feed|stream|wall)\\b/i.test(className);
@@ -1838,6 +1847,7 @@ async function boot() {
                   isArticleOrCard: Boolean(isArticle),
                   isFeedContainer: Boolean(isFeed),
                   isDialogOrModal: Boolean(isDialog),
+                  isFixed: Boolean(isFixed),
                   hasMedia: Boolean(node.querySelector('img, video')),
                   outerHtmlSnippet: (node.outerHTML || '').slice(0, 300),
                 };

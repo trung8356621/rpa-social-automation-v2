@@ -1131,3 +1131,199 @@ test("C2.11.4: Preserves user-provided mappings and evidence without fabrication
   const m2 = v2?.mappings.find((m) => m.sampleId === cap1);
   assert.equal(m2, undefined, "Unmapped variable remains untouched without fake not_present");
 });
+
+// ---------------------------------------------------------------------------
+// C2.11.5 BEGIN/END Pairing & Candidate Filtering Tests
+// ---------------------------------------------------------------------------
+
+test("C2.11.5: Rejects fixed chrome elements and top header bar (y < 45) for END anchors", () => {
+  const endRegion = createCollectorRegion({
+    captureItemId: "s1",
+    type: "END",
+    groupTag: "post-main",
+    label: "post-main End",
+    box: { x: 20, y: 500, width: 300, height: 40 },
+    imageWidth: 800,
+    imageHeight: 600,
+  });
+
+  const elements = [
+    {
+      id: "sticky_nav_group",
+      tagName: "SPAN",
+      role: "group",
+      rect: { x: 10, y: 2, width: 200, height: 35 },
+      textSnippet: "",
+      attributes: { role: "group" },
+      isFixed: true,
+      childrenIds: [],
+    },
+    {
+      id: "top_bar_at_y2",
+      tagName: "SPAN",
+      role: "group",
+      rect: { x: 10, y: 2, width: 200, height: 35 },
+      textSnippet: "",
+      attributes: { role: "group" },
+      isFixed: false,
+      childrenIds: [],
+    },
+    {
+      id: "real_post_action_bar",
+      tagName: "DIV",
+      role: "toolbar",
+      rect: { x: 10, y: 450, width: 500, height: 40 },
+      textSnippet: "Thích · Bình luận · Chia sẻ",
+      attributes: { role: "toolbar" },
+      isFixed: false,
+      childrenIds: [],
+    },
+  ];
+
+  const cands = findAnchorCandidates(endRegion, elements as any);
+  assert.equal(cands.length, 1, "Only the real action bar should qualify as END candidate");
+  assert.equal(cands[0].el.id, "real_post_action_bar");
+  assert.equal(cands[0].el.rect.y, 450);
+});
+
+test("C2.11.5: Rejects sticky navigation links (e.g. 'Bài viết', 'Giới thiệu') from BEGIN author candidates", () => {
+  const beginRegion = createCollectorRegion({
+    captureItemId: "s1",
+    type: "BEGIN",
+    groupTag: "post-main",
+    label: "post-main Begin",
+    box: { x: 20, y: 20, width: 300, height: 60 },
+    imageWidth: 800,
+    imageHeight: 600,
+  });
+
+  const elements = [
+    {
+      id: "nav_tab_discussion",
+      tagName: "A",
+      role: "tab",
+      rect: { x: 20, y: 58, width: 80, height: 40 },
+      textSnippet: "Bài viết",
+      attributes: { href: "/groups/123/" },
+      isFixed: true,
+      childrenIds: [],
+    },
+    {
+      id: "nav_tab_about",
+      tagName: "A",
+      role: "tab",
+      rect: { x: 110, y: 58, width: 80, height: 40 },
+      textSnippet: "Giới thiệu",
+      attributes: { href: "/groups/123/about" },
+      isFixed: false, // even if not flagged fixed, rejected by navTextRegex
+      childrenIds: [],
+    },
+    {
+      id: "real_post_author",
+      tagName: "A",
+      role: "link",
+      rect: { x: 30, y: 150, width: 160, height: 25 },
+      textSnippet: "Trần Minh Quân",
+      attributes: { href: "/user/1000123" },
+      isFixed: false,
+      childrenIds: [],
+    },
+  ];
+
+  const cands = findAnchorCandidates(beginRegion, elements as any);
+  assert.equal(cands.length, 1, "Only genuine author link should qualify as BEGIN candidate");
+  assert.equal(cands[0].el.id, "real_post_author");
+  assert.equal(cands[0].el.rect.y, 150);
+});
+
+test("C2.11.5: Successful BEGIN/END pairing resolves post container and generates rich candidate diagnostics", () => {
+  let draft = createEmptyDraft({ name: "C2.11.5 Test" });
+  draft = addCaptureItem(draft, {
+    imageAsset: "00000001-0000-0000-0000-000000000000.png",
+    captureUrl: "https://facebook.com/groups/123",
+    roi: { x: 0, y: 0, width: 800, height: 600, containerWidth: 800, containerHeight: 600 },
+  });
+  const capId = draft.captures[0].id;
+
+  const bReg = createCollectorRegion({
+    captureItemId: capId,
+    type: "BEGIN",
+    groupTag: "post-main",
+    label: "Author Header",
+    box: { x: 20, y: 20, width: 300, height: 50 },
+    imageWidth: 800,
+    imageHeight: 600,
+  });
+
+  const eReg = createCollectorRegion({
+    captureItemId: capId,
+    type: "END",
+    groupTag: "post-main",
+    label: "Action Footer",
+    box: { x: 20, y: 400, width: 500, height: 40 },
+    imageWidth: 800,
+    imageHeight: 600,
+  });
+
+  draft = addRegionToDraft(draft, bReg);
+  draft = addRegionToDraft(draft, eReg);
+
+  const snapshot: CollectorDomSnapshot = {
+    url: "https://facebook.com/groups/123",
+    capturedAt: new Date().toISOString(),
+    viewport: { width: 610, height: 600, scrollX: 0, scrollY: 300, dpr: 1 },
+    elements: [
+      {
+        id: "post_container_1",
+        tagName: "DIV",
+        role: "article",
+        rect: { x: 10, y: 100, width: 590, height: 450 },
+        textSnippet: "Post content",
+        attributes: { role: "article" },
+        depth: 1,
+        isArticleOrCard: true,
+        childrenIds: ["b_node", "e_node"],
+      },
+      {
+        id: "b_node",
+        tagName: "A",
+        role: "link",
+        rect: { x: 20, y: 120, width: 180, height: 25 },
+        textSnippet: "Phan Văn Đức",
+        attributes: { href: "/user/999" },
+        depth: 2,
+        parentId: "post_container_1",
+        childrenIds: [],
+      },
+      {
+        id: "e_node",
+        tagName: "DIV",
+        role: "toolbar",
+        rect: { x: 20, y: 500, width: 450, height: 35 },
+        textSnippet: "Thích · Bình luận",
+        attributes: { role: "toolbar" },
+        depth: 2,
+        parentId: "post_container_1",
+        childrenIds: [],
+      },
+    ],
+  };
+
+  const res = executeLiveBrowserMatchTest(draft.regions!, snapshot, draft);
+  assert.equal(res.status, "MATCHED");
+  assert.equal(res.matchedPostCount, 1);
+
+  const grp = res.groups[0];
+  assert.equal(grp.status, "MATCHED");
+  assert.equal(grp.domAssociationStatus, "CONFIRMED");
+  assert.ok(grp.candidateDiagnostics);
+  assert.equal(grp.candidateDiagnostics.topBeginCandidates.length, 1);
+  assert.equal(grp.candidateDiagnostics.topBeginCandidates[0].id, "b_node");
+  assert.equal(grp.candidateDiagnostics.topBeginCandidates[0].isViewportRelative, true);
+  assert.equal(grp.candidateDiagnostics.topEndCandidates.length, 1);
+  assert.equal(grp.candidateDiagnostics.topEndCandidates[0].id, "e_node");
+  assert.equal(grp.candidateDiagnostics.topEndCandidates[0].isViewportRelative, true);
+  assert.equal(grp.candidateDiagnostics.selectedPair?.beginId, "b_node");
+  assert.equal(grp.candidateDiagnostics.selectedPair?.endId, "e_node");
+  assert.equal(grp.candidateDiagnostics.selectedPair?.containerId, "post_container_1");
+});

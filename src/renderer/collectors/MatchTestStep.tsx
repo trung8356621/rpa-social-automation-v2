@@ -202,6 +202,7 @@ export function StepMatchTest({
             failureReason: g.failureReason,
             beginMatched: g.beginMatch?.matched,
             endMatched: g.endMatch?.matched,
+            candidateDiagnostics: g.candidateDiagnostics,
           })),
           matchedItems: (result.matchedItems || []).map((item) => ({
             index: item.index,

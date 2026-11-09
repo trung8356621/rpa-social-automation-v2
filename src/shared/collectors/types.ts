@@ -398,6 +398,19 @@ export type AnchorMatchDetail = {
   evidence?: string;
 };
 
+export type CandidateDiagnosticInfo = {
+  id: string;
+  tagName: string;
+  role?: string;
+  textSnippet?: string;
+  rect: Rect;
+  isViewportRelative: boolean;
+  isFixed?: boolean;
+  score: number;
+  method: string;
+  reasons: string;
+};
+
 export type PostGroupMatch = {
   groupTag: string;
   status: MatchTestStatus;
@@ -420,6 +433,31 @@ export type PostGroupMatch = {
   visualConfidence: number;
   limitations?: string[];
   failureReason?: string;
+  candidateDiagnostics?: {
+    topBeginCandidates: CandidateDiagnosticInfo[];
+    topEndCandidates: CandidateDiagnosticInfo[];
+    rejectedPairings: Array<{
+      beginId: string;
+      beginTag: string;
+      beginY: number;
+      endId: string;
+      endTag: string;
+      endY: number;
+      reason: string;
+    }>;
+    selectedPair?: {
+      beginId: string;
+      beginTag: string;
+      beginY: number;
+      endId: string;
+      endTag: string;
+      endY: number;
+      containerId?: string;
+      containerTag?: string;
+      containerRect?: Rect;
+      score: number;
+    } | null;
+  };
 };
 
 export type MatchedPostItem = {
@@ -497,6 +535,7 @@ export type CollectorDomElement = {
   isArticleOrCard?: boolean;
   isFeedContainer?: boolean;
   isDialogOrModal?: boolean;
+  isFixed?: boolean;
   hasMedia?: boolean;
   outerHtmlSnippet?: string;
 };

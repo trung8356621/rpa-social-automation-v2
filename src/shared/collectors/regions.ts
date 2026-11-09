@@ -1477,14 +1477,27 @@ export function findAnchorCandidates(
   }
 
   for (const el of elements) {
+    // Top chrome and fixed elements cannot be feed post anchors
+    if (el.isFixed) {
+      continue;
+    }
+
+    // A post END anchor (footer / reactions / actions) cannot be in the top navigation zone
+    if (region.type === "END" && el.rect.y < 45) {
+      continue;
+    }
+
     let score = 0;
     let method: "text_dom" | "visual_projection" | "none" = "none";
     const reasons: string[] = [];
 
-    // Text token matching against stable tokens
-    if (refTokens.length > 0 && el.textSnippet) {
-      const elText = normalizeVietnameseText(el.textSnippet);
-      const matchCount = refTokens.filter((token) => !variableTokenSet.has(token) && elText.includes(token)).length;
+    // Text token matching against stable tokens and reference OCR
+    const fullElementText = normalizeVietnameseText(
+      [el.textSnippet, el.attributes?.["aria-label"]].filter(Boolean).join(" "),
+    );
+
+    if (refTokens.length > 0 && fullElementText) {
+      const matchCount = refTokens.filter((token) => !variableTokenSet.has(token) && fullElementText.includes(token)).length;
       const effectiveRefCount = refTokens.filter((token) => !variableTokenSet.has(token)).length || refTokens.length;
       if (matchCount > 0) {
         const textScore = Math.min(60, Math.round((matchCount / effectiveRefCount) * 60));
@@ -1507,7 +1520,7 @@ export function findAnchorCandidates(
     } else if (region.type === "BEGIN" && (el.role === "heading" || el.tagName === "HEADER" || el.role === "banner")) {
       score += 20;
       reasons.push(`semantic header role`);
-    } else if (region.type === "END" && (el.role === "footer" || el.tagName === "FOOTER" || el.role === "toolbar" || el.role === "group")) {
+    } else if (region.type === "END" && (el.role === "footer" || el.tagName === "FOOTER" || el.role === "contentinfo")) {
       score += 20;
       reasons.push(`semantic footer role`);
     }
@@ -1537,10 +1550,16 @@ export function findAnchorCandidates(
     }
 
     // Social post header heuristics (author profile link, timestamp pattern)
+    const navTextRegex = /^(bài viết|giới thiệu|thành viên|đáng chú ý|sự kiện|file|phương tiện|discussion|featured|about|members|events|media|files|reels|photos|videos|home|trang chủ|thông báo|tin nhắn|xem thêm|see more)$/i;
+    const isNavText = Boolean(el.textSnippet && navTextRegex.test(el.textSnippet.trim()));
+
     const isAuthorHeader =
-      (el.tagName === "A" && Boolean(el.attributes?.href) && Boolean(el.textSnippet && el.textSnippet.length > 2)) ||
-      (el.attributes?.role === "link" && Boolean(el.textSnippet && isAuthorCandidate(el.textSnippet))) ||
-      Boolean(el.textSnippet && isTimestampText(el.textSnippet));
+      !isNavText &&
+      ((el.tagName === "A" &&
+        Boolean(el.attributes?.href) &&
+        Boolean(el.textSnippet && (isAuthorCandidate(el.textSnippet) || isTimestampText(el.textSnippet)))) ||
+        (el.attributes?.role === "link" && Boolean(el.textSnippet && isAuthorCandidate(el.textSnippet))) ||
+        Boolean(el.textSnippet && isTimestampText(el.textSnippet)));
 
     if (region.type === "BEGIN" && isAuthorHeader) {
       score += 25;
@@ -1549,17 +1568,21 @@ export function findAnchorCandidates(
     }
 
     // Social post footer/actions heuristics (like/comment/share actions, engagement toolbar)
+    const actionVerbsRegex = /\b(thích|bình luận|chia sẻ|like|comment|share|reply|gửi|send|upvote|retweet|repost)\b/i;
+    const hasEngagementAction = Boolean(
+      (el.textSnippet && actionVerbsRegex.test(el.textSnippet)) ||
+      (el.attributes?.["aria-label"] && actionVerbsRegex.test(el.attributes["aria-label"])) ||
+      (el.textSnippet && isEngagementText(el.textSnippet)),
+    );
+
     const isActionFooter =
-      Boolean(el.textSnippet && isEngagementText(el.textSnippet)) ||
-      Boolean(el.textSnippet && /\b(thích|bình luận|chia sẻ|like|comment|share|reply|gửi|send|upvote|retweet|repost)\b/i.test(el.textSnippet)) ||
-      Boolean(el.attributes?.["aria-label"] && /\b(thích|bình luận|chia sẻ|like|comment|share)\b/i.test(el.attributes["aria-label"])) ||
-      el.role === "toolbar" ||
-      el.role === "group";
+      hasEngagementAction ||
+      ((el.role === "toolbar" || el.role === "group") && hasEngagementAction);
 
     if (region.type === "END" && isActionFooter) {
-      score += 30;
+      score += 35;
       if (method === "none") method = "text_dom";
-      reasons.push("social actions bar (like/comment/share)");
+      reasons.push("social actions (like/comment/share)");
     }
 
     if (score >= 40) {
@@ -1716,6 +1739,69 @@ export function executeLiveBrowserMatchTest(
     // 2. Find candidates for END
     const endCandidates = findAnchorCandidates(end, snapshot.elements, ruleGroup?.endRule);
 
+    type PairCandidate = {
+      beginCandidate: (typeof beginCandidates)[0];
+      endCandidate: (typeof endCandidates)[0];
+      lca: CollectorDomElement | null;
+      isVerticallyOrdered: boolean;
+      isBroadFeed: boolean;
+      enclosesMultiple: boolean;
+      score: number;
+    };
+
+    const validPairs: PairCandidate[] = [];
+    const rejectedPairs: Array<{ pair: PairCandidate; reason: string }> = [];
+
+    const buildCandidateDiagnostics = (selected: PairCandidate | null = null) => ({
+      topBeginCandidates: beginCandidates.slice(0, 5).map((c) => ({
+        id: c.el.id,
+        tagName: c.el.tagName,
+        role: c.el.role,
+        textSnippet: c.el.textSnippet ? c.el.textSnippet.slice(0, 60) : undefined,
+        rect: c.el.rect,
+        isViewportRelative: true,
+        isFixed: Boolean(c.el.isFixed),
+        score: c.score,
+        method: c.method,
+        reasons: c.reason,
+      })),
+      topEndCandidates: endCandidates.slice(0, 5).map((c) => ({
+        id: c.el.id,
+        tagName: c.el.tagName,
+        role: c.el.role,
+        textSnippet: c.el.textSnippet ? c.el.textSnippet.slice(0, 60) : undefined,
+        rect: c.el.rect,
+        isViewportRelative: true,
+        isFixed: Boolean(c.el.isFixed),
+        score: c.score,
+        method: c.method,
+        reasons: c.reason,
+      })),
+      rejectedPairings: rejectedPairs.slice(0, 10).map((r) => ({
+        beginId: r.pair.beginCandidate.el.id,
+        beginTag: r.pair.beginCandidate.el.tagName,
+        beginY: r.pair.beginCandidate.el.rect.y,
+        endId: r.pair.endCandidate.el.id,
+        endTag: r.pair.endCandidate.el.tagName,
+        endY: r.pair.endCandidate.el.rect.y,
+        reason: r.reason,
+      })),
+      selectedPair: selected
+        ? {
+            beginId: selected.beginCandidate.el.id,
+            beginTag: selected.beginCandidate.el.tagName,
+            beginY: selected.beginCandidate.el.rect.y,
+            endId: selected.endCandidate.el.id,
+            endTag: selected.endCandidate.el.tagName,
+            endY: selected.endCandidate.el.rect.y,
+            containerId: selected.lca?.id,
+            containerTag: selected.lca?.tagName,
+            containerRect: selected.lca?.rect,
+            score: selected.score,
+          }
+        : null,
+    });
+
     if (beginCandidates.length === 0 && endCandidates.length === 0) {
       allMatchedItems.push({
         index: allMatchedItems.length + 1,
@@ -1734,6 +1820,7 @@ export function executeLiveBrowserMatchTest(
         visualConfidence: 0,
         limitations: visualLimitations,
         failureReason: `Neither BEGIN anchor (${begin.label}) nor END anchor (${end.label}) matched in live DOM.`,
+        candidateDiagnostics: buildCandidateDiagnostics(null),
       });
       continue;
     }
@@ -1770,6 +1857,7 @@ export function executeLiveBrowserMatchTest(
         visualConfidence: topBegin.score,
         limitations: visualLimitations,
         failureReason: `BEGIN anchor matched <${topBegin.el.tagName}>, but END anchor (${end.label}) was not found in live DOM.`,
+        candidateDiagnostics: buildCandidateDiagnostics(null),
       });
       continue;
     }
@@ -1806,23 +1894,12 @@ export function executeLiveBrowserMatchTest(
         visualConfidence: topEnd.score,
         limitations: visualLimitations,
         failureReason: `END anchor matched <${topEnd.el.tagName}>, but BEGIN anchor (${begin.label}) was not found in live DOM.`,
+        candidateDiagnostics: buildCandidateDiagnostics(null),
       });
       continue;
     }
 
     // Both have candidates. Evaluate pairings.
-    type PairCandidate = {
-      beginCandidate: (typeof beginCandidates)[0];
-      endCandidate: (typeof endCandidates)[0];
-      lca: CollectorDomElement | null;
-      isVerticallyOrdered: boolean;
-      isBroadFeed: boolean;
-      enclosesMultiple: boolean;
-      score: number;
-    };
-
-    const validPairs: PairCandidate[] = [];
-    const rejectedPairs: Array<{ pair: PairCandidate; reason: string }> = [];
 
     for (const bCand of beginCandidates) {
       for (const eCand of endCandidates) {
@@ -1974,6 +2051,7 @@ export function executeLiveBrowserMatchTest(
         ),
         limitations: visualLimitations,
         failureReason: primaryRejection,
+        candidateDiagnostics: buildCandidateDiagnostics(null),
       });
       continue;
     }
@@ -2067,6 +2145,7 @@ export function executeLiveBrowserMatchTest(
       domAssociationStatus: "CONFIRMED",
       visualConfidence: primaryPair.score,
       limitations: visualLimitations,
+      candidateDiagnostics: buildCandidateDiagnostics(primaryPair),
     });
   }
 
