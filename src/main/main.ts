@@ -29,6 +29,7 @@ import { BrowserCore } from "./browser-core.js";
 import { CollectorScrollCaptureController } from "./collector-scroll-capture.js";
 import { BrowserSessions } from "./browser-sessions.js";
 import { matchEndVisual } from "./end-visual-matcher.js";
+import { matchBeginLayout } from "./begin-layout-matcher.js";
 import { BrowserRecording } from "./browser-recording.js";
 import { TestRunEvidence } from "./test-run-evidence.js";
 import { TestLab } from "./test-lab.js";
@@ -2116,6 +2117,80 @@ async function boot() {
             const badge = document.createElement('div');
             badge.style.cssText = 'position:absolute;top:-20px;left:0;background:#7c3aed;color:#ffffff;font-size:10px;font-weight:bold;padding:1px 6px;border-radius:2px;font-family:system-ui,sans-serif;box-shadow:0 1px 3px rgba(0,0,0,0.5);white-space:nowrap;';
             badge.textContent = '#' + (idx + 1) + ' Screenshot Test Result: END Visual Anchor (' + m.confidence + '%)';
+            box.appendChild(badge);
+            overlay.appendChild(box);
+          });
+
+          document.documentElement.appendChild(overlay);
+        })()`,
+          )
+          .catch(() => {});
+        return { success: true };
+      }
+      case "collectorMatchBeginLayout": {
+        isIdle();
+        const wc = browser.view.webContents;
+        const img = await wc.capturePage(undefined, { stayHidden: true });
+        const screenshotBuffer = img.toPNG();
+
+        const references: Array<{ sampleId?: string; groupTag?: string; imageBuffer: Buffer; roi?: Rect }> = [];
+        const rawRefs = Array.isArray(command.references) ? command.references : [];
+
+        for (const ref of rawRefs) {
+          let buf: Buffer | null = null;
+          if (typeof ref.referenceImage === "string" && ref.referenceImage.startsWith("data:")) {
+            const base64Data = ref.referenceImage.split(",")[1];
+            if (base64Data) buf = Buffer.from(base64Data, "base64");
+          } else if (ref.assetId && typeof ref.assetId === "string") {
+            const assetPath = path.join(evidenceDir, `${ref.assetId}.png`);
+            try {
+              buf = await readFile(assetPath);
+            } catch {}
+          }
+          if (buf && buf.length > 0) {
+            references.push({
+              sampleId: ref.sampleId,
+              groupTag: ref.groupTag,
+              imageBuffer: buf,
+              roi: ref.originalRoi,
+            });
+          }
+        }
+
+        const matchResult = await matchBeginLayout(screenshotBuffer, references, command.options);
+        return matchResult;
+      }
+      case "collectorHighlightBeginLayout": {
+        isIdle();
+        const wc = browser.view.webContents;
+        const matches = Array.isArray(command.matches) ? command.matches : [];
+        await wc
+          .executeJavaScript(
+            `(() => {
+          // Clear previous highlights
+          document.querySelectorAll('.__rpa_highlight_badge__').forEach((b) => b.remove());
+          document.querySelectorAll('[data-rpa-highlight]').forEach((el) => {
+            el.style.outline = el.getAttribute('data-rpa-orig-outline') || '';
+            el.style.boxShadow = el.getAttribute('data-rpa-orig-box-shadow') || '';
+          });
+          const old = document.getElementById('__rpa_match_test_overlay__');
+          if (old) old.remove();
+
+          const items = ${JSON.stringify(matches)};
+          if (!items || items.length === 0) return;
+
+          const overlay = document.createElement('div');
+          overlay.id = '__rpa_match_test_overlay__';
+          overlay.style.cssText = 'position:fixed;top:0;left:0;width:100vw;height:100vh;pointer-events:none;z-index:2147483647;';
+
+          items.forEach((m, idx) => {
+            const rect = m.rect;
+            if (!rect) return;
+            const box = document.createElement('div');
+            box.style.cssText = 'position:absolute;left:' + rect.x + 'px;top:' + rect.y + 'px;width:' + rect.width + 'px;height:' + rect.height + 'px;border:2px solid #06b6d4;box-shadow:0 0 10px rgba(6,182,212,0.5),inset 0 0 8px rgba(6,182,212,0.15);border-radius:3px;box-sizing:border-box;pointer-events:none;';
+            const badge = document.createElement('div');
+            badge.style.cssText = 'position:absolute;top:-20px;left:0;background:#0891b2;color:#ffffff;font-size:10px;font-weight:bold;padding:1px 6px;border-radius:2px;font-family:system-ui,sans-serif;box-shadow:0 1px 3px rgba(0,0,0,0.5);white-space:nowrap;';
+            badge.textContent = '#' + (idx + 1) + ' B3 VISUAL CANDIDATE — NOT DOM VERIFIED (' + m.confidence + '%)';
             box.appendChild(badge);
             overlay.appendChild(box);
           });

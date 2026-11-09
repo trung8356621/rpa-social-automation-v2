@@ -600,6 +600,8 @@ export type MatchTestResult = {
   error?: string;
   // C2.11.12: Isolated END-only visual matching experiment
   endVisualExperiment?: EndVisualMatchResult;
+  // C2.11.13: Isolated BEGIN layout matching experiment (B3)
+  beginLayoutExperiment?: BeginLayoutMatchResult;
 };
 
 // C2.11.12: END-Only Visual Matching Experiment types
@@ -639,6 +641,66 @@ export type EndVisualMatchResult = {
   rejectedCandidates: EndVisualCandidate[];
   diagnostics: {
     referenceCropDimensions: Array<{ width: number; height: number; sampleId: string }>;
+    totalEvaluated: number;
+    durationMs: number;
+    summary: string;
+  };
+};
+
+// C2.11.13: BEGIN Layout Matching Experiment (B3) types
+export type BeginLayoutFeatureScores = {
+  avatarFound: boolean;
+  avatarConfidence: number;
+  dualBandTextFound: boolean;
+  dualBandConfidence: number;
+  menuFound: boolean;
+  menuConfidence: number;
+  structuralGridSimilarity: number;
+  verticalProfileSimilarity: number;
+  aspectRatioSimilarity: number;
+};
+
+export type BeginLayoutCandidate = {
+  id: string;
+  rect: Rect;
+  confidence: number;
+  score: number;
+  status: "MATCHED" | "REJECTED" | "PARTIAL";
+  rejectionReason?: string;
+  features: BeginLayoutFeatureScores;
+  referenceSampleIds: string[];
+  cropDimensions: { width: number; height: number };
+  scale: number;
+};
+
+export type BeginLayoutTemplateInfo = {
+  sampleCount: number;
+  groupTag: string;
+  nominalDimensions: { width: number; height: number };
+  aspectRatio: number;
+  avatarRelBounds: { x: number; y: number; width: number; height: number };
+  textRelBounds: { x: number; y: number; width: number; height: number };
+  menuRelBounds: { x: number; y: number; width: number; height: number };
+};
+
+export type BeginLayoutMatchResult = {
+  testedAt: string;
+  technique: string;
+  screenshotDimensions: { width: number; height: number };
+  scale: number;
+  referenceBeginCount: number;
+  referenceSampleIds: string[];
+  templateInfo?: BeginLayoutTemplateInfo;
+  status: "MATCHED" | "NO_MATCH" | "PARTIAL";
+  matchedHeaders: BeginLayoutCandidate[];
+  rejectedCandidates: BeginLayoutCandidate[];
+  diagnostics: {
+    referenceCropDimensions: Array<{
+      width: number;
+      height: number;
+      sampleId: string;
+      groupTag?: string;
+    }>;
     totalEvaluated: number;
     durationMs: number;
     summary: string;

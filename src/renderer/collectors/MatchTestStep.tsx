@@ -7,6 +7,8 @@ import type {
   PostGroupMatch,
   EndVisualCandidate,
   EndVisualMatchResult,
+  BeginLayoutCandidate,
+  BeginLayoutMatchResult,
 } from "../../shared/collectors/types.js";
 import {
   executeLiveBrowserMatchTest,
@@ -22,6 +24,8 @@ import {
   collectorLogMatchDiagnostic,
   collectorMatchEndVisual,
   collectorHighlightEndVisual,
+  collectorMatchBeginLayout,
+  collectorHighlightBeginLayout,
   isElectronBrowserCoreAvailable,
   type CollectorInvoke,
 } from "./browser-capture.js";
@@ -49,9 +53,15 @@ export function StepMatchTest({
   const [browserConnected, setBrowserConnected] = useState<boolean>(false);
 
   // C2.11.12: Isolated END-only Visual Matching experiment mode
-  const [matchExperimentMode, setMatchExperimentMode] = useState<"BEGIN_PRIMARY" | "END_ONLY_VISUAL">("BEGIN_PRIMARY");
+  // C2.11.13: Isolated BEGIN layout matching experiment (B3)
+  const [matchExperimentMode, setMatchExperimentMode] = useState<
+    "BEGIN_PRIMARY" | "END_ONLY_VISUAL" | "BEGIN_LAYOUT_B3"
+  >("BEGIN_PRIMARY");
   const [endVisualResult, setEndVisualResult] = useState<EndVisualMatchResult | null>(null);
-  const matchExperimentModeRef = useRef<"BEGIN_PRIMARY" | "END_ONLY_VISUAL">("BEGIN_PRIMARY");
+  const [beginLayoutResult, setBeginLayoutResult] = useState<BeginLayoutMatchResult | null>(null);
+  const matchExperimentModeRef = useRef<
+    "BEGIN_PRIMARY" | "END_ONLY_VISUAL" | "BEGIN_LAYOUT_B3"
+  >("BEGIN_PRIMARY");
   matchExperimentModeRef.current = matchExperimentMode;
 
   const hostRef = useRef<HTMLDivElement>(null);
@@ -246,6 +256,85 @@ export function StepMatchTest({
           groups: [],
           summary: visualResult.diagnostics.summary,
           endVisualExperiment: visualResult,
+        };
+        onChangeRef.current({ ...draftRef.current, matchTest: expTestResult, dirty: true });
+        return;
+      }
+
+      // C2.11.13: Isolated BEGIN Layout Matching Experiment (B3)
+      if (matchExperimentModeRef.current === "BEGIN_LAYOUT_B3") {
+        const allRegions = [
+          ...(draftRef.current.regions ?? []),
+          ...(draftRef.current.captures ?? []).flatMap((c) => c.regions ?? []),
+        ];
+        const beginRegions = allRegions.filter(
+          (r) =>
+            r.confirmed &&
+            (r.type === "BEGIN" || (r.type === "STATIC" && r.role === "header")),
+        );
+
+        if (beginRegions.length === 0) {
+          setErrorMsg(
+            "No confirmed BEGIN regions found in teaching samples. Please confirm a BEGIN region in Step 2A first.",
+          );
+          isRunningRef.current = false;
+          setIsRunning(false);
+          return;
+        }
+
+        const references = beginRegions.map((r) => ({
+          sampleId: r.captureItemId,
+          groupTag: r.groupTag,
+          referenceImage: r.referenceImage,
+          assetId: r.referenceImageAsset,
+          originalRoi: r.originalRoi,
+        }));
+
+        const layoutResult = await collectorMatchBeginLayout(invoke, references);
+        setBeginLayoutResult(layoutResult);
+
+        // File-based structured diagnostic logging
+        try {
+          const diagRecord = {
+            timestamp: new Date().toISOString(),
+            matchRunId: `match_run_begin_layout_${currentRunId}_${Date.now()}`,
+            mode: "BEGIN_LAYOUT_B3",
+            sessionId: draftRef.current.id,
+            url: currentUrl,
+            matchingTechnique: layoutResult.technique,
+            referenceBeginSampleIds: layoutResult.referenceSampleIds,
+            referenceCropDimensions: layoutResult.diagnostics.referenceCropDimensions,
+            screenshotDimensions: layoutResult.screenshotDimensions,
+            scale: layoutResult.scale,
+            status: layoutResult.status,
+            matchedHeaders: layoutResult.matchedHeaders,
+            rejectedCandidates: layoutResult.rejectedCandidates,
+            durationMs: layoutResult.diagnostics.durationMs,
+          };
+          void collectorLogMatchDiagnostic(invoke, diagRecord);
+        } catch (logErr) {
+          console.error("Begin layout match diagnostic logging failed", logErr);
+        }
+
+        if (!isMountedRef.current || currentRunId !== runIdRef.current || !matchModeRef.current) {
+          await collectorClearHighlights(invoke);
+          return;
+        }
+
+        if (layoutResult.matchedHeaders.length > 0) {
+          await collectorHighlightBeginLayout(invoke, layoutResult.matchedHeaders);
+        } else {
+          await collectorClearHighlights(invoke);
+        }
+
+        const expTestResult: MatchTestResult = {
+          testedAt: layoutResult.testedAt,
+          browserUrl: currentUrl,
+          status: layoutResult.status === "MATCHED" ? "MATCHED" : "FAILED",
+          matchedPostCount: layoutResult.matchedHeaders.length,
+          groups: [],
+          summary: layoutResult.diagnostics.summary,
+          beginLayoutExperiment: layoutResult,
         };
         onChangeRef.current({ ...draftRef.current, matchTest: expTestResult, dirty: true });
         return;
@@ -477,7 +566,10 @@ export function StepMatchTest({
               value={matchExperimentMode}
               disabled={locked || isRunning}
               onChange={(e) => {
-                const nextMode = e.target.value as "BEGIN_PRIMARY" | "END_ONLY_VISUAL";
+                const nextMode = e.target.value as
+                  | "BEGIN_PRIMARY"
+                  | "END_ONLY_VISUAL"
+                  | "BEGIN_LAYOUT_B3";
                 setMatchExperimentMode(nextMode);
                 matchExperimentModeRef.current = nextMode;
                 if (invoke && isElectronBrowserCoreAvailable()) {
@@ -486,7 +578,12 @@ export function StepMatchTest({
               }}
               style={{
                 background: "#0f172a",
-                color: matchExperimentMode === "END_ONLY_VISUAL" ? "#c084fc" : "#38bdf8",
+                color:
+                  matchExperimentMode === "BEGIN_LAYOUT_B3"
+                    ? "#06b6d4"
+                    : matchExperimentMode === "END_ONLY_VISUAL"
+                      ? "#c084fc"
+                      : "#38bdf8",
                 border: "1px solid #334155",
                 borderRadius: "3px",
                 padding: "3px 8px",
@@ -494,10 +591,11 @@ export function StepMatchTest({
                 fontWeight: 600,
                 cursor: "pointer",
               }}
-              title="Select matching mode: Production (Primary/BEGIN) or Isolated END-Only Visual Experiment"
+              title="Select matching mode: Production (Primary/BEGIN), Isolated END-Only, or B3 BEGIN Layout Experiment"
             >
               <option value="BEGIN_PRIMARY">Production (Primary / BEGIN)</option>
               <option value="END_ONLY_VISUAL">🧪 END-Only Visual Experiment</option>
+              <option value="BEGIN_LAYOUT_B3">🧪 BEGIN Layout Experiment (B3)</option>
             </select>
           </div>
 
@@ -626,8 +724,111 @@ export function StepMatchTest({
             )}
           </div>
 
-          {/* C2.11.12: END-Only Visual Matching Experiment Results Card */}
-          {matchExperimentMode === "END_ONLY_VISUAL" ? (
+          {/* C2.11.13: BEGIN Layout Matching Experiment (B3) Results Card */}
+          {matchExperimentMode === "BEGIN_LAYOUT_B3" ? (
+            <div className="collector-match-items-section">
+              <div className="collector-match-items-head-row">
+                <h4 className="collector-section-title" style={{ margin: 0, color: "#06b6d4" }}>
+                  🧪 BEGIN Layout Experiment (B3) (Screenshot Space)
+                </h4>
+                <span className="collector-count-pill matched has-matches">
+                  Matched: <b>{beginLayoutResult?.matchedHeaders?.length ?? 0}</b>
+                </span>
+              </div>
+
+              <div
+                style={{
+                  background: "#083344",
+                  border: "1px solid #0891b2",
+                  borderRadius: "4px",
+                  padding: "8px 12px",
+                  marginBottom: "10px",
+                  fontSize: "11px",
+                  color: "#cffafe",
+                }}
+              >
+                <b>Visual Technique:</b> {beginLayoutResult?.technique || "Structural Geometry & Relative Layout Correlation (Sharp)"}<br />
+                <b>Reference Crops:</b> {beginLayoutResult?.referenceBeginCount ?? 0} confirmed BEGIN sample(s) | <b>Scale:</b> {beginLayoutResult?.scale ?? 1.0}×<br />
+                {beginLayoutResult?.templateInfo && (
+                  <div style={{ marginTop: "4px", fontSize: "10px", color: "#a5f3fc" }}>
+                    <b>Template Family:</b> Group: <code>{beginLayoutResult.templateInfo.groupTag}</code> | AR: <code>{beginLayoutResult.templateInfo.aspectRatio}:1</code> | Nominal: <code>{beginLayoutResult.templateInfo.nominalDimensions.width}×{beginLayoutResult.templateInfo.nominalDimensions.height}px</code>
+                  </div>
+                )}
+                <div style={{ marginTop: "4px", color: "#67e8f9", fontWeight: 600 }}>
+                  ⚠️ B3 VISUAL CANDIDATE — NOT DOM VERIFIED
+                </div>
+                <span style={{ color: "#7dd3fc", fontSize: "10px" }}>
+                  Note: Isolated B3 layout recognition. Does not resolve post containers, does not run variable extraction, does not pair with END, and does not claim candidate is a confirmed post.
+                </span>
+              </div>
+
+              {(!beginLayoutResult?.matchedHeaders || beginLayoutResult.matchedHeaders.length === 0) && (
+                <div className="collector-sample-empty">
+                  {displayStatus === "NOT TESTED"
+                    ? "Click 'Re-match Current Viewport' in Match Mode ON to test B3 visual layout matching."
+                    : beginLayoutResult?.status === "PARTIAL"
+                      ? "Partial header detected at viewport boundary; insufficient complete evidence."
+                      : "0 post headers matched. Check that post headers (avatar, author, timestamp, action menu) are visible in the viewport."}
+                </div>
+              )}
+
+              {beginLayoutResult?.matchedHeaders?.map((cand, idx) => (
+                <div
+                  key={cand.id || `begin-header-${idx}`}
+                  className="collector-match-item-card resolved"
+                  style={{ borderLeftColor: "#06b6d4" }}
+                >
+                  <div className="collector-match-item-head">
+                    <div style={{ display: "flex", gap: "8px", alignItems: "center" }}>
+                      <span className="collector-match-num-badge" style={{ backgroundColor: "#0891b2" }}>
+                        #{idx + 1}
+                      </span>
+                      <b style={{ color: "#e2e8f0" }}>B3 VISUAL CANDIDATE — NOT DOM VERIFIED</b>
+                      <span style={{ color: "#22d3ee", fontSize: "11px", fontFamily: "monospace" }}>
+                        [{cand.rect.x}, {cand.rect.y}, {cand.rect.width}×{cand.rect.height}]
+                      </span>
+                    </div>
+                    <span className="collector-match-pill small status-matched">
+                      {cand.confidence}% MATCH
+                    </span>
+                  </div>
+
+                  <div style={{ marginTop: "6px", fontSize: "11px", color: "#94a3b8", display: "flex", gap: "10px", flexWrap: "wrap" }}>
+                    <span>Avatar: <b style={{ color: "#38bdf8" }}>{cand.features.avatarConfidence}%</b></span>
+                    <span>Dual-Band Text: <b style={{ color: "#38bdf8" }}>{cand.features.dualBandConfidence}%</b></span>
+                    <span>Action Menu: <b style={{ color: "#38bdf8" }}>{cand.features.menuConfidence}%</b></span>
+                    <span>Structural Grid: <b style={{ color: "#4ade80" }}>{cand.features.structuralGridSimilarity}%</b></span>
+                    <span>Vertical Profile: <b style={{ color: "#4ade80" }}>{cand.features.verticalProfileSimilarity}%</b></span>
+                  </div>
+                </div>
+              ))}
+
+              {beginLayoutResult?.rejectedCandidates && beginLayoutResult.rejectedCandidates.length > 0 && (
+                <div style={{ marginTop: "12px" }}>
+                  <small style={{ color: "#94a3b8", fontWeight: 600 }}>
+                    Rejected Candidate Zones ({beginLayoutResult.rejectedCandidates.length}):
+                  </small>
+                  <div style={{ display: "flex", flexDirection: "column", gap: "4px", marginTop: "4px" }}>
+                    {beginLayoutResult.rejectedCandidates.map((rej, rIdx) => (
+                      <div
+                        key={rej.id || `rej-${rIdx}`}
+                        style={{
+                          background: "#0f172a",
+                          border: "1px solid #1e293b",
+                          borderRadius: "3px",
+                          padding: "4px 8px",
+                          fontSize: "10px",
+                        }}
+                      >
+                        <span style={{ color: "#f87171", fontWeight: 600 }}>REJECTED at y={rej.rect.y}:</span>{" "}
+                        <span style={{ color: "#cbd5e1" }}>{rej.rejectionReason}</span>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              )}
+            </div>
+          ) : matchExperimentMode === "END_ONLY_VISUAL" ? (
             <div className="collector-match-items-section">
               <div className="collector-match-items-head-row">
                 <h4 className="collector-section-title" style={{ margin: 0, color: "#c084fc" }}>

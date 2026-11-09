@@ -11,6 +11,8 @@ import type {
   SampleRoi,
   EndVisualCandidate,
   EndVisualMatchResult,
+  BeginLayoutCandidate,
+  BeginLayoutMatchResult,
 } from "../../shared/collectors/types";
 import { WEB_HEIGHT, WEB_WIDTH } from "../../shared/geometry";
 
@@ -259,3 +261,49 @@ export async function collectorHighlightEndVisual(
   if (!isElectronBrowserCoreAvailable()) return;
   await invoke({ type: "collectorHighlightEndVisual", matches });
 }
+
+export async function collectorMatchBeginLayout(
+  invoke: CollectorInvoke,
+  references: Array<{
+    sampleId?: string;
+    groupTag?: string;
+    referenceImage?: string;
+    assetId?: string;
+    originalRoi?: Rect;
+  }>,
+  options?: { scaleVariants?: number[]; minConfidence?: number },
+): Promise<BeginLayoutMatchResult> {
+  if (!isElectronBrowserCoreAvailable()) {
+    return {
+      testedAt: new Date().toISOString(),
+      technique: "Structural Geometry & Relative Layout Correlation (Sharp)",
+      screenshotDimensions: { width: 1280, height: 800 },
+      scale: 1.0,
+      referenceBeginCount: references.length,
+      referenceSampleIds: references.map((r) => r.sampleId || "").filter(Boolean),
+      status: "NO_MATCH",
+      matchedHeaders: [],
+      rejectedCandidates: [],
+      diagnostics: {
+        referenceCropDimensions: [],
+        totalEvaluated: 0,
+        durationMs: 0,
+        summary: "Electron Browser Core unavailable in preview mode.",
+      },
+    };
+  }
+  return invoke<BeginLayoutMatchResult>({
+    type: "collectorMatchBeginLayout",
+    references,
+    options,
+  });
+}
+
+export async function collectorHighlightBeginLayout(
+  invoke: CollectorInvoke,
+  matches: BeginLayoutCandidate[],
+): Promise<void> {
+  if (!isElectronBrowserCoreAvailable()) return;
+  await invoke({ type: "collectorHighlightBeginLayout", matches });
+}
+

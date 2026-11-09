@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import sharp from "sharp";
+import sharp, { type OverlayOptions } from "sharp";
 import {
   matchEndVisual,
   computeVariance,
@@ -56,7 +56,7 @@ async function createSyntheticScreenshot(
   canvasW = 1200,
   canvasH = 800,
 ): Promise<Buffer> {
-  const composites: sharp.OverlayOptions[] = [];
+  const composites: OverlayOptions[] = [];
 
   for (const f of footers) {
     const fW = f.width ?? 500;
@@ -258,7 +258,7 @@ test("Test F: Scrolled screenshot -> coordinates update to new position", async 
 
 test("Utility: computeVariance and extractVisualSubPatches correctly segment 3 action clusters", async () => {
   const refBuffer = await createReferenceEndBuffer(500, 40);
-  const patches = await extractVisualSubPatches(refBuffer, { x: 0, y: 0, width: 500, height: 40 });
+  const patches = await extractVisualSubPatches(refBuffer);
 
   assert.ok(patches, "extractVisualSubPatches must succeed on valid reference");
   assert.ok(patches.likePatch.variance > 0, "Like patch must have non-zero variance");

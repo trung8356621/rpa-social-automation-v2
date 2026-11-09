@@ -1,6 +1,9 @@
 import type { V3Request } from "./admin-v3.js";
 import type { NetworkSettings, NetworkRunSettings } from "./network-mode.js";
-import type { EndVisualCandidate } from "./collectors/types.js";
+import type {
+  EndVisualCandidate,
+  BeginLayoutCandidate,
+} from "./collectors/types.js";
 export type { ScriptReleaseManifest } from "./script-release.js";
 export type Rect = { x: number; y: number; width: number; height: number };
 export type MainPage = "scenarios" | "browser-sessions" | "test-lab" | "settings" | "variations" | "widget-registry" | "workflows" | "builds-releases" | "collectors" | "collector-test-lab";
@@ -506,6 +509,21 @@ export type Command =
   | {
       type: "collectorHighlightEndVisual";
       matches: EndVisualCandidate[];
+    }
+  | {
+      type: "collectorMatchBeginLayout";
+      references: Array<{
+        sampleId?: string;
+        groupTag?: string;
+        referenceImage?: string;
+        assetId?: string;
+        originalRoi?: Rect;
+      }>;
+      options?: { scaleVariants?: number[]; minConfidence?: number };
+    }
+  | {
+      type: "collectorHighlightBeginLayout";
+      matches: BeginLayoutCandidate[];
     };
 export const DRAFT_KEYS = [
   "variableId",
