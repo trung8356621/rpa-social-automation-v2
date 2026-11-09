@@ -546,3 +546,39 @@ test("Phase 6: Offline Benchmark on synthetic & real fixture regions", async () 
   assert.equal(precision, 1.0, "Precision should be 100%");
   assert.equal(recall, 1.0, "Recall should be 100%");
 });
+
+test("Requirement 8: Distinguishes NO_REFERENCES from NO_VISUAL_MATCH", async () => {
+  const dummyScreen = await sharp({
+    create: {
+      width: 1280,
+      height: 800,
+      channels: 4,
+      background: { r: 255, g: 255, b: 255, alpha: 1 },
+    },
+  })
+    .png()
+    .toBuffer();
+
+  // Case 1: Empty references list -> NO_REFERENCES
+  const noRefsResult = await matchBeginLayout(dummyScreen, []);
+  assert.equal(
+    noRefsResult.status,
+    "NO_REFERENCES",
+    "Empty references must return NO_REFERENCES",
+  );
+  assert.equal(noRefsResult.referenceBeginCount, 0);
+
+  // Case 2: References provided, but page is empty white canvas -> NO_MATCH
+  const ref = await createReferenceBeginBuffer(560, 60);
+  const noMatchResult = await matchBeginLayout(
+    dummyScreen,
+    [{ sampleId: "ref_1", imageBuffer: ref }],
+    { scaleVariants: [1.0] },
+  );
+  assert.equal(
+    noMatchResult.status,
+    "NO_MATCH",
+    "Valid references on unmatched viewport must return NO_MATCH",
+  );
+  assert.equal(noMatchResult.referenceBeginCount, 1);
+});

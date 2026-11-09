@@ -2138,22 +2138,106 @@ async function boot() {
 
         for (const ref of rawRefs) {
           let buf: Buffer | null = null;
+          let resolveReason = "NO_IMAGE_BUFFER";
+          let sourceDesc = "none";
+
+          // 1. Reuse existing reference crop from Review data (data URL)
           if (typeof ref.referenceImage === "string" && ref.referenceImage.startsWith("data:")) {
             const base64Data = ref.referenceImage.split(",")[1];
-            if (base64Data) buf = Buffer.from(base64Data, "base64");
-          } else if (ref.assetId && typeof ref.assetId === "string") {
-            const assetPath = path.join(evidenceDir, `${ref.assetId}.png`);
-            try {
-              buf = await readFile(assetPath);
-            } catch {}
+            if (base64Data) {
+              try {
+                const decoded = Buffer.from(base64Data, "base64");
+                if (decoded.length > 0) {
+                  buf = decoded;
+                  sourceDesc = "inline_review_crop";
+                }
+              } catch {}
+            }
           }
+
+          // 2. If no inline crop or decoded buffer empty, load screenshot from disk (targets/ or captures/) and extract exact ROI
+          if (!buf || buf.length === 0) {
+            const possiblePaths = [
+              ref.assetId && path.join(assetDir, ref.assetId),
+              ref.assetId && !ref.assetId.endsWith(".png") && path.join(assetDir, `${ref.assetId}.png`),
+              ref.assetId && path.join(evidenceDir, ref.assetId),
+              ref.assetId && !ref.assetId.endsWith(".png") && path.join(evidenceDir, `${ref.assetId}.png`),
+              (ref.captureId || ref.sampleId) && path.join(evidenceDir, `${ref.captureId || ref.sampleId}.png`),
+              (ref.captureId || ref.sampleId) && path.join(assetDir, `${ref.captureId || ref.sampleId}.png`),
+            ].filter((p): p is string => Boolean(p));
+
+            let rawScreenshot: Buffer | null = null;
+            let loadedPath: string | null = null;
+            for (const p of possiblePaths) {
+              try {
+                const b = await readFile(p);
+                if (b && b.length > 0) {
+                  rawScreenshot = b;
+                  loadedPath = p;
+                  break;
+                }
+              } catch {}
+            }
+
+            if (rawScreenshot && rawScreenshot.length > 0) {
+              try {
+                const meta = await sharp(rawScreenshot).metadata();
+                const mW = meta.width || 1280;
+                const mH = meta.height || 800;
+
+                let left = 0;
+                let top = 0;
+                let width = 0;
+                let height = 0;
+
+                if (ref.originalRoi && ref.originalRoi.width >= 4 && ref.originalRoi.height >= 4) {
+                  left = Math.max(0, Math.min(Math.round(ref.originalRoi.x), mW - 1));
+                  top = Math.max(0, Math.min(Math.round(ref.originalRoi.y), mH - 1));
+                  width = Math.min(Math.round(ref.originalRoi.width), mW - left);
+                  height = Math.min(Math.round(ref.originalRoi.height), mH - top);
+                } else if (ref.geometry && ref.geometry.relW > 0 && ref.geometry.relH > 0) {
+                  left = Math.max(0, Math.min(Math.round(ref.geometry.relX * mW), mW - 1));
+                  top = Math.max(0, Math.min(Math.round(ref.geometry.relY * mH), mH - 1));
+                  width = Math.min(Math.round(ref.geometry.relW * mW), mW - left);
+                  height = Math.min(Math.round(ref.geometry.relH * mH), mH - top);
+                }
+
+                if (width >= 4 && height >= 4) {
+                  buf = await sharp(rawScreenshot).extract({ left, top, width, height }).toBuffer();
+                  sourceDesc = `disk_capture_roi (${path.basename(loadedPath || "")})`;
+                } else {
+                  resolveReason = `INVALID_ROI: [w=${width}, h=${height}] on image [${mW}x${mH}]`;
+                }
+              } catch (cropErr) {
+                resolveReason = `CROP_EXTRACTION_ERROR: ${cropErr instanceof Error ? cropErr.message : String(cropErr)}`;
+              }
+            } else {
+              resolveReason = `ASSET_FILE_NOT_FOUND: tried [${possiblePaths.join(", ")}]`;
+            }
+          }
+
           if (buf && buf.length > 0) {
+            let cW = 0;
+            let cH = 0;
+            try {
+              const meta = await sharp(buf).metadata();
+              cW = meta.width ?? 0;
+              cH = meta.height ?? 0;
+            } catch {}
+
+            console.info(
+              `[B3 Reference Resolution] Accepted: SampleId=${ref.sampleId || "unknown"}, RegionId=${ref.regionId || "unknown"}, Group=${ref.groupTag || "default"}, Source=${sourceDesc}, Dimensions=${cW}x${cH}`,
+            );
             references.push({
               sampleId: ref.sampleId,
               groupTag: ref.groupTag,
               imageBuffer: buf,
               roi: ref.originalRoi,
             });
+          } else {
+            console.warn(
+              `[B3 Reference Resolution] Skipped: SampleId=${ref.sampleId || "unknown"}, RegionId=${ref.regionId || "unknown"}, Group=${ref.groupTag || "default"}, Reason=${resolveReason}`,
+            );
           }
         }
 

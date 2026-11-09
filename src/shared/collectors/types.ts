@@ -636,7 +636,7 @@ export type EndVisualMatchResult = {
   scale: number;
   referenceEndCount: number;
   referenceSampleIds: string[];
-  status: "MATCHED" | "NO_MATCH" | "PARTIAL";
+  status: "MATCHED" | "NO_MATCH" | "PARTIAL" | "NO_REFERENCES";
   matchedFooters: EndVisualCandidate[];
   rejectedCandidates: EndVisualCandidate[];
   diagnostics: {
@@ -691,7 +691,7 @@ export type BeginLayoutMatchResult = {
   referenceBeginCount: number;
   referenceSampleIds: string[];
   templateInfo?: BeginLayoutTemplateInfo;
-  status: "MATCHED" | "NO_MATCH" | "PARTIAL";
+  status: "MATCHED" | "NO_MATCH" | "PARTIAL" | "NO_REFERENCES";
   matchedHeaders: BeginLayoutCandidate[];
   rejectedCandidates: BeginLayoutCandidate[];
   diagnostics: {

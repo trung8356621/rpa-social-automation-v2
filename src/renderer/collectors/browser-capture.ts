@@ -13,6 +13,7 @@ import type {
   EndVisualMatchResult,
   BeginLayoutCandidate,
   BeginLayoutMatchResult,
+  NormalizedRegionGeometry,
 } from "../../shared/collectors/types";
 import { WEB_HEIGHT, WEB_WIDTH } from "../../shared/geometry";
 
@@ -266,10 +267,13 @@ export async function collectorMatchBeginLayout(
   invoke: CollectorInvoke,
   references: Array<{
     sampleId?: string;
+    regionId?: string;
     groupTag?: string;
     referenceImage?: string;
     assetId?: string;
+    captureId?: string;
     originalRoi?: Rect;
+    geometry?: NormalizedRegionGeometry;
   }>,
   options?: { scaleVariants?: number[]; minConfidence?: number },
 ): Promise<BeginLayoutMatchResult> {

@@ -650,14 +650,15 @@ export async function matchBeginLayout(
       scale: 1.0,
       referenceBeginCount: 0,
       referenceSampleIds: [],
-      status: "NO_MATCH",
+      status: "NO_REFERENCES",
       matchedHeaders: [],
       rejectedCandidates: [],
       diagnostics: {
         referenceCropDimensions: [],
         totalEvaluated: 0,
         durationMs: Math.round(performance.now() - startTime),
-        summary: "No valid confirmed BEGIN reference crops provided.",
+        summary:
+          "No valid confirmed BEGIN reference crops provided. Ensure at least one BEGIN anchor is confirmed in Review 2A.",
       },
     };
   }

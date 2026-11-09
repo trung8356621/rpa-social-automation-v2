@@ -9,6 +9,7 @@ import type {
   EndVisualMatchResult,
   BeginLayoutCandidate,
   BeginLayoutMatchResult,
+  CollectorRegion,
 } from "../../shared/collectors/types.js";
 import {
   executeLiveBrowserMatchTest,
@@ -105,9 +106,19 @@ export function StepMatchTest({
     matchTestResult?.error?.includes("Stale")
   );
   const displayStatus =
-    rawStatus === "FAILED" && !isExecutionError && resolvedMatchedCount === 0
-      ? "NO MATCH"
-      : rawStatus;
+    matchExperimentMode === "BEGIN_LAYOUT_B3" && beginLayoutResult
+      ? beginLayoutResult.status === "NO_REFERENCES"
+        ? "NO REFERENCES"
+        : beginLayoutResult.status === "NO_MATCH"
+          ? "NO MATCH"
+          : beginLayoutResult.status === "MATCHED"
+            ? "MATCHED"
+            : beginLayoutResult.status === "PARTIAL"
+              ? "PARTIAL"
+              : rawStatus
+      : rawStatus === "FAILED" && !isExecutionError && resolvedMatchedCount === 0
+        ? "NO MATCH"
+        : rawStatus;
 
   // Measure and report host frame bounds to Electron shell.
   // Suppresses redundant IPC calls if bounds have not changed.
@@ -263,32 +274,139 @@ export function StepMatchTest({
 
       // C2.11.13: Isolated BEGIN Layout Matching Experiment (B3)
       if (matchExperimentModeRef.current === "BEGIN_LAYOUT_B3") {
-        const allRegions = [
+        const captures = draftRef.current.captures ?? [];
+        const captureAuditMap = new Map(
+          (draftRef.current.captureAudits ?? []).map((a) => [a.captureItemId, a.status]),
+        );
+        const teachingCaptureId = draftRef.current.teachingCaptureId;
+
+        // Gather all regions from top-level and capture-level, deduplicated by region ID
+        const regionMap = new Map<string, CollectorRegion>();
+        for (const r of [
           ...(draftRef.current.regions ?? []),
-          ...(draftRef.current.captures ?? []).flatMap((c) => c.regions ?? []),
-        ];
-        const beginRegions = allRegions.filter(
-          (r) =>
-            r.confirmed &&
-            (r.type === "BEGIN" || (r.type === "STATIC" && r.role === "header")),
+          ...captures.flatMap((c) => c.regions ?? []),
+        ]) {
+          if (!r?.id) continue;
+          const existing = regionMap.get(r.id);
+          // Prefer region with inline referenceImage if one exists
+          if (!existing || (!existing.referenceImage && r.referenceImage)) {
+            regionMap.set(r.id, r);
+          }
+        }
+        const uniqueRegions = Array.from(regionMap.values());
+
+        // Structured pipeline logging for every candidate region
+        const regionalLogs: Array<{
+          collectorId: string;
+          sampleId: string;
+          regionId: string;
+          anchorGroup: string;
+          confirmationStatus: string;
+          referenceImageAvailability: string;
+          cropDimensions: string;
+          reason: string;
+          accepted: boolean;
+          region: CollectorRegion;
+        }> = [];
+
+        for (const r of uniqueRegions) {
+          const isBeginType =
+            r.type === "BEGIN" ||
+            (r.type === "STATIC" && r.role === "header") ||
+            r.role === "header";
+          const parentCap = captures.find((c) => c.id === r.captureItemId);
+          const isConfirmedAudit = parentCap
+            ? captureAuditMap.get(parentCap.id) === "confirmed"
+            : false;
+          const isTeaching = parentCap ? parentCap.id === teachingCaptureId : false;
+          const isConfirmed = Boolean(r.confirmed || isConfirmedAudit || isTeaching);
+
+          const w =
+            r.originalRoi?.width ??
+            (r.geometry ? Math.round(r.geometry.relW * 1280) : 0);
+          const h =
+            r.originalRoi?.height ??
+            (r.geometry ? Math.round(r.geometry.relH * 800) : 0);
+          const cropDims = `${w}x${h}`;
+
+          const hasRefImage = Boolean(r.referenceImage);
+          const hasAsset = Boolean(parentCap?.imageAsset || r.referenceImageAsset);
+          const refImgAvail = hasRefImage
+            ? "inline_data_url"
+            : hasAsset
+              ? "parent_capture_asset"
+              : "none";
+
+          let accepted = false;
+          let reason = "";
+
+          if (!isBeginType) {
+            reason = `Skipped: region type '${r.type}' (role: ${r.role || "none"}) is not a BEGIN/header`;
+          } else if (!isConfirmed) {
+            reason = "Skipped: region and parent sample are both unconfirmed";
+          } else if (!hasRefImage && !hasAsset) {
+            reason = "Skipped: neither inline referenceImage nor parent screenshot asset found";
+          } else {
+            accepted = true;
+            reason = `Accepted: confirmed BEGIN anchor (${hasRefImage ? "inline crop" : "parent capture asset"})`;
+          }
+
+          regionalLogs.push({
+            collectorId: draftRef.current.id,
+            sampleId: r.captureItemId,
+            regionId: r.id,
+            anchorGroup: r.groupTag || "default",
+            confirmationStatus: r.confirmed
+              ? "confirmed_region"
+              : isTeaching
+                ? "teaching_sample"
+                : isConfirmedAudit
+                  ? "confirmed_audit"
+                  : "unconfirmed",
+            referenceImageAvailability: refImgAvail,
+            cropDimensions: cropDims,
+            reason,
+            accepted,
+            region: r,
+          });
+        }
+
+        console.info(
+          `[B3 Pipeline Stage 1-3] BEGIN Reference Candidates (evaluated ${uniqueRegions.length} region(s)):`,
+          regionalLogs,
         );
 
-        if (beginRegions.length === 0) {
+        const acceptedRegions = regionalLogs
+          .filter((item) => item.accepted)
+          .map((item) => item.region);
+
+        if (acceptedRegions.length === 0) {
+          const detailReasons = regionalLogs
+            .map((item) => `[Region ${item.regionId} in Sample ${item.sampleId}]: ${item.reason}`)
+            .join("; ");
           setErrorMsg(
-            "No confirmed BEGIN regions found in teaching samples. Please confirm a BEGIN region in Step 2A first.",
+            detailReasons
+              ? `No usable confirmed BEGIN reference crops found: ${detailReasons}`
+              : "No confirmed BEGIN regions found in teaching samples. Please confirm a BEGIN region in Step 2A first.",
           );
           isRunningRef.current = false;
           setIsRunning(false);
           return;
         }
 
-        const references = beginRegions.map((r) => ({
-          sampleId: r.captureItemId,
-          groupTag: r.groupTag,
-          referenceImage: r.referenceImage,
-          assetId: r.referenceImageAsset,
-          originalRoi: r.originalRoi,
-        }));
+        const references = acceptedRegions.map((r) => {
+          const parentCap = captures.find((c) => c.id === r.captureItemId);
+          return {
+            sampleId: r.captureItemId,
+            regionId: r.id,
+            groupTag: r.groupTag,
+            referenceImage: r.referenceImage,
+            assetId: parentCap?.imageAsset || r.referenceImageAsset,
+            captureId: r.captureItemId,
+            originalRoi: r.originalRoi,
+            geometry: r.geometry,
+          };
+        });
 
         const layoutResult = await collectorMatchBeginLayout(invoke, references);
         setBeginLayoutResult(layoutResult);
@@ -310,6 +428,7 @@ export function StepMatchTest({
             matchedHeaders: layoutResult.matchedHeaders,
             rejectedCandidates: layoutResult.rejectedCandidates,
             durationMs: layoutResult.diagnostics.durationMs,
+            pipelineLogs: regionalLogs.map(({ region: _reg, ...rest }) => rest),
           };
           void collectorLogMatchDiagnostic(invoke, diagRecord);
         } catch (logErr) {
@@ -330,7 +449,12 @@ export function StepMatchTest({
         const expTestResult: MatchTestResult = {
           testedAt: layoutResult.testedAt,
           browserUrl: currentUrl,
-          status: layoutResult.status === "MATCHED" ? "MATCHED" : "FAILED",
+          status:
+            layoutResult.status === "MATCHED"
+              ? "MATCHED"
+              : layoutResult.status === "NO_REFERENCES"
+                ? ("NO_REFERENCES" as any)
+                : "FAILED",
           matchedPostCount: layoutResult.matchedHeaders.length,
           groups: [],
           summary: layoutResult.diagnostics.summary,
@@ -572,6 +696,10 @@ export function StepMatchTest({
                   | "BEGIN_LAYOUT_B3";
                 setMatchExperimentMode(nextMode);
                 matchExperimentModeRef.current = nextMode;
+                // C2.11.13a: Reset stale experimental results and status when switching matching modes
+                setEndVisualResult(null);
+                setBeginLayoutResult(null);
+                setErrorMsg(null);
                 if (invoke && isElectronBrowserCoreAvailable()) {
                   void collectorClearHighlights(invoke);
                 }
@@ -766,9 +894,11 @@ export function StepMatchTest({
                 <div className="collector-sample-empty">
                   {displayStatus === "NOT TESTED"
                     ? "Click 'Re-match Current Viewport' in Match Mode ON to test B3 visual layout matching."
-                    : beginLayoutResult?.status === "PARTIAL"
-                      ? "Partial header detected at viewport boundary; insufficient complete evidence."
-                      : "0 post headers matched. Check that post headers (avatar, author, timestamp, action menu) are visible in the viewport."}
+                    : beginLayoutResult?.status === "NO_REFERENCES"
+                      ? "NO REFERENCES: 0 confirmed BEGIN reference crops found. Ensure at least one BEGIN anchor is confirmed in Review 2A."
+                      : beginLayoutResult?.status === "PARTIAL"
+                        ? "Partial header detected at viewport boundary; insufficient complete evidence."
+                        : "0 post headers matched. Check that post headers (avatar, author, timestamp, action menu) are visible in the viewport."}
                 </div>
               )}
 

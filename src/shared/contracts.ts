@@ -3,6 +3,7 @@ import type { NetworkSettings, NetworkRunSettings } from "./network-mode.js";
 import type {
   EndVisualCandidate,
   BeginLayoutCandidate,
+  NormalizedRegionGeometry,
 } from "./collectors/types.js";
 export type { ScriptReleaseManifest } from "./script-release.js";
 export type Rect = { x: number; y: number; width: number; height: number };
@@ -514,10 +515,13 @@ export type Command =
       type: "collectorMatchBeginLayout";
       references: Array<{
         sampleId?: string;
+        regionId?: string;
         groupTag?: string;
         referenceImage?: string;
         assetId?: string;
+        captureId?: string;
         originalRoi?: Rect;
+        geometry?: NormalizedRegionGeometry;
       }>;
       options?: { scaleVariants?: number[]; minConfidence?: number };
     }
