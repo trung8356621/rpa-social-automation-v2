@@ -284,6 +284,105 @@ export type CollectorRegion = {
   updatedAt: string;
 };
 
+// C2.11: Group Tag suggestions for auto-complete combobox
+export type GroupTagSuggestionKind =
+  | "unpaired_in_sample"
+  | "other_sample"
+  | "existing_group"
+  | "create_new";
+
+export type GroupTagSuggestion = {
+  tag: string;
+  kind: GroupTagSuggestionKind;
+  label?: string;
+  hasBeginInSample?: boolean;
+  hasEndInSample?: boolean;
+  sampleCount: number;
+};
+
+// C2.11: Learned Anchor Rule Foundation
+export type StableGeometryProfile = {
+  minRelX: number;
+  maxRelX: number;
+  avgRelX: number;
+  minRelY: number;
+  maxRelY: number;
+  avgRelY: number;
+  minRelW: number;
+  maxRelW: number;
+  avgRelW: number;
+  minRelH: number;
+  maxRelH: number;
+  avgRelH: number;
+};
+
+export type AnchorReferenceExample = {
+  captureItemId: string;
+  regionId: string;
+  originalRoi?: Rect;
+  geometry: NormalizedRegionGeometry;
+  role?: CollectorRegionRole;
+  domEvidence?: DomElementEvidence;
+  ocrEvidenceText?: string;
+  ocrText?: string;
+  candidateVariableKeys: string[];
+  referenceImageAsset?: string;
+  referenceImage?: string;
+};
+
+export type LearnedAnchorRule = {
+  groupTag: string;
+  type: CollectorRegionType;
+  role: CollectorRegionRole;
+  exampleCount: number;
+  referenceExamples: AnchorReferenceExample[];
+  geometryProfile: StableGeometryProfile;
+  stableTokens: string[];
+  variableTokens: string[];
+  domProfile: {
+    tagNames: string[];
+    roles: string[];
+    hasAttributes: string[];
+  };
+  associatedVariableKeys: string[];
+};
+
+export type LearnedAnchorGroup = {
+  groupTag: string;
+  beginRule?: LearnedAnchorRule;
+  endRule?: LearnedAnchorRule;
+  freeRules: LearnedAnchorRule[];
+  sampleIds: string[];
+};
+
+// C2.11: Region Quick Fill Proposal
+export type QuickFillProposal = {
+  variableId: string;
+  variableKey: string;
+  targetRegionId: string;
+  targetSegmentId: string;
+  targetSegmentText?: string;
+  method: CollectorExtractionMethod;
+  attribute?: string;
+  confidence: number;
+  evidence: string;
+  bbox: Rect;
+  normalizedBbox: {
+    relX: number;
+    relY: number;
+    relW: number;
+    relH: number;
+  };
+  refSampleId: string;
+  refRegionId: string;
+};
+
+export type QuickFillResult = {
+  draft: CollectorDraft;
+  proposals: QuickFillProposal[];
+  appliedCount: number;
+};
+
 export type MatchTestStatus = "NOT TESTED" | "MATCHED" | "PARTIAL" | "AMBIGUOUS" | "NO MATCH" | "FAILED";
 
 export type AnchorMatchDetail = {

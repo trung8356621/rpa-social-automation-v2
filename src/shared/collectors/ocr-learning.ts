@@ -6,6 +6,7 @@ import type {
   CollectorVariableMapping,
 } from "./types.js";
 import { auditForCapture, captureItemById, markValidationOutdated } from "./ops.js";
+import { proposeQuickFillForCapture } from "./regions.js";
 
 /** Normalize text for robust comparison across Unicode/Vietnamese diacritics. */
 export function normalizeVietnameseText(text: string): string {
@@ -483,7 +484,7 @@ export function proposeLearnedMappings(
   imageHeight?: number,
 ): CollectorDraft {
   const targetCapture = captureItemById(draft, targetCaptureId);
-  if (!targetCapture || !targetCapture.ocr) return draft;
+  if (!targetCapture) return draft;
 
   const isTeaching =
     draft.teachingCaptureId === targetCaptureId ||
@@ -491,6 +492,40 @@ export function proposeLearnedMappings(
 
   // In Image #1 (teaching reference), NEVER automatically guess variable assignments.
   if (isTeaching) return draft;
+
+  // C2.11: Stage 2B region-scoped OCR learning path (independent of capture.ocr)
+  const targetRegions = [
+    ...(draft.regions ?? []),
+    ...(draft.captures ?? []).flatMap((c) => c.regions ?? []),
+  ].filter((r) => r.captureItemId === targetCaptureId && r.ocr?.segments?.length);
+
+  if (targetRegions.length > 0) {
+    const withQuickFill = proposeQuickFillForCapture(draft, targetCaptureId, imageWidth, imageHeight);
+    const hasNewProposals = withQuickFill.variables.some((v) =>
+      v.mappings.some((m) => m.sampleId === targetCaptureId && m.simulatedProposal),
+    );
+    if (hasNewProposals) {
+      const captureAudits = (withQuickFill.captureAudits ?? []).map((a) => {
+        if (a.captureItemId === targetCaptureId && a.status === "unreviewed") {
+          return {
+            ...a,
+            status: "proposed" as const,
+            note: "Suggested values based on confirmed teaching reference.",
+          };
+        }
+        return a;
+      });
+      return markValidationOutdated({
+        ...withQuickFill,
+        captureAudits,
+        dirty: true,
+      });
+    }
+    return withQuickFill;
+  }
+
+  // Fallback to legacy capture-level OCR for backward compatibility
+  if (!targetCapture.ocr) return draft;
 
   // Gather confirmed reference captures
   const confirmedIds = new Set(

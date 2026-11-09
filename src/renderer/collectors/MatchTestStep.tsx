@@ -169,7 +169,7 @@ export function StepMatchTest({
         return;
       }
 
-      const result = executeLiveBrowserMatchTest(draftRef.current.regions ?? [], snapshot);
+      const result = executeLiveBrowserMatchTest(draftRef.current.regions ?? [], snapshot, draftRef.current);
 
       // Filter to highlight ONLY successfully resolved containers (never unresolved candidates)
       const resolvedMatches = (result.matchedItems || []).filter((item) => item.domResolved);

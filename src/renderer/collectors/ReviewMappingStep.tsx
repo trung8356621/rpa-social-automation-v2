@@ -35,7 +35,12 @@ import {
   assignSegmentMapping,
   getMappedVariablesForSegment,
   getMappingConfigState,
+  getGroupTagSuggestions,
+  proposeRegionQuickFill,
+  confirmQuickFillMapping,
+  rejectQuickFillMapping,
 } from "../../shared/collectors/regions";
+import { GroupTagCombobox } from "./GroupTagCombobox";
 import type {
   CaptureAuditStatus,
   CollectorDraft,
@@ -326,6 +331,59 @@ export function StepReviewMapping({ draft, locked, onChange, invoke }: Props) {
   }, [regionPendingDelete, activeRegions]);
 
   const currentRegion = selectedRegion || activeRegions[0];
+
+  const createGroupSuggestions = useMemo(() => {
+    if (!active || newRegionType === "FREE") return [];
+    return getGroupTagSuggestions(draft, active.id, newRegionType, newRegionGroupTag);
+  }, [draft, active?.id, newRegionType, newRegionGroupTag]);
+
+  const editGroupSuggestions = useMemo(() => {
+    if (!active || !selectedRegion || selectedRegion.type === "FREE") return [];
+    return getGroupTagSuggestions(
+      draft,
+      active.id,
+      selectedRegion.type,
+      selectedRegion.groupTag ?? "",
+    );
+  }, [draft, active?.id, selectedRegion?.type, selectedRegion?.groupTag]);
+
+  const quickFillStatus = useMemo(() => {
+    if (!currentRegion || !active) return { hasConfirmedReferences: false, confirmedRefCount: 0, pendingProposals: [], confirmedCount: 0 };
+    const allRegions = [
+      ...(draft.regions ?? []),
+      ...(draft.captures ?? []).flatMap((c) => c.regions ?? []),
+    ];
+    const confirmedRefs = allRegions.filter((r) => {
+      if (!r.confirmed || r.captureItemId === active.id) return false;
+      if (r.type !== currentRegion.type) return false;
+      if (r.type === "FREE") return true;
+      return (r.groupTag || "default").trim() === (currentRegion.groupTag || "default").trim();
+    });
+
+    const regionMappings = draft.variables.flatMap((v) =>
+      v.mappings
+        .filter((m) => m.sampleId === active.id && m.regionId === currentRegion.id)
+        .map((m) => ({ variable: v, mapping: m })),
+    );
+
+    const pendingProposals = regionMappings.filter((item) => item.mapping.simulatedProposal || !item.mapping.confirmed);
+    const confirmedCount = regionMappings.filter((item) => item.mapping.confirmed && !item.mapping.simulatedProposal).length;
+
+    return {
+      hasConfirmedReferences: confirmedRefs.length > 0,
+      confirmedRefCount: confirmedRefs.length,
+      pendingProposals,
+      confirmedCount,
+    };
+  }, [currentRegion, active, draft.regions, draft.captures, draft.variables]);
+
+  const handleApplyRegionQuickFill = useCallback(() => {
+    if (!currentRegion || !active) return;
+    const res = proposeRegionQuickFill(draft, currentRegion.id, imageDims.width, imageDims.height);
+    if (res.appliedCount > 0) {
+      onChange(res.draft);
+    }
+  }, [currentRegion, active, draft, imageDims.width, imageDims.height, onChange]);
 
   const runRegionOcr = useCallback(
     async (force = false, targetRegionId?: string) => {
@@ -715,10 +773,15 @@ export function StepReviewMapping({ draft, locked, onChange, invoke }: Props) {
       setNewRegionBox(box);
       setCreationError(undefined);
 
-      const defaultTag = "post-main";
-      const hasBegin = activeRegions.some((r) => r.type === "BEGIN" && (r.groupTag || "default") === defaultTag);
+      // C2.11: Prioritize unpaired BEGIN missing END in current sample when creating END
+      const unpairedInSample = activeRegions.find(
+        (r) =>
+          r.type === "BEGIN" &&
+          !activeRegions.some((end) => end.type === "END" && (end.groupTag || "default") === (r.groupTag || "default")),
+      );
       const isTop = y < imageDims.height * 0.45;
-      const suggestedType: CollectorRegionType = !hasBegin || isTop ? "BEGIN" : "END";
+      const suggestedType: CollectorRegionType = unpairedInSample || !isTop ? "END" : "BEGIN";
+      const defaultTag = (suggestedType === "END" && unpairedInSample?.groupTag) || "post-main";
       setNewRegionType(suggestedType);
       setNewRegionGroupTag(defaultTag);
       setNewRegionRole(suggestedType === "BEGIN" ? "header" : "footer");
@@ -1735,7 +1798,14 @@ export function StepReviewMapping({ draft, locked, onChange, invoke }: Props) {
                           setNewRegionLabel(newRegionGroupTag ? `${newRegionGroupTag} Begin` : "Begin Anchor");
                         } else if (t === "END") {
                           setNewRegionRole("footer");
-                          setNewRegionLabel(newRegionGroupTag ? `${newRegionGroupTag} End` : "End Anchor");
+                          const unpaired = activeRegions.find(
+                            (r) =>
+                              r.type === "BEGIN" &&
+                              !activeRegions.some((end) => end.type === "END" && (end.groupTag || "default") === (r.groupTag || "default")),
+                          );
+                          const tag = unpaired?.groupTag || newRegionGroupTag || "post-main";
+                          setNewRegionGroupTag(tag);
+                          setNewRegionLabel(`${tag} End`);
                         } else {
                           setNewRegionRole("custom");
                           setNewRegionLabel("Free Region");
@@ -1750,17 +1820,15 @@ export function StepReviewMapping({ draft, locked, onChange, invoke }: Props) {
                   {newRegionType !== "FREE" && (
                     <label style={{ display: "flex", gap: "4px", alignItems: "center", fontSize: "11px" }}>
                       <b>Group Tag:</b>
-                      <input
-                        type="text"
+                      <GroupTagCombobox
                         value={newRegionGroupTag}
-                        placeholder="e.g. post-main"
-                        onChange={(e) => {
-                          const tag = e.target.value;
+                        onChange={(tag) => {
                           setNewRegionGroupTag(tag);
                           if (newRegionType === "BEGIN") setNewRegionLabel(`${tag} Begin`);
                           if (newRegionType === "END") setNewRegionLabel(`${tag} End`);
                         }}
-                        style={{ width: "110px", padding: "2px 6px", fontSize: "11px" }}
+                        suggestions={createGroupSuggestions}
+                        placeholder="e.g. post-main"
                       />
                     </label>
                   )}
@@ -1862,18 +1930,17 @@ export function StepReviewMapping({ draft, locked, onChange, invoke }: Props) {
                     </label>
 
                     {selectedRegion.type !== "FREE" && (
-                      <label>
+                      <label style={{ display: "flex", gap: "4px", alignItems: "center", fontSize: "11px" }}>
                         <b>Group Tag:</b>
-                        <input
-                          type="text"
+                        <GroupTagCombobox
                           value={selectedRegion.groupTag ?? ""}
-                          placeholder="e.g. post-main"
-                          onChange={(e) =>
+                          onChange={(tag) =>
                             handleUpdateRegionProps(selectedRegion.id, {
-                              groupTag: e.target.value.trim() || undefined,
+                              groupTag: tag.trim() || undefined,
                             })
                           }
-                          style={{ width: "110px", padding: "2px 6px", fontSize: "11px" }}
+                          suggestions={editGroupSuggestions}
+                          placeholder="e.g. post-main"
                         />
                       </label>
                     )}
@@ -1976,7 +2043,112 @@ export function StepReviewMapping({ draft, locked, onChange, invoke }: Props) {
               </div>
             )}
 
-            {/* STAGE 2B — Docked Selected OCR Segment */}
+            {/* STAGE 2B — Region Quick Fill & Docked Selected OCR Segment */}
+            {step2Stage === "fields" && currentRegion && (
+              <div className="collector-quick-fill-panel" style={{ marginBottom: "10px", padding: "8px", background: "#0b1320", border: "1px solid #1e3a5f", borderRadius: "4px" }}>
+                <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: "6px" }}>
+                  <div style={{ display: "flex", gap: "6px", alignItems: "center" }}>
+                    <span style={{ fontSize: "12px", fontWeight: "bold", color: "#38bdf8" }}>⚡ Region Quick Fill</span>
+                    <span className="collector-group-badge">
+                      {currentRegion.type} {currentRegion.groupTag ? `#${currentRegion.groupTag}` : ""}
+                    </span>
+                  </div>
+                  {quickFillStatus.hasConfirmedReferences && currentRegion.ocr && (
+                    <button
+                      type="button"
+                      className="primary"
+                      disabled={locked || ocrLoading}
+                      onClick={handleApplyRegionQuickFill}
+                      style={{ fontSize: "10px", padding: "2px 8px" }}
+                      title={`Quick Fill variable mappings using confirmed ${currentRegion.type} #${currentRegion.groupTag || "default"} reference`}
+                    >
+                      ⚡ Quick Fill from Reference
+                    </button>
+                  )}
+                </div>
+
+                {quickFillStatus.hasConfirmedReferences ? (
+                  <div style={{ fontSize: "11px", color: "#94a3b8" }}>
+                    Found {quickFillStatus.confirmedRefCount} confirmed {currentRegion.type} reference(s) for group "{currentRegion.groupTag || "default"}".
+                  </div>
+                ) : (
+                  <div style={{ fontSize: "11px", color: "#64748b", fontStyle: "italic" }}>
+                    No confirmed {currentRegion.type} reference available yet for group "{currentRegion.groupTag || "default"}". Confirm Image #1 to enable Quick Fill.
+                  </div>
+                )}
+
+                {/* Suggestions List */}
+                {quickFillStatus.pendingProposals.length > 0 && (
+                  <div style={{ marginTop: "8px", borderTop: "1px solid #1e293b", paddingTop: "6px" }}>
+                    <div style={{ fontSize: "10px", fontWeight: "bold", color: "#facc15", marginBottom: "4px", display: "flex", alignItems: "center", gap: "4px" }}>
+                      <span>💡 Suggested Mappings ({quickFillStatus.pendingProposals.length})</span>
+                      <small style={{ color: "#94a3b8", fontWeight: "normal" }}>Review and accept or correct:</small>
+                    </div>
+                    <div style={{ display: "flex", flexDirection: "column", gap: "4px" }}>
+                      {quickFillStatus.pendingProposals.map(({ variable, mapping }) => {
+                        const method = mapping.method || "OCR_TEXT";
+                        const isOcr = method === "OCR_TEXT";
+                        return (
+                          <div
+                            key={`prop-${variable.id}-${method}`}
+                            style={{
+                              display: "flex",
+                              justifyContent: "space-between",
+                              alignItems: "center",
+                              background: "#172554",
+                              border: "1px solid #1d4ed8",
+                              borderRadius: "3px",
+                              padding: "4px 8px",
+                              fontSize: "11px",
+                            }}
+                          >
+                            <div style={{ display: "flex", gap: "6px", alignItems: "center", flexWrap: "wrap" }}>
+                              <b style={{ color: "#93c5fd" }}>{variable.label}</b>
+                              <code style={{ fontSize: "10px", color: "#bfdbfe" }}>({variable.key})</code>
+                              <span style={{ fontSize: "9px", background: "#f59e0b", color: "#000", padding: "1px 4px", borderRadius: "2px", fontWeight: "bold" }}>
+                                SUGGESTED
+                              </span>
+                              {mapping.confidence != null && (
+                                <span style={{ fontSize: "10px", color: "#68d6a6" }}>
+                                  {mapping.confidence}% confidence
+                                </span>
+                              )}
+                              <span style={{ fontSize: "10px", color: "#94a3b8" }}>
+                                [{method}{method === "DOM_ATTRIBUTE" ? `(${mapping.attribute || "href"})` : ""}]
+                              </span>
+                              {isOcr && mapping.text && (
+                                <span style={{ fontStyle: "italic", color: "#e2e8f0" }}>"{mapping.text}"</span>
+                              )}
+                            </div>
+                            <div style={{ display: "flex", gap: "4px" }}>
+                              <button
+                                type="button"
+                                disabled={locked}
+                                style={{ fontSize: "10px", padding: "2px 6px", background: "#166534", color: "#bbf7d0", border: "1px solid #22c55e", borderRadius: "3px" }}
+                                onClick={() => onChange(confirmQuickFillMapping(draft, active.id, variable.id, currentRegion.id))}
+                                title="Accept and confirm this suggestion"
+                              >
+                                ✓ Accept
+                              </button>
+                              <button
+                                type="button"
+                                disabled={locked}
+                                style={{ fontSize: "10px", padding: "2px 6px", background: "#7f1d1d", color: "#fecaca", border: "1px solid #ef4444", borderRadius: "3px" }}
+                                onClick={() => onChange(rejectQuickFillMapping(draft, active.id, variable.id, currentRegion.id))}
+                                title="Reject this suggestion"
+                              >
+                                ✕ Reject
+                              </button>
+                            </div>
+                          </div>
+                        );
+                      })}
+                    </div>
+                  </div>
+                )}
+              </div>
+            )}
+
             {step2Stage === "fields" && (
               selectedSegment ? (
                 <div className="collector-selected-segment-dock">

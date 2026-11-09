@@ -11,7 +11,7 @@
  *
  * Zero platform-specific hardcoding: works uniformly for Facebook, Threads, Reddit, YouTube, forums.
  */
-import type { Rect } from "../contracts.js";
+import type { OcrResult, Rect } from "../contracts.js";
 import type {
   AnchorMatchDetail,
   CollectorDomElement,
@@ -23,6 +23,7 @@ import type {
   CollectorRegionType,
   CollectorVariable,
   CollectorVariableMapping,
+  DomElementEvidence,
   DynamicHtmlExtractionResult,
   LayoutContextKind,
   MatchedPostItem,
@@ -32,9 +33,22 @@ import type {
   PostGroupMatch,
   RegionRelationship,
   VerifiedPostContainer,
+  GroupTagSuggestion,
+  GroupTagSuggestionKind,
+  LearnedAnchorRule,
+  LearnedAnchorGroup,
+  AnchorReferenceExample,
+  StableGeometryProfile,
+  QuickFillProposal,
+  QuickFillResult,
 } from "./types.js";
 import { cryptoRandomId } from "./fixtures.js";
-import { normalizeVietnameseText } from "./ocr-learning.js";
+import {
+  isAuthorCandidate,
+  isEngagementText,
+  isTimestampText,
+  normalizeVietnameseText,
+} from "./ocr-learning.js";
 
 // ---------------------------------------------------------------------------
 // 1. GEOMETRY HELPERS
@@ -158,6 +172,7 @@ function defaultRoleForType(type: CollectorRegionType): CollectorRegionRole {
 }
 
 export function createCollectorRegion(opts: {
+  id?: string;
   captureItemId: string;
   type: CollectorRegionType;
   label: string;
@@ -168,6 +183,10 @@ export function createCollectorRegion(opts: {
   imageHeight: number;
   candidateVariableKeys?: string[];
   relationships?: RegionRelationship[];
+  confirmed?: boolean;
+  simulatedProposal?: boolean;
+  domEvidence?: DomElementEvidence;
+  ocr?: OcrResult;
   ocrText?: string;
   ocrConfidence?: number;
   referenceImage?: string;
@@ -183,7 +202,7 @@ export function createCollectorRegion(opts: {
         : rawTag || undefined;
 
   return {
-    id: cryptoRandomId(),
+    id: opts.id || cryptoRandomId(),
     captureItemId: opts.captureItemId,
     type: opts.type,
     label: opts.label.trim() || defaultLabelForType(opts.type, groupTag),
@@ -192,14 +211,22 @@ export function createCollectorRegion(opts: {
     geometry: normalizeGeometry(opts.box, opts.imageWidth, opts.imageHeight),
     originalRoi: opts.box,
     candidateVariableKeys: opts.candidateVariableKeys ?? [],
-    confirmed: false,
+    confirmed: opts.confirmed ?? false,
+    simulatedProposal: opts.simulatedProposal,
+    domEvidence: opts.domEvidence,
     relationships: opts.relationships ?? [],
+    ocr: opts.ocr,
     ocrEvidence: opts.ocrText
       ? {
           text: opts.ocrText,
           confidence: opts.ocrConfidence ?? 90,
         }
-      : undefined,
+      : opts.ocr?.text
+        ? {
+            text: opts.ocr.text,
+            confidence: opts.ocr.confidence ?? 90,
+          }
+        : undefined,
     referenceImage: opts.referenceImage,
     referenceImageAsset: opts.referenceImageAsset,
     createdAt: now,
@@ -363,6 +390,136 @@ export function verifyAnchorGroups(
     groups,
     freeRegions,
   };
+}
+
+/**
+ * C2.11: Propose existing and contextual group tags for editable combobox.
+ *
+ * Requirements:
+ * 1. Suggest existing group tags from across the Collector.
+ * 2. When creating END, prioritize groups with BEGIN but missing END in the current sample.
+ * 3. When creating BEGIN, suggest previously used group names from other samples.
+ * 4. Distinct kinds for existing linked groups vs creating a new group.
+ * 5. FREE must not require a group tag.
+ * 6. Preserves existing tags and saved data.
+ */
+export function getGroupTagSuggestions(
+  draft: CollectorDraft,
+  currentCaptureId: string,
+  regionType: CollectorRegionType,
+  currentInput: string = "",
+): GroupTagSuggestion[] {
+  if (regionType === "FREE") return [];
+
+  const allRegions: CollectorRegion[] = [
+    ...(draft.regions ?? []),
+    ...(draft.captures ?? []).flatMap((c) => c.regions ?? []),
+  ];
+
+  const regionMap = new Map<string, CollectorRegion>();
+  for (const r of allRegions) {
+    if (!regionMap.has(r.id)) regionMap.set(r.id, r);
+  }
+  const uniqueRegions = Array.from(regionMap.values());
+
+  const tagStats = new Map<
+    string,
+    {
+      sampleIds: Set<string>;
+      hasBeginInSample: boolean;
+      hasEndInSample: boolean;
+    }
+  >();
+
+  for (const r of uniqueRegions) {
+    if (r.type === "FREE") continue;
+    const tag = r.groupTag?.trim();
+    if (!tag) continue;
+
+    let stat = tagStats.get(tag);
+    if (!stat) {
+      stat = {
+        sampleIds: new Set<string>(),
+        hasBeginInSample: false,
+        hasEndInSample: false,
+      };
+      tagStats.set(tag, stat);
+    }
+    stat.sampleIds.add(r.captureItemId);
+
+    if (r.captureItemId === currentCaptureId) {
+      if (
+        r.type === "BEGIN" ||
+        (r.type === "STATIC" &&
+          (r.role === "header" ||
+            r.label.toLowerCase().includes("begin") ||
+            r.label.toLowerCase().includes("header")))
+      ) {
+        stat.hasBeginInSample = true;
+      }
+      if (
+        r.type === "END" ||
+        (r.type === "STATIC" &&
+          (r.role === "footer" ||
+            r.label.toLowerCase().includes("end") ||
+            r.label.toLowerCase().includes("footer")))
+      ) {
+        stat.hasEndInSample = true;
+      }
+    }
+  }
+
+  const query = currentInput.trim().toLowerCase();
+  const suggestions: GroupTagSuggestion[] = [];
+
+  for (const [tag, stat] of tagStats.entries()) {
+    if (query && !tag.toLowerCase().includes(query)) continue;
+
+    let kind: GroupTagSuggestionKind = "existing_group";
+    let label = tag;
+
+    if (regionType === "END" && stat.hasBeginInSample && !stat.hasEndInSample) {
+      kind = "unpaired_in_sample";
+      label = `${tag} (Needs END anchor)`;
+    } else if (regionType === "BEGIN" && stat.sampleIds.size > 0 && !stat.sampleIds.has(currentCaptureId)) {
+      kind = "other_sample";
+      const count = stat.sampleIds.size;
+      label = `${tag} (Used in ${count} other sample${count > 1 ? "s" : ""})`;
+    }
+
+    suggestions.push({
+      tag,
+      kind,
+      label,
+      hasBeginInSample: stat.hasBeginInSample,
+      hasEndInSample: stat.hasEndInSample,
+      sampleCount: stat.sampleIds.size,
+    });
+  }
+
+  suggestions.sort((a, b) => {
+    if (regionType === "END") {
+      if (a.kind === "unpaired_in_sample" && b.kind !== "unpaired_in_sample") return -1;
+      if (b.kind === "unpaired_in_sample" && a.kind !== "unpaired_in_sample") return 1;
+    }
+    if (regionType === "BEGIN") {
+      if (a.kind === "other_sample" && b.kind !== "other_sample") return -1;
+      if (b.kind === "other_sample" && a.kind !== "other_sample") return 1;
+    }
+    return a.tag.localeCompare(b.tag);
+  });
+
+  const exactMatchExists = Array.from(tagStats.keys()).some((t) => t.toLowerCase() === query);
+  if (query && !exactMatchExists) {
+    suggestions.unshift({
+      tag: currentInput.trim(),
+      kind: "create_new",
+      label: `Create new group "${currentInput.trim()}"`,
+      sampleCount: 0,
+    });
+  }
+
+  return suggestions;
 }
 
 /**
@@ -1292,6 +1449,7 @@ export function executeHtmlFilter(
 function findAnchorCandidates(
   region: CollectorRegion,
   elements: CollectorDomElement[],
+  learnedRule?: LearnedAnchorRule,
 ): Array<{
   el: CollectorDomElement;
   score: number;
@@ -1305,38 +1463,60 @@ function findAnchorCandidates(
     reason: string;
   }> = [];
 
-  const rawText = region.ocrEvidence?.text || region.label;
+  // Prefer region-scoped OCR text or explicit evidence text over fallback label
+  const rawText = region.ocr?.text || region.ocrEvidence?.text || region.label;
   const normalizedText = normalizeVietnameseText(rawText);
-  const refTokens = normalizedText.split(/\s+/).filter((t) => t.length > 1);
+
+  // When learned rule is available, use its stable tokens and ignore variable tokens (e.g. dynamic author/timestamp)
+  let refTokens: string[];
+  const variableTokenSet = new Set<string>(learnedRule?.variableTokens ?? []);
+  if (learnedRule && learnedRule.stableTokens.length > 0) {
+    refTokens = learnedRule.stableTokens;
+  } else {
+    refTokens = normalizedText.split(/\s+/).filter((t) => t.length > 1);
+  }
 
   for (const el of elements) {
     let score = 0;
     let method: "text_dom" | "visual_projection" | "none" = "none";
     const reasons: string[] = [];
 
-    // Text token matching
+    // Text token matching against stable tokens
     if (refTokens.length > 0 && el.textSnippet) {
       const elText = normalizeVietnameseText(el.textSnippet);
-      const matchCount = refTokens.filter((token) => elText.includes(token)).length;
+      const matchCount = refTokens.filter((token) => !variableTokenSet.has(token) && elText.includes(token)).length;
+      const effectiveRefCount = refTokens.filter((token) => !variableTokenSet.has(token)).length || refTokens.length;
       if (matchCount > 0) {
-        const textScore = Math.min(60, Math.round((matchCount / refTokens.length) * 60));
+        const textScore = Math.min(60, Math.round((matchCount / effectiveRefCount) * 60));
         score += textScore;
         method = "text_dom";
-        reasons.push(`matched ${matchCount}/${refTokens.length} tokens`);
+        reasons.push(`matched ${matchCount}/${effectiveRefCount} tokens`);
       }
     }
 
-    // Role or attribute match
-    if (region.domEvidence?.role && el.role === region.domEvidence.role) {
+    // Role or attribute match (learned profile or region evidence)
+    if (learnedRule?.domProfile.roles.length && el.role && learnedRule.domProfile.roles.includes(el.role)) {
+      score += 20;
+      reasons.push(`learned role "${el.role}"`);
+    } else if (region.domEvidence?.role && el.role === region.domEvidence.role) {
       score += 20;
       reasons.push(`role "${el.role}"`);
     } else if (region.role && (el.role === region.role || (el.className && el.className.includes(region.role)))) {
       score += 15;
       reasons.push(`role/class "${region.role}"`);
+    } else if (region.type === "BEGIN" && (el.role === "heading" || el.tagName === "HEADER" || el.role === "banner")) {
+      score += 20;
+      reasons.push(`semantic header role`);
+    } else if (region.type === "END" && (el.role === "footer" || el.tagName === "FOOTER" || el.role === "toolbar" || el.role === "group")) {
+      score += 20;
+      reasons.push(`semantic footer role`);
     }
 
     // Tag name match
-    if (region.domEvidence?.tagName && el.tagName === region.domEvidence.tagName) {
+    if (learnedRule?.domProfile.tagNames.length && learnedRule.domProfile.tagNames.includes(el.tagName)) {
+      score += 10;
+      reasons.push(`learned <${el.tagName}>`);
+    } else if (region.domEvidence?.tagName && el.tagName === region.domEvidence.tagName) {
       score += 10;
       reasons.push(`<${el.tagName}>`);
     }
@@ -1345,6 +1525,17 @@ function findAnchorCandidates(
     if (el.rect.width > 0 && el.rect.height > 0) {
       score += 10;
       if (method === "none") method = "visual_projection";
+    }
+
+    // Relative vertical alignment with learned geometry profile
+    if (learnedRule?.geometryProfile) {
+      if (region.type === "BEGIN" && el.rect.y < 350) {
+        score += 10;
+        reasons.push("top layout zone");
+      } else if (region.type === "END" && el.rect.y > 150) {
+        score += 10;
+        reasons.push("bottom layout zone");
+      }
     }
 
     if (score >= 40) {
@@ -1372,10 +1563,12 @@ function findAnchorCandidates(
  * - Rejects inverted ordering (END above BEGIN).
  * - Respects multiple visible posts in a feed.
  * - Explicitly reports visual matching limitations.
+ * - C2.11: Consumes multi-sample LearnedAnchorRules when available or derived from draft.
  */
 export function executeLiveBrowserMatchTest(
   regions: CollectorRegion[],
   snapshot: CollectorDomSnapshot,
+  draft?: CollectorDraft,
 ): MatchTestResult {
   const testedAt = new Date().toISOString();
   const visualLimitations = [
@@ -1409,7 +1602,43 @@ export function executeLiveBrowserMatchTest(
     };
   }
 
-  const analysis = verifyAnchorGroups(regions);
+  // Deduplicate multi-sample regions to one representative BEGIN and END per group tag
+  const canonicalRegions: CollectorRegion[] = [];
+  const seenBegin = new Set<string>();
+  const seenEnd = new Set<string>();
+
+  const sortedRegions = [...regions].sort((a, b) => {
+    const aPri = draft?.teachingCaptureId
+      ? a.captureItemId === draft.teachingCaptureId ? 2 : a.confirmed ? 1 : 0
+      : a.confirmed ? 1 : 0;
+    const bPri = draft?.teachingCaptureId
+      ? b.captureItemId === draft.teachingCaptureId ? 2 : b.confirmed ? 1 : 0
+      : b.confirmed ? 1 : 0;
+    return bPri - aPri;
+  });
+
+  for (const r of sortedRegions) {
+    if (r.type === "FREE") {
+      canonicalRegions.push(r);
+      continue;
+    }
+    const tag = (r.groupTag || "default").trim();
+    if (r.type === "BEGIN") {
+      if (!seenBegin.has(tag)) {
+        seenBegin.add(tag);
+        canonicalRegions.push(r);
+      }
+    } else if (r.type === "END") {
+      if (!seenEnd.has(tag)) {
+        seenEnd.add(tag);
+        canonicalRegions.push(r);
+      }
+    } else {
+      canonicalRegions.push(r);
+    }
+  }
+
+  const analysis = verifyAnchorGroups(canonicalRegions);
   if (analysis.errors.length > 0) {
     return {
       testedAt,
@@ -1445,15 +1674,19 @@ export function executeLiveBrowserMatchTest(
   const allMatchedItems: MatchedPostItem[] = [];
   let totalMatchedPosts = 0;
 
+  const learnedRules = draft ? buildLearnedAnchorRules(draft) : undefined;
+
   for (const [tag, group] of analysis.groups.entries()) {
     const begin = group.begin;
     const end = group.end;
     if (!begin || !end) continue;
 
+    const ruleGroup = learnedRules?.get(tag);
+
     // 1. Find candidates for BEGIN
-    const beginCandidates = findAnchorCandidates(begin, snapshot.elements);
+    const beginCandidates = findAnchorCandidates(begin, snapshot.elements, ruleGroup?.beginRule);
     // 2. Find candidates for END
-    const endCandidates = findAnchorCandidates(end, snapshot.elements);
+    const endCandidates = findAnchorCandidates(end, snapshot.elements, ruleGroup?.endRule);
 
     if (beginCandidates.length === 0 && endCandidates.length === 0) {
       allMatchedItems.push({
@@ -1915,6 +2148,11 @@ export function assignSegmentMapping(
     return draft;
   }
 
+  const hostRegion = regionId
+    ? (draft.regions ?? []).find((r) => r.id === regionId) ??
+      (draft.captures ?? []).flatMap((c) => c.regions ?? []).find((r) => r.id === regionId)
+    : undefined;
+
   const newMapping: CollectorVariableMapping = {
     sampleId: captureItemId,
     regionId,
@@ -1925,6 +2163,14 @@ export function assignSegmentMapping(
     text: isOcr ? segment.text : undefined,
     confidence: isOcr ? segment.confidence : undefined,
     bbox: screenshotBbox || segment.bbox,
+    normalizedBbox: hostRegion
+      ? {
+          relX: segment.bbox.x / Math.max(1, hostRegion.originalRoi?.width || 300),
+          relY: segment.bbox.y / Math.max(1, hostRegion.originalRoi?.height || 60),
+          relW: segment.bbox.width / Math.max(1, hostRegion.originalRoi?.width || 300),
+          relH: segment.bbox.height / Math.max(1, hostRegion.originalRoi?.height || 60),
+        }
+      : undefined,
     segmentId: segment.id,
     evidence: isOcr
       ? (draft.teachingCaptureId === captureItemId ? "Manual teaching assignment (Reference)" : "Manual user correction")
@@ -2115,4 +2361,550 @@ export function getMappingConfigState(
     badgeStyle: "info",
     description: "Mapping configured.",
   };
+}
+
+// ---------------------------------------------------------------------------
+// 12. C2.11 MULTI-SAMPLE LEARNED ANCHOR RULE FOUNDATION
+// ---------------------------------------------------------------------------
+
+/**
+ * C2.11: Multi-sample Learned Anchor Rule Foundation.
+ *
+ * Aggregates confirmed reference regions across multiple captures into reusable learned rules.
+ * - Groups by groupTag + region type (BEGIN / END / FREE).
+ * - Identifies stable text tokens vs variable content (author names, timestamps, dynamic numbers).
+ * - Extracts stable geometry profile (min/max/average bounds).
+ * - Learns common DOM tags, roles, and structural characteristics.
+ */
+export function buildLearnedAnchorRules(
+  draft: CollectorDraft,
+): Map<string, LearnedAnchorGroup> {
+  const groups = new Map<string, LearnedAnchorGroup>();
+
+  const allRegions: CollectorRegion[] = [
+    ...(draft.regions ?? []),
+    ...(draft.captures ?? []).flatMap((c) => c.regions ?? []),
+  ];
+
+  const regionMap = new Map<string, CollectorRegion>();
+  for (const r of allRegions) {
+    if (!regionMap.has(r.id)) regionMap.set(r.id, r);
+  }
+  const confirmedRegions = Array.from(regionMap.values()).filter((r) => r.confirmed);
+
+  const tagBuckets = new Map<string, CollectorRegion[]>();
+  for (const r of confirmedRegions) {
+    const tag = (r.groupTag || (r.type === "FREE" ? "free" : "default")).trim();
+    const list = tagBuckets.get(tag) ?? [];
+    list.push(r);
+    tagBuckets.set(tag, list);
+  }
+
+  function tokenize(str: string): string[] {
+    return normalizeVietnameseText(str)
+      .toLowerCase()
+      .split(/\s+/)
+      .map((t) => t.replace(/[^a-z0-9_\u00C0-\u024F\u1EA0-\u1EF9]/gi, ""))
+      .filter((t) => t.length > 1);
+  }
+
+  for (const [tag, tagRegions] of tagBuckets.entries()) {
+    const beginExamples = tagRegions.filter((r) => r.type === "BEGIN" || (r.type === "STATIC" && r.role === "header"));
+    const endExamples = tagRegions.filter((r) => r.type === "END" || (r.type === "STATIC" && r.role === "footer"));
+    const freeExamples = tagRegions.filter((r) => r.type === "FREE" || r.type === "DYNAMIC");
+
+    function buildRuleForType(
+      type: CollectorRegionType,
+      examples: CollectorRegion[],
+      defaultRole: CollectorRegionRole,
+    ): LearnedAnchorRule | undefined {
+      if (examples.length === 0) return undefined;
+
+      const refExamples: AnchorReferenceExample[] = examples.map((ex) => ({
+        captureItemId: ex.captureItemId,
+        regionId: ex.id,
+        originalRoi: ex.originalRoi,
+        geometry: { ...ex.geometry },
+        role: ex.role,
+        domEvidence: ex.domEvidence ? { ...ex.domEvidence } : undefined,
+        ocrEvidenceText: ex.ocrEvidence?.text,
+        ocrText: ex.ocr?.text,
+        candidateVariableKeys: [...(ex.candidateVariableKeys ?? [])],
+        referenceImageAsset: ex.referenceImageAsset,
+        referenceImage: ex.referenceImage,
+      }));
+
+      let minRelX = Infinity, maxRelX = -Infinity, sumRelX = 0;
+      let minRelY = Infinity, maxRelY = -Infinity, sumRelY = 0;
+      let minRelW = Infinity, maxRelW = -Infinity, sumRelW = 0;
+      let minRelH = Infinity, maxRelH = -Infinity, sumRelH = 0;
+
+      for (const ex of examples) {
+        const g = ex.geometry;
+        minRelX = Math.min(minRelX, g.relX);
+        maxRelX = Math.max(maxRelX, g.relX);
+        sumRelX += g.relX;
+
+        minRelY = Math.min(minRelY, g.relY);
+        maxRelY = Math.max(maxRelY, g.relY);
+        sumRelY += g.relY;
+
+        minRelW = Math.min(minRelW, g.relW);
+        maxRelW = Math.max(maxRelW, g.relW);
+        sumRelW += g.relW;
+
+        minRelH = Math.min(minRelH, g.relH);
+        maxRelH = Math.max(maxRelH, g.relH);
+        sumRelH += g.relH;
+      }
+      const n = examples.length;
+      const geometryProfile: StableGeometryProfile = {
+        minRelX,
+        maxRelX,
+        avgRelX: sumRelX / n,
+        minRelY,
+        maxRelY,
+        avgRelY: sumRelY / n,
+        minRelW,
+        maxRelW,
+        avgRelW: sumRelW / n,
+        minRelH,
+        maxRelH,
+        avgRelH: sumRelH / n,
+      };
+
+      const associatedVars = Array.from(new Set(examples.flatMap((e) => e.candidateVariableKeys ?? [])));
+
+      const sampleTokensMap = new Map<string, Set<string>>();
+      const allTokensSet = new Set<string>();
+
+      for (const ex of examples) {
+        const sampleId = ex.captureItemId;
+        const textToAnalyze = ex.ocr?.text || ex.ocrEvidence?.text || "";
+        const tokens = tokenize(textToAnalyze);
+        let sampleSet = sampleTokensMap.get(sampleId);
+        if (!sampleSet) {
+          sampleSet = new Set<string>();
+          sampleTokensMap.set(sampleId, sampleSet);
+        }
+        for (const tok of tokens) {
+          sampleSet.add(tok);
+          allTokensSet.add(tok);
+        }
+      }
+
+      const knownVariableValues = new Set<string>();
+      for (const v of draft.variables) {
+        for (const m of v.mappings) {
+          if (m.confirmed && m.text && examples.some((e) => e.captureItemId === m.sampleId && e.id === m.regionId)) {
+            for (const t of tokenize(m.text)) {
+              knownVariableValues.add(t);
+            }
+          }
+        }
+      }
+
+      const stableTokens: string[] = [];
+      const variableTokens: string[] = [];
+
+      const sampleCount = sampleTokensMap.size;
+      for (const tok of allTokensSet) {
+        if (knownVariableValues.has(tok)) {
+          variableTokens.push(tok);
+          continue;
+        }
+
+        if (sampleCount > 1) {
+          let count = 0;
+          for (const sSet of sampleTokensMap.values()) {
+            if (sSet.has(tok)) count++;
+          }
+          if (count >= 2 || count === sampleCount) {
+            stableTokens.push(tok);
+          } else {
+            variableTokens.push(tok);
+          }
+        } else {
+          if (isAuthorCandidate(tok) && (tok.length > 3 || /^[A-Z]/.test(tok))) {
+            variableTokens.push(tok);
+          } else {
+            stableTokens.push(tok);
+          }
+        }
+      }
+
+      const tagNames = Array.from(new Set(examples.map((e) => e.domEvidence?.tagName).filter(Boolean) as string[]));
+      const roles = Array.from(new Set(examples.map((e) => e.domEvidence?.role || e.role).filter(Boolean) as string[]));
+      const hasAttributes: string[] = [];
+      for (const ex of examples) {
+        if (ex.domEvidence?.attributes) {
+          for (const attr of Object.keys(ex.domEvidence.attributes)) {
+            if (!hasAttributes.includes(attr)) hasAttributes.push(attr);
+          }
+        }
+      }
+
+      return {
+        groupTag: tag,
+        type,
+        role: examples[0]?.role || defaultRole,
+        exampleCount: examples.length,
+        referenceExamples: refExamples,
+        geometryProfile,
+        stableTokens,
+        variableTokens,
+        domProfile: {
+          tagNames,
+          roles,
+          hasAttributes,
+        },
+        associatedVariableKeys: associatedVars,
+      };
+    }
+
+    const beginRule = buildRuleForType("BEGIN", beginExamples, "header");
+    const endRule = buildRuleForType("END", endExamples, "footer");
+    const freeRules: LearnedAnchorRule[] = [];
+    if (freeExamples.length > 0) {
+      const freeRule = buildRuleForType("FREE", freeExamples, "custom");
+      if (freeRule) freeRules.push(freeRule);
+    }
+
+    const sampleIds = Array.from(new Set(tagRegions.map((r) => r.captureItemId)));
+
+    groups.set(tag, {
+      groupTag: tag,
+      beginRule,
+      endRule,
+      freeRules,
+      sampleIds,
+    });
+  }
+
+  return groups;
+}
+
+// ---------------------------------------------------------------------------
+// 13. C2.11 REGION-BASED QUICK FILL ENGINE
+// ---------------------------------------------------------------------------
+
+/**
+ * C2.11: Propose variable mappings for a target region using confirmed reference regions.
+ *
+ * Matching scope: Region Type + Group Tag + Variable Configuration
+ * Rules:
+ * 1. Learn only from confirmed references.
+ * 2. Use target Region's own OCR results (region.ocr).
+ * 3. Do not depend on legacy capture-level OCR.
+ * 4. Preserve extraction methods and attribute names.
+ * 5. Do not copy old OCR segment IDs directly.
+ * 6. Find corresponding target segment using OCR characteristics and relative layout.
+ * 7. Mark automatic proposals as SUGGESTED (simulatedProposal: true, confirmed: false).
+ * 8. Never overwrite existing confirmed manual mappings.
+ */
+export function proposeRegionQuickFill(
+  draft: CollectorDraft,
+  targetRegionId: string,
+  imageWidth: number = 800,
+  imageHeight: number = 600,
+): QuickFillResult {
+  const targetRegion =
+    (draft.regions ?? []).find((r) => r.id === targetRegionId) ??
+    (draft.captures ?? []).flatMap((c) => c.regions ?? []).find((r) => r.id === targetRegionId);
+
+  if (!targetRegion || !targetRegion.ocr || !targetRegion.ocr.segments?.length) {
+    return { draft, proposals: [], appliedCount: 0 };
+  }
+
+  const targetCaptureId = targetRegion.captureItemId;
+
+  const allRegions = [
+    ...(draft.regions ?? []),
+    ...(draft.captures ?? []).flatMap((c) => c.regions ?? []),
+  ];
+  const regionMap = new Map<string, CollectorRegion>();
+  for (const r of allRegions) {
+    if (!regionMap.has(r.id)) regionMap.set(r.id, r);
+  }
+
+  const confirmedReferences = Array.from(regionMap.values()).filter((r) => {
+    if (!r.confirmed || r.captureItemId === targetCaptureId) return false;
+    if (r.type !== targetRegion.type) return false;
+    if (r.type === "FREE") {
+      return (r.role && r.role === targetRegion.role) || r.label === targetRegion.label;
+    }
+    const refTag = (r.groupTag || "default").trim();
+    const targetTag = (targetRegion.groupTag || "default").trim();
+    return refTag === targetTag;
+  });
+
+  if (confirmedReferences.length === 0) {
+    return { draft, proposals: [], appliedCount: 0 };
+  }
+
+  const targetCropBox = resolveRegionCropBox(targetRegion, imageWidth, imageHeight);
+  const targetW = targetRegion.originalRoi?.width || targetCropBox.box?.width || 300;
+  const targetH = targetRegion.originalRoi?.height || targetCropBox.box?.height || 60;
+  const targetRoiX = targetRegion.originalRoi?.x ?? targetCropBox.box?.x ?? 0;
+  const targetRoiY = targetRegion.originalRoi?.y ?? targetCropBox.box?.y ?? 0;
+
+  const proposals: QuickFillProposal[] = [];
+  const assignedSegmentIds = new Set<string>();
+
+  for (const refRegion of confirmedReferences) {
+    for (const v of draft.variables) {
+      const refMapping = v.mappings.find(
+        (m) =>
+          m.sampleId === refRegion.captureItemId &&
+          m.regionId === refRegion.id &&
+          m.presence === "mapped" &&
+          m.confirmed,
+      );
+      if (!refMapping) continue;
+
+      const existingTarget = v.mappings.find(
+        (m) => m.sampleId === targetCaptureId && (m.regionId === targetRegion.id || !m.regionId),
+      );
+      if (existingTarget && existingTarget.confirmed) {
+        continue;
+      }
+
+      if (proposals.some((p) => p.variableId === v.id)) continue;
+
+      let refRelX = refMapping.normalizedBbox?.relX;
+      let refRelY = refMapping.normalizedBbox?.relY;
+      if (refRelX == null || refRelY == null) {
+        const refCropBox = resolveRegionCropBox(refRegion, imageWidth, imageHeight);
+        const refW = refRegion.originalRoi?.width || refCropBox.box?.width || 300;
+        const refH = refRegion.originalRoi?.height || refCropBox.box?.height || 60;
+        const refX = refRegion.originalRoi?.x ?? refCropBox.box?.x ?? 0;
+        const refY = refRegion.originalRoi?.y ?? refCropBox.box?.y ?? 0;
+        const localX = refMapping.bbox?.x != null && refMapping.bbox.x >= refX ? refMapping.bbox.x - refX : (refMapping.bbox?.x ?? 0);
+        const localY = refMapping.bbox?.y != null && refMapping.bbox.y >= refY ? refMapping.bbox.y - refY : (refMapping.bbox?.y ?? 0);
+        refRelX = localX / refW;
+        refRelY = localY / refH;
+      }
+
+      let bestSeg: (typeof targetRegion.ocr.segments)[0] | null = null;
+      let bestScore = -1;
+      const reasons: string[] = [];
+
+      for (const cand of targetRegion.ocr.segments) {
+        const candRelX = cand.bbox.x / targetW;
+        const candRelY = cand.bbox.y / targetH;
+        const dist = Math.hypot(candRelX - refRelX, candRelY - refRelY);
+        let score = Math.max(0, 70 - Math.round(dist * 90));
+
+        const candReasons: string[] = [`layout proximity (${Math.round((1 - Math.min(1, dist)) * 100)}%)`];
+
+        const isVarAuthor = /author|creator|user|name|tac_gia/i.test(v.key);
+        const isVarTime = /time|date|created|timestamp|ngay|gio/i.test(v.key);
+        const isVarEngage = /reaction|like|comment|share|count|luot/i.test(v.key);
+
+        if (isVarAuthor && isAuthorCandidate(cand.text)) {
+          score += 20;
+          candReasons.push("author pattern");
+        } else if (isVarTime && isTimestampText(cand.text)) {
+          score += 25;
+          candReasons.push("timestamp pattern");
+        } else if (isVarEngage && isEngagementText(cand.text)) {
+          score += 20;
+          candReasons.push("engagement pattern");
+        }
+
+        if (refMapping.method === "DOM_ATTRIBUTE") {
+          score += 15;
+          candReasons.push(`attribute @${refMapping.attribute}`);
+        } else if (refMapping.method === "DOM_TEXT") {
+          score += 10;
+          candReasons.push("DOM text");
+        }
+
+        if (cand.confidence) {
+          score += Math.round((cand.confidence / 100) * 10);
+        }
+
+        if (assignedSegmentIds.has(cand.id)) {
+          score -= 15;
+        }
+
+        if (score > bestScore) {
+          bestScore = score;
+          bestSeg = cand;
+          reasons.length = 0;
+          reasons.push(...candReasons);
+        }
+      }
+
+      if (bestSeg) {
+        assignedSegmentIds.add(bestSeg.id);
+        const finalConfidence = Math.min(95, Math.max(50, bestScore));
+
+        const screenshotBbox: Rect = {
+          x: targetRoiX + bestSeg.bbox.x,
+          y: targetRoiY + bestSeg.bbox.y,
+          width: bestSeg.bbox.width,
+          height: bestSeg.bbox.height,
+        };
+
+        const refCapture = (draft.captures ?? []).find((c) => c.id === refRegion.captureItemId);
+        const refTitle = refCapture?.captureUrl || `Sample #${refRegion.captureItemId.slice(0, 6)}`;
+
+        proposals.push({
+          variableId: v.id,
+          variableKey: v.key,
+          targetRegionId: targetRegion.id,
+          targetSegmentId: bestSeg.id,
+          targetSegmentText: bestSeg.text,
+          method: refMapping.method || "OCR_TEXT",
+          attribute: refMapping.attribute,
+          confidence: finalConfidence,
+          evidence: `Quick Fill from confirmed ${refRegion.type} [#${refRegion.groupTag || "default"}] (${refTitle}): ${reasons.join(", ")}`,
+          bbox: screenshotBbox,
+          normalizedBbox: {
+            relX: bestSeg.bbox.x / targetW,
+            relY: bestSeg.bbox.y / targetH,
+            relW: bestSeg.bbox.width / targetW,
+            relH: bestSeg.bbox.height / targetH,
+          },
+          refSampleId: refRegion.captureItemId,
+          refRegionId: refRegion.id,
+        });
+      }
+    }
+  }
+
+  if (proposals.length === 0) {
+    return { draft, proposals: [], appliedCount: 0 };
+  }
+
+  let updatedDraft = draft;
+  for (const proposal of proposals) {
+    updatedDraft = applyQuickFillProposal(updatedDraft, proposal);
+  }
+
+  return {
+    draft: updatedDraft,
+    proposals,
+    appliedCount: proposals.length,
+  };
+}
+
+export function applyQuickFillProposal(
+  draft: CollectorDraft,
+  proposal: QuickFillProposal,
+): CollectorDraft {
+  const isOcr = proposal.method === "OCR_TEXT";
+  const newMapping: CollectorVariableMapping = {
+    sampleId:
+      (draft.regions ?? []).find((r) => r.id === proposal.targetRegionId)?.captureItemId ||
+      (draft.captures ?? []).flatMap((c) => c.regions ?? []).find((r) => r.id === proposal.targetRegionId)?.captureItemId || "",
+    regionId: proposal.targetRegionId,
+    presence: "mapped",
+    confirmed: false,
+    simulatedProposal: true,
+    method: proposal.method,
+    attribute: proposal.attribute,
+    text: isOcr ? proposal.targetSegmentText : undefined,
+    confidence: proposal.confidence,
+    bbox: proposal.bbox,
+    normalizedBbox: proposal.normalizedBbox,
+    segmentId: proposal.targetSegmentId,
+    evidence: proposal.evidence,
+  };
+
+  const variables = draft.variables.map((v) => {
+    if (v.id !== proposal.variableId) return v;
+    const existing = v.mappings.find(
+      (m) => m.sampleId === newMapping.sampleId && (m.regionId === proposal.targetRegionId || !m.regionId),
+    );
+    if (existing && existing.confirmed) return v;
+
+    const others = v.mappings.filter(
+      (m) => !(m.sampleId === newMapping.sampleId && (m.regionId === proposal.targetRegionId || !m.regionId)),
+    );
+    return {
+      ...v,
+      source: isOcr ? ("ocr_image" as const) : ("visual_dom" as const),
+      mappings: [...others, newMapping],
+    };
+  });
+
+  const regions = (draft.regions ?? []).map((r) =>
+    r.id === proposal.targetRegionId
+      ? {
+          ...r,
+          candidateVariableKeys: Array.from(new Set([...r.candidateVariableKeys, proposal.variableKey])),
+          updatedAt: new Date().toISOString(),
+        }
+      : r,
+  );
+
+  return {
+    ...draft,
+    variables,
+    regions,
+    dirty: true,
+  };
+}
+
+export function confirmQuickFillMapping(
+  draft: CollectorDraft,
+  targetCaptureId: string,
+  variableId: string,
+  regionId?: string,
+): CollectorDraft {
+  const variables = draft.variables.map((v) => {
+    if (v.id !== variableId) return v;
+    const mappings = v.mappings.map((m) => {
+      if (m.sampleId === targetCaptureId && (!regionId || m.regionId === regionId)) {
+        return {
+          ...m,
+          confirmed: true,
+          simulatedProposal: false,
+          evidence: "User accepted Quick Fill suggestion",
+        };
+      }
+      return m;
+    });
+    return { ...v, mappings };
+  });
+
+  return { ...draft, variables, dirty: true };
+}
+
+export function rejectQuickFillMapping(
+  draft: CollectorDraft,
+  targetCaptureId: string,
+  variableId: string,
+  regionId?: string,
+): CollectorDraft {
+  const variables = draft.variables.map((v) => {
+    if (v.id !== variableId) return v;
+    const mappings = v.mappings.filter(
+      (m) => !(m.sampleId === targetCaptureId && (!regionId || m.regionId === regionId)),
+    );
+    return { ...v, mappings };
+  });
+
+  return { ...draft, variables, dirty: true };
+}
+
+export function proposeQuickFillForCapture(
+  draft: CollectorDraft,
+  targetCaptureId: string,
+  imageWidth: number = 800,
+  imageHeight: number = 600,
+): CollectorDraft {
+  const targetRegions = [
+    ...(draft.regions ?? []),
+    ...(draft.captures ?? []).flatMap((c) => c.regions ?? []),
+  ].filter((r) => r.captureItemId === targetCaptureId && r.ocr?.segments?.length);
+
+  let updatedDraft = draft;
+  for (const reg of targetRegions) {
+    const res = proposeRegionQuickFill(updatedDraft, reg.id, imageWidth, imageHeight);
+    updatedDraft = res.draft;
+  }
+  return updatedDraft;
 }

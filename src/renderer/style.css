@@ -4065,3 +4065,22 @@ body[data-panel="shell"] .collector-capture-split > aside.collector-capture-tool
   color: #7dd3fc;
   font-size: 10px;
 }
+
+/* C2.11 Group Tag Combobox & Region Quick Fill */
+.collector-group-combobox {
+  position: relative;
+  display: inline-block;
+}
+.collector-group-combobox-input {
+  transition: border-color 0.15s ease;
+}
+.collector-group-combobox-input:focus {
+  border-color: #38bdf8 !important;
+  outline: none;
+}
+.collector-quick-fill-panel {
+  transition: border-color 0.15s ease;
+}
+.collector-quick-fill-panel:hover {
+  border-color: #38bdf8;
+}
