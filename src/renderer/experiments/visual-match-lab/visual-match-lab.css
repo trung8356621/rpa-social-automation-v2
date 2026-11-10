@@ -1,0 +1,125 @@
+.visual-match-lab-page {
+  --bg-main: #0f172a;
+  --bg-card: #1e293b;
+  --bg-subtle: #334155;
+  --border-color: #475569;
+  --text-primary: #f8fafc;
+  --text-muted: #94a3b8;
+  --accent-blue: #38bdf8;
+  --accent-green: #34d399;
+  --accent-amber: #fbbf24;
+  --accent-red: #f87171;
+  --accent-purple: #c084fc;
+  padding: 24px;
+  overflow-x: hidden;
+}
+
+.visual-match-lab-page .visual-match-lab-original {
+  width: 100%;
+  max-width: 1600px !important;
+  min-width: 0;
+  margin: 0 !important;
+  color: var(--text-primary);
+}
+
+.visual-match-lab-page .visual-match-lab-original,
+.visual-match-lab-page .visual-match-lab-original * {
+  box-sizing: border-box;
+}
+
+.visual-match-lab-page .visual-match-lab-original > div[style*="grid-template-columns"] {
+  width: 100%;
+  min-width: 0;
+}
+
+.visual-match-lab-page .visual-match-lab-original > div[style*="grid-template-columns"] > div {
+  min-width: 0;
+}
+
+.visual-match-lab-page .visual-match-lab-original section,
+.visual-match-lab-page .visual-match-lab-original aside {
+  min-width: 0;
+}
+
+.visual-match-lab-page .visual-match-lab-original > header {
+  width: auto;
+  height: auto;
+  padding: 0 0 16px;
+  gap: 0;
+  background: transparent;
+}
+
+.visual-match-lab-page .visual-match-lab-original label input,
+.visual-match-lab-page .visual-match-lab-original label select {
+  display: initial;
+  margin-top: 0;
+}
+
+/* Creator has a legacy global `aside` rule for its step navigator. The Lab's
+   original Panel 1 is a normal grid child and must keep that behavior. */
+.visual-match-lab-page .visual-match-lab-original aside {
+  position: static;
+  inset: auto;
+  width: auto;
+  height: auto;
+  min-height: 0;
+  padding: 16px;
+  overflow: visible;
+  border-right: 1px solid var(--border-color);
+}
+
+.visual-match-lab-page .visual-match-lab-original canvas,
+.visual-match-lab-page .visual-match-lab-original img {
+  max-width: none;
+}
+
+.visual-match-lab-page .visual-match-lab-original table {
+  display: table;
+}
+
+.visual-match-lab-page .visual-match-lab-original h1,
+.visual-match-lab-page .visual-match-lab-original h2,
+.visual-match-lab-page .visual-match-lab-original h3,
+.visual-match-lab-page .visual-match-lab-original h4,
+.visual-match-lab-page .visual-match-lab-original p {
+  margin-top: 0;
+}
+
+.live-scroll-test { background: var(--bg-card); border: 1px solid var(--border-color); border-radius: 8px; margin-top: 20px; padding: 16px; }
+.live-scroll-test h2 { color: var(--accent-green); font-size: 14px; text-transform: uppercase; }
+.live-scroll-test > button { background: #047857; margin: 8px 0; font-weight: 700; }
+.live-scroll-test [role="status"] { margin: 8px 0; font-size: 12px; }
+.live-scroll-summary { display: flex; flex-wrap: wrap; gap: 12px; margin: 12px 0; }
+.live-scroll-table { max-width: 100%; overflow-x: auto; }
+.live-scroll-table table { width: 100%; border-collapse: collapse; }
+.live-scroll-table th, .live-scroll-table td { border-bottom: 1px solid var(--border-color); padding: 7px; text-align: left; }
+.live-scroll-evidence { display: grid; gap: 14px; grid-template-columns: repeat(auto-fit, minmax(360px, 1fr)); margin-top: 14px; }
+.live-scroll-evidence article { background: var(--bg-subtle); border-radius: 6px; min-width: 0; padding: 10px; }
+.live-scroll-evidence h3 { font-size: 12px; margin: 0 0 7px; }
+.evidence-image { position: relative; width: 100%; }
+.evidence-image img { display: block; height: auto; max-width: 100% !important; width: 100%; }
+.evidence-image span { border: 2px solid #f59e0b; pointer-events: none; position: absolute; }
+.evidence-image span[data-status="NEW_ITEM"] { border-color: #22c55e; }
+.evidence-image span[data-status="DUPLICATE"] { border-color: #38bdf8; }
+.evidence-image span[data-status="COMMENT_ACTION"] { border-color: #c084fc; }
+.live-scroll-evidence ul { font-size: 11px; margin: 8px 0 0; padding-left: 18px; }
+.live-template-calibration { background: #17263b; border: 1px solid var(--border-color); border-radius: 6px; margin: 12px 0; padding: 12px; }
+.live-template-calibration h3 { margin: 0 0 6px; }
+.template-controls { align-items: center; display: flex; flex-wrap: wrap; gap: 7px; margin: 8px 0; }
+.template-controls select { width: auto; }
+.template-controls button[aria-pressed="true"] { background: var(--accent-blue); color: #0f172a; }
+.template-crop-surface { cursor: crosshair; line-height: 0; max-width: 1024px; position: relative; touch-action: none; user-select: none; }
+.template-crop-surface img { display: block; height: auto; max-width: 100% !important; width: 100%; }
+.template-crop-surface > span { background: #38bdf833; border: 2px solid #38bdf8; pointer-events: none; position: absolute; }
+.template-previews { display: flex; flex-wrap: wrap; gap: 10px; margin: 10px 0; }
+.template-previews > div { align-items: center; background: var(--bg-subtle); border-radius: 4px; display: flex; gap: 7px; min-height: 42px; padding: 6px; }
+.template-previews img { background: white; image-rendering: pixelated; max-height: 32px; max-width: 80px !important; }
+.template-previews span { color: var(--accent-amber); font-size: 11px; }
+.live-template-calibration > strong { margin-left: 10px; }
+
+@media (max-width: 1050px) {
+  .visual-match-lab-page .visual-match-lab-original > div[style*="grid-template-columns"] {
+    grid-template-columns: minmax(260px, 320px) minmax(0, 1fr) !important;
+    gap: 14px !important;
+  }
+}

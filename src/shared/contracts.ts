@@ -8,7 +8,7 @@ import type {
 } from "./collectors/types.js";
 export type { ScriptReleaseManifest } from "./script-release.js";
 export type Rect = { x: number; y: number; width: number; height: number };
-export type MainPage = "scenarios" | "browser-sessions" | "test-lab" | "settings" | "variations" | "widget-registry" | "workflows" | "builds-releases" | "collectors" | "collector-test-lab";
+export type MainPage = "scenarios" | "browser-sessions" | "test-lab" | "visual-match-lab" | "settings" | "variations" | "widget-registry" | "workflows" | "builds-releases" | "collectors" | "collector-test-lab";
 export type AppPage = MainPage | "creator" | "test-case" | "studio-run";
 export type VariableValues = Record<string, string | string[] | number>;
 export type CaseRunStatus = "RUNNING" | "PASS" | "BLOCKED" | "SKIPPED" | "ERROR" | "ACTION_SENT";
@@ -476,6 +476,12 @@ export type Command =
   | { type: "armTest"; stepId: string; version: number; overrideId?: string }
   | { type: "disarmTest" }
   | { type: "browserVisible"; visible: boolean }
+  | { type: "visualMatchLabState" }
+  | { type: "visualMatchLabCapture" }
+  | { type: "visualMatchLabInspect"; captureId: string; webContentsId: number; point: { x: number; y: number }; parent?: boolean }
+  | { type: "visualMatchLabHighlight"; captureId: string; webContentsId: number; point: { x: number; y: number } }
+  | { type: "visualMatchLabScroll"; webContentsId: number; deltaY: number }
+  | { type: "visualMatchLabOcr"; dataUrl: string }
   /** Collector Capture workspace hole — null/inactive hides Browser Core on collectors pages. */
   | {
       type: "collectorBrowserHost";

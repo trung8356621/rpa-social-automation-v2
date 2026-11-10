@@ -36,6 +36,9 @@ function webDevEntryPlugin(): Plugin {
 export default defineConfig({
   root: "src/renderer",
   base: "./",
+  // The preserved experiment has its own node_modules. Force its components to
+  // use Creator's React instance so hooks share the renderer root dispatcher.
+  resolve: { dedupe: ["react", "react-dom"] },
   build: { outDir: "../../dist/renderer", emptyOutDir: false },
   server: {
     port: 5173,

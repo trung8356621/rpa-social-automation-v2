@@ -26,6 +26,7 @@ import { PointerTrace } from "./pointer-trace.js";
 import { ClickMarker } from "./click-marker.js";
 import { CreatorOverlays } from "./creator-overlays.js";
 import { BrowserCore } from "./browser-core.js";
+import { VisualMatchLabRuntime } from "./visual-match-lab.js";
 import { CollectorScrollCaptureController } from "./collector-scroll-capture.js";
 import { BrowserSessions } from "./browser-sessions.js";
 import { matchEndVisual } from "./end-visual-matcher.js";
@@ -298,6 +299,22 @@ async function boot() {
     browser,
     store.setting("appSidebarCollapsed") === "true",
   );
+  const visualMatchLab = new VisualMatchLabRuntime(browser, async (operation) => {
+    const previousPage = overlays.page;
+    overlays.setPage("creator");
+    browser.window.show();
+    browser.window.focus();
+    browser.view.webContents.focus();
+    browser.view.webContents.invalidate();
+    await browser.view.webContents.executeJavaScript(`new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve)))`);
+    await new Promise((resolve) => setTimeout(resolve, 250));
+    try {
+      return await operation();
+    } finally {
+      overlays.setPage(previousPage);
+      window.webContents.focus();
+    }
+  });
   const pointerTrace = new PointerTrace(
     window,
     browser,
@@ -1381,7 +1398,7 @@ async function boot() {
       case "appPage":
         isIdle();
         if (uiPlayAllRunId) throw new Error("Đợi Play All kết thúc trước khi chuyển màn hình.");
-        if (event.sender !== window.webContents || !["scenarios", "creator", "browser-sessions", "test-lab", "settings", "test-case", "variations", "widget-registry", "workflows", "builds-releases", "collectors", "collector-test-lab"].includes(command.page))
+        if (event.sender !== window.webContents || !["scenarios", "creator", "browser-sessions", "test-lab", "visual-match-lab", "settings", "test-case", "variations", "widget-registry", "workflows", "builds-releases", "collectors", "collector-test-lab"].includes(command.page))
           throw new Error("Invalid app page");
         overlays.setPage(command.page);
         if (command.page !== "creator") armedTest = undefined;
@@ -1804,6 +1821,27 @@ async function boot() {
             ...pointerTrace.snapshot(),
           });
         return state();
+      case "visualMatchLabState":
+        isIdle();
+        return visualMatchLab.state();
+      case "visualMatchLabCapture":
+        isIdle();
+        return visualMatchLab.capture();
+      case "visualMatchLabInspect":
+        isIdle();
+        return visualMatchLab.inspect(command.captureId, command.webContentsId, command.point, command.parent === true);
+      case "visualMatchLabHighlight":
+        isIdle();
+        return visualMatchLab.highlight(command.captureId, command.webContentsId, command.point);
+      case "visualMatchLabScroll":
+        isIdle();
+        return visualMatchLab.scroll(command.webContentsId, command.deltaY);
+      case "visualMatchLabOcr": {
+        isIdle();
+        const match = /^data:image\/[a-z0-9.+-]+;base64,(.+)$/iu.exec(command.dataUrl);
+        if (!match) throw new Error("OCR_IMAGE_INVALID: expected an image data URL.");
+        return localOcr.recognize(Buffer.from(match[1], "base64"));
+      }
       case "collectorBrowserHost": {
         isIdle();
         if (event.sender !== window.webContents) throw new Error("Invalid collector host sender");
@@ -2560,6 +2598,26 @@ async function boot() {
     publishSessions();
   }
   window.show();
+  if (process.argv.includes("--visual-match-lab-check")) {
+    try {
+      await new Promise((resolve) => setTimeout(resolve, 15000));
+      const state = await visualMatchLab.state();
+      const before = await visualMatchLab.capture();
+      const point = { x: Math.round(before.viewport.width / 2), y: Math.round(before.viewport.height / 2) };
+      const inspected = await visualMatchLab.inspect(before.id, before.webContentsId, point);
+      const highlighted = await visualMatchLab.highlight(before.id, before.webContentsId, point);
+      await visualMatchLab.scroll(before.webContentsId, 300);
+      const after = await visualMatchLab.capture();
+      await mkdir(path.join(project, "artifacts"), { recursive: true });
+      await writeFile(path.join(project, "artifacts", "visual-match-lab-live-check.json"), JSON.stringify({ state, before: { id: before.id, webContentsId: before.webContentsId, width: before.width, height: before.height, viewport: before.viewport }, inspected, highlighted, after: { id: after.id, webContentsId: after.webContentsId, width: after.width, height: after.height, viewport: after.viewport }, sameBrowser: before.webContentsId === after.webContentsId }, null, 2));
+      app.exit(0);
+      return;
+    } catch (error) {
+      console.error("VISUAL_MATCH_LAB_CHECK_FAILED", error);
+      app.exit(1);
+      return;
+    }
+  }
   if (selfTest) {
     try {
       const { runSelfTest } = await import(

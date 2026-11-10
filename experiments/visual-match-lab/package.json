@@ -1,0 +1,25 @@
+{
+  "name": "visual-match-lab",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "vite",
+    "live": "electron electron/main.mjs",
+    "build": "tsc && vite build",
+    "test": "node --test tests/*.test.mjs",
+    "preview": "vite preview"
+  },
+  "dependencies": {
+    "react": "^19.3.1",
+    "react-dom": "^19.3.1",
+    "@techstark/opencv-js": "^5.0.0-release.1"
+  },
+  "devDependencies": {
+    "@types/react": "^19.2.0",
+    "@types/react-dom": "^19.2.0",
+    "electron": "44.9.0",
+    "typescript": "^5.9.3",
+    "vite": "^8.3.4"
+  }
+}

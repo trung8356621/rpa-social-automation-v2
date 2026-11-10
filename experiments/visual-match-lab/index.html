@@ -1,0 +1,43 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>RPA Visual Image Recognition Lab</title>
+    <script src="/opencv.js" async></script>
+    <style>
+      :root {
+        --bg-main: #0f172a;
+        --bg-card: #1e293b;
+        --bg-subtle: #334155;
+        --border-color: #475569;
+        --text-primary: #f8fafc;
+        --text-muted: #94a3b8;
+        --accent-blue: #38bdf8;
+        --accent-green: #34d399;
+        --accent-amber: #fbbf24;
+        --accent-red: #f87171;
+        --accent-purple: #c084fc;
+      }
+      * {
+        box-sizing: border-box;
+        margin: 0;
+        padding: 0;
+      }
+      body {
+        font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+        background-color: var(--bg-main);
+        color: var(--text-primary);
+        min-height: 100vh;
+        overflow-x: hidden;
+      }
+      button, input, select {
+        font-family: inherit;
+      }
+    </style>
+  </head>
+  <body>
+    <div id="root"></div>
+    <script type="module" src="./src/main.tsx"></script>
+  </body>
+</html>

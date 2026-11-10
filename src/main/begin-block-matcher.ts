@@ -26,12 +26,16 @@ export function getBlockColor(type: BeginLayoutBlockType): string {
   switch (type) {
     case "image_avatar":
       return "#8b5cf6"; // Purple
+    case "image_region":
+      return "#ec4899"; // Pink
     case "primary_text":
       return "#0284c7"; // Sky blue
     case "secondary_text":
       return "#64748b"; // Slate gray
     case "action_menu":
       return "#f59e0b"; // Amber
+    case "unknown":
+      return "#94a3b8"; // Muted gray
     case "generic_block":
     default:
       return "#10b981"; // Emerald
@@ -62,7 +66,10 @@ type RawComponent = {
  */
 export async function extractBeginBlocks(
   imageBuffer: Buffer,
-  options?: { generateSegmentedOverlay?: boolean },
+  options?: {
+    generateSegmentedOverlay?: boolean;
+    generateIntermediateMasks?: boolean;
+  },
 ): Promise<{
   blocks: BeginLayoutBlock[];
   rawWidth: number;
@@ -73,6 +80,22 @@ export async function extractBeginBlocks(
   scaleX: number;
   scaleY: number;
   segmentedPngBuffer?: Buffer;
+  maskOverlayPngBuffer?: Buffer;
+  diagnostics?: {
+    avatarFound: boolean;
+    avatarConfidence?: number;
+    primaryTextFound: boolean;
+    menuFound: boolean;
+    statusSummary?: string;
+    edgePixelCount?: number;
+    rawComponentCount?: number;
+    filteredComponentCount?: number;
+    intermediateBounds?: {
+      avatar?: Rect;
+      menu?: Rect;
+      textZone?: Rect;
+    };
+  };
 }> {
   const meta = await sharp(imageBuffer).metadata();
   const rawWidth = meta.width || 560;
@@ -94,127 +117,409 @@ export async function extractBeginBlocks(
 
   // 1. Edge/Gradient thresholding
   const edgeMask = new Uint8Array(normWidth * normHeight);
+  let edgePixelCount = 0;
   for (let y = 1; y < normHeight - 1; y++) {
     const rowOffset = y * normWidth;
     for (let x = 1; x < normWidth - 1; x++) {
       const idx = rowOffset + x;
       const dx = Math.abs(pixels[idx + 1]! - pixels[idx - 1]!);
       const dy = Math.abs(pixels[idx + normWidth]! - pixels[idx - normWidth]!);
-      if (dx + dy >= 24) {
+      if (dx + dy >= 20) {
         edgeMask[idx] = 1;
+        edgePixelCount++;
       }
     }
   }
 
-  // 2. Morphological horizontal dilation / closing (horizontal radius 4, vertical radius 1)
-  // Fuses characters into text lines without blurring separate lines
-  const closedMask = new Uint8Array(normWidth * normHeight);
-  const hRad = 4;
-  const vRad = 1;
-
+  // 2. STAGE A: Avatar / Image-Region Detection (Left Zone: 0 .. 22% width)
+  const leftZoneMaxX = Math.round(normWidth * 0.22);
+  const leftEdgeMask = new Uint8Array(normWidth * normHeight);
   for (let y = 0; y < normHeight; y++) {
-    const yMin = Math.max(0, y - vRad);
-    const yMax = Math.min(normHeight - 1, y + vRad);
-    for (let x = 0; x < normWidth; x++) {
-      const xMin = Math.max(0, x - hRad);
-      const xMax = Math.min(normWidth - 1, x + hRad);
+    for (let x = 0; x <= leftZoneMaxX; x++) {
+      const idx = y * normWidth + x;
+      if (edgeMask[idx] === 1) leftEdgeMask[idx] = 1;
+    }
+  }
 
+  // Consolidate avatar shape with local morphological dilation
+  const closedLeftMask = new Uint8Array(normWidth * normHeight);
+  const avRad = 3;
+  for (let y = 0; y < normHeight; y++) {
+    const yMin = Math.max(0, y - avRad);
+    const yMax = Math.min(normHeight - 1, y + avRad);
+    for (let x = 0; x <= leftZoneMaxX; x++) {
+      const xMin = Math.max(0, x - avRad);
+      const xMax = Math.min(leftZoneMaxX, x + avRad);
       let found = false;
       for (let ny = yMin; ny <= yMax && !found; ny++) {
-        const nOffset = ny * normWidth;
+        const offset = ny * normWidth;
         for (let nx = xMin; nx <= xMax; nx++) {
-          if (edgeMask[nOffset + nx] === 1) {
+          if (leftEdgeMask[offset + nx] === 1) {
             found = true;
             break;
           }
         }
       }
-      if (found) {
-        closedMask[y * normWidth + x] = 1;
-      }
+      if (found) closedLeftMask[y * normWidth + x] = 1;
     }
   }
 
-  // 3. Connected-Component extraction
-  const visited = new Uint8Array(normWidth * normHeight);
-  const rawComponents: RawComponent[] = [];
-
+  // Connected components in left zone
+  const leftVisited = new Uint8Array(normWidth * normHeight);
+  const leftComponents: RawComponent[] = [];
   for (let y = 0; y < normHeight; y++) {
-    for (let x = 0; x < normWidth; x++) {
+    for (let x = 0; x <= leftZoneMaxX; x++) {
       const idx = y * normWidth + x;
-      if (closedMask[idx] === 1 && visited[idx] === 0) {
-        // BFS flood fill
+      if (closedLeftMask[idx] === 1 && leftVisited[idx] === 0) {
         let cXmin = x;
         let cXmax = x;
         let cYmin = y;
         let cYmax = y;
         let pixelCount = 0;
-
-        const queue: number[] = [idx];
-        visited[idx] = 1;
-
+        const queue = [idx];
+        leftVisited[idx] = 1;
         let head = 0;
         while (head < queue.length) {
           const curr = queue[head++]!;
           const cy = Math.floor(curr / normWidth);
           const cx = curr % normWidth;
-
           if (cx < cXmin) cXmin = cx;
           if (cx > cXmax) cXmax = cx;
           if (cy < cYmin) cYmin = cy;
           if (cy > cYmax) cYmax = cy;
           if (edgeMask[curr] === 1) pixelCount++;
 
-          // 4-way neighbors
+          const neighbors = [
+            cy > 0 ? curr - normWidth : -1,
+            cy < normHeight - 1 ? curr + normWidth : -1,
+            cx > 0 ? curr - 1 : -1,
+            cx < leftZoneMaxX ? curr + 1 : -1,
+          ];
+          for (const n of neighbors) {
+            if (n >= 0 && closedLeftMask[n] === 1 && leftVisited[n] === 0) {
+              leftVisited[n] = 1;
+              queue.push(n);
+            }
+          }
+        }
+        const w = cXmax - cXmin + 1;
+        const h = cYmax - cYmin + 1;
+        if (w >= 10 && h >= 10) {
+          leftComponents.push({ xMin: cXmin, yMin: cYmin, xMax: cXmax, yMax: cYmax, pixelCount });
+        }
+      }
+    }
+  }
+
+  // Find best avatar candidate in left components (leftmost candidate first)
+  leftComponents.sort((a, b) => a.xMin - b.xMin);
+  let avatarBlock: BeginLayoutBlock | null = null;
+  let avatarMaskBounds: { xMin: number; xMax: number; yMin: number; yMax: number } | null = null;
+
+  for (const comp of leftComponents) {
+    const compW = comp.xMax - comp.xMin + 1;
+    const compH = comp.yMax - comp.yMin + 1;
+    const relX = comp.xMin / normWidth;
+    const relH = compH / normHeight;
+    const aspect = compW / Math.max(1, compH);
+    const cy = (comp.yMin + comp.yMax) / 2;
+
+    // Avatar criteria:
+    // - Starts near left edge (relX <= 0.09)
+    // - Substantial vertical height for post header avatar (52% to 95% of container)
+    // - Approximately square / circle aspect ratio (0.65 to 1.45)
+    // - Vertically roughly centered (0.15 <= cy / normHeight <= 0.85)
+    if (
+      relX <= 0.09 &&
+      relH >= 0.52 &&
+      relH <= 0.98 &&
+      aspect >= 0.65 &&
+      aspect <= 1.45 &&
+      cy >= normHeight * 0.15 &&
+      cy <= normHeight * 0.85
+    ) {
+      let conf = 0.70;
+      if (relX <= 0.08) conf += 0.15;
+      if (aspect >= 0.85 && aspect <= 1.15) conf += 0.10;
+      if (relH >= 0.50 && relH <= 0.90) conf += 0.05;
+
+      avatarBlock = {
+        id: "blk_avatar",
+        type: "image_avatar",
+        normalizedBounds: {
+          x: Math.round((comp.xMin / normWidth) * 1000) / 1000,
+          y: Math.round((comp.yMin / normHeight) * 1000) / 1000,
+          width: Math.round((compW / normWidth) * 1000) / 1000,
+          height: Math.round((compH / normHeight) * 1000) / 1000,
+        },
+        rawBounds: {
+          x: Math.round((comp.xMin / normWidth) * rawWidth),
+          y: Math.round((comp.yMin / normHeight) * rawHeight),
+          width: Math.max(4, Math.round((compW / normWidth) * rawWidth)),
+          height: Math.max(4, Math.round((compH / normHeight) * rawHeight)),
+        },
+        processingBounds: {
+          x: comp.xMin,
+          y: comp.yMin,
+          width: compW,
+          height: compH,
+        },
+        aspectRatio: Math.round(aspect * 100) / 100,
+        density: Math.round((comp.pixelCount / Math.max(1, compW * compH)) * 100) / 100,
+        confidence: Math.min(0.99, Math.round(conf * 100) / 100),
+        required: true,
+        label: "IMAGE AVATAR",
+      };
+
+      avatarMaskBounds = {
+        xMin: Math.max(0, comp.xMin - 2),
+        xMax: Math.min(normWidth - 1, comp.xMax + 4),
+        yMin: Math.max(0, comp.yMin - 2),
+        yMax: Math.min(normHeight - 1, comp.yMax + 2),
+      };
+      break;
+    }
+  }
+
+  // 3. STAGE B: Action Menu Detection & Clustering (Right Zone: 70..100% width)
+  const rightZoneMinX = Math.round(normWidth * 0.70);
+  const rightComponents: RawComponent[] = [];
+  const rightVisited = new Uint8Array(normWidth * normHeight);
+
+  for (let y = 0; y < normHeight; y++) {
+    for (let x = rightZoneMinX; x < normWidth; x++) {
+      const idx = y * normWidth + x;
+      if (edgeMask[idx] === 1 && rightVisited[idx] === 0) {
+        let cXmin = x;
+        let cXmax = x;
+        let cYmin = y;
+        let cYmax = y;
+        let pixelCount = 0;
+        const queue = [idx];
+        rightVisited[idx] = 1;
+        let head = 0;
+        while (head < queue.length) {
+          const curr = queue[head++]!;
+          const cy = Math.floor(curr / normWidth);
+          const cx = curr % normWidth;
+          if (cx < cXmin) cXmin = cx;
+          if (cx > cXmax) cXmax = cx;
+          if (cy < cYmin) cYmin = cy;
+          if (cy > cYmax) cYmax = cy;
+          pixelCount++;
+
+          const neighbors = [
+            cy > 0 ? curr - normWidth : -1,
+            cy < normHeight - 1 ? curr + normWidth : -1,
+            cx > rightZoneMinX ? curr - 1 : -1,
+            cx < normWidth - 1 ? curr + 1 : -1,
+          ];
+          for (const n of neighbors) {
+            if (n >= 0 && edgeMask[n] === 1 && rightVisited[n] === 0) {
+              rightVisited[n] = 1;
+              queue.push(n);
+            }
+          }
+        }
+        const w = cXmax - cXmin + 1;
+        const h = cYmax - cYmin + 1;
+        if (w >= 2 && h >= 2) {
+          rightComponents.push({ xMin: cXmin, yMin: cYmin, xMax: cXmax, yMax: cYmax, pixelCount });
+        }
+      }
+    }
+  }
+
+  // Cluster nearby right-side components into a single menu cluster (prevents 2+ menu blocks from 3-dots)
+  let menuBlock: BeginLayoutBlock | null = null;
+  let menuMaskBounds: { xMin: number; xMax: number; yMin: number; yMax: number } | null = null;
+
+  if (rightComponents.length > 0) {
+    rightComponents.sort((a, b) => a.xMin - b.xMin);
+    let mXmin = rightComponents[0]!.xMin;
+    let mXmax = rightComponents[0]!.xMax;
+    let mYmin = rightComponents[0]!.yMin;
+    let mYmax = rightComponents[0]!.yMax;
+    let mPixels = rightComponents[0]!.pixelCount;
+
+    for (let i = 1; i < rightComponents.length; i++) {
+      const c = rightComponents[i]!;
+      const gapX = c.xMin - mXmax;
+      const cyDiff = Math.abs((c.yMin + c.yMax) / 2 - (mYmin + mYmax) / 2);
+      if (gapX <= 16 && cyDiff <= 12) {
+        mXmin = Math.min(mXmin, c.xMin);
+        mXmax = Math.max(mXmax, c.xMax);
+        mYmin = Math.min(mYmin, c.yMin);
+        mYmax = Math.max(mYmax, c.yMax);
+        mPixels += c.pixelCount;
+      }
+    }
+
+    const mW = mXmax - mXmin + 1;
+    const mH = mYmax - mYmin + 1;
+    const relX = mXmin / normWidth;
+    const relW = mW / normWidth;
+    const relH = mH / normHeight;
+    const relY = mYmin / normHeight;
+
+    if (relX >= 0.70 && relW <= 0.25 && relH <= 0.50 && relY <= 0.65) {
+      menuBlock = {
+        id: "blk_menu",
+        type: "action_menu",
+        normalizedBounds: {
+          x: Math.round((mXmin / normWidth) * 1000) / 1000,
+          y: Math.round((mYmin / normHeight) * 1000) / 1000,
+          width: Math.round((mW / normWidth) * 1000) / 1000,
+          height: Math.round((mH / normHeight) * 1000) / 1000,
+        },
+        rawBounds: {
+          x: Math.round((mXmin / normWidth) * rawWidth),
+          y: Math.round((mYmin / normHeight) * rawHeight),
+          width: Math.max(4, Math.round((mW / normWidth) * rawWidth)),
+          height: Math.max(4, Math.round((mH / normHeight) * rawHeight)),
+        },
+        processingBounds: {
+          x: mXmin,
+          y: mYmin,
+          width: mW,
+          height: mH,
+        },
+        aspectRatio: Math.round((mW / Math.max(1, mH)) * 100) / 100,
+        density: Math.round((mPixels / Math.max(1, mW * mH)) * 100) / 100,
+        confidence: 0.90,
+        required: false,
+        label: "ACTION MENU",
+      };
+
+      menuMaskBounds = {
+        xMin: Math.max(0, mXmin - 3),
+        xMax: Math.min(normWidth - 1, mXmax + 3),
+        yMin: Math.max(0, mYmin - 2),
+        yMax: Math.min(normHeight - 1, mYmax + 2),
+      };
+    }
+  }
+
+  // 4. STAGE C: Masking & Text / Layout Segmentation (Strictly Unmasked Area)
+  const textEdgeMask = new Uint8Array(normWidth * normHeight);
+  for (let y = 0; y < normHeight; y++) {
+    for (let x = 0; x < normWidth; x++) {
+      const idx = y * normWidth + x;
+      if (edgeMask[idx] === 0) continue;
+
+      // Mask out Avatar
+      if (
+        avatarMaskBounds &&
+        x >= avatarMaskBounds.xMin &&
+        x <= avatarMaskBounds.xMax &&
+        y >= avatarMaskBounds.yMin &&
+        y <= avatarMaskBounds.yMax
+      ) {
+        continue;
+      }
+
+      // Mask out Action Menu
+      if (
+        menuMaskBounds &&
+        x >= menuMaskBounds.xMin &&
+        x <= menuMaskBounds.xMax &&
+        y >= menuMaskBounds.yMin &&
+        y <= menuMaskBounds.yMax
+      ) {
+        continue;
+      }
+
+      textEdgeMask[idx] = 1;
+    }
+  }
+
+  // Morphological horizontal dilation on unmasked text zone (hRad=5, vRad=1)
+  const closedTextMask = new Uint8Array(normWidth * normHeight);
+  const textHRad = 5;
+  const textVRad = 1;
+
+  for (let y = 0; y < normHeight; y++) {
+    const yMin = Math.max(0, y - textVRad);
+    const yMax = Math.min(normHeight - 1, y + textVRad);
+    for (let x = 0; x < normWidth; x++) {
+      const xMin = Math.max(0, x - textHRad);
+      const xMax = Math.min(normWidth - 1, x + textHRad);
+      let found = false;
+      for (let ny = yMin; ny <= yMax && !found; ny++) {
+        const offset = ny * normWidth;
+        for (let nx = xMin; nx <= xMax; nx++) {
+          if (textEdgeMask[offset + nx] === 1) {
+            found = true;
+            break;
+          }
+        }
+      }
+      if (found) closedTextMask[y * normWidth + x] = 1;
+    }
+  }
+
+  // Extract connected components in unmasked text area
+  const textVisited = new Uint8Array(normWidth * normHeight);
+  const rawTextComps: RawComponent[] = [];
+
+  for (let y = 0; y < normHeight; y++) {
+    for (let x = 0; x < normWidth; x++) {
+      const idx = y * normWidth + x;
+      if (closedTextMask[idx] === 1 && textVisited[idx] === 0) {
+        let cXmin = x;
+        let cXmax = x;
+        let cYmin = y;
+        let cYmax = y;
+        let pixelCount = 0;
+        const queue = [idx];
+        textVisited[idx] = 1;
+        let head = 0;
+        while (head < queue.length) {
+          const curr = queue[head++]!;
+          const cy = Math.floor(curr / normWidth);
+          const cx = curr % normWidth;
+          if (cx < cXmin) cXmin = cx;
+          if (cx > cXmax) cXmax = cx;
+          if (cy < cYmin) cYmin = cy;
+          if (cy > cYmax) cYmax = cy;
+          if (textEdgeMask[curr] === 1) pixelCount++;
+
           const neighbors = [
             cy > 0 ? curr - normWidth : -1,
             cy < normHeight - 1 ? curr + normWidth : -1,
             cx > 0 ? curr - 1 : -1,
             cx < normWidth - 1 ? curr + 1 : -1,
           ];
-
           for (const n of neighbors) {
-            if (n >= 0 && closedMask[n] === 1 && visited[n] === 0) {
-              visited[n] = 1;
+            if (n >= 0 && closedTextMask[n] === 1 && textVisited[n] === 0) {
+              textVisited[n] = 1;
               queue.push(n);
             }
           }
         }
-
-        const compW = cXmax - cXmin + 1;
-        const compH = cYmax - cYmin + 1;
-
-        // Filter tiny noise speckles (< 6px in both directions)
-        if (compW >= 6 || compH >= 6) {
-          rawComponents.push({
-            xMin: cXmin,
-            yMin: cYmin,
-            xMax: cXmax,
-            yMax: cYmax,
-            pixelCount,
-          });
+        const w = cXmax - cXmin + 1;
+        const h = cYmax - cYmin + 1;
+        if (w >= 8 || h >= 6) {
+          rawTextComps.push({ xMin: cXmin, yMin: cYmin, xMax: cXmax, yMax: cYmax, pixelCount });
         }
       }
     }
   }
 
-  // 4. Region Merging: Merge horizontally aligned components on the same line if gap is small
-  const mergedComponents: RawComponent[] = [];
-  rawComponents.sort((a, b) => a.xMin - b.xMin);
+  // Safe horizontal fragment merging on aligned lines
+  rawTextComps.sort((a, b) => a.xMin - b.xMin);
+  const mergedTextComps: RawComponent[] = [];
 
-  for (const comp of rawComponents) {
+  for (const comp of rawTextComps) {
     let merged = false;
-    for (const existing of mergedComponents) {
+    for (const existing of mergedTextComps) {
       const cy1 = (comp.yMin + comp.yMax) / 2;
       const cy2 = (existing.yMin + existing.yMax) / 2;
-      const h1 = comp.yMax - comp.yMin + 1;
-      const h2 = existing.yMax - existing.yMin + 1;
-
-      // Both are horizontal text-like fragments on the same line
-      const sameLine = Math.abs(cy1 - cy2) <= 5 && Math.min(h1, h2) / Math.max(h1, h2) >= 0.5;
+      const sameLine = Math.abs(cy1 - cy2) <= 4;
       const horizontalGap = Math.max(0, comp.xMin - existing.xMax);
 
-      if (sameLine && horizontalGap <= 16 && (comp.xMax - comp.xMin > 10 || existing.xMax - existing.xMin > 10)) {
+      // Do not merge across large gap (> 14px) or if resulting width exceeds 75% of normWidth
+      if (sameLine && horizontalGap <= 14 && comp.xMax - existing.xMin < normWidth * 0.75) {
         existing.xMin = Math.min(existing.xMin, comp.xMin);
         existing.xMax = Math.max(existing.xMax, comp.xMax);
         existing.yMin = Math.min(existing.yMin, comp.yMin);
@@ -225,54 +530,50 @@ export async function extractBeginBlocks(
       }
     }
     if (!merged) {
-      mergedComponents.push({ ...comp });
+      mergedTextComps.push({ ...comp });
     }
   }
 
-  // 5. Geometric Classification into Abstract Layout Blocks
-  const blocks: BeginLayoutBlock[] = [];
+  // Sort text components vertically (top line first)
+  mergedTextComps.sort((a, b) => a.yMin - b.yMin);
+
+  const textBlocks: BeginLayoutBlock[] = [];
   let blockCounter = 1;
 
-  for (const c of mergedComponents) {
+  for (let i = 0; i < mergedTextComps.length; i++) {
+    const c = mergedTextComps[i]!;
     const w = c.xMax - c.xMin + 1;
     const h = c.yMax - c.yMin + 1;
-    const area = w * h;
-
     const rx = c.xMin / normWidth;
     const ry = c.yMin / normHeight;
     const rw = w / normWidth;
     const rh = h / normHeight;
-    const compAspect = w / Math.max(1, h);
-    const density = Math.min(1, Math.round((c.pixelCount / Math.max(1, area)) * 100) / 100);
+    const aspect = w / Math.max(1, h);
 
     let type: BeginLayoutBlockType = "generic_block";
-    let confidence = 0.8;
+    let conf = 0.8;
+    let required = false;
 
-    // Classification rules
-    if (rx <= 0.22 && compAspect >= 0.55 && compAspect <= 1.65 && rh >= 0.32) {
-      // Compact square / circle on the left with substantial height
-      type = "image_avatar";
-      confidence = 0.95;
-    } else if (rx >= 0.70 && rw <= 0.25 && rh <= 0.45 && ry <= 0.65) {
-      // Small compact action/menu cluster on the top-right
-      type = "action_menu";
-      confidence = 0.9;
-    } else if (rh <= 0.45 && (compAspect >= 1.8 || rw >= 0.12)) {
-      // Horizontal text-line structure
-      if (ry <= 0.48) {
+    // Normal text line criteria (requires genuine stroke density, not hollow box outlines)
+    const density = Math.round((c.pixelCount / Math.max(1, w * h)) * 100) / 100;
+    if (rh <= 0.48 && (aspect >= 1.5 || rw >= 0.08) && density >= 0.12) {
+      if (i === 0 && ry <= 0.50) {
         type = "primary_text";
-        confidence = 0.9;
+        conf = 0.92;
+        required = true;
       } else {
         type = "secondary_text";
-        confidence = 0.85;
+        conf = 0.86;
+        required = false;
       }
     } else if (rw >= 0.45 && rh >= 0.45) {
-      // Wide single element covering multiple rows (e.g. composer input pill or media)
+      // Wide block covering multiple rows (composer input pill or media)
       type = "generic_block";
-      confidence = 0.7;
+      conf = 0.75;
+      required = false;
     }
 
-    blocks.push({
+    textBlocks.push({
       id: `blk_${blockCounter++}_${type}`,
       type,
       normalizedBounds: {
@@ -284,8 +585,8 @@ export async function extractBeginBlocks(
       rawBounds: {
         x: Math.round(rx * rawWidth),
         y: Math.round(ry * rawHeight),
-        width: Math.max(1, Math.round(rw * rawWidth)),
-        height: Math.max(1, Math.round(rh * rawHeight)),
+        width: Math.max(4, Math.round(rw * rawWidth)),
+        height: Math.max(4, Math.round(rh * rawHeight)),
       },
       processingBounds: {
         x: c.xMin,
@@ -293,33 +594,86 @@ export async function extractBeginBlocks(
         width: w,
         height: h,
       },
-      aspectRatio: Math.round(compAspect * 100) / 100,
+      aspectRatio: Math.round(aspect * 100) / 100,
       density,
-      confidence,
-      required: type === "image_avatar" || type === "primary_text",
+      confidence: conf,
+      required,
       label: type.replace("_", " ").toUpperCase(),
     });
   }
 
-  // Sort blocks from left to right, then top to bottom
-  blocks.sort((a, b) => a.normalizedBounds.x - b.normalizedBounds.x || a.normalizedBounds.y - b.normalizedBounds.y);
+  // 5. Assemble all detected blocks
+  const finalBlocks: BeginLayoutBlock[] = [];
+  if (avatarBlock) finalBlocks.push(avatarBlock);
+  finalBlocks.push(...textBlocks);
+  if (menuBlock) finalBlocks.push(menuBlock);
 
-  // 6. Optional: Generate segmented visual overlay on original reference crop (preserving aspect ratio and coordinates)
+  // Sort blocks left-to-right, then top-to-bottom
+  finalBlocks.sort((a, b) => a.normalizedBounds.x - b.normalizedBounds.x || a.normalizedBounds.y - b.normalizedBounds.y);
+
+  // Diagnostics summary
+  const avatarFound = Boolean(avatarBlock);
+  const primaryTextFound = finalBlocks.some((b) => b.type === "primary_text");
+  const menuFound = Boolean(menuBlock);
+
+  const statusSummary =
+    avatarFound && primaryTextFound && menuFound
+      ? "STANDARD_HEADER_DETECTED"
+      : avatarFound && primaryTextFound
+        ? "HEADER_NO_MENU"
+        : primaryTextFound
+          ? "TEXT_ONLY_HEADER"
+          : "NON_STANDARD_LAYOUT";
+
+  const diagnostics = {
+    avatarFound,
+    avatarConfidence: avatarBlock?.confidence,
+    primaryTextFound,
+    menuFound,
+    statusSummary,
+    edgePixelCount,
+    rawComponentCount: leftComponents.length + rightComponents.length + rawTextComps.length,
+    filteredComponentCount: finalBlocks.length,
+    intermediateBounds: {
+      avatar: avatarBlock ? avatarBlock.rawBounds : undefined,
+      menu: menuBlock ? menuBlock.rawBounds : undefined,
+      textZone: {
+        x: avatarBlock ? (avatarBlock.rawBounds?.x ?? 0) + (avatarBlock.rawBounds?.width ?? 0) : 0,
+        y: 0,
+        width: menuBlock
+          ? (menuBlock.rawBounds?.x ?? rawWidth) -
+            (avatarBlock ? (avatarBlock.rawBounds?.x ?? 0) + (avatarBlock.rawBounds?.width ?? 0) : 0)
+          : rawWidth,
+        height: rawHeight,
+      },
+    },
+  };
+
+  // 6. Optional: Generate segmented visual overlay on original reference crop
   let segmentedPngBuffer: Buffer | undefined;
   if (options?.generateSegmentedOverlay) {
     try {
-      const svgElements = blocks
+      const svgElements = finalBlocks
         .map((b) => {
           const bx = b.rawBounds?.x ?? Math.round(b.normalizedBounds.x * rawWidth);
           const by = b.rawBounds?.y ?? Math.round(b.normalizedBounds.y * rawHeight);
           const bw = Math.max(4, b.rawBounds?.width ?? Math.round(b.normalizedBounds.width * rawWidth));
           const bh = Math.max(4, b.rawBounds?.height ?? Math.round(b.normalizedBounds.height * rawHeight));
           const color = getBlockColor(b.type);
-          const label = b.type === "image_avatar" ? "AVATAR" : b.type === "primary_text" ? "TITLE" : b.type === "secondary_text" ? "TIME" : b.type === "action_menu" ? "MENU" : "BLOCK";
+          const label =
+            b.type === "image_avatar"
+              ? "AVATAR"
+              : b.type === "primary_text"
+                ? "AUTHOR"
+                : b.type === "secondary_text"
+                  ? "TIMESTAMP"
+                  : b.type === "action_menu"
+                    ? "MENU"
+                    : "BLOCK";
 
           return `
             <rect x="${bx}" y="${by}" width="${bw}" height="${bh}" fill="${color}" fill-opacity="0.22" stroke="${color}" stroke-width="2" rx="2" />
-            <rect x="${bx}" y="${Math.max(0, by - 12)}" width="${Math.min(bw, 44)}" height="12" fill="${color}" rx="1" />
+            <rect x="${bx}" y="${Math.max(0, by - 12)}" width="${Math.min(bw, 54)}" height="12" fill="${color}" rx="1" />
             <text x="${bx + 2}" y="${Math.max(0, by - 12) + 9}" font-family="sans-serif" font-size="8" font-weight="bold" fill="#ffffff">${label}</text>
           `;
         })
@@ -335,8 +689,60 @@ export async function extractBeginBlocks(
     }
   }
 
+  // 7. Optional: Generate intermediate mask visualization overlay
+  let maskOverlayPngBuffer: Buffer | undefined;
+  if (options?.generateIntermediateMasks) {
+    try {
+      const maskSvgParts: string[] = [];
+
+      // Background dim
+      maskSvgParts.push(`<rect width="${rawWidth}" height="${rawHeight}" fill="#0f172a" fill-opacity="0.25" />`);
+
+      // Avatar Mask
+      if (avatarMaskBounds) {
+        const ax = Math.round((avatarMaskBounds.xMin / normWidth) * rawWidth);
+        const ay = Math.round((avatarMaskBounds.yMin / normHeight) * rawHeight);
+        const aw = Math.round(((avatarMaskBounds.xMax - avatarMaskBounds.xMin + 1) / normWidth) * rawWidth);
+        const ah = Math.round(((avatarMaskBounds.yMax - avatarMaskBounds.yMin + 1) / normHeight) * rawHeight);
+        maskSvgParts.push(`
+          <rect x="${ax}" y="${ay}" width="${aw}" height="${ah}" fill="#8b5cf6" fill-opacity="0.35" stroke="#8b5cf6" stroke-width="2" stroke-dasharray="3 3" rx="3" />
+          <text x="${ax + 4}" y="${ay + 14}" font-family="sans-serif" font-size="9" font-weight="bold" fill="#ffffff">AVATAR MASK</text>
+        `);
+      }
+
+      // Menu Mask
+      if (menuMaskBounds) {
+        const mx = Math.round((menuMaskBounds.xMin / normWidth) * rawWidth);
+        const my = Math.round((menuMaskBounds.yMin / normHeight) * rawHeight);
+        const mw = Math.round(((menuMaskBounds.xMax - menuMaskBounds.xMin + 1) / normWidth) * rawWidth);
+        const mh = Math.round(((menuMaskBounds.yMax - menuMaskBounds.yMin + 1) / normHeight) * rawHeight);
+        maskSvgParts.push(`
+          <rect x="${mx}" y="${my}" width="${mw}" height="${mh}" fill="#f59e0b" fill-opacity="0.35" stroke="#f59e0b" stroke-width="2" stroke-dasharray="3 3" rx="2" />
+          <text x="${Math.max(0, mx - 50)}" y="${my + 14}" font-family="sans-serif" font-size="9" font-weight="bold" fill="#ffffff">MENU MASK</text>
+        `);
+      }
+
+      // Text Search Zone
+      const tzX = avatarMaskBounds ? Math.round(((avatarMaskBounds.xMax + 1) / normWidth) * rawWidth) : 0;
+      const tzEndX = menuMaskBounds ? Math.round((menuMaskBounds.xMin / normWidth) * rawWidth) : rawWidth;
+      const tzW = Math.max(10, tzEndX - tzX);
+      maskSvgParts.push(`
+        <rect x="${tzX}" y="2" width="${tzW}" height="${rawHeight - 4}" fill="#0284c7" fill-opacity="0.08" stroke="#0284c7" stroke-width="1.5" stroke-dasharray="4 4" rx="2" />
+        <text x="${tzX + 8}" y="${Math.round(rawHeight / 2)}" font-family="sans-serif" font-size="10" font-weight="bold" fill="#38bdf8" opacity="0.8">UNMASKED TEXT ZONE</text>
+      `);
+
+      const maskSvg = `<svg width="${rawWidth}" height="${rawHeight}" xmlns="http://www.w3.org/2000/svg">${maskSvgParts.join("")}</svg>`;
+      maskOverlayPngBuffer = await sharp(imageBuffer)
+        .composite([{ input: Buffer.from(maskSvg) }])
+        .png()
+        .toBuffer();
+    } catch {
+      maskOverlayPngBuffer = undefined;
+    }
+  }
+
   return {
-    blocks,
+    blocks: finalBlocks,
     rawWidth,
     rawHeight,
     aspectRatio,
@@ -345,6 +751,8 @@ export async function extractBeginBlocks(
     scaleX,
     scaleY,
     segmentedPngBuffer,
+    maskOverlayPngBuffer,
+    diagnostics,
   };
 }
 
@@ -465,7 +873,7 @@ export async function buildLearnedBlockVariants(
         const meanAspect = grp.reduce((acc, b) => acc + b.aspectRatio, 0) / count;
 
         // Block is required if consistency >= 0.70 or if single sample and core header element
-        const isCore = t === "image_avatar" || t === "primary_text";
+        const isCore = t === "image_avatar" || t === "primary_text" || t === "action_menu";
         const required = sampleCount === 1 ? isCore : consistency >= 0.7;
 
         aggregatedBlocks.push({
@@ -1012,7 +1420,10 @@ export async function inspectBeginBlockTemplate(
       }
 
       try {
-        const seg = await extractBeginBlocks(ref.imageBuffer, { generateSegmentedOverlay: true });
+        const seg = await extractBeginBlocks(ref.imageBuffer, {
+          generateSegmentedOverlay: true,
+          generateIntermediateMasks: true,
+        });
         const originalCropDataUrl =
           ref.originalDataUrl ||
           `data:image/png;base64,${(await sharp(ref.imageBuffer).png().toBuffer()).toString("base64")}`;
@@ -1020,6 +1431,10 @@ export async function inspectBeginBlockTemplate(
         const segmentedCropDataUrl = seg.segmentedPngBuffer
           ? `data:image/png;base64,${seg.segmentedPngBuffer.toString("base64")}`
           : originalCropDataUrl;
+
+        const maskOverlayDataUrl = seg.maskOverlayPngBuffer
+          ? `data:image/png;base64,${seg.maskOverlayPngBuffer.toString("base64")}`
+          : undefined;
 
         sampleInspections.push({
           sampleId: ref.sampleId || "unknown",
@@ -1032,7 +1447,9 @@ export async function inspectBeginBlockTemplate(
           processingAspectRatio: Math.round((seg.normWidth / Math.max(1, seg.normHeight)) * 100) / 100,
           originalCropDataUrl,
           segmentedCropDataUrl,
+          maskOverlayDataUrl,
           blocks: seg.blocks,
+          diagnostics: seg.diagnostics,
         });
       } catch (err) {
         sampleInspections.push({

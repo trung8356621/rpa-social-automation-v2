@@ -539,3 +539,83 @@ test("Task Review 2C: Preserves original input geometry, rawBounds and uncompres
     assert.equal(overlayMeta.height, rawH, "Segmented overlay height must match original raw height");
   }
 });
+
+test("Task C2.11.16: B3 V2 Input Segmentation Correction & Multi-Zone Masking", async () => {
+  // Test Case A: 679x59 (Facebook Sample #1 dimensions)
+  const sample1Buf = await createReferenceBeginBuffer(679, 59, {
+    authorName: "Nguyễn Văn A",
+    timestamp: "2 giờ trước • 🌐",
+  });
+  const res1 = await extractBeginBlocks(sample1Buf, {
+    generateSegmentedOverlay: true,
+    generateIntermediateMasks: true,
+  });
+
+  // Diagnostics check
+  assert.ok(res1.diagnostics, "Diagnostics must be generated");
+  assert.equal(res1.diagnostics.avatarFound, true, "Avatar must be found in sample #1");
+  assert.equal(res1.diagnostics.primaryTextFound, true, "Primary text must be found in sample #1");
+  assert.equal(res1.diagnostics.menuFound, true, "Action menu must be found in sample #1");
+  assert.equal(res1.diagnostics.statusSummary, "STANDARD_HEADER_DETECTED");
+
+  // Primary text must NOT cover the whole image (must not be runaway ~679px)
+  const primaryText1 = res1.blocks.find((b) => b.type === "primary_text");
+  assert.ok(primaryText1, "Primary text block must exist");
+  assert.ok(
+    primaryText1.rawBounds && primaryText1.rawBounds.width < 250,
+    `Primary text width (${primaryText1.rawBounds?.width}px) must be safely bounded under 250px`,
+  );
+  assert.ok(
+    primaryText1.rawBounds && primaryText1.rawBounds.x >= 50,
+    `Primary text must start after avatar (x >= 50, actual=${primaryText1.rawBounds?.x})`,
+  );
+
+  // Exactly ONE action menu block
+  const menus1 = res1.blocks.filter((b) => b.type === "action_menu");
+  assert.equal(menus1.length, 1, "Must have exactly 1 action menu block");
+  assert.ok(menus1[0]!.rawBounds!.x > 600, "Action menu must be on right side");
+
+  // Intermediate masks overlay generated
+  assert.ok(res1.maskOverlayPngBuffer, "Intermediate mask overlay PNG buffer must be generated");
+
+  // Test Case B: 682x64 (Facebook Sample #2 dimensions)
+  const sample2Buf = await createReferenceBeginBuffer(682, 64, {
+    authorName: "Trần Thị B",
+    timestamp: "Vừa xong • 🌐",
+  });
+  const res2 = await extractBeginBlocks(sample2Buf);
+  assert.equal(res2.diagnostics?.avatarFound, true, "Avatar must be detected");
+  const avatar2 = res2.blocks.find((b) => b.type === "image_avatar");
+  assert.ok(avatar2, "Avatar block must be image_avatar (not generic_block)");
+  assert.ok(avatar2.confidence >= 0.85, "Avatar confidence must be high");
+
+  // Ensure no runaway full-width component (no component >= 600px wide)
+  for (const b of res2.blocks) {
+    assert.ok(
+      b.rawBounds && b.rawBounds.width < 600,
+      `No block should span almost the entire image width (found ${b.rawBounds?.width}px)`,
+    );
+  }
+
+  // Test Case C: 679x63 (Facebook Sample #3 dimensions with 3-dot menu clustering)
+  const sample3Buf = await createReferenceBeginBuffer(679, 63, {
+    authorName: "Lê Hoàng C",
+    timestamp: "5 giờ trước • 🌐",
+  });
+  const res3 = await extractBeginBlocks(sample3Buf);
+  const menus3 = res3.blocks.filter((b) => b.type === "action_menu");
+  assert.equal(menus3.length, 1, "Clustering must prevent duplicate action menus for 3-dots");
+
+  // Test Case D: Negative case — Animal photo without avatar structure
+  const animalSvg = `
+    <svg width="679" height="59" xmlns="http://www.w3.org/2000/svg">
+      <rect width="679" height="59" fill="#1b4332" />
+      <polygon points="100,10 140,50 60,50" fill="#2d6a4f" />
+      <text x="200" y="35" font-family="sans-serif" font-size="18" fill="#d8f3dc">Rừng nhiệt đới</text>
+    </svg>
+  `;
+  const animalBuf = await sharp(Buffer.from(animalSvg)).png().toBuffer();
+  const animalRes = await extractBeginBlocks(animalBuf);
+  assert.equal(animalRes.diagnostics?.avatarFound, false, "Animal photo must report avatarFound=false");
+  assert.equal(animalRes.diagnostics?.statusSummary !== "STANDARD_HEADER_DETECTED", true);
+});

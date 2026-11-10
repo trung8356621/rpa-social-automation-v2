@@ -774,10 +774,12 @@ export type BeginLayoutMatchResult = {
 // C2.11.15: B3 V2 Block-Level Layout Matching types
 export type BeginLayoutBlockType =
   | "image_avatar"
+  | "image_region"
   | "primary_text"
   | "secondary_text"
   | "action_menu"
-  | "generic_block";
+  | "generic_block"
+  | "unknown";
 
 export type BeginLayoutBlock = {
   id: string;
@@ -877,7 +879,23 @@ export type BeginSampleBlockInspection = {
   processingAspectRatio?: number;
   originalCropDataUrl?: string;
   segmentedCropDataUrl?: string;
+  maskOverlayDataUrl?: string;
   blocks: BeginLayoutBlock[];
+  diagnostics?: {
+    avatarFound: boolean;
+    avatarConfidence?: number;
+    primaryTextFound: boolean;
+    menuFound: boolean;
+    statusSummary?: string;
+    edgePixelCount?: number;
+    rawComponentCount?: number;
+    filteredComponentCount?: number;
+    intermediateBounds?: {
+      avatar?: Rect;
+      menu?: Rect;
+      textZone?: Rect;
+    };
+  };
   error?: string;
 };
 

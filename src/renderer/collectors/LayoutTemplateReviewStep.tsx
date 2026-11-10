@@ -21,12 +21,16 @@ function getBlockColor(type: string): string {
   switch (type) {
     case "image_avatar":
       return "#8b5cf6"; // Purple
+    case "image_region":
+      return "#ec4899"; // Pink
     case "primary_text":
       return "#0284c7"; // Sky blue
     case "secondary_text":
       return "#64748b"; // Slate gray
     case "action_menu":
       return "#f59e0b"; // Amber
+    case "unknown":
+      return "#94a3b8"; // Muted gray
     case "generic_block":
     default:
       return "#10b981"; // Emerald
@@ -65,7 +69,7 @@ export function LayoutTemplateReviewStep({
   } | null>(null);
 
   // B3 V2 Inspection States
-  const [b3v2ViewMode, setB3v2ViewMode] = useState<"overlay" | "raw" | "split">("overlay");
+  const [b3v2ViewMode, setB3v2ViewMode] = useState<"overlay" | "raw" | "mask" | "split">("overlay");
   const [b3v2TemplateSource, setB3v2TemplateSource] = useState<"variant" | "sample">("variant");
   const [b3v2HoveredBlockId, setB3v2HoveredBlockId] = useState<string | null>(null);
   const [b3v2ShowDiagnostics, setB3v2ShowDiagnostics] = useState<boolean>(true);
@@ -413,7 +417,7 @@ export function LayoutTemplateReviewStep({
                   1. Segmented Reference Regions
                 </b>
                 <div style={{ display: "flex", gap: "2px" }}>
-                  {(["overlay", "raw", "split"] as const).map((mode) => (
+                  {(["overlay", "raw", "mask", "split"] as const).map((mode) => (
                     <button
                       key={mode}
                       type="button"
@@ -429,11 +433,67 @@ export function LayoutTemplateReviewStep({
                         fontWeight: b3v2ViewMode === mode ? 700 : 500,
                       }}
                     >
-                      {mode === "overlay" ? "Overlay" : mode === "raw" ? "Clean Crop" : "Compare"}
+                      {mode === "overlay"
+                        ? "Overlay"
+                        : mode === "raw"
+                          ? "Clean Crop"
+                          : mode === "mask"
+                            ? "Mask & Regions"
+                            : "Compare"}
                     </button>
                   ))}
                 </div>
               </div>
+
+              {/* Fail-Safe Diagnostic Indicators */}
+              {currentBlockSample?.diagnostics && (
+                <div style={{ display: "flex", gap: "4px", flexWrap: "wrap", alignItems: "center" }}>
+                  <span
+                    style={{
+                      fontSize: "8.5px",
+                      fontWeight: 700,
+                      padding: "1px 5px",
+                      borderRadius: "2px",
+                      background: currentBlockSample.diagnostics.avatarFound ? "#064e3b" : "#78350f",
+                      color: currentBlockSample.diagnostics.avatarFound ? "#6ee7b7" : "#fde68a",
+                      border: `1px solid ${currentBlockSample.diagnostics.avatarFound ? "#059669" : "#d97706"}`,
+                    }}
+                  >
+                    {currentBlockSample.diagnostics.avatarFound ? "✓ AVATAR_FOUND" : "⚠ AVATAR_NOT_FOUND"}
+                  </span>
+                  <span
+                    style={{
+                      fontSize: "8.5px",
+                      fontWeight: 700,
+                      padding: "1px 5px",
+                      borderRadius: "2px",
+                      background: currentBlockSample.diagnostics.primaryTextFound ? "#064e3b" : "#78350f",
+                      color: currentBlockSample.diagnostics.primaryTextFound ? "#6ee7b7" : "#fde68a",
+                      border: `1px solid ${currentBlockSample.diagnostics.primaryTextFound ? "#059669" : "#d97706"}`,
+                    }}
+                  >
+                    {currentBlockSample.diagnostics.primaryTextFound ? "✓ PRIMARY_TEXT_FOUND" : "⚠ PRIMARY_TEXT_NOT_FOUND"}
+                  </span>
+                  <span
+                    style={{
+                      fontSize: "8.5px",
+                      fontWeight: 700,
+                      padding: "1px 5px",
+                      borderRadius: "2px",
+                      background: currentBlockSample.diagnostics.menuFound ? "#064e3b" : "#78350f",
+                      color: currentBlockSample.diagnostics.menuFound ? "#6ee7b7" : "#fde68a",
+                      border: `1px solid ${currentBlockSample.diagnostics.menuFound ? "#059669" : "#d97706"}`,
+                    }}
+                  >
+                    {currentBlockSample.diagnostics.menuFound ? "✓ MENU_FOUND" : "⚠ MENU_NOT_FOUND"}
+                  </span>
+                  {currentBlockSample.diagnostics.statusSummary && (
+                    <span style={{ fontSize: "8.5px", color: "#64748b", fontFamily: "monospace" }}>
+                      ({currentBlockSample.diagnostics.statusSummary})
+                    </span>
+                  )}
+                </div>
+              )}
 
               {/* Image Preview Box with Strict Aspect-Ratio Sync */}
               {currentBlockSample?.originalCropDataUrl || currentBlockSample?.segmentedCropDataUrl ? (
@@ -441,9 +501,12 @@ export function LayoutTemplateReviewStep({
                   const rawW = currentBlockSample.rawDimensions.width || 640;
                   const rawH = Math.max(1, currentBlockSample.rawDimensions.height || 64);
                   const sampleAR = Math.round((rawW / rawH) * 100) / 100;
-                  const imgSrc = currentBlockSample.originalCropDataUrl || currentBlockSample.segmentedCropDataUrl;
+                  const imgSrc =
+                    b3v2ViewMode === "mask" && currentBlockSample.maskOverlayDataUrl
+                      ? currentBlockSample.maskOverlayDataUrl
+                      : currentBlockSample.originalCropDataUrl || currentBlockSample.segmentedCropDataUrl;
 
-                  const renderImageBox = (withOverlay: boolean, label?: string) => (
+                  const renderImageBox = (withOverlay: boolean, label?: string, customSrc?: string) => (
                     <div style={{ display: "flex", flexDirection: "column", gap: "2px", width: "100%" }}>
                       {label && <span style={{ fontSize: "9px", color: "#64748b", fontWeight: 600 }}>{label}</span>}
                       <div
@@ -462,7 +525,7 @@ export function LayoutTemplateReviewStep({
                         }}
                       >
                         <img
-                          src={imgSrc}
+                          src={customSrc || imgSrc}
                           alt="Original BEGIN Reference Crop"
                           style={{
                             width: "100%",
@@ -480,9 +543,9 @@ export function LayoutTemplateReviewStep({
                                 b.type === "image_avatar"
                                   ? "AVATAR"
                                   : b.type === "primary_text"
-                                    ? "TITLE"
+                                    ? "AUTHOR"
                                     : b.type === "secondary_text"
-                                      ? "TIME"
+                                      ? "TIMESTAMP"
                                       : b.type === "action_menu"
                                         ? "MENU"
                                         : "BLOCK";
@@ -548,6 +611,8 @@ export function LayoutTemplateReviewStep({
                         </>
                       ) : b3v2ViewMode === "raw" ? (
                         renderImageBox(false)
+                      ) : b3v2ViewMode === "mask" ? (
+                        renderImageBox(false, "Intermediate Masking & Text Search Zone", currentBlockSample.maskOverlayDataUrl)
                       ) : (
                         renderImageBox(true)
                       )}
@@ -962,6 +1027,30 @@ export function LayoutTemplateReviewStep({
                         <b style={{ color: "#f59e0b" }}>
                           X: {currentBlockSample.scaleFactors.scaleX} | Y: {currentBlockSample.scaleFactors.scaleY}
                         </b>
+                      </div>
+                    )}
+                    {currentBlockSample.diagnostics && (
+                      <div style={{ display: "flex", flexDirection: "column", gap: "2px", borderTop: "1px dashed #334155", paddingTop: "3px", marginTop: "2px" }}>
+                        <div style={{ display: "flex", justifyContent: "space-between" }}>
+                          <span>Segmentation Status:</span>
+                          <b style={{ color: currentBlockSample.diagnostics.avatarFound ? "#34d399" : "#fbbf24" }}>
+                            {currentBlockSample.diagnostics.statusSummary || "n/a"}
+                          </b>
+                        </div>
+                        <div style={{ display: "flex", justifyContent: "space-between" }}>
+                          <span>Edges / Components:</span>
+                          <span>
+                            {currentBlockSample.diagnostics.edgePixelCount ?? 0} px | {currentBlockSample.diagnostics.rawComponentCount ?? 0} raw &rarr; {currentBlockSample.diagnostics.filteredComponentCount ?? 0} blocks
+                          </span>
+                        </div>
+                        {currentBlockSample.diagnostics.intermediateBounds?.textZone && (
+                          <div style={{ display: "flex", justifyContent: "space-between" }}>
+                            <span>Unmasked Text Zone:</span>
+                            <span style={{ fontFamily: "monospace", color: "#38bdf8" }}>
+                              x={currentBlockSample.diagnostics.intermediateBounds.textZone.x}, w={currentBlockSample.diagnostics.intermediateBounds.textZone.width} px
+                            </span>
+                          </div>
+                        )}
                       </div>
                     )}
 
