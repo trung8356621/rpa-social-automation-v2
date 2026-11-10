@@ -101,8 +101,14 @@ export class VisualMatchLabRuntime {
 
     try {
       if (shouldHighlight && options?.captureEvidence !== false) {
-        const evidence = await this.withVisibleBrowser(() => this.browser.capture({ requireCanonical: false }));
-        evidenceDataUrl = evidence.dataUrl;
+        await wc.executeJavaScript(`new Promise(r => requestAnimationFrame(() => requestAnimationFrame(r)))`);
+        const nativeImg = await wc.capturePage(undefined, { stayHidden: true });
+        if (!nativeImg.isEmpty()) {
+          evidenceDataUrl = `data:image/png;base64,${nativeImg.toPNG().toString("base64")}`;
+        } else {
+          const evidence = await this.withVisibleBrowser(() => this.browser.capture({ requireCanonical: false }));
+          evidenceDataUrl = evidence.dataUrl;
+        }
       }
     } finally {
       if (shouldHighlight) {

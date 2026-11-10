@@ -277,7 +277,9 @@ export function buildBoundaryProbeScript(
     let level = 0;
 
     while (curr && curr !== document.documentElement && level < 35) {
-      const anchors = Array.from(curr.querySelectorAll('a[href]'));
+      const anchors = (curr.tagName && curr.tagName.toLowerCase() === 'a' && curr.hasAttribute('href'))
+        ? [curr, ...Array.from(curr.querySelectorAll('a[href]'))]
+        : Array.from(curr.querySelectorAll('a[href]'));
       const posts = [];
       const keys = new Set();
 

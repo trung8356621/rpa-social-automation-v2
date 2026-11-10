@@ -147,9 +147,17 @@ export function LiveScrollTest({ invoke, currentFixture, actionGroups, method, t
           const candidates: LiveCandidate[] = [];
 
           for (const row of detected.rows) {
+            const targetIcon = row.items[0];
+            const iconCenterX = targetIcon
+              ? targetIcon.bbox.x + targetIcon.bbox.width / 2
+              : row.bbox.x + Math.min(24, row.bbox.width / 2);
+            const iconCenterY = targetIcon
+              ? targetIcon.bbox.y + targetIcon.bbox.height / 2
+              : row.bbox.y + row.bbox.height / 2;
+
             const point = {
-              x: Math.round((row.bbox.x + row.bbox.width / 2) * capture.viewport.width / capture.width),
-              y: Math.round((row.bbox.y + row.bbox.height / 2) * capture.viewport.height / capture.height),
+              x: Math.round(iconCenterX * capture.viewport.width / capture.width),
+              y: Math.round(iconCenterY * capture.viewport.height / capture.height),
             };
             const actionRowCssBbox = {
               x: Math.round(row.bbox.x * capture.viewport.width / capture.width),
@@ -173,7 +181,9 @@ export function LiveScrollTest({ invoke, currentFixture, actionGroups, method, t
               if (boundary.candidateContainer?.role === "article" || boundary.status === "BOUNDARY_FOUND") {
                 context = "post";
               }
-            } catch {
+            } catch (probeError) {
+              const probeMsg = probeError instanceof Error ? probeError.message : String(probeError);
+              console.warn(`Frame ${frame} boundary probe error:`, probeMsg);
               try {
                 const inspected = await invoke<{ element: { context?: string } | null }>({
                   type: "visualMatchLabInspect",
@@ -181,8 +191,10 @@ export function LiveScrollTest({ invoke, currentFixture, actionGroups, method, t
                   webContentsId: capture.webContentsId,
                   point,
                 });
-                context = inspected.element?.context ?? "unknown";
-              } catch {}
+                context = inspected.element?.context ?? `unknown (${probeMsg})`;
+              } catch {
+                context = `unknown (${probeMsg})`;
+              }
             }
 
             const hash = fingerprint(target, row.bbox);
@@ -284,7 +296,7 @@ export function LiveScrollTest({ invoke, currentFixture, actionGroups, method, t
             score: row.score,
             iconCount: row.items.length,
             status: duplicate ? "DUPLICATE" : "NEEDS_ATTENTION",
-            context: "unknown (saved evidence - DOM boundary requires live synchronization)",
+            context: "unverified (offline frame - click 'Run Live Scroll Test' to probe live DOM)",
             fingerprint: hash,
             docY,
           };
@@ -330,6 +342,11 @@ export function LiveScrollTest({ invoke, currentFixture, actionGroups, method, t
       <button onClick={() => void run()} disabled={running}>{running ? "Running Live Scroll & Boundary Test…" : "Run Live Scroll Test"}</button>
       <div role="status">{status}</div>
       <LiveTemplateCalibration captures={frames.map(frame => frame.capture)} templates={templates} onChange={setTemplates} onRerun={() => void rerunExisting()} running={running} />
+      {frames.length > 0 && frames.some(f => !f.boundaryStatus || (f.boundaryStatus === "BOUNDARY_NOT_FOUND" && f.candidates.some(c => !c.boundary))) && (
+        <div className="boundary-warning" style={{ margin: "10px 0", padding: "8px 12px", background: "#fef3c7", border: "1px solid #f59e0b", borderRadius: "4px", color: "#92400e" }}>
+          ℹ <b>Notice</b>: Current list contains stored frames from an earlier offline run. Click <b>"Run Live Scroll Test"</b> above to execute live DOM hit-test &amp; Permalink Boundary Probe with green/yellow/red container highlights.
+        </div>
+      )}
       <div className="live-scroll-summary">
         <b>Capture: {frames.length} pass / {captureFailures} fail</b>
         <b>Action rows: {provisionalGroups}</b>
@@ -369,8 +386,8 @@ export function LiveScrollTest({ invoke, currentFixture, actionGroups, method, t
                   <td>{frame.templateStatus}</td>
                   <td>{frame.detectionStatus}</td>
                   <td>
-                    <span className={`badge-boundary ${frame.boundaryStatus}`}>
-                      {frame.boundaryStatus}
+                    <span className={`badge-boundary ${frame.boundaryStatus ?? "BOUNDARY_NOT_FOUND"}`}>
+                      {frame.boundaryStatus ?? "UNTESTED"}
                     </span>
                   </td>
                   <td>{frame.rawIconMatches}</td>
@@ -386,10 +403,13 @@ export function LiveScrollTest({ invoke, currentFixture, actionGroups, method, t
       )}
       <div className="live-scroll-evidence">
         {frames.map(frame => {
-          const highlightedImg = frame.candidates.find(c => c.highlightedEvidenceUrl)?.highlightedEvidenceUrl || frame.capture.dataUrl;
+          const highlightedImg =
+            frame.candidates.find(c => c.boundary?.status === "BOUNDARY_FOUND" && c.highlightedEvidenceUrl)?.highlightedEvidenceUrl ||
+            frame.candidates.find(c => c.highlightedEvidenceUrl)?.highlightedEvidenceUrl ||
+            frame.capture.dataUrl;
           return (
             <article key={frame.capture.id}>
-              <h3>Frame {frame.frame} · scrollY={frame.capture.viewport.scrollY} · Boundary: {frame.boundaryStatus}</h3>
+              <h3>Frame {frame.frame} · scrollY={frame.capture.viewport.scrollY} · Boundary: {frame.boundaryStatus ?? "PENDING_LIVE_RUN"}</h3>
               <p>{frame.captureStatus}</p>
               <p>{frame.pipelineStatus}</p>
               <p>{frame.templateStatus}</p>
