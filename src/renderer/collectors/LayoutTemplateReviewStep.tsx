@@ -64,6 +64,12 @@ export function LayoutTemplateReviewStep({
     variance?: number;
   } | null>(null);
 
+  // B3 V2 Inspection States
+  const [b3v2ViewMode, setB3v2ViewMode] = useState<"overlay" | "raw" | "split">("overlay");
+  const [b3v2TemplateSource, setB3v2TemplateSource] = useState<"variant" | "sample">("variant");
+  const [b3v2HoveredBlockId, setB3v2HoveredBlockId] = useState<string | null>(null);
+  const [b3v2ShowDiagnostics, setB3v2ShowDiagnostics] = useState<boolean>(true);
+
   const captures = draft.captures ?? [];
   const captureAuditMap = useMemo(
     () =>
@@ -384,7 +390,7 @@ export function LayoutTemplateReviewStep({
           <div
             style={{
               display: "grid",
-              gridTemplateColumns: "32% 38% 30%",
+              gridTemplateColumns: "33% 37% 30%",
               gap: "10px",
               flex: 1,
               minHeight: "440px",
@@ -402,87 +408,215 @@ export function LayoutTemplateReviewStep({
                 gap: "8px",
               }}
             >
-              <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+              <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", flexWrap: "wrap", gap: "4px" }}>
                 <b style={{ color: "#34d399", fontSize: "12px" }}>
                   1. Segmented Reference Regions
                 </b>
-                <span
-                  style={{
-                    background: "#064e3b",
-                    color: "#6ee7b7",
-                    fontSize: "9px",
-                    fontWeight: 700,
-                    padding: "1px 5px",
-                    borderRadius: "2px",
-                  }}
-                >
-                  B3 V2 SEGMENTED
-                </span>
+                <div style={{ display: "flex", gap: "2px" }}>
+                  {(["overlay", "raw", "split"] as const).map((mode) => (
+                    <button
+                      key={mode}
+                      type="button"
+                      onClick={() => setB3v2ViewMode(mode)}
+                      style={{
+                        fontSize: "9px",
+                        padding: "1px 5px",
+                        background: b3v2ViewMode === mode ? "#064e3b" : "#0f172a",
+                        border: "1px solid",
+                        borderColor: b3v2ViewMode === mode ? "#10b981" : "#334155",
+                        color: b3v2ViewMode === mode ? "#34d399" : "#94a3b8",
+                        borderRadius: "2px",
+                        fontWeight: b3v2ViewMode === mode ? 700 : 500,
+                      }}
+                    >
+                      {mode === "overlay" ? "Overlay" : mode === "raw" ? "Clean Crop" : "Compare"}
+                    </button>
+                  ))}
+                </div>
               </div>
 
-              {currentBlockSample?.segmentedCropDataUrl ? (
-                <div
-                  style={{
-                    background: "#030712",
-                    border: "1px solid #334155",
-                    borderRadius: "4px",
-                    padding: "6px",
-                    textAlign: "center",
-                  }}
-                >
-                  <img
-                    src={currentBlockSample.segmentedCropDataUrl}
-                    alt="Segmented Visual Regions"
-                    style={{
-                      maxWidth: "100%",
-                      maxHeight: "120px",
-                      objectFit: "contain",
-                      borderRadius: "2px",
-                      display: "block",
-                      margin: "0 auto",
-                    }}
-                  />
-                  <div style={{ fontSize: "10px", color: "#64748b", marginTop: "4px" }}>
-                    Crop: <b>{currentBlockSample.rawDimensions.width}×{currentBlockSample.rawDimensions.height} px</b> | AR: <b>{currentBlockSample.aspectRatio}:1</b>
-                  </div>
-                </div>
+              {/* Image Preview Box with Strict Aspect-Ratio Sync */}
+              {currentBlockSample?.originalCropDataUrl || currentBlockSample?.segmentedCropDataUrl ? (
+                (() => {
+                  const rawW = currentBlockSample.rawDimensions.width || 640;
+                  const rawH = Math.max(1, currentBlockSample.rawDimensions.height || 64);
+                  const sampleAR = Math.round((rawW / rawH) * 100) / 100;
+                  const imgSrc = currentBlockSample.originalCropDataUrl || currentBlockSample.segmentedCropDataUrl;
+
+                  const renderImageBox = (withOverlay: boolean, label?: string) => (
+                    <div style={{ display: "flex", flexDirection: "column", gap: "2px", width: "100%" }}>
+                      {label && <span style={{ fontSize: "9px", color: "#64748b", fontWeight: 600 }}>{label}</span>}
+                      <div
+                        style={{
+                          position: "relative",
+                          width: "100%",
+                          aspectRatio: `${sampleAR}`,
+                          maxHeight: b3v2ViewMode === "split" ? "80px" : "130px",
+                          background: "#030712",
+                          border: "1px solid #334155",
+                          borderRadius: "4px",
+                          overflow: "hidden",
+                          display: "flex",
+                          alignItems: "center",
+                          justifyContent: "center",
+                        }}
+                      >
+                        <img
+                          src={imgSrc}
+                          alt="Original BEGIN Reference Crop"
+                          style={{
+                            width: "100%",
+                            height: "100%",
+                            objectFit: "fill",
+                            display: "block",
+                          }}
+                        />
+                        {withOverlay && (
+                          <div style={{ position: "absolute", inset: 0, pointerEvents: "none" }}>
+                            {currentBlockSample.blocks.map((b) => {
+                              const color = getBlockColor(b.type);
+                              const isHovered = b3v2HoveredBlockId === b.id;
+                              const labelText =
+                                b.type === "image_avatar"
+                                  ? "AVATAR"
+                                  : b.type === "primary_text"
+                                    ? "TITLE"
+                                    : b.type === "secondary_text"
+                                      ? "TIME"
+                                      : b.type === "action_menu"
+                                        ? "MENU"
+                                        : "BLOCK";
+
+                              return (
+                                <div
+                                  key={b.id}
+                                  style={{
+                                    position: "absolute",
+                                    left: `${b.normalizedBounds.x * 100}%`,
+                                    top: `${b.normalizedBounds.y * 100}%`,
+                                    width: `${b.normalizedBounds.width * 100}%`,
+                                    height: `${b.normalizedBounds.height * 100}%`,
+                                    border: `${isHovered ? "3px" : "2px"} solid ${color}`,
+                                    background: isHovered ? `${color}44` : `${color}25`,
+                                    boxSizing: "border-box",
+                                    borderRadius: "2px",
+                                    boxShadow: isHovered ? `0 0 6px ${color}` : undefined,
+                                  }}
+                                >
+                                  <span
+                                    style={{
+                                      position: "absolute",
+                                      top: "-11px",
+                                      left: "0",
+                                      fontSize: "7.5px",
+                                      fontWeight: 700,
+                                      background: color,
+                                      color: "#ffffff",
+                                      padding: "0 2px",
+                                      borderRadius: "1px",
+                                      lineHeight: "10px",
+                                      whiteSpace: "nowrap",
+                                    }}
+                                  >
+                                    {labelText}
+                                  </span>
+                                </div>
+                              );
+                            })}
+                          </div>
+                        )}
+                      </div>
+                    </div>
+                  );
+
+                  return (
+                    <div
+                      style={{
+                        background: "#030712",
+                        border: "1px solid #334155",
+                        borderRadius: "4px",
+                        padding: "6px",
+                        display: "flex",
+                        flexDirection: "column",
+                        gap: "6px",
+                      }}
+                    >
+                      {b3v2ViewMode === "split" ? (
+                        <>
+                          {renderImageBox(false, "Original BEGIN Reference Crop (Clean)")}
+                          {renderImageBox(true, "Synchronized Segmentation Overlay")}
+                        </>
+                      ) : b3v2ViewMode === "raw" ? (
+                        renderImageBox(false)
+                      ) : (
+                        renderImageBox(true)
+                      )}
+                      <div style={{ fontSize: "10px", color: "#64748b", display: "flex", justifyContent: "space-between" }}>
+                        <span>
+                          Crop: <b>{rawW}×{rawH} px</b>
+                        </span>
+                        <span>
+                          Aspect Ratio: <b>{sampleAR}:1</b>
+                        </span>
+                      </div>
+                    </div>
+                  );
+                })()
               ) : (
                 <div style={{ color: "#94a3b8", fontSize: "11px", textAlign: "center", padding: "20px" }}>
-                  {currentBlockSample?.error || "No segmented preview available"}
+                  {currentBlockSample?.error || "No reference preview available"}
                 </div>
               )}
 
               {/* Detected Blocks in Sample */}
-              <div style={{ display: "flex", flexDirection: "column", gap: "4px" }}>
-                <small style={{ color: "#94a3b8", fontWeight: 700 }}>
-                  Segmented Blocks ({currentBlockSample?.blocks.length ?? 0}):
-                </small>
-                <div style={{ display: "flex", flexDirection: "column", gap: "3px", maxHeight: "190px", overflowY: "auto" }}>
-                  {currentBlockSample?.blocks.map((b) => (
-                    <div
-                      key={b.id}
-                      style={{
-                        display: "flex",
-                        alignItems: "center",
-                        justifyContent: "space-between",
-                        background: "#0f172a",
-                        border: `1px solid ${getBlockColor(b.type)}`,
-                        borderRadius: "3px",
-                        padding: "3px 6px",
-                        fontSize: "10px",
-                      }}
-                    >
-                      <span style={{ color: getBlockColor(b.type), fontWeight: 700 }}>
-                        {b.label || b.type}
-                      </span>
-                      <span style={{ color: "#94a3b8", fontFamily: "monospace" }}>
-                        [{Math.round(b.normalizedBounds.x * 100)}%, {Math.round(b.normalizedBounds.y * 100)}%, {Math.round(b.normalizedBounds.width * 100)}%×{Math.round(b.normalizedBounds.height * 100)}%]
-                      </span>
-                      <span style={{ color: b.required ? "#34d399" : "#94a3b8", fontSize: "9px" }}>
-                        {b.required ? "REQUIRED" : "OPTIONAL"}
-                      </span>
-                    </div>
-                  ))}
+              <div style={{ display: "flex", flexDirection: "column", gap: "4px", flex: 1, minHeight: 0 }}>
+                <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+                  <small style={{ color: "#94a3b8", fontWeight: 700 }}>
+                    Detected Blocks ({currentBlockSample?.blocks.length ?? 0}):
+                  </small>
+                  <span style={{ fontSize: "9px", color: "#64748b" }}>Hover to highlight</span>
+                </div>
+                <div style={{ display: "flex", flexDirection: "column", gap: "3px", maxHeight: "170px", overflowY: "auto" }}>
+                  {currentBlockSample?.blocks.map((b) => {
+                    const isHovered = b3v2HoveredBlockId === b.id;
+                    const color = getBlockColor(b.type);
+                    return (
+                      <div
+                        key={b.id}
+                        onMouseEnter={() => setB3v2HoveredBlockId(b.id)}
+                        onMouseLeave={() => setB3v2HoveredBlockId(null)}
+                        style={{
+                          display: "flex",
+                          alignItems: "center",
+                          justifyContent: "space-between",
+                          background: isHovered ? "#1e293b" : "#0f172a",
+                          border: `1px solid ${isHovered ? color : "#334155"}`,
+                          borderRadius: "3px",
+                          padding: "3px 6px",
+                          fontSize: "10px",
+                          cursor: "pointer",
+                          transition: "all 0.1s ease",
+                        }}
+                      >
+                        <div style={{ display: "flex", alignItems: "center", gap: "5px" }}>
+                          <span style={{ width: "6px", height: "6px", borderRadius: "50%", background: color }} />
+                          <span style={{ color, fontWeight: 700 }}>
+                            {b.label || b.type}
+                          </span>
+                        </div>
+                        <div style={{ display: "flex", flexDirection: "column", alignItems: "flex-end", gap: "1px" }}>
+                          {b.rawBounds && (
+                            <span style={{ color: "#e2e8f0", fontFamily: "monospace", fontSize: "9px" }}>
+                              {b.rawBounds.x},{b.rawBounds.y} ({b.rawBounds.width}×{b.rawBounds.height}px)
+                            </span>
+                          )}
+                          <span style={{ color: "#64748b", fontFamily: "monospace", fontSize: "8.5px" }}>
+                            [{Math.round(b.normalizedBounds.x * 100)}%, {Math.round(b.normalizedBounds.y * 100)}%, {Math.round(b.normalizedBounds.width * 100)}%×{Math.round(b.normalizedBounds.height * 100)}%]
+                          </span>
+                        </div>
+                      </div>
+                    );
+                  })}
                 </div>
               </div>
             </div>
@@ -499,80 +633,140 @@ export function LayoutTemplateReviewStep({
                 gap: "8px",
               }}
             >
-              <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+              <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", flexWrap: "wrap", gap: "4px" }}>
                 <b style={{ color: "#38bdf8", fontSize: "12px" }}>
                   2. Abstract Block Template (B3 V2)
                 </b>
-                <span style={{ fontSize: "10px", color: "#64748b" }}>
-                  Whole-Layout Geometric Model
-                </span>
+                <div style={{ display: "flex", gap: "2px" }}>
+                  <button
+                    type="button"
+                    onClick={() => setB3v2TemplateSource("sample")}
+                    style={{
+                      fontSize: "9px",
+                      padding: "1px 5px",
+                      background: b3v2TemplateSource === "sample" ? "#083344" : "#0f172a",
+                      border: "1px solid",
+                      borderColor: b3v2TemplateSource === "sample" ? "#06b6d4" : "#334155",
+                      color: b3v2TemplateSource === "sample" ? "#22d3ee" : "#94a3b8",
+                      borderRadius: "2px",
+                      fontWeight: b3v2TemplateSource === "sample" ? 700 : 500,
+                    }}
+                  >
+                    Sample #{selectedSampleIndex + 1}
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setB3v2TemplateSource("variant")}
+                    style={{
+                      fontSize: "9px",
+                      padding: "1px 5px",
+                      background: b3v2TemplateSource === "variant" ? "#083344" : "#0f172a",
+                      border: "1px solid",
+                      borderColor: b3v2TemplateSource === "variant" ? "#06b6d4" : "#334155",
+                      color: b3v2TemplateSource === "variant" ? "#22d3ee" : "#94a3b8",
+                      borderRadius: "2px",
+                      fontWeight: b3v2TemplateSource === "variant" ? 700 : 500,
+                    }}
+                  >
+                    Variant #{selectedVariantIndex + 1}
+                  </button>
+                </div>
               </div>
 
-              {/* Canvas Preview of Abstract Blocks */}
-              <div
-                style={{
-                  background: "#030712",
-                  border: "1px solid #334155",
-                  borderRadius: "4px",
-                  padding: "8px",
-                  display: "flex",
-                  flexDirection: "column",
-                  alignItems: "center",
-                }}
-              >
-                <div
-                  style={{
-                    position: "relative",
-                    width: "100%",
-                    height: "110px",
-                    background: "#090d14",
-                    border: "1px dashed #334155",
-                    borderRadius: "4px",
-                    overflow: "hidden",
-                  }}
-                >
-                  {(currentVariant?.blocks ?? currentBlockSample?.blocks ?? []).map((b) => {
-                    const color = getBlockColor(b.type);
-                    return (
-                      <div
-                        key={b.id}
-                        title={`${b.type} (${Math.round(b.normalizedBounds.width * 100)}%×${Math.round(b.normalizedBounds.height * 100)}%)`}
-                        style={{
-                          position: "absolute",
-                          left: `${b.normalizedBounds.x * 100}%`,
-                          top: `${b.normalizedBounds.y * 100}%`,
-                          width: `${b.normalizedBounds.width * 100}%`,
-                          height: `${b.normalizedBounds.height * 100}%`,
-                          background: `${color}33`,
-                          border: `2px solid ${color}`,
-                          borderRadius: b.type === "image_avatar" ? "4px" : "2px",
-                          display: "flex",
-                          alignItems: "center",
-                          justifyContent: "center",
-                          color: "#ffffff",
-                          fontSize: "9px",
-                          fontWeight: 700,
-                          boxSizing: "border-box",
-                          pointerEvents: "none",
-                        }}
-                      >
-                        {b.type === "image_avatar"
-                          ? "AVATAR"
-                          : b.type === "primary_text"
-                            ? "TITLE"
-                            : b.type === "secondary_text"
-                              ? "TIME"
-                              : b.type === "action_menu"
-                                ? "•••"
-                                : "BLOCK"}
-                      </div>
-                    );
-                  })}
-                </div>
-                <div style={{ fontSize: "10px", color: "#64748b", marginTop: "4px" }}>
-                  Relative geometric layout: normalized coordinate space [0..1]
-                </div>
-              </div>
+              {/* Canvas Preview of Abstract Blocks with True Aspect-Ratio */}
+              {(() => {
+                const isSample = b3v2TemplateSource === "sample";
+                const activeBlocks = isSample
+                  ? (currentBlockSample?.blocks ?? [])
+                  : (currentVariant?.blocks ?? currentBlockSample?.blocks ?? []);
+
+                const targetAR = isSample
+                  ? (currentBlockSample ? currentBlockSample.rawDimensions.width / Math.max(1, currentBlockSample.rawDimensions.height) : 11.0)
+                  : (currentVariant?.nominalAspectRatio || 11.0);
+
+                const activeW = isSample
+                  ? (currentBlockSample?.rawDimensions.width || 640)
+                  : (currentVariant?.nominalDimensions.width || 640);
+                const activeH = isSample
+                  ? (currentBlockSample?.rawDimensions.height || 60)
+                  : (currentVariant?.nominalDimensions.height || 60);
+
+                return (
+                  <div
+                    style={{
+                      background: "#030712",
+                      border: "1px solid #334155",
+                      borderRadius: "4px",
+                      padding: "8px",
+                      display: "flex",
+                      flexDirection: "column",
+                      alignItems: "center",
+                      gap: "6px",
+                    }}
+                  >
+                    <div
+                      style={{
+                        position: "relative",
+                        width: "100%",
+                        aspectRatio: `${Math.round(targetAR * 100) / 100}`,
+                        maxHeight: "130px",
+                        background: "#090d14",
+                        border: "1px dashed #334155",
+                        borderRadius: "4px",
+                        overflow: "hidden",
+                      }}
+                    >
+                      {activeBlocks.map((b) => {
+                        const color = getBlockColor(b.type);
+                        const isHovered = b3v2HoveredBlockId === b.id;
+                        return (
+                          <div
+                            key={b.id}
+                            title={`${b.label || b.type} (${Math.round(b.normalizedBounds.width * 100)}%×${Math.round(b.normalizedBounds.height * 100)}%)`}
+                            style={{
+                              position: "absolute",
+                              left: `${b.normalizedBounds.x * 100}%`,
+                              top: `${b.normalizedBounds.y * 100}%`,
+                              width: `${b.normalizedBounds.width * 100}%`,
+                              height: `${b.normalizedBounds.height * 100}%`,
+                              background: isHovered ? `${color}66` : `${color}33`,
+                              border: `${isHovered ? "3px" : "2px"} solid ${color}`,
+                              borderRadius: b.type === "image_avatar" ? "4px" : "2px",
+                              display: "flex",
+                              alignItems: "center",
+                              justifyContent: "center",
+                              color: "#ffffff",
+                              fontSize: "8.5px",
+                              fontWeight: 700,
+                              boxSizing: "border-box",
+                              pointerEvents: "none",
+                              boxShadow: isHovered ? `0 0 8px ${color}` : undefined,
+                            }}
+                          >
+                            {b.type === "image_avatar"
+                              ? "AVATAR"
+                              : b.type === "primary_text"
+                                ? "TITLE"
+                                : b.type === "secondary_text"
+                                  ? "TIME"
+                                  : b.type === "action_menu"
+                                    ? "•••"
+                                    : "BLOCK"}
+                          </div>
+                        );
+                      })}
+                    </div>
+                    <div style={{ fontSize: "10px", color: "#64748b", width: "100%", display: "flex", justifyContent: "space-between" }}>
+                      <span>
+                        Viewing: <b style={{ color: "#38bdf8" }}>{isSample ? `Sample #${selectedSampleIndex + 1}` : `Learned Variant #${selectedVariantIndex + 1}`}</b> ({activeW}×{activeH} px)
+                      </span>
+                      <span>
+                        AR: <b>{Math.round(targetAR * 100) / 100}:1</b>
+                      </span>
+                    </div>
+                  </div>
+                );
+              })()}
 
               {/* Block Category Legend */}
               <div style={{ display: "flex", gap: "8px", flexWrap: "wrap", fontSize: "10px", color: "#cbd5e1" }}>
@@ -609,7 +803,7 @@ export function LayoutTemplateReviewStep({
               </div>
             </div>
 
-            {/* PANEL 3: RIGHT — Multi-Sample Learned Variants Diagnostics */}
+            {/* PANEL 3: RIGHT — Multi-Sample Learned Variants & Geometry Diagnostics */}
             <div
               style={{
                 background: "#0b1220",
@@ -619,6 +813,8 @@ export function LayoutTemplateReviewStep({
                 display: "flex",
                 flexDirection: "column",
                 gap: "8px",
+                overflowY: "auto",
+                maxHeight: "560px",
               }}
             >
               <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
@@ -646,7 +842,10 @@ export function LayoutTemplateReviewStep({
                     <button
                       key={v.variantId}
                       type="button"
-                      onClick={() => setSelectedVariantIndex(vIdx)}
+                      onClick={() => {
+                        setSelectedVariantIndex(vIdx);
+                        setB3v2TemplateSource("variant");
+                      }}
                       style={{
                         fontSize: "10px",
                         padding: "2px 6px",
@@ -655,9 +854,10 @@ export function LayoutTemplateReviewStep({
                         borderColor: selectedVariantIndex === vIdx ? "#06b6d4" : "#334155",
                         color: selectedVariantIndex === vIdx ? "#22d3ee" : "#94a3b8",
                         borderRadius: "2px",
+                        fontWeight: selectedVariantIndex === vIdx ? 700 : 500,
                       }}
                     >
-                      Variant #{vIdx + 1} ({v.sampleCount} samples)
+                      Variant #{vIdx + 1} ({v.sampleCount} sample{v.sampleCount === 1 ? "" : "s"})
                     </button>
                   ))}
                 </div>
@@ -680,7 +880,7 @@ export function LayoutTemplateReviewStep({
                 >
                   <b style={{ color: "#38bdf8" }}>VARIANT: {currentVariant.variantId}</b>
                   <div style={{ display: "flex", justifyContent: "space-between" }}>
-                    <span>Samples Contributing:</span>
+                    <span>Contributing Samples:</span>
                     <b>{currentVariant.sampleCount}</b>
                   </div>
                   <div style={{ display: "flex", justifyContent: "space-between" }}>
@@ -708,11 +908,101 @@ export function LayoutTemplateReviewStep({
                 </div>
               )}
 
+              {/* SECTION 4: Geometry & Input Preprocessing Diagnostics */}
+              <div
+                style={{
+                  background: "#081325",
+                  border: "1px solid #334155",
+                  borderRadius: "3px",
+                  padding: "6px 8px",
+                  display: "flex",
+                  flexDirection: "column",
+                  gap: "5px",
+                  fontSize: "9.5px",
+                  color: "#94a3b8",
+                }}
+              >
+                <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+                  <b style={{ color: "#a5b4fc" }}>📐 Geometry & Preprocessing Audit</b>
+                  <button
+                    type="button"
+                    onClick={() => setB3v2ShowDiagnostics((prev) => !prev)}
+                    style={{
+                      background: "transparent",
+                      border: "none",
+                      color: "#64748b",
+                      fontSize: "9px",
+                      cursor: "pointer",
+                      padding: 0,
+                    }}
+                  >
+                    {b3v2ShowDiagnostics ? "Hide ▲" : "Show ▼"}
+                  </button>
+                </div>
+
+                {b3v2ShowDiagnostics && currentBlockSample && (
+                  <div style={{ display: "flex", flexDirection: "column", gap: "3px" }}>
+                    <div style={{ display: "flex", justifyContent: "space-between" }}>
+                      <span>Original Crop:</span>
+                      <b style={{ color: "#e2e8f0" }}>
+                        {currentBlockSample.rawDimensions.width} × {currentBlockSample.rawDimensions.height} px ({currentBlockSample.aspectRatio}:1)
+                      </b>
+                    </div>
+                    {currentBlockSample.processingDimensions && (
+                      <div style={{ display: "flex", justifyContent: "space-between" }}>
+                        <span>Working / Preproc:</span>
+                        <b style={{ color: "#e2e8f0" }}>
+                          {currentBlockSample.processingDimensions.width} × {currentBlockSample.processingDimensions.height} px ({currentBlockSample.processingAspectRatio}:1)
+                        </b>
+                      </div>
+                    )}
+                    {currentBlockSample.scaleFactors && (
+                      <div style={{ display: "flex", justifyContent: "space-between" }}>
+                        <span>Scale (Proc / Raw):</span>
+                        <b style={{ color: "#f59e0b" }}>
+                          X: {currentBlockSample.scaleFactors.scaleX} | Y: {currentBlockSample.scaleFactors.scaleY}
+                        </b>
+                      </div>
+                    )}
+
+                    {/* Block Coordinates Table */}
+                    <div style={{ marginTop: "4px", borderTop: "1px solid #1e293b", paddingTop: "4px" }}>
+                      <span style={{ color: "#cbd5e1", fontWeight: 600 }}>Sample #{selectedSampleIndex + 1} Blocks Audit:</span>
+                      <div style={{ display: "flex", flexDirection: "column", gap: "2px", marginTop: "2px" }}>
+                        {currentBlockSample.blocks.map((b) => (
+                          <div
+                            key={b.id}
+                            style={{
+                              background: "#030712",
+                              padding: "2px 4px",
+                              borderRadius: "2px",
+                              display: "flex",
+                              justifyContent: "space-between",
+                              fontFamily: "monospace",
+                              fontSize: "8.5px",
+                              borderLeft: `2px solid ${getBlockColor(b.type)}`,
+                            }}
+                          >
+                            <span style={{ color: getBlockColor(b.type) }}>{b.type.replace("image_", "").replace("_text", "")}</span>
+                            <span style={{ color: "#e2e8f0" }}>
+                              {b.rawBounds ? `${b.rawBounds.x},${b.rawBounds.y} ${b.rawBounds.width}×${b.rawBounds.height}px` : "N/A"}
+                            </span>
+                            <span style={{ color: "#64748b" }}>
+                              [{b.normalizedBounds.x.toFixed(2)},{b.normalizedBounds.y.toFixed(2)},{b.normalizedBounds.width.toFixed(2)}×{b.normalizedBounds.height.toFixed(2)}]
+                            </span>
+                          </div>
+                        ))}
+                      </div>
+                    </div>
+                  </div>
+                )}
+              </div>
+
               {/* Read-Only Notice */}
               <div
                 style={{
                   marginTop: "auto",
-                  fontSize: "10px",
+                  fontSize: "9.5px",
                   color: "#64748b",
                   borderTop: "1px solid #1e293b",
                   paddingTop: "6px",

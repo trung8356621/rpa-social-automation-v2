@@ -487,3 +487,55 @@ test("Task C2.11.15a: Pipeline Reference Diagnostic - distinguishes NO_REFERENCE
   assert.equal(noMatchRes.validReferenceCount, 1);
   assert.equal(noMatchRes.skippedReferenceCount, 0);
 });
+
+test("Task Review 2C: Preserves original input geometry, rawBounds and uncompressed overlay dimensions", async () => {
+  // Test with real Facebook-like dimensions: 679 x 59 px
+  const rawW = 679;
+  const rawH = 59;
+  const refBuf = await createReferenceBeginBuffer(rawW, rawH);
+
+  const report = await inspectBeginBlockTemplate([
+    {
+      sampleId: "fb_sample_1",
+      regionId: "reg_fb_1",
+      groupTag: "post-main",
+      imageBuffer: refBuf,
+    },
+  ]);
+
+  const group = report.groups["post-main"]!;
+  assert.equal(group.status, "READY");
+  const sample = group.samples[0]!;
+
+  // 1. Original dimensions preserved
+  assert.equal(sample.rawDimensions.width, rawW);
+  assert.equal(sample.rawDimensions.height, rawH);
+  assert.equal(sample.aspectRatio, Math.round((rawW / rawH) * 100) / 100);
+
+  // 2. Processing dimensions & scaling factors reported
+  assert.ok(sample.processingDimensions);
+  assert.equal(sample.processingDimensions.height, 64);
+  assert.ok(sample.scaleFactors);
+  assert.ok(sample.scaleFactors.scaleX > 0);
+  assert.ok(sample.scaleFactors.scaleY > 0);
+
+  // 3. Raw bounds populated on every block within [0..rawW, 0..rawH]
+  assert.ok(sample.blocks.length >= 3);
+  for (const b of sample.blocks) {
+    assert.ok(b.rawBounds, `Block ${b.id} must have rawBounds`);
+    assert.ok(b.rawBounds.x >= 0 && b.rawBounds.x <= rawW);
+    assert.ok(b.rawBounds.y >= 0 && b.rawBounds.y <= rawH);
+    assert.ok(b.rawBounds.width > 0 && b.rawBounds.x + b.rawBounds.width <= rawW + 2);
+    assert.ok(b.rawBounds.height > 0 && b.rawBounds.y + b.rawBounds.height <= rawH + 2);
+
+    assert.ok(b.processingBounds, `Block ${b.id} must have processingBounds`);
+  }
+
+  // 4. Segmented PNG overlay preserves original unresized crop dimensions (no distortion)
+  if (sample.segmentedCropDataUrl) {
+    const b64 = sample.segmentedCropDataUrl.split(",")[1]!;
+    const overlayMeta = await sharp(Buffer.from(b64, "base64")).metadata();
+    assert.equal(overlayMeta.width, rawW, "Segmented overlay width must match original raw width");
+    assert.equal(overlayMeta.height, rawH, "Segmented overlay height must match original raw height");
+  }
+});

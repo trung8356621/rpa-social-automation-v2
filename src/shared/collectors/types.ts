@@ -789,6 +789,20 @@ export type BeginLayoutBlock = {
     width: number;
     height: number;
   };
+  /** Bounding box in original reference crop pixel space */
+  rawBounds?: {
+    x: number;
+    y: number;
+    width: number;
+    height: number;
+  };
+  /** Bounding box in normalized preprocessing pixel space */
+  processingBounds?: {
+    x: number;
+    y: number;
+    width: number;
+    height: number;
+  };
   aspectRatio: number;
   density: number; // fill / edge density [0..1]
   confidence: number; // [0..1]
@@ -857,7 +871,10 @@ export type BeginSampleBlockInspection = {
   regionId?: string;
   groupTag: string;
   rawDimensions: { width: number; height: number };
+  processingDimensions?: { width: number; height: number };
+  scaleFactors?: { scaleX: number; scaleY: number };
   aspectRatio: number;
+  processingAspectRatio?: number;
   originalCropDataUrl?: string;
   segmentedCropDataUrl?: string;
   blocks: BeginLayoutBlock[];

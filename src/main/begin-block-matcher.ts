@@ -70,6 +70,8 @@ export async function extractBeginBlocks(
   aspectRatio: number;
   normWidth: number;
   normHeight: number;
+  scaleX: number;
+  scaleY: number;
   segmentedPngBuffer?: Buffer;
 }> {
   const meta = await sharp(imageBuffer).metadata();
@@ -80,6 +82,8 @@ export async function extractBeginBlocks(
   // Preserve aspect ratio with standardized working height
   const normHeight = NORM_H;
   const normWidth = Math.max(MIN_NORM_W, Math.min(MAX_NORM_W, Math.round(normHeight * aspectRatio)));
+  const scaleX = Math.round((normWidth / Math.max(1, rawWidth)) * 10000) / 10000;
+  const scaleY = Math.round((normHeight / Math.max(1, rawHeight)) * 10000) / 10000;
 
   // Extract grayscale raw pixels
   const { data: pixels } = await sharp(imageBuffer)
@@ -277,6 +281,18 @@ export async function extractBeginBlocks(
         width: Math.round(rw * 1000) / 1000,
         height: Math.round(rh * 1000) / 1000,
       },
+      rawBounds: {
+        x: Math.round(rx * rawWidth),
+        y: Math.round(ry * rawHeight),
+        width: Math.max(1, Math.round(rw * rawWidth)),
+        height: Math.max(1, Math.round(rh * rawHeight)),
+      },
+      processingBounds: {
+        x: c.xMin,
+        y: c.yMin,
+        width: w,
+        height: h,
+      },
       aspectRatio: Math.round(compAspect * 100) / 100,
       density,
       confidence,
@@ -288,16 +304,16 @@ export async function extractBeginBlocks(
   // Sort blocks from left to right, then top to bottom
   blocks.sort((a, b) => a.normalizedBounds.x - b.normalizedBounds.x || a.normalizedBounds.y - b.normalizedBounds.y);
 
-  // 6. Optional: Generate segmented visual overlay
+  // 6. Optional: Generate segmented visual overlay on original reference crop (preserving aspect ratio and coordinates)
   let segmentedPngBuffer: Buffer | undefined;
   if (options?.generateSegmentedOverlay) {
     try {
       const svgElements = blocks
         .map((b) => {
-          const bx = Math.round(b.normalizedBounds.x * normWidth);
-          const by = Math.round(b.normalizedBounds.y * normHeight);
-          const bw = Math.max(4, Math.round(b.normalizedBounds.width * normWidth));
-          const bh = Math.max(4, Math.round(b.normalizedBounds.height * normHeight));
+          const bx = b.rawBounds?.x ?? Math.round(b.normalizedBounds.x * rawWidth);
+          const by = b.rawBounds?.y ?? Math.round(b.normalizedBounds.y * rawHeight);
+          const bw = Math.max(4, b.rawBounds?.width ?? Math.round(b.normalizedBounds.width * rawWidth));
+          const bh = Math.max(4, b.rawBounds?.height ?? Math.round(b.normalizedBounds.height * rawHeight));
           const color = getBlockColor(b.type);
           const label = b.type === "image_avatar" ? "AVATAR" : b.type === "primary_text" ? "TITLE" : b.type === "secondary_text" ? "TIME" : b.type === "action_menu" ? "MENU" : "BLOCK";
 
@@ -309,9 +325,8 @@ export async function extractBeginBlocks(
         })
         .join("");
 
-      const svg = `<svg width="${normWidth}" height="${normHeight}" xmlns="http://www.w3.org/2000/svg">${svgElements}</svg>`;
+      const svg = `<svg width="${rawWidth}" height="${rawHeight}" xmlns="http://www.w3.org/2000/svg">${svgElements}</svg>`;
       segmentedPngBuffer = await sharp(imageBuffer)
-        .resize(normWidth, normHeight, { fit: "fill" })
         .composite([{ input: Buffer.from(svg) }])
         .png()
         .toBuffer();
@@ -327,6 +342,8 @@ export async function extractBeginBlocks(
     aspectRatio,
     normWidth,
     normHeight,
+    scaleX,
+    scaleY,
     segmentedPngBuffer,
   };
 }
@@ -459,6 +476,12 @@ export async function buildLearnedBlockVariants(
             y: Math.round(meanY * 1000) / 1000,
             width: Math.round(meanW * 1000) / 1000,
             height: Math.round(meanH * 1000) / 1000,
+          },
+          rawBounds: {
+            x: Math.round(meanX * avgW),
+            y: Math.round(meanY * avgH),
+            width: Math.max(1, Math.round(meanW * avgW)),
+            height: Math.max(1, Math.round(meanH * avgH)),
           },
           aspectRatio: Math.round(meanAspect * 100) / 100,
           density: Math.round(meanDensity * 100) / 100,
@@ -1003,7 +1026,10 @@ export async function inspectBeginBlockTemplate(
           regionId: ref.regionId,
           groupTag: tag,
           rawDimensions: { width: seg.rawWidth, height: seg.rawHeight },
+          processingDimensions: { width: seg.normWidth, height: seg.normHeight },
+          scaleFactors: { scaleX: seg.scaleX, scaleY: seg.scaleY },
           aspectRatio: Math.round(seg.aspectRatio * 100) / 100,
+          processingAspectRatio: Math.round((seg.normWidth / Math.max(1, seg.normHeight)) * 100) / 100,
           originalCropDataUrl,
           segmentedCropDataUrl,
           blocks: seg.blocks,
