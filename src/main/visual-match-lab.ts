@@ -1,4 +1,9 @@
 import type { BrowserCore } from "./browser-core.js";
+import {
+  buildBoundaryProbeScript,
+  buildRemoveBoundaryHighlightsScript,
+  type BoundaryProbeResult,
+} from "../shared/boundary-probe.js";
 
 type Point = { x: number; y: number };
 type Snapshot = { webContentsId: number; url: string; scrollX: number; scrollY: number };
@@ -32,11 +37,17 @@ export class VisualMatchLabRuntime {
 
   private async facebook() {
     const wc = this.browser.view.webContents;
-    if (!/^https:\/\/(?:www\.)?facebook\.com\//i.test(wc.getURL())) throw new Error("BROWSER_NOT_FACEBOOK: Mở Facebook trong BrowserCore của Creator V2 trước.");
-    const loggedIn = await wc.executeJavaScript(`(() => Boolean(
-      document.querySelector('[role="navigation"],[role="feed"],[aria-label*="Account" i],[aria-label*="Tài khoản" i]') &&
-      !document.querySelector('input[type="password"],form[action*="login"],input[name="email"]')
-    ))()`);
+    const url = wc.getURL();
+    const isFb = /^https:\/\/(?:www\.)?facebook\.com\//i.test(url);
+    const isThreads = /^https:\/\/(?:www\.)?threads\.(?:net|com)\//i.test(url);
+    if (!isFb && !isThreads) throw new Error("BROWSER_NOT_FACEBOOK: Mở Facebook hoặc Threads trong BrowserCore của Creator V2 trước.");
+    const loggedIn = await wc.executeJavaScript(`(() => {
+      if (/(?:threads\\.net|threads\\.com)/i.test(location.hostname)) return true;
+      return Boolean(
+        document.querySelector('[role="navigation"],[role="feed"],[aria-label*="Account" i],[aria-label*="Tài khoản" i]') &&
+        !document.querySelector('input[type="password"],form[action*="login"],input[name="email"]')
+      );
+    })()`);
     if (!loggedIn) throw new Error("FACEBOOK_NOT_LOGGED_IN: Đăng nhập thủ công trong BrowserCore của Creator V2 trước.");
     return wc;
   }
@@ -74,6 +85,32 @@ export class VisualMatchLabRuntime {
       document.documentElement.appendChild(box); return true;
     })()`);
     return { webContentsId, highlighted };
+  }
+  async probeBoundary(
+    captureId: string,
+    webContentsId: number,
+    point: Point,
+    actionRowBbox?: { x: number; y: number; width: number; height: number },
+    options?: { highlight?: boolean; captureEvidence?: boolean },
+  ): Promise<BoundaryProbeResult & { webContentsId: number; evidenceDataUrl?: string }> {
+    const wc = await this.fresh(captureId, webContentsId);
+    const shouldHighlight = options?.highlight !== false;
+    const script = buildBoundaryProbeScript(point, actionRowBbox, { highlight: shouldHighlight });
+    const result = (await wc.executeJavaScript(script)) as BoundaryProbeResult;
+    let evidenceDataUrl: string | undefined;
+
+    try {
+      if (shouldHighlight && options?.captureEvidence !== false) {
+        const evidence = await this.withVisibleBrowser(() => this.browser.capture({ requireCanonical: false }));
+        evidenceDataUrl = evidence.dataUrl;
+      }
+    } finally {
+      if (shouldHighlight) {
+        await wc.executeJavaScript(buildRemoveBoundaryHighlightsScript());
+      }
+    }
+
+    return { ...result, webContentsId, evidenceDataUrl };
   }
   async scroll(webContentsId: number, deltaY: number) {
     const wc = await this.facebook();

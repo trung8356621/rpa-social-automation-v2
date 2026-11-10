@@ -481,6 +481,14 @@ export type Command =
   | { type: "visualMatchLabInspect"; captureId: string; webContentsId: number; point: { x: number; y: number }; parent?: boolean }
   | { type: "visualMatchLabHighlight"; captureId: string; webContentsId: number; point: { x: number; y: number } }
   | { type: "visualMatchLabScroll"; webContentsId: number; deltaY: number }
+  | {
+      type: "visualMatchLabProbeBoundary";
+      captureId: string;
+      webContentsId: number;
+      point: { x: number; y: number };
+      actionRowBbox?: { x: number; y: number; width: number; height: number };
+      options?: { highlight?: boolean; captureEvidence?: boolean };
+    }
   | { type: "visualMatchLabOcr"; dataUrl: string }
   /** Collector Capture workspace hole — null/inactive hides Browser Core on collectors pages. */
   | {

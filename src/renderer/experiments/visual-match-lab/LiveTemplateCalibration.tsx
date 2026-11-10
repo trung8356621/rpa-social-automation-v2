@@ -7,7 +7,16 @@ export type LiveIconTemplate = { kind: LiveIconKind; dataUrl: string; width: num
 export type LiveIconTemplates = Partial<Record<LiveIconKind, LiveIconTemplate>>;
 export const LIVE_TEMPLATE_KEY = "visual_match_lab_live_templates_v1";
 
-export const loadLiveTemplates = (): LiveIconTemplates => { try { return JSON.parse(localStorage.getItem(LIVE_TEMPLATE_KEY) ?? "{}"); } catch { return {}; } };
+import defaultRealTemplates from "./default-real-templates.json";
+
+export const loadLiveTemplates = (): LiveIconTemplates => {
+  try {
+    const saved = JSON.parse(localStorage.getItem(LIVE_TEMPLATE_KEY) ?? "{}");
+    return { ...(defaultRealTemplates as LiveIconTemplates), ...saved };
+  } catch {
+    return defaultRealTemplates as LiveIconTemplates;
+  }
+};
 
 export function LiveTemplateCalibration({ captures, templates, onChange, onRerun, running }: { captures: LiveCapture[]; templates: LiveIconTemplates; onChange: (templates: LiveIconTemplates) => void; onRerun: () => void; running: boolean }) {
   const [frameId, setFrameId] = useState(captures[0]?.id ?? ""); const [kind, setKind] = useState<LiveIconKind>("like"); const [rect, setRect] = useState<Rect | null>(null); const start = useRef<{ x: number; y: number } | null>(null);

@@ -1836,6 +1836,15 @@ async function boot() {
       case "visualMatchLabScroll":
         isIdle();
         return visualMatchLab.scroll(command.webContentsId, command.deltaY);
+      case "visualMatchLabProbeBoundary":
+        isIdle();
+        return visualMatchLab.probeBoundary(
+          command.captureId,
+          command.webContentsId,
+          command.point,
+          command.actionRowBbox,
+          command.options,
+        );
       case "visualMatchLabOcr": {
         isIdle();
         const match = /^data:image\/[a-z0-9.+-]+;base64,(.+)$/iu.exec(command.dataUrl);
@@ -2606,10 +2615,11 @@ async function boot() {
       const point = { x: Math.round(before.viewport.width / 2), y: Math.round(before.viewport.height / 2) };
       const inspected = await visualMatchLab.inspect(before.id, before.webContentsId, point);
       const highlighted = await visualMatchLab.highlight(before.id, before.webContentsId, point);
+      const boundaryProbe = await visualMatchLab.probeBoundary(before.id, before.webContentsId, point, undefined, { highlight: true, captureEvidence: true });
       await visualMatchLab.scroll(before.webContentsId, 300);
       const after = await visualMatchLab.capture();
       await mkdir(path.join(project, "artifacts"), { recursive: true });
-      await writeFile(path.join(project, "artifacts", "visual-match-lab-live-check.json"), JSON.stringify({ state, before: { id: before.id, webContentsId: before.webContentsId, width: before.width, height: before.height, viewport: before.viewport }, inspected, highlighted, after: { id: after.id, webContentsId: after.webContentsId, width: after.width, height: after.height, viewport: after.viewport }, sameBrowser: before.webContentsId === after.webContentsId }, null, 2));
+      await writeFile(path.join(project, "artifacts", "visual-match-lab-live-check.json"), JSON.stringify({ state, before: { id: before.id, webContentsId: before.webContentsId, width: before.width, height: before.height, viewport: before.viewport }, inspected, highlighted, boundaryProbe, after: { id: after.id, webContentsId: after.webContentsId, width: after.width, height: after.height, viewport: after.viewport }, sameBrowser: before.webContentsId === after.webContentsId }, null, 2));
       app.exit(0);
       return;
     } catch (error) {

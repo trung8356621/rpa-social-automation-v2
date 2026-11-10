@@ -117,6 +117,13 @@
 .template-previews span { color: var(--accent-amber); font-size: 11px; }
 .live-template-calibration > strong { margin-left: 10px; }
 
+.badge-boundary { display: inline-block; font-size: 10px; font-weight: 700; padding: 2px 6px; border-radius: 3px; margin-right: 6px; }
+.badge-boundary.BOUNDARY_FOUND { background: rgba(34, 197, 94, 0.2); border: 1px solid #22c55e; color: #4ade80; }
+.badge-boundary.BOUNDARY_AMBIGUOUS { background: rgba(234, 179, 8, 0.2); border: 1px solid #eab308; color: #fde047; }
+.badge-boundary.BOUNDARY_NOT_FOUND { background: rgba(148, 163, 184, 0.2); border: 1px solid #64748b; color: #cbd5e1; }
+.boundary-detail { font-size: 11px; color: var(--text-muted); margin-top: 3px; }
+.boundary-warning { color: #f87171; font-weight: 600; margin-top: 2px; }
+
 @media (max-width: 1050px) {
   .visual-match-lab-page .visual-match-lab-original > div[style*="grid-template-columns"] {
     grid-template-columns: minmax(260px, 320px) minmax(0, 1fr) !important;
