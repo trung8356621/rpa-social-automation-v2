@@ -1,11 +1,13 @@
 import path from "node:path";
-import { mkdir, writeFile } from "node:fs/promises";
+import { mkdir, writeFile, readFile, readdir, stat } from "node:fs/promises";
 import type { BrowserCore } from "./browser-core.js";
+import type { SavedRunSummaryItem } from "../shared/contracts.js";
 import {
   buildBoundaryProbeScript,
   buildRemoveBoundaryHighlightsScript,
   type BoundaryProbeResult,
   type BoundaryDebugReport,
+  type BoundaryDebugRecord,
 } from "../shared/boundary-probe.js";
 
 type Point = { x: number; y: number };
@@ -95,11 +97,14 @@ export class VisualMatchLabRuntime {
     webContentsId: number,
     point: Point,
     actionRowBbox?: { x: number; y: number; width: number; height: number },
-    options?: { highlight?: boolean; captureEvidence?: boolean },
+    options?: { highlight?: boolean; captureEvidence?: boolean; customRules?: any[] },
   ): Promise<BoundaryProbeResult & { webContentsId: number; evidenceDataUrl?: string }> {
     const wc = await this.fresh(captureId, webContentsId);
     const shouldHighlight = options?.highlight !== false;
-    const script = buildBoundaryProbeScript(point, actionRowBbox, { highlight: shouldHighlight });
+    const script = buildBoundaryProbeScript(point, actionRowBbox, {
+      highlight: shouldHighlight,
+      customRules: options?.customRules,
+    });
     const result = (await wc.executeJavaScript(script)) as BoundaryProbeResult;
     let evidenceDataUrl: string | undefined;
 
@@ -135,21 +140,209 @@ export class VisualMatchLabRuntime {
     const latestPath = path.join(scratchDir, "visual-match-lab-boundary-debug.json");
     const runPath = path.join(scratchDir, `visual-match-lab-boundary-debug-${report.runId}.json`);
 
-    const jsonStr = JSON.stringify(report, null, 2);
-    await writeFile(latestPath, jsonStr, "utf8");
-    await writeFile(runPath, jsonStr, "utf8");
-
+    // 1. Save evidence images to separate files on disk to prevent bloating JSON with Base64
     for (const record of report.records) {
       if (record.evidenceScreenshotBase64) {
         const match = /^data:image\/png;base64,(.+)$/.exec(record.evidenceScreenshotBase64);
         if (match) {
-          const imgPath = path.join(scratchDir, `boundary-evidence-f${record.frameNumber}-r${record.rowIndex}.png`);
+          // Per-run filename: shared names were overwritten by every later run, so old
+          // runs silently pointed at screenshots of a different feed position.
+          const imgPath = path.join(scratchDir, `boundary-evidence-${report.runId}-f${record.frameNumber}-r${record.rowIndex}.png`);
           await writeFile(imgPath, Buffer.from(match[1], "base64")).catch(() => undefined);
           record.evidenceScreenshotSaved = imgPath;
         }
+        // Free base64 memory in saved debug JSON artifact
+        delete record.evidenceScreenshotBase64;
       }
     }
 
+    // 2. Persist lean JSON debug artifact with image file paths
+    const jsonStr = JSON.stringify(report, null, 2);
+    await writeFile(latestPath, jsonStr, "utf8");
+    await writeFile(runPath, jsonStr, "utf8");
+
+    // 3. Persist structured run structure: runs/{runId}/...
+    try {
+      const runDir = path.join(scratchDir, "runs", report.runId);
+      await mkdir(runDir, { recursive: true });
+
+      const manifest = {
+        runId: report.runId,
+        timestamp: report.timestamp,
+        platform: report.environment.platform,
+        totalFrames: report.totalFrames,
+        summary: report.summary,
+      };
+      await writeFile(path.join(runDir, "manifest.json"), JSON.stringify(manifest, null, 2), "utf8");
+      await writeFile(path.join(runDir, "summary.json"), JSON.stringify(report.summary, null, 2), "utf8");
+      await writeFile(path.join(runDir, "rules-snapshot.json"), JSON.stringify(report.environment, null, 2), "utf8");
+
+      // Group records by frame
+      const frameGroups = new Map<number, BoundaryDebugRecord[]>();
+      for (const r of report.records) {
+        const list = frameGroups.get(r.frameNumber) || [];
+        list.push(r);
+        frameGroups.set(r.frameNumber, list);
+      }
+
+      for (const [frameNum, frameRecords] of frameGroups) {
+        const frameDir = path.join(runDir, "frames", String(frameNum).padStart(3, "0"));
+        await mkdir(frameDir, { recursive: true });
+        await writeFile(path.join(frameDir, "debug.json"), JSON.stringify(frameRecords, null, 2), "utf8");
+        for (const rec of frameRecords) {
+          if (rec.evidenceScreenshotSaved) {
+            const dest = path.join(frameDir, `highlighted-r${rec.rowIndex}.png`);
+            await writeFile(dest, await readFile(rec.evidenceScreenshotSaved)).catch(() => undefined);
+          }
+        }
+      }
+    } catch (err) {
+      console.warn("Failed to create structured runs directory:", err);
+    }
+
     return { ok: true, path: latestPath, runPath, recordCount: report.records.length };
+  }
+
+  async listRuns(): Promise<SavedRunSummaryItem[]> {
+    const scratchDir = path.join(this.projectDir, "scratch");
+    const runsDir = path.join(scratchDir, "runs");
+    const result: Map<string, SavedRunSummaryItem> = new Map();
+
+    // 1. Read structured runs in scratch/runs/
+    try {
+      const entries = await readdir(runsDir, { withFileTypes: true });
+      for (const ent of entries) {
+        if (ent.isDirectory()) {
+          const runId = ent.name;
+          if (runId.startsWith("run_audit_")) continue;
+          const manifestPath = path.join(runsDir, runId, "manifest.json");
+          try {
+            const data = JSON.parse(await readFile(manifestPath, "utf8"));
+            result.set(runId, {
+              runId,
+              timestamp: data.timestamp || new Date().toISOString(),
+              platform: data.platform || "facebook",
+              totalFrames: data.totalFrames || 0,
+              actionRowsDetected: data.summary?.totalProbed || 0,
+              boundaryFoundCount: data.summary?.boundaryFoundCount || 0,
+              boundaryAmbiguousCount: data.summary?.boundaryAmbiguousCount || 0,
+              boundaryNotFoundCount: data.summary?.boundaryNotFoundCount || 0,
+              jumpedZeroToTwoPlusCount: data.summary?.jumpedZeroToTwoPlusCount || 0,
+              noActionRowCount: Math.max(0, (data.totalFrames || 0) - (data.summary?.totalProbed || 0)),
+              source: "structured",
+            });
+          } catch {}
+        }
+      }
+    } catch {}
+
+    // 2. Read legacy runs from scratch/visual-match-lab-boundary-debug-*.json
+    try {
+      const files = await readdir(scratchDir);
+      for (const file of files) {
+        const match = /^visual-match-lab-boundary-debug-(run_[^.]+)\.json$/.exec(file);
+        if (match) {
+          const runId = match[1];
+          if (runId.startsWith("run_audit_")) continue;
+          if (!result.has(runId)) {
+            try {
+              const fullPath = path.join(scratchDir, file);
+              const data = JSON.parse(await readFile(fullPath, "utf8"));
+              result.set(runId, {
+                runId,
+                timestamp: data.timestamp || new Date().toISOString(),
+                platform: data.environment?.platform || "facebook",
+                totalFrames: data.totalFrames || 0,
+                actionRowsDetected: data.summary?.totalProbed || 0,
+                boundaryFoundCount: data.summary?.boundaryFoundCount || 0,
+                boundaryAmbiguousCount: data.summary?.boundaryAmbiguousCount || 0,
+                boundaryNotFoundCount: data.summary?.boundaryNotFoundCount || 0,
+                jumpedZeroToTwoPlusCount: data.summary?.jumpedZeroToTwoPlusCount || 0,
+                noActionRowCount: Math.max(0, (data.totalFrames || 0) - (data.summary?.totalProbed || 0)),
+                source: "legacy",
+              });
+            } catch {}
+          }
+        }
+      }
+    } catch {}
+
+    return Array.from(result.values()).sort((a, b) => b.timestamp.localeCompare(a.timestamp));
+  }
+
+  async loadRun(runId: string): Promise<{ ok: boolean; report: BoundaryDebugReport; runId: string }> {
+    const scratchDir = path.join(this.projectDir, "scratch");
+    const runDir = path.join(scratchDir, "runs", runId);
+    let report: BoundaryDebugReport | null = null;
+
+    // Check structured run first
+    try {
+      const manifestPath = path.join(runDir, "manifest.json");
+      const manifest = JSON.parse(await readFile(manifestPath, "utf8"));
+      const framesDir = path.join(runDir, "frames");
+      const frameEntries = await readdir(framesDir, { withFileTypes: true });
+      const records: BoundaryDebugRecord[] = [];
+      for (const fe of frameEntries) {
+        if (fe.isDirectory()) {
+          const debugPath = path.join(framesDir, fe.name, "debug.json");
+          try {
+            const frameRecords: BoundaryDebugRecord[] = JSON.parse(await readFile(debugPath, "utf8"));
+            for (const r of frameRecords) {
+              const imgPath = path.join(framesDir, fe.name, `highlighted-r${r.rowIndex}.png`);
+              try {
+                const imgBuf = await readFile(imgPath);
+                r.evidenceScreenshotBase64 = `data:image/png;base64,${imgBuf.toString("base64")}`;
+              } catch {}
+              records.push(r);
+            }
+          } catch {}
+        }
+      }
+      report = {
+        runId: manifest.runId,
+        timestamp: manifest.timestamp,
+        environment: { width: 1024, height: 560, zoom: 1, platform: manifest.platform || "facebook" },
+        totalFrames: manifest.totalFrames,
+        records,
+        summary: manifest.summary,
+      };
+    } catch {
+      // Fallback to legacy file
+      const legacyPath = path.join(scratchDir, `visual-match-lab-boundary-debug-${runId}.json`);
+      try {
+        report = JSON.parse(await readFile(legacyPath, "utf8"));
+        if (report) {
+          const synthetic = report.runId.startsWith("run_audit_");
+          for (const r of report.records) {
+            if (r.evidenceScreenshotBase64 && r.evidenceScreenshotBase64.startsWith("data:image/")) {
+              continue;
+            }
+            if (synthetic) continue;
+            const candidates: string[] = [];
+            if (r.evidenceScreenshotSaved) {
+              candidates.push(r.evidenceScreenshotSaved);
+              candidates.push(path.join(scratchDir, path.basename(r.evidenceScreenshotSaved)));
+            }
+            candidates.push(path.join(scratchDir, `boundary-evidence-${report.runId}-f${r.frameNumber}-r${r.rowIndex}.png`));
+            candidates.push(path.join(scratchDir, `boundary-evidence-f${r.frameNumber}-r${r.rowIndex}.png`));
+
+            for (const p of candidates) {
+              try {
+                const imgBuf = await readFile(p);
+                r.evidenceScreenshotBase64 = `data:image/png;base64,${imgBuf.toString("base64")}`;
+                r.evidenceScreenshotSaved = p;
+                break;
+              } catch {}
+            }
+          }
+        }
+      } catch {}
+    }
+
+    if (!report) {
+      throw new Error(`RUN_NOT_FOUND: Could not load run ${runId}`);
+    }
+
+    return { ok: true, report, runId };
   }
 }

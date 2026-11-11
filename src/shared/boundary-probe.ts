@@ -1,4 +1,5 @@
 import { buildFacebookPermalinkExtractorJs, type PlatformPermalinkAdapter, type PostIdentity } from "./permalink-adapter.js";
+import { compileRule, type UserPermalinkRule } from "./permalink-rules.js";
 
 export type BoundaryStatus = "BOUNDARY_FOUND" | "BOUNDARY_AMBIGUOUS" | "BOUNDARY_NOT_FOUND";
 
@@ -298,12 +299,28 @@ export function resolveBoundaryFromAncestors(
 export function buildBoundaryProbeScript(
   point: { x: number; y: number },
   actionRowBbox?: { x: number; y: number; width: number; height: number },
-  options: { highlight?: boolean } = {},
+  options: { highlight?: boolean; customRules?: UserPermalinkRule[] } = {},
 ): string {
+  const serializedCustomRules = (options.customRules ?? [])
+    .filter(r => r.enabled)
+    .map(r => {
+      const c = compileRule(r);
+      if (!c) return null;
+      return {
+        id: c.id,
+        platform: c.platform,
+        pathPattern: c.pathPattern.source,
+        pathTokenNames: c.pathTokenNames,
+        paramRules: c.paramRules.map(pr => ({ key: pr.key, pattern: pr.pattern.source, tokenNames: pr.tokenNames })),
+      };
+    })
+    .filter(Boolean);
+
   return `(() => {
     const point = ${JSON.stringify(point)};
     const actionRowBbox = ${JSON.stringify(actionRowBbox ?? null)};
     const highlight = ${JSON.stringify(options.highlight ?? true)};
+    const customRules = ${JSON.stringify(serializedCustomRules)};
 
     // Clean up any stale highlights first
     document.querySelectorAll('[data-boundary-probe-highlight]').forEach(n => n.remove());
@@ -345,9 +362,57 @@ export function buildBoundaryProbeScript(
       return null;
     }
 
+    function extractCustomPost(href, baseOrigin) {
+      if (!customRules || customRules.length === 0) return null;
+      let parsed;
+      try { parsed = new URL(href, baseOrigin || location.origin); } catch { return null; }
+      for (const cr of customRules) {
+        const pRe = new RegExp(cr.pathPattern, 'i');
+        const pMatch = pRe.exec(parsed.pathname);
+        if (!pMatch) continue;
+        const tokens = {};
+        for (let i = 0; i < cr.pathTokenNames.length; i++) {
+          if (pMatch[i + 1]) tokens[cr.pathTokenNames[i]] = pMatch[i + 1];
+        }
+        let paramsOk = true;
+        for (const pr of cr.paramRules) {
+          const val = parsed.searchParams.get(pr.key);
+          if (!val) { paramsOk = false; break; }
+          const m = new RegExp(pr.pattern, 'i').exec(val.trim());
+          if (!m) { paramsOk = false; break; }
+          for (let i = 0; i < pr.tokenNames.length; i++) {
+            if (m[i + 1]) tokens[pr.tokenNames[i]] = m[i + 1];
+          }
+        }
+        if (!paramsOk) continue;
+        const postId = tokens['postId'];
+        if (postId) {
+          const scope = tokens['scope'] || tokens['groupId'] || tokens['username'] || tokens['idorvanity'] || parsed.searchParams.get('idorvanity') || undefined;
+          let canonicalUrl = '';
+          if (cr.platform === 'facebook') {
+            canonicalUrl = scope ? 'https://www.facebook.com/groups/' + scope + '/posts/' + postId : 'https://www.facebook.com/permalink.php?story_fbid=' + postId;
+          } else if (cr.platform === 'threads') {
+            canonicalUrl = 'https://www.threads.net/' + (scope ? (scope.startsWith('@') ? scope : '@' + scope) : '') + '/post/' + postId;
+          } else {
+            canonicalUrl = parsed.origin + parsed.pathname;
+          }
+          return { platform: cr.platform, postId: postId, scope: scope, canonicalUrl: canonicalUrl, rawUrl: href };
+        }
+      }
+      return null;
+    }
+
     function extractPost(href) {
-      if (isFacebook) return extractFacebookPost(href, location.origin);
-      if (isThreads) return extractThreadsPost(href, location.origin);
+      if (isFacebook) {
+        const p = extractFacebookPost(href, location.origin);
+        if (p) return p;
+      }
+      if (isThreads) {
+        const p = extractThreadsPost(href, location.origin);
+        if (p) return p;
+      }
+      const custom = extractCustomPost(href, location.origin);
+      if (custom) return custom;
       return null;
     }
 

@@ -249,7 +249,7 @@ export class BrowserCore {
       await writeFile(path.join(this.evidenceDir, `${id}.png`), buffer);
     }
     this.captures.set(id, buffer);
-    if (this.captures.size > 30)
+    if (this.captures.size > 70)
       this.captures.delete(this.captures.keys().next().value!);
     const width = requireCanonical
       ? this.bounds.width

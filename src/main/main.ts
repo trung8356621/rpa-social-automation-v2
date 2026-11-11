@@ -11,6 +11,7 @@ import {
   dialog,
   screen,
   clipboard,
+  shell,
 } from "electron";
 import { mkdir, mkdtemp, rm, writeFile, readFile, stat } from "node:fs/promises";
 import { appendFileSync, existsSync, statSync, unlinkSync, renameSync } from "node:fs";
@@ -1848,6 +1849,67 @@ async function boot() {
       case "visualMatchLabSaveBoundaryDebug":
         isIdle();
         return visualMatchLab.saveBoundaryDebug(command.report);
+      case "visualMatchLabListRuns":
+        isIdle();
+        return visualMatchLab.listRuns();
+      case "visualMatchLabLoadRun":
+        isIdle();
+        return visualMatchLab.loadRun(command.runId);
+      case "openExternalUrl":
+        isIdle();
+        if (typeof command.url === "string" && /^https?:\/\//i.test(command.url)) {
+          void shell.openExternal(command.url);
+          return { ok: true };
+        }
+        return { ok: false, error: "INVALID_URL" };
+      case "visualMatchLabNavigateBrowserCore": {
+        isIdle();
+        const rawUrl = command.url;
+        if (typeof rawUrl !== "string" || !rawUrl.trim()) {
+          throw new Error("URL_REQUIRED");
+        }
+        let parsed: URL;
+        try {
+          const trimmed = rawUrl.trim();
+          const candidateUrl =
+            trimmed.startsWith("//")
+              ? `https:${trimmed}`
+              : trimmed.startsWith("/") || trimmed.startsWith("?")
+                ? new URL(trimmed, "https://www.facebook.com").href
+                : trimmed;
+          parsed = new URL(candidateUrl);
+        } catch {
+          throw new Error("INVALID_URL: Could not parse URL format.");
+        }
+        if (!["http:", "https:"].includes(parsed.protocol)) {
+          throw new Error("INVALID_PROTOCOL: Only HTTP/HTTPS URLs are allowed.");
+        }
+        const host = parsed.hostname.toLowerCase();
+        const isFacebook = host.includes("facebook.com") || host.includes("fb.com");
+        const isThreads = host.includes("threads.net") || host.includes("threads.com");
+        if (!isFacebook && !isThreads) {
+          throw new Error(`UNSUPPORTED_PLATFORM: Domain ${parsed.hostname} is not Facebook or Threads.`);
+        }
+        // Navigate existing BrowserCore WebContents using current login session/partition
+        await browser.navigate(parsed.href);
+        await browser.view.webContents.executeJavaScript(
+          `new Promise(r => requestAnimationFrame(() => requestAnimationFrame(r)))`
+        ).catch(() => undefined);
+        let previewDataUrl = "";
+        try {
+          const img = await browser.view.webContents.capturePage(undefined, { stayHidden: true });
+          if (!img.isEmpty()) {
+            previewDataUrl = `data:image/png;base64,${img.toPNG().toString("base64")}`;
+          }
+        } catch {}
+        return {
+          ok: true,
+          url: browser.view.webContents.getURL(),
+          webContentsId: browser.view.webContents.id,
+          title: browser.view.webContents.getTitle(),
+          previewDataUrl,
+        };
+      }
       case "visualMatchLabOcr": {
         isIdle();
         const match = /^data:image\/[a-z0-9.+-]+;base64,(.+)$/iu.exec(command.dataUrl);

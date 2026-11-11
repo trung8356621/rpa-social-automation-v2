@@ -1,5 +1,5 @@
 import React, { useEffect, useState } from "react";
-import type { Command } from "../../../shared/contracts";
+import type { Command, SavedRunSummaryItem } from "../../../shared/contracts";
 import { TemplateMatcher } from "../../../../experiments/visual-match-lab/src/cv/template-matcher";
 import { runRecognitionPipeline } from "../../../../experiments/visual-match-lab/src/cv/recognition-pipeline";
 import type { FixtureItem } from "../../../../experiments/visual-match-lab/src/fixtures/fixture-manager";
@@ -7,6 +7,12 @@ import type { MatchCandidate, MatchMethod, RecognizedGroup, Rect } from "../../.
 import type { LiveCapture } from "./types";
 import { LiveTemplateCalibration, loadLiveTemplates, type LiveIconTemplates } from "./LiveTemplateCalibration";
 import type { BoundaryProbeResult, BoundaryStatus, BoundaryDebugRecord, BoundaryDebugReport } from "../../../shared/boundary-probe";
+import {
+  BUILTIN_PERMALINK_RULES,
+  type UserPermalinkRule,
+} from "../../../shared/permalink-rules";
+import { FrameInspector } from "./FrameInspector";
+import { RunSummary } from "./RunSummary";
 
 type Invoke = <T>(command: Command) => Promise<T>;
 export type CandidateStatus = "NEW_ITEM" | "DUPLICATE" | "NEEDS_ATTENTION" | "COMMENT_ACTION";
@@ -21,7 +27,7 @@ export type LiveCandidate = {
   boundary?: BoundaryProbeResult;
   highlightedEvidenceUrl?: string;
 };
-type FrameReport = {
+export type FrameReport = {
   frame: number;
   capture: LiveCapture;
   captureStatus: "CAPTURE_PASS";
@@ -33,7 +39,21 @@ type FrameReport = {
   actionClusters: number;
   candidates: LiveCandidate[];
 };
-const LIVE_FRAMES_KEY = "visual_match_lab_live_frames_v1";
+// v2: v1 caches could hold synthetic audit bboxes paired with unrelated screenshots.
+const LIVE_FRAMES_KEY = "visual_match_lab_live_frames_v2";
+const LIVE_RUN_ID_KEY = "visual_match_lab_live_run_id_v2";
+const LIVE_RULES_KEY = "visual_match_lab_permalink_rules_v1";
+
+function loadSavedRules(): UserPermalinkRule[] {
+  try {
+    const raw = localStorage.getItem(LIVE_RULES_KEY);
+    if (raw) {
+      const parsed = JSON.parse(raw);
+      if (Array.isArray(parsed) && parsed.length > 0) return parsed;
+    }
+  } catch {}
+  return BUILTIN_PERMALINK_RULES;
+}
 
 const wait = (ms: number) => new Promise(resolve => setTimeout(resolve, ms));
 const imageCanvas = async (dataUrl: string, width?: number, height?: number) => {
@@ -96,18 +116,196 @@ async function detectActionRows(target: HTMLCanvasElement, templates: HTMLCanvas
 export function LiveScrollTest({ invoke, currentFixture, actionGroups, method, threshold }: { invoke: Invoke; currentFixture: FixtureItem | null; actionGroups: RecognizedGroup[]; method: MatchMethod; threshold: number }) {
   const [frames, setFrames] = useState<FrameReport[]>(() => { try { return JSON.parse(localStorage.getItem(LIVE_FRAMES_KEY) ?? "[]"); } catch { return []; } });
   const [templates, setTemplates] = useState<LiveIconTemplates>(() => loadLiveTemplates());
+  const [rules, setRules] = useState<UserPermalinkRule[]>(() => loadSavedRules());
   const [captureFailures, setCaptureFailures] = useState(0);
   const [running, setRunning] = useState(false);
   const [status, setStatus] = useState("Ready — no public Facebook action is performed.");
   const [debugArtifactPath, setDebugArtifactPath] = useState<string | null>(null);
+  const [currentRunId, setCurrentRunId] = useState<string>(() => localStorage.getItem(LIVE_RUN_ID_KEY) || "live_session");
+  const [savedRuns, setSavedRuns] = useState<SavedRunSummaryItem[]>([]);
+  const [loadingRun, setLoadingRun] = useState(false);
+
+  const fetchSavedRuns = async () => {
+    try {
+      const runs = await invoke<SavedRunSummaryItem[]>({ type: "visualMatchLabListRuns" });
+      if (Array.isArray(runs)) {
+        setSavedRuns(runs);
+        const missingEvidenceImages = frames.some(
+          f => f.candidates.length > 0 && !f.capture?.dataUrl && !f.candidates[0]?.highlightedEvidenceUrl
+        );
+        if (
+          runs.length > 0 &&
+          (frames.length === 0 || currentRunId.startsWith("run_audit_") || missingEvidenceImages)
+        ) {
+          const targetRunId = runs.some(r => r.runId === currentRunId)
+            ? currentRunId
+            : runs[0].runId;
+          void handleLoadRun(targetRunId);
+        }
+      }
+    } catch (e) {
+      console.warn("Failed to list saved runs:", e);
+    }
+  };
+
+  useEffect(() => {
+    void fetchSavedRuns();
+  }, []);
+
+  const handleSaveRule = (newRule: UserPermalinkRule) => {
+    setRules(prev => {
+      const next = [newRule, ...prev.filter(r => r.id !== newRule.id)];
+      try { localStorage.setItem(LIVE_RULES_KEY, JSON.stringify(next)); } catch {}
+      return next;
+    });
+  };
+
+  const handleUpdateCandidateBoundary = (frameNumber: number, candidateIndex: number, newBoundary: BoundaryProbeResult, evidenceUrl?: string) => {
+    setFrames(prev => prev.map(f => {
+      if (f.frame !== frameNumber) return f;
+      const nextCandidates = f.candidates.map((c, idx) => {
+        if (idx !== candidateIndex) return c;
+        return {
+          ...c,
+          boundary: newBoundary,
+          highlightedEvidenceUrl: evidenceUrl || c.highlightedEvidenceUrl,
+          status: classifyLiveCandidate(c.context, c.iconCount, c.docY, c.fingerprint, [], newBoundary.status),
+        };
+      });
+      const frameBoundary: FrameReport["boundaryStatus"] =
+        nextCandidates.some(c => c.boundary?.status === "BOUNDARY_FOUND")
+          ? "BOUNDARY_FOUND"
+          : nextCandidates.some(c => c.boundary?.status === "BOUNDARY_AMBIGUOUS")
+            ? "BOUNDARY_AMBIGUOUS"
+            : "BOUNDARY_NOT_FOUND";
+      return {
+        ...f,
+        candidates: nextCandidates,
+        boundaryStatus: frameBoundary,
+      };
+    }));
+  };
+
+  const handleLoadRun = async (runId: string) => {
+    setLoadingRun(true);
+    try {
+      const res = await invoke<{ ok: boolean; report: BoundaryDebugReport; runId: string }>({
+        type: "visualMatchLabLoadRun",
+        runId,
+      });
+      if (res.ok && res.report) {
+        const loadedReports: FrameReport[] = [];
+        const recordsByFrame = new Map<number, BoundaryDebugRecord[]>();
+        for (const r of res.report.records) {
+          const list = recordsByFrame.get(r.frameNumber) || [];
+          list.push(r);
+          recordsByFrame.set(r.frameNumber, list);
+        }
+
+        const sortedFrames = Array.from(recordsByFrame.keys()).sort((a, b) => a - b);
+        for (const frameNum of sortedFrames) {
+          const frameRecs = recordsByFrame.get(frameNum) || [];
+          const firstRec = frameRecs[0];
+          const candidates: LiveCandidate[] = frameRecs.map(r => ({
+            bbox: r.actionRowBbox,
+            score: r.matchingScore,
+            iconCount: 3,
+            status: r.boundaryStatus === "BOUNDARY_FOUND" ? "NEW_ITEM" : "NEEDS_ATTENTION",
+            context: `Loaded run (${r.boundaryStatus})`,
+            fingerprint: "",
+            docY: r.scrollY + r.actionRowBbox.y,
+            boundary: {
+              status: r.boundaryStatus,
+              ancestorsChecked: r.ancestorDepth,
+              ancestorSteps: r.ancestors.map(a => ({
+                level: a.level,
+                tag: a.tag,
+                role: a.role,
+                id: a.id,
+                className: a.className,
+                rect: a.rect,
+                rawUrls: a.rawUrls,
+                postIdentities: a.postIdentities,
+                uniqueKeys: a.uniqueKeys,
+                hasNestedArticle: false,
+                hasQuoteOrReplyHint: false,
+              })),
+              firstPermalinkLevel: r.transitions.firstPermalinkLevel,
+              secondPermalinkLevel: r.transitions.secondPermalinkLevel,
+              boundaryCrossedLevel: r.transitions.boundaryCrossedLevel,
+              jumpedZeroToTwoPlus: r.transitions.jumpedZeroToTwoPlus,
+              jumpReason: r.transitions.jumpReason ?? null,
+              candidateContainer: r.candidateContainer ?? null,
+              crossedContainer: r.crossedContainer ?? null,
+              postIdentities: r.ancestors.flatMap(a => a.postIdentities),
+              hasQuoteOrSharedPostRisk: false,
+              riskReason: r.riskReason ?? null,
+              actionPoint: r.hitPoint,
+              hitElement: r.hitElement,
+              ownershipEvidence: r.ownershipEvidence,
+            },
+            highlightedEvidenceUrl: r.evidenceScreenshotBase64,
+          }));
+
+          const frameBoundary: FrameReport["boundaryStatus"] = frameRecs.length === 0
+            ? "NO_ACTION_ROW"
+            : frameRecs.some(r => r.boundaryStatus === "BOUNDARY_FOUND")
+              ? "BOUNDARY_FOUND"
+              : frameRecs.some(r => r.boundaryStatus === "BOUNDARY_AMBIGUOUS")
+                ? "BOUNDARY_AMBIGUOUS"
+                : "BOUNDARY_NOT_FOUND";
+
+          loadedReports.push({
+            frame: frameNum,
+            capture: {
+              id: `capture_${frameNum}_${runId}`,
+              webContentsId: firstRec?.browserWebContentsId ?? 1,
+              width: 1024,
+              height: 560,
+              dataUrl: firstRec?.evidenceScreenshotBase64 ?? "",
+              url: "https://www.facebook.com",
+              viewport: {
+                width: 1024,
+                height: 560,
+                scrollX: 0,
+                scrollY: firstRec?.scrollY ?? 0,
+                dpr: 1,
+                url: "https://www.facebook.com",
+              },
+            },
+            captureStatus: "CAPTURE_PASS",
+            pipelineStatus: `PIPELINE_PASS: Loaded evidence from run ${runId}`,
+            templateStatus: "TEMPLATE_READY: saved evidence",
+            detectionStatus: "DETECTION_PASS",
+            boundaryStatus: frameBoundary,
+            rawIconMatches: frameRecs.length * 3,
+            actionClusters: frameRecs.length,
+            candidates,
+          });
+        }
+
+        setFrames(loadedReports);
+        setCurrentRunId(runId);
+        setStatus(`Loaded run ${runId} with ${loadedReports.length} frames (${res.report.summary.boundaryFoundCount} boundaries found).${runId.startsWith("run_audit_") ? " SYNTHETIC audit run — no screenshots were captured; bboxes are simulated and are not drawn." : ""}`);
+      }
+    } catch (e) {
+      setStatus(`Failed to load run ${runId}: ${String(e)}`);
+    } finally {
+      setLoadingRun(false);
+    }
+  };
 
   useEffect(() => {
     try {
+      localStorage.removeItem("visual_match_lab_live_frames_v1");
+      localStorage.setItem(LIVE_RUN_ID_KEY, currentRunId);
+    } catch {}
+    try {
       localStorage.setItem(LIVE_FRAMES_KEY, JSON.stringify(frames));
     } catch {
-      setStatus("PARTIAL PASS: evidence is visible, but browser storage could not persist every frame.");
+      // Evidence images can exceed localStorage quota (~5MB); disk-backed loadRun handles reload.
     }
-  }, [frames]);
+  }, [frames, currentRunId]);
 
   const run = async () => {
     setRunning(true);
@@ -115,6 +313,7 @@ export function LiveScrollTest({ invoke, currentFixture, actionGroups, method, t
     setCaptureFailures(0);
     setDebugArtifactPath(null);
     const runId = `run_${Date.now()}_${Math.random().toString(36).slice(2, 7)}`;
+    setCurrentRunId(runId);
     const debugRecords: BoundaryDebugRecord[] = [];
     const reports: FrameReport[] = [];
     const seen: LiveCandidate[] = [];
@@ -127,7 +326,7 @@ export function LiveScrollTest({ invoke, currentFixture, actionGroups, method, t
       let priorScrollY: number | null = null;
       let browserWebContentsId: number | null = null;
 
-      for (let frame = 1; frame <= 20; frame++) {
+      for (let frame = 1; frame <= 50; frame++) {
         let capture: LiveCapture;
         try { capture = await invoke<LiveCapture>({ type: "visualMatchLabCapture" }); }
         catch (error) { failedCaptures++; setCaptureFailures(failedCaptures); throw new Error(`CAPTURE_STOPPED_AT_FRAME_${frame}: ${String(error)}`); }
@@ -180,7 +379,7 @@ export function LiveScrollTest({ invoke, currentFixture, actionGroups, method, t
                 webContentsId: capture.webContentsId,
                 point,
                 actionRowBbox: actionRowCssBbox,
-                options: { highlight: true, captureEvidence: true },
+                options: { highlight: true, captureEvidence: true, customRules: rules },
               });
               if (boundary.candidateContainer?.role === "article" || boundary.status === "BOUNDARY_FOUND") {
                 context = "post";
@@ -295,7 +494,7 @@ export function LiveScrollTest({ invoke, currentFixture, actionGroups, method, t
         setFrames([...reports]);
         priorScrollY = capture.viewport.scrollY;
 
-        if (frame < 20) {
+        if (frame < 50) {
           try {
             await invoke({ type: "visualMatchLabScroll", webContentsId: capture.webContentsId, deltaY: Math.round(capture.viewport.height * 0.65) });
             await wait(1400);
@@ -305,7 +504,7 @@ export function LiveScrollTest({ invoke, currentFixture, actionGroups, method, t
         }
       }
 
-      setStatus(`PARTIAL PASS: ${reports.length}/20 frames captured and processed on BrowserCore webContents.id=${reports[0].capture.webContentsId}.${templateError ? ` ${templateError}` : ""}`);
+      setStatus(`PARTIAL PASS: ${reports.length}/50 frames captured and processed on BrowserCore webContents.id=${reports[0].capture.webContentsId}.${templateError ? ` ${templateError}` : ""}`);
     } catch (error) {
       setStatus(reports.length > 0 ? `PARTIAL PASS: stopped safely after ${reports.length} frames; evidence retained. ${String(error)}` : `FAIL: ${String(error)}`);
     } finally {
@@ -334,6 +533,7 @@ export function LiveScrollTest({ invoke, currentFixture, actionGroups, method, t
         } catch (e) {
           console.warn("Failed to persist boundary debug report:", e);
         }
+        void fetchSavedRuns();
       }
       setRunning(false);
     }
@@ -396,7 +596,6 @@ export function LiveScrollTest({ invoke, currentFixture, actionGroups, method, t
 
   const all = frames.flatMap(frame => frame.candidates);
   const confirmed = all.filter(item => item.status === "NEW_ITEM").length;
-  const possible = frames.filter(frame => frame.actionClusters > 0).length;
   const rawCandidates = frames.reduce((sum, frame) => sum + frame.rawIconMatches, 0);
   const provisionalGroups = frames.reduce((sum, frame) => sum + frame.actionClusters, 0);
   const boundaryFound = all.filter(item => item.boundary?.status === "BOUNDARY_FOUND").length;
@@ -406,134 +605,66 @@ export function LiveScrollTest({ invoke, currentFixture, actionGroups, method, t
   return (
     <section className="live-scroll-test">
       <h2>Live Scroll &amp; Permalink Boundary POC</h2>
-      <p>BrowserCore 1024×560 · 65% overlap scroll · maximum 20 frames · OpenCV Action Row → DOM hit-test → parentNode traversal → Permalink Filter → Boundary</p>
-      <button onClick={() => void run()} disabled={running}>{running ? "Running Live Scroll & Boundary Test…" : "Run Live Scroll Test"}</button>
+      <p>BrowserCore 1024×560 · 65% overlap scroll · maximum 50 frames · OpenCV Action Row → DOM hit-test → parentNode traversal → Permalink Filter → Boundary</p>
+      
+      <div style={{ display: "flex", gap: "10px", alignItems: "center", margin: "8px 0" }}>
+        <button onClick={() => void run()} disabled={running}>
+          {running ? "Running Live Scroll & Boundary Test…" : "Run Live Scroll Test"}
+        </button>
+      </div>
+
       <div role="status">{status}</div>
+
       {debugArtifactPath && (
         <div style={{ margin: "6px 0", fontSize: "12px", color: "#065f46", background: "#d1fae5", padding: "6px 10px", borderRadius: "4px" }}>
           <b>Boundary Debug Log saved:</b> <code>scratch/visual-match-lab-boundary-debug.json</code>
         </div>
       )}
-      <LiveTemplateCalibration captures={frames.map(frame => frame.capture)} templates={templates} onChange={setTemplates} onRerun={() => void rerunExisting()} running={running} />
+
+      <LiveTemplateCalibration
+        captures={frames.map(frame => frame.capture)}
+        templates={templates}
+        onChange={setTemplates}
+        onRerun={() => void rerunExisting()}
+        running={running}
+      />
+
       {frames.length > 0 && frames.some(f => !f.boundaryStatus || (f.boundaryStatus === "BOUNDARY_NOT_FOUND" && f.candidates.some(c => !c.boundary))) && (
         <div className="boundary-warning" style={{ margin: "10px 0", padding: "8px 12px", background: "#fef3c7", border: "1px solid #f59e0b", borderRadius: "4px", color: "#92400e" }}>
           ℹ <b>Notice</b>: Current list contains stored frames from an earlier offline run. Click <b>"Run Live Scroll Test"</b> above to execute live DOM hit-test &amp; Permalink Boundary Probe with green/yellow/red container highlights.
         </div>
       )}
-      <div className="live-scroll-summary">
-        <b>Capture: {frames.length} pass / {captureFailures} fail</b>
-        <b>Action rows: {provisionalGroups}</b>
-        <b>Raw icon matches: {rawCandidates}</b>
-        <b>Boundary Found: {boundaryFound}</b>
-        <span>Boundary Ambiguous: {boundaryAmbiguous}</span>
-        <span>Boundary Not Found: {boundaryNotFound}</span>
-        <b>Confirmed posts: {confirmed}</b>
-        <span>Duplicates: {all.filter(item => item.status === "DUPLICATE").length}</span>
-        <span>Needs Attention: {all.filter(item => item.status === "NEEDS_ATTENTION").length}</span>
-        <span>Comment actions: {all.filter(item => item.status === "COMMENT_ACTION").length}</span>
-      </div>
+
+      {/* Run Summary Statistics Bar & Saved Runs Selector */}
+      <RunSummary
+        totalFrames={frames.length}
+        capturePassCount={frames.length}
+        captureFailCount={captureFailures}
+        actionClustersTotal={provisionalGroups}
+        rawIconMatchesTotal={rawCandidates}
+        boundaryFoundCount={boundaryFound}
+        boundaryAmbiguousCount={boundaryAmbiguous}
+        boundaryNotFoundCount={boundaryNotFound}
+        candidates={all}
+        savedRuns={savedRuns}
+        currentRunId={currentRunId}
+        onLoadRun={handleLoadRun}
+        loadingRun={loadingRun}
+      />
+
+      {/* Frame Inspector: Single Frame (70% Screenshot / 30% Diagnostics) */}
       {frames.length > 0 && (
-        <div className="live-scroll-table">
-          <table>
-            <thead>
-              <tr>
-                <th>Frame</th>
-                <th>Capture</th>
-                <th>Pipeline</th>
-                <th>Template</th>
-                <th>Detection</th>
-                <th>Boundary Probe</th>
-                <th>Raw icon matches</th>
-                <th>Action clusters</th>
-                <th>New</th>
-                <th>Duplicate</th>
-                <th>Needs Attention</th>
-              </tr>
-            </thead>
-            <tbody>
-              {frames.map(frame => (
-                <tr key={frame.capture.id}>
-                  <td>{frame.frame}</td>
-                  <td>{frame.captureStatus}</td>
-                  <td>{frame.pipelineStatus}</td>
-                  <td>{frame.templateStatus}</td>
-                  <td>{frame.detectionStatus}</td>
-                  <td>
-                    <span className={`badge-boundary ${frame.boundaryStatus ?? "BOUNDARY_NOT_FOUND"}`}>
-                      {frame.boundaryStatus ?? "UNTESTED"}
-                    </span>
-                  </td>
-                  <td>{frame.rawIconMatches}</td>
-                  <td>{frame.actionClusters}</td>
-                  <td>{frame.candidates.filter(item => item.status === "NEW_ITEM").length}</td>
-                  <td>{frame.candidates.filter(item => item.status === "DUPLICATE").length}</td>
-                  <td>{frame.candidates.filter(item => item.status === "NEEDS_ATTENTION" || item.status === "COMMENT_ACTION").length}</td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
-        </div>
+        <FrameInspector
+          frames={frames}
+          currentRunId={currentRunId}
+          platform="facebook"
+          rules={rules}
+          onRuleSaved={handleSaveRule}
+          onUpdateBoundary={handleUpdateCandidateBoundary}
+          invoke={invoke}
+          isLiveRunning={running}
+        />
       )}
-      <div className="live-scroll-evidence">
-        {frames.map(frame => {
-          const highlightedImg =
-            frame.candidates.find(c => c.boundary?.status === "BOUNDARY_FOUND" && c.highlightedEvidenceUrl)?.highlightedEvidenceUrl ||
-            frame.candidates.find(c => c.highlightedEvidenceUrl)?.highlightedEvidenceUrl ||
-            frame.capture.dataUrl;
-          return (
-            <article key={frame.capture.id}>
-              <h3>Frame {frame.frame} · scrollY={frame.capture.viewport.scrollY} · Boundary: {frame.boundaryStatus ?? "PENDING_LIVE_RUN"}</h3>
-              <p>{frame.captureStatus}</p>
-              <p>{frame.pipelineStatus}</p>
-              <p>{frame.templateStatus}</p>
-              <div className="evidence-image">
-                <img src={highlightedImg} alt={`Frame ${frame.frame} evidence`} />
-                {frame.candidates.map((item, index) => (
-                  <span
-                    key={index}
-                    data-status={item.status}
-                    style={{
-                      left: `${item.bbox.x / frame.capture.width * 100}%`,
-                      top: `${item.bbox.y / frame.capture.height * 100}%`,
-                      width: `${item.bbox.width / frame.capture.width * 100}%`,
-                      height: `${item.bbox.height / frame.capture.height * 100}%`,
-                    }}
-                    title={`${item.status} score=${item.score.toFixed(3)} boundary=${item.boundary?.status ?? "NONE"}`}
-                  />
-                ))}
-              </div>
-              <ul>
-                {frame.candidates.map((item, index) => (
-                  <li key={index}>
-                    <b>{item.status}</b> · bbox {item.bbox.x},{item.bbox.y},{item.bbox.width}×{item.bbox.height} · score {(item.score * 100).toFixed(1)}% · DOM {item.context}
-                    {item.boundary && (
-                      <div className="boundary-detail">
-                        <span className={`badge-boundary ${item.boundary.status}`}>{item.boundary.status}</span>
-                        <span>Ancestors: {item.boundary.ancestorsChecked} · </span>
-                        <span>First: {item.boundary.firstPermalinkLevel !== null ? `L${item.boundary.firstPermalinkLevel}` : "None"} · </span>
-                        <span>Second (Crossed): {item.boundary.secondPermalinkLevel !== null ? `L${item.boundary.secondPermalinkLevel}` : "None"}</span>
-                        {item.boundary.candidateContainer && (
-                          <div>
-                            Candidate Container: &lt;{item.boundary.candidateContainer.tag}
-                            {item.boundary.candidateContainer.role ? ` role="${item.boundary.candidateContainer.role}"` : ""}
-                            &gt; L{item.boundary.candidateContainer.level} ({Math.round(item.boundary.candidateContainer.rect.width)}×{Math.round(item.boundary.candidateContainer.rect.height)})
-                          </div>
-                        )}
-                        {item.boundary.postIdentities.length > 0 && (
-                          <div>Post identities: {item.boundary.postIdentities.map(p => `${p.platform}:${p.postId}`).join(", ")}</div>
-                        )}
-                        {item.boundary.hasQuoteOrSharedPostRisk && (
-                          <div className="boundary-warning">⚠ Quote/Shared post risk: {item.boundary.riskReason}</div>
-                        )}
-                      </div>
-                    )}
-                  </li>
-                ))}
-              </ul>
-            </article>
-          );
-        })}
-      </div>
     </section>
   );
 }

@@ -7,6 +7,7 @@ import type {
   NormalizedRegionGeometry,
 } from "./collectors/types.js";
 import type { BoundaryDebugReport } from "./boundary-probe.js";
+import type { UserPermalinkRule } from "./permalink-rules.js";
 export type { ScriptReleaseManifest } from "./script-release.js";
 export type Rect = { x: number; y: number; width: number; height: number };
 export type MainPage = "scenarios" | "browser-sessions" | "test-lab" | "visual-match-lab" | "settings" | "variations" | "widget-registry" | "workflows" | "builds-releases" | "collectors" | "collector-test-lab";
@@ -365,6 +366,20 @@ export type State = {
   scriptRequests?: ScriptRequest[];
   activeScriptsByTag?: Record<string, string>;
 };
+export type SavedRunSummaryItem = {
+  runId: string;
+  timestamp: string;
+  platform: string;
+  totalFrames: number;
+  actionRowsDetected: number;
+  boundaryFoundCount: number;
+  boundaryAmbiguousCount: number;
+  boundaryNotFoundCount: number;
+  jumpedZeroToTwoPlusCount: number;
+  noActionRowCount: number;
+  source: "structured" | "legacy";
+};
+
 export type Command =
   | { type: "studio"; request: V3Request }
   | { type: "recordingEvent"; token: string; event: "ready" | "chunk" | "done" | "error"; data?: string }
@@ -488,12 +503,16 @@ export type Command =
       webContentsId: number;
       point: { x: number; y: number };
       actionRowBbox?: { x: number; y: number; width: number; height: number };
-      options?: { highlight?: boolean; captureEvidence?: boolean };
+      options?: { highlight?: boolean; captureEvidence?: boolean; customRules?: UserPermalinkRule[] };
     }
   | {
       type: "visualMatchLabSaveBoundaryDebug";
       report: BoundaryDebugReport;
     }
+  | { type: "visualMatchLabListRuns" }
+  | { type: "visualMatchLabLoadRun"; runId: string }
+  | { type: "openExternalUrl"; url: string }
+  | { type: "visualMatchLabNavigateBrowserCore"; url: string }
   | { type: "visualMatchLabOcr"; dataUrl: string }
   /** Collector Capture workspace hole — null/inactive hides Browser Core on collectors pages. */
   | {

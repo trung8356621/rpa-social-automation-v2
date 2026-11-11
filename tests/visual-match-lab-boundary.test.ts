@@ -11,6 +11,14 @@ import {
   buildRemoveBoundaryHighlightsScript,
   type AncestorStep,
 } from "../src/shared/boundary-probe.js";
+import {
+  validateRuleTemplate,
+  compileRule,
+  matchCompiledRule,
+  detectRuleConflict,
+  PermalinkRuleRegistry,
+  type UserPermalinkRule,
+} from "../src/shared/permalink-rules.js";
 
 test("FacebookPermalinkAdapter extracts all required Facebook permalink formats (A-E)", () => {
   const adapter = new FacebookPermalinkAdapter();
@@ -302,4 +310,125 @@ test("buildBoundaryProbeScript and buildRemoveBoundaryHighlightsScript produce c
   const cleanupScript = buildRemoveBoundaryHighlightsScript();
   assert.match(cleanupScript, /data-boundary-probe-highlight/);
   assert.match(cleanupScript, /remove\(\)/);
+});
+
+test("UserPermalinkRules: validates template without regex and enforces {postId}", () => {
+  assert.equal(validateRuleTemplate("https://www.facebook.com/photo/?fbid={photoId}&set=pcb.{postId}").valid, true);
+  assert.equal(validateRuleTemplate("/groups/{groupId}/posts/{postId}").valid, true);
+  // Missing postId
+  const res1 = validateRuleTemplate("https://www.facebook.com/photo/?fbid={photoId}");
+  assert.equal(res1.valid, false);
+  assert.match(res1.error ?? "", /must contain \{postId\}/i);
+  // Empty
+  assert.equal(validateRuleTemplate("").valid, false);
+});
+
+test("UserPermalinkRules: matches URLs with permuted query parameters and tracking noise", () => {
+  const rule: UserPermalinkRule = {
+    id: "custom_photo_pcb",
+    name: "Custom Photo PCB",
+    platform: "facebook",
+    template: "https://www.facebook.com/photo/?fbid={photoId}&set=pcb.{postId}",
+    enabled: true,
+  };
+  const compiled = compileRule(rule);
+  assert.notEqual(compiled, null);
+
+  // Normal order
+  const id1 = matchCompiledRule(compiled!, "https://www.facebook.com/photo/?fbid=11111&set=pcb.22222&__cft__[0]=AZX");
+  assert.notEqual(id1, null);
+  assert.equal(id1?.postId, "22222");
+
+  // Permuted order (set first, fbid second, extra tracking params)
+  const id2 = matchCompiledRule(compiled!, "https://www.facebook.com/photo/?set=pcb.22222&fbid=33333&ref=share&rdid=999");
+  assert.notEqual(id2, null);
+  assert.equal(id2?.postId, "22222"); // postId is 22222, not 33333
+
+  // Multiple photos with same pcb.{postId} deduplicate
+  assert.equal(id1?.postId, id2?.postId);
+  assert.equal(`${id1?.platform}:${id1?.postId}`, `${id2?.platform}:${id2?.postId}`);
+
+  // Missing required param 'set'
+  assert.equal(matchCompiledRule(compiled!, "https://www.facebook.com/photo/?fbid=11111"), null);
+});
+
+test("UserPermalinkRules: detects conflict when new rule extracts different postId on same URL", () => {
+  const existingRules: UserPermalinkRule[] = [
+    {
+      id: "rule_pcb_post",
+      name: "Existing PCB Post Rule",
+      platform: "facebook",
+      template: "https://www.facebook.com/photo/?fbid={photoId}&set=pcb.{postId}",
+      enabled: true,
+    },
+  ];
+
+  // Conflicting candidate rule: attempts to treat fbid as postId instead of set=pcb
+  const badCandidate: UserPermalinkRule = {
+    id: "candidate_bad",
+    name: "Bad Candidate Rule",
+    platform: "facebook",
+    template: "https://www.facebook.com/photo/?fbid={postId}&set=pcb.{photoId}",
+    enabled: true,
+  };
+
+  const sampleUrl = "https://www.facebook.com/photo/?fbid=10229806370657064&set=pcb.29279737605045010";
+  const result = detectRuleConflict(badCandidate, existingRules, [sampleUrl]);
+
+  assert.equal(result.valid, true);
+  assert.equal(result.conflicts.length, 1);
+  assert.equal(result.conflicts[0].type, "IDENTITY_CONFLICT");
+  assert.equal(result.conflicts[0].candidatePostId, "10229806370657064");
+  assert.equal(result.conflicts[0].existingPostId, "29279737605045010");
+
+  // Shadowed rule with identical postId
+  const shadowedCandidate: UserPermalinkRule = {
+    id: "candidate_shadowed",
+    name: "Shadowed Candidate Rule",
+    platform: "facebook",
+    template: "/photo/?fbid={photoId}&set=pcb.{postId}",
+    enabled: true,
+  };
+  const result2 = detectRuleConflict(shadowedCandidate, existingRules, [sampleUrl]);
+  assert.equal(result2.valid, true);
+  assert.equal(result2.conflicts.length, 1);
+  assert.equal(result2.conflicts[0].type, "SHADOWED_RULE");
+});
+
+test("PermalinkRuleRegistry: manages rules, toggling, and exports without eval", () => {
+  const registry = new PermalinkRuleRegistry();
+  const initialCount = registry.getRules().length;
+  assert.ok(initialCount >= 7);
+
+  // Register user rule
+  const userRule: UserPermalinkRule = {
+    id: "rule_user_custom_forum",
+    name: "Custom Forum Post",
+    platform: "facebook",
+    template: "https://www.facebook.com/groups/{groupId}/discussion/{postId}",
+    enabled: true,
+  };
+  assert.equal(registry.registerRule(userRule), true);
+  assert.equal(registry.getRules().length, initialCount + 1);
+
+  // Match URL
+  const match = registry.match("https://www.facebook.com/groups/seovamarketing/discussion/999888777/");
+  assert.notEqual(match, null);
+  assert.equal(match?.identity.postId, "999888777");
+  assert.equal(match?.ruleId, "rule_user_custom_forum");
+
+  // Toggle rule off
+  registry.toggleRule("rule_user_custom_forum", false);
+  assert.equal(registry.match("https://www.facebook.com/groups/seovamarketing/discussion/999888777/"), null);
+
+  // Toggle rule back on
+  registry.toggleRule("rule_user_custom_forum", true);
+  assert.notEqual(registry.match("https://www.facebook.com/groups/seovamarketing/discussion/999888777/"), null);
+
+  // Delete user rule
+  assert.equal(registry.deleteRule("rule_user_custom_forum"), true);
+  assert.equal(registry.match("https://www.facebook.com/groups/seovamarketing/discussion/999888777/"), null);
+
+  // Builtin rules cannot be deleted
+  assert.equal(registry.deleteRule("builtin_fb_group_post"), false);
 });

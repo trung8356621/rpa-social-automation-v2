@@ -13,33 +13,40 @@ async function main() {
   const runId = `run_audit_${Date.now()}`;
   const debugRecords: BoundaryDebugRecord[] = [];
 
-  // Simulate realistic 20-frame scenario including typical group feed frames
-  // Frame 5: Group Photo permalink with set=gm.{postId} (previously jumped 0->3 in live run)
-  // Frame 8: Group Photo permalink with set=gm.{postId}
-  // Frame 13: Multiple photos with same gm.{postId} deduplicating
-  // Frame 18: Non-post link (demonstrating BOUNDARY_NOT_FOUND)
-  const testScenarios = [
-    { frame: 1, scrollY: 0, postUrl: "https://www.facebook.com/groups/mmo_community/posts/101589324789/", title: "Standard Group Post (Numeric ID)" },
-    { frame: 2, scrollY: 364, postUrl: "https://www.facebook.com/groups/mmo_community/permalink/101589324790/", title: "Group Permalink Format" },
-    { frame: 3, scrollY: 728, postUrl: "https://www.facebook.com/zuck/posts/10114881478201", title: "User Post (Numeric ID)" },
-    { frame: 4, scrollY: 1092, postUrl: "https://www.facebook.com/vtv24.tintuc/posts/pfbid02RkWuJ5q7XyZ", title: "Page Post with pfbid" },
-    { frame: 5, scrollY: 1456, postUrl: "https://www.facebook.com/photo/?fbid=10229817286489953&set=gm.29295208876831216&idorvanity=295931577185665&__cft__[0]=AZhge30STAoEB4", title: "Group Photo Post with set=gm.{postId} (Frame 5 exception)" },
-    { frame: 6, scrollY: 1820, postUrl: "https://www.facebook.com/groups/mmo_community/permalink/pfbid088XkLmNoPq/?mibextid=oXZ", title: "Group Permalink with pfbid" },
-    { frame: 7, scrollY: 2184, postUrl: "https://www.facebook.com/permalink.php?story_fbid=pfbid077QwertYuiOp&id=100085421&__cft__[0]=AZW", title: "Legacy permalink.php with pfbid & owner id" },
-    { frame: 8, scrollY: 2548, postUrl: "https://www.facebook.com/photo/?fbid=10229814300455304&set=gm.29290501077301996&idorvanity=295931577185665&__cft__[0]=AZhq-tIozuey", title: "Group Photo Post with set=gm.{postId} (Frame 8)" },
-    { frame: 9, scrollY: 2912, postUrl: "https://www.facebook.com/profile.php?id=100012345&story_fbid=pfbid055ZxcvBnm&ref=share", title: "Profile.php with story_fbid & id" },
-    { frame: 10, scrollY: 3276, postUrl: "https://www.facebook.com/groups/mmo_community/posts/101589324799/", title: "Standard Group Post" },
-    { frame: 11, scrollY: 3640, postUrl: "https://www.facebook.com/groups/mmo_community/posts/pfbid011AABBCCDDEE/?ref=share", title: "Group Post with pfbid" },
-    { frame: 12, scrollY: 4004, postUrl: "https://www.facebook.com/meta/posts/10160000000001", title: "Meta Page Post" },
-    { frame: 13, scrollY: 4368, postUrl: "https://www.facebook.com/photo/?fbid=999900001&set=gm.29295208876831216&idorvanity=295931577185665", title: "Group Photo matching post 29295208876831216 (deduplicated)" },
-    { frame: 14, scrollY: 4732, postUrl: "https://www.facebook.com/photo/?fbid=10229806370657064&set=pcb.29279737605045010&__cft__[0]=AZjP93Vxa", title: "Group Photo Post with set=pcb.{postId} (Frame 14)" },
-    { frame: 15, scrollY: 5096, postUrl: "https://www.facebook.com/story.php?story_fbid=pfbid066AsdfGhjkL&id=100012345&notif_t=feedback", title: "Story.php link" },
-    { frame: 16, scrollY: 5460, postUrl: "https://www.facebook.com/groups/mmo_community/posts/101589324816/", title: "Group Post" },
-    { frame: 17, scrollY: 5824, postUrl: "https://www.facebook.com/groups/mmo_community/posts/pfbid033XxYyZz/", title: "Group Post with pfbid" },
-    { frame: 18, scrollY: 6188, postUrl: "https://www.facebook.com/photo/?fbid=123456789", title: "Regular Photo without set=gm (No permalink -> BOUNDARY_NOT_FOUND)" },
-    { frame: 19, scrollY: 6552, postUrl: "https://www.facebook.com/groups/mmo_community/posts/101589324819/", title: "Group Post" },
-    { frame: 20, scrollY: 6916, postUrl: "https://www.facebook.com/groups/mmo_community/posts/101589324820/", title: "Final Group Post" },
+  // Simulate realistic 50-frame scenario including typical group feed frames
+  // Including standard group posts, pfbid, permalinks, gm photos, pcb photos, custom rules, and negative links
+  const sampleUrls = [
+    (i: number) => ({ url: `https://www.facebook.com/groups/mmo_community/posts/${101589324780 + i}/`, title: `Standard Group Post ${i}` }),
+    (i: number) => ({ url: `https://www.facebook.com/groups/mmo_community/permalink/${101589324780 + i}/`, title: `Group Permalink Format ${i}` }),
+    (i: number) => ({ url: `https://www.facebook.com/zuck/posts/1011488147820${i % 10}`, title: `User Post ${i}` }),
+    (i: number) => ({ url: `https://www.facebook.com/vtv24.tintuc/posts/pfbid02RkWuJ5q7Xy${i}`, title: `Page Post with pfbid ${i}` }),
+    (i: number) => ({ url: `https://www.facebook.com/photo/?fbid=10229817286489953&set=gm.${29295208876831200 + i}&idorvanity=295931577185665`, title: `Group Photo Post with set=gm.{postId} ${i}` }),
+    (i: number) => ({ url: `https://www.facebook.com/photo/?fbid=10229806370657064&set=pcb.${29279737605045000 + i}`, title: `Group Photo Post with set=pcb.{postId} ${i}` }),
+    (i: number) => ({ url: `https://www.facebook.com/permalink.php?story_fbid=pfbid077QwertYui${i}&id=100085421`, title: `Legacy permalink.php ${i}` }),
+    (i: number) => ({ url: `https://www.facebook.com/story.php?story_fbid=pfbid066AsdfGhjk${i}&id=100012345`, title: `Story.php link ${i}` }),
+    (i: number) => ({ url: `https://www.facebook.com/photo/?fbid=${123456700 + i}`, title: `Regular Photo without set=gm/pcb (BOUNDARY_NOT_FOUND) ${i}` }),
   ];
+
+  const testScenarios = Array.from({ length: 50 }, (_, idx) => {
+    const frame = idx + 1;
+    const scrollY = (frame - 1) * 364;
+    // Every 10th frame (e.g. frame 10, 20, 30, 40, 50) simulate non-post link (BOUNDARY_NOT_FOUND)
+    if (frame % 10 === 0) {
+      return {
+        frame,
+        scrollY,
+        postUrl: `https://www.facebook.com/photo/?fbid=${123456700 + frame}`,
+        title: `Regular Photo without permalink (Frame ${frame})`,
+      };
+    }
+    const sample = sampleUrls[(frame - 1) % (sampleUrls.length - 1)](frame);
+    return {
+      frame,
+      scrollY,
+      postUrl: sample.url,
+      title: sample.title,
+    };
+  });
 
   for (const scen of testScenarios) {
     const postIdentity = fbAdapter.extractPostIdentity(scen.postUrl);
@@ -203,7 +210,7 @@ async function main() {
       zoom: 1,
       platform: "facebook",
     },
-    totalFrames: 20,
+    totalFrames: 50,
     records: debugRecords,
     summary: {
       totalProbed: debugRecords.length,
