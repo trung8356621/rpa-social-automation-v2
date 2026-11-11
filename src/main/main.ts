@@ -314,7 +314,7 @@ async function boot() {
       overlays.setPage(previousPage);
       window.webContents.focus();
     }
-  });
+  }, project);
   const pointerTrace = new PointerTrace(
     window,
     browser,
@@ -1845,6 +1845,9 @@ async function boot() {
           command.actionRowBbox,
           command.options,
         );
+      case "visualMatchLabSaveBoundaryDebug":
+        isIdle();
+        return visualMatchLab.saveBoundaryDebug(command.report);
       case "visualMatchLabOcr": {
         isIdle();
         const match = /^data:image\/[a-z0-9.+-]+;base64,(.+)$/iu.exec(command.dataUrl);

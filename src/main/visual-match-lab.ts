@@ -1,8 +1,11 @@
+import path from "node:path";
+import { mkdir, writeFile } from "node:fs/promises";
 import type { BrowserCore } from "./browser-core.js";
 import {
   buildBoundaryProbeScript,
   buildRemoveBoundaryHighlightsScript,
   type BoundaryProbeResult,
+  type BoundaryDebugReport,
 } from "../shared/boundary-probe.js";
 
 type Point = { x: number; y: number };
@@ -33,6 +36,7 @@ export class VisualMatchLabRuntime {
   constructor(
     private readonly browser: BrowserCore,
     private readonly withVisibleBrowser: <T>(operation: () => Promise<T>) => Promise<T>,
+    private readonly projectDir: string = process.cwd(),
   ) {}
 
   private async facebook() {
@@ -124,5 +128,28 @@ export class VisualMatchLabRuntime {
     await wc.executeJavaScript(`scrollBy({top:${Number(deltaY) || 0},behavior:'instant'})`);
     this.captures.clear();
     return { webContentsId, scrolled: true };
+  }
+  async saveBoundaryDebug(report: BoundaryDebugReport) {
+    const scratchDir = path.join(this.projectDir, "scratch");
+    await mkdir(scratchDir, { recursive: true });
+    const latestPath = path.join(scratchDir, "visual-match-lab-boundary-debug.json");
+    const runPath = path.join(scratchDir, `visual-match-lab-boundary-debug-${report.runId}.json`);
+
+    const jsonStr = JSON.stringify(report, null, 2);
+    await writeFile(latestPath, jsonStr, "utf8");
+    await writeFile(runPath, jsonStr, "utf8");
+
+    for (const record of report.records) {
+      if (record.evidenceScreenshotBase64) {
+        const match = /^data:image\/png;base64,(.+)$/.exec(record.evidenceScreenshotBase64);
+        if (match) {
+          const imgPath = path.join(scratchDir, `boundary-evidence-f${record.frameNumber}-r${record.rowIndex}.png`);
+          await writeFile(imgPath, Buffer.from(match[1], "base64")).catch(() => undefined);
+          record.evidenceScreenshotSaved = imgPath;
+        }
+      }
+    }
+
+    return { ok: true, path: latestPath, runPath, recordCount: report.records.length };
   }
 }

@@ -53,7 +53,7 @@ test("live scroll classification deduplicates overlap geometry and excludes comm
 
 test("live scroll POC is bounded, overlap-aware, and never sends public actions", () => {
   const source = read("src/renderer/experiments/visual-match-lab/LiveScrollTest.tsx");
-  assert.match(source, /frame <= 10/);
+  assert.match(source, /frame <= 20/);
   assert.match(source, /viewport\.height \* 0\.65/);
   assert.match(source, /PARTIAL PASS/);
   assert.match(source, /BROWSER_INSTANCE_CHANGED/);

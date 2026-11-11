@@ -6,6 +6,7 @@ import type {
   BeginBlockCandidate,
   NormalizedRegionGeometry,
 } from "./collectors/types.js";
+import type { BoundaryDebugReport } from "./boundary-probe.js";
 export type { ScriptReleaseManifest } from "./script-release.js";
 export type Rect = { x: number; y: number; width: number; height: number };
 export type MainPage = "scenarios" | "browser-sessions" | "test-lab" | "visual-match-lab" | "settings" | "variations" | "widget-registry" | "workflows" | "builds-releases" | "collectors" | "collector-test-lab";
@@ -488,6 +489,10 @@ export type Command =
       point: { x: number; y: number };
       actionRowBbox?: { x: number; y: number; width: number; height: number };
       options?: { highlight?: boolean; captureEvidence?: boolean };
+    }
+  | {
+      type: "visualMatchLabSaveBoundaryDebug";
+      report: BoundaryDebugReport;
     }
   | { type: "visualMatchLabOcr"; dataUrl: string }
   /** Collector Capture workspace hole — null/inactive hides Browser Core on collectors pages. */

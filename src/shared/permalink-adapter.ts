@@ -36,23 +36,56 @@ export class FacebookPermalinkAdapter implements PlatformPermalinkAdapter {
       return null;
     }
 
-    if (!/(?:facebook\.com|fb\.com)$/i.test(parsed.hostname)) {
+    const hostname = parsed.hostname.toLowerCase();
+    if (!/(?:^|\.)(?:facebook\.com|fb\.com)$/.test(hostname)) {
       return null;
     }
 
     const pathname = parsed.pathname;
 
-    // 1. Explicit negative filter: photos, media, navigation, interactions, profiles
+    // 0. Special exception for group photo permalinks:
+    // /photo/?fbid=...&set=gm.{postId}&idorvanity={groupId}
+    // Must extract postId from gm.{postId}, not fbid. Reject if gm is missing or malformed.
+    if (/^\/(?:photo|photo\.php)\/?$/i.test(pathname)) {
+      const setParam = parsed.searchParams.get("set");
+      const gmMatch = setParam ? /^gm\.([0-9a-zA-Z_-]+)$/.exec(setParam.trim()) : null;
+      if (gmMatch && gmMatch[1]) {
+        const postId = gmMatch[1];
+        const idorvanity = parsed.searchParams.get("idorvanity");
+        const scope = idorvanity && /^[0-9a-zA-Z._-]+$/.test(idorvanity.trim()) ? idorvanity.trim() : undefined;
+        const canonicalUrl = scope
+          ? `https://www.facebook.com/groups/${scope}/posts/${postId}`
+          : `https://www.facebook.com/permalink.php?story_fbid=${postId}`;
+        return {
+          platform: "facebook",
+          postId,
+          scope,
+          canonicalUrl,
+          rawUrl: trimmed,
+        };
+      }
+      return null;
+    }
+
+    // 1. Explicit negative filter: profiles without posts, photos, media, videos, watch, stories, reels, navigation, group subpages
     if (
-      /\/(?:photo|photos|media|videos|watch|stories|reels|reel|hashtag|events|messages|notifications|marketplace|groups\/[^/]+\/(?:about|members|media|files))\b/i.test(
+      /^\/(?:photo|photos|media|videos|video|watch|stories|reels|reel|hashtag|events|messages|notifications|marketplace|search|friends|settings|help|login|recover|pages|share)\b/i.test(
+        pathname,
+      ) ||
+      /\/(?:photo|photos|media|videos|watch|stories|reels|reel|hashtag|events|messages|notifications|marketplace)\b/i.test(
+        pathname,
+      ) ||
+      /^\/groups\/[^/]+\/(?:about|members|media|files|events|announcements_rules|discussion|buy_sell_discussion)\b/i.test(
         pathname,
       )
     ) {
       return null;
     }
 
-    // 2. Facebook Group Posts: /groups/{group}/posts/{postId} or /groups/{group}/permalink/{postId}
-    const groupMatch = /^\/groups\/([^/]+)\/(?:posts|permalink)\/([0-9a-zA-Z_-]+)/i.exec(pathname);
+    // 2. Facebook Group Posts & Group Permalinks:
+    // A. /groups/{groupIdOrSlug}/posts/{postId}/
+    // B. /groups/{groupIdOrSlug}/permalink/{postId}/
+    const groupMatch = /^\/groups\/([^/]+)\/(?:posts|permalink)\/([0-9a-zA-Z_-]+)\/?$/i.exec(pathname);
     if (groupMatch) {
       const scope = groupMatch[1];
       const postId = groupMatch[2];
@@ -65,29 +98,41 @@ export class FacebookPermalinkAdapter implements PlatformPermalinkAdapter {
       };
     }
 
-    // 3. User / Page Posts: /{username}/posts/{postId}
-    const userPostMatch = /^\/([a-zA-Z0-9._-]+)\/posts\/([0-9a-zA-Z_-]+)/i.exec(pathname);
-    if (userPostMatch && !/^(?:home|groups|settings|help|login|recover|pages|share)$/i.test(userPostMatch[1])) {
+    // 3. Facebook Page / Profile Posts:
+    // C. /{pageOrUsername}/posts/{postId}/
+    const userPostMatch = /^\/([a-zA-Z0-9._-]+)\/posts\/([0-9a-zA-Z_-]+)\/?$/i.exec(pathname);
+    if (userPostMatch) {
       const scope = userPostMatch[1];
       const postId = userPostMatch[2];
-      return {
-        platform: "facebook",
-        postId,
-        scope,
-        canonicalUrl: `https://www.facebook.com/${scope}/posts/${postId}`,
-        rawUrl: trimmed,
-      };
+      if (
+        !/^(?:home|groups|settings|help|login|recover|pages|share|marketplace|watch|gaming|bookmarks|friends|messages|notifications|events|stories|reels|reel|photo|photos|media|videos|hashtag|search)$/i.test(
+          scope,
+        )
+      ) {
+        return {
+          platform: "facebook",
+          postId,
+          scope,
+          canonicalUrl: `https://www.facebook.com/${scope}/posts/${postId}`,
+          rawUrl: trimmed,
+        };
+      }
     }
 
-    // 4. Query-based permalinks: permalink.php?story_fbid={id} or story.php?story_fbid={id}
-    if (/^\/(?:permalink|story)\.php$/i.test(pathname)) {
+    // 4. Query-based posts:
+    // D. permalink.php?story_fbid={postId}&id={ownerId}
+    // E. story.php?story_fbid={postId}&id={ownerId}
+    // and profile.php?id={ownerId}&story_fbid={postId}
+    if (/^\/(?:permalink|story|profile)\.php$/i.test(pathname)) {
       const fbid = parsed.searchParams.get("story_fbid") || parsed.searchParams.get("fbid");
+      const ownerId = parsed.searchParams.get("id");
       if (fbid && /^[0-9a-zA-Z_-]+$/.test(fbid)) {
+        const canonical = `https://www.facebook.com/permalink.php?story_fbid=${fbid}${ownerId ? `&id=${ownerId}` : ""}`;
         return {
           platform: "facebook",
           postId: fbid,
-          scope: parsed.searchParams.get("id") || undefined,
-          canonicalUrl: `https://www.facebook.com/permalink.php?story_fbid=${fbid}`,
+          scope: ownerId || undefined,
+          canonicalUrl: canonical,
           rawUrl: trimmed,
         };
       }
@@ -95,6 +140,102 @@ export class FacebookPermalinkAdapter implements PlatformPermalinkAdapter {
 
     return null;
   }
+}
+
+/**
+ * Returns raw browser JS code for extracting Facebook post permalinks inside Chromium.
+ * Guaranteed to share the exact same parsing rules with FacebookPermalinkAdapter.
+ */
+export function buildFacebookPermalinkExtractorJs(): string {
+  return `function extractFacebookPost(href, baseOrigin) {
+    if (!href || typeof href !== 'string') return null;
+    const trimmed = href.trim();
+    if (!trimmed || trimmed.startsWith('#') || trimmed.startsWith('javascript:')) return null;
+
+    let parsed;
+    try {
+      parsed = new URL(trimmed, baseOrigin || location.origin);
+    } catch {
+      return null;
+    }
+
+    const hostname = parsed.hostname.toLowerCase();
+    if (!/(?:^|\\.)(?:facebook\\.com|fb\\.com)$/.test(hostname)) return null;
+
+    const pathname = parsed.pathname;
+
+    if (/^\\/(?:photo|photo\\.php)\\/?$/i.test(pathname)) {
+      const setParam = parsed.searchParams.get("set");
+      const gmMatch = setParam ? /^gm\\.([0-9a-zA-Z_-]+)$/.exec(setParam.trim()) : null;
+      if (gmMatch && gmMatch[1]) {
+        const postId = gmMatch[1];
+        const idorvanity = parsed.searchParams.get("idorvanity");
+        const scope = (idorvanity && /^[0-9a-zA-Z._-]+$/.test(idorvanity.trim())) ? idorvanity.trim() : undefined;
+        const canonicalUrl = scope
+          ? 'https://www.facebook.com/groups/' + scope + '/posts/' + postId
+          : 'https://www.facebook.com/permalink.php?story_fbid=' + postId;
+        return {
+          platform: "facebook",
+          postId: postId,
+          scope: scope,
+          canonicalUrl: canonicalUrl,
+          rawUrl: trimmed
+        };
+      }
+      return null;
+    }
+
+    if (/^\\/(?:photo|photos|media|videos|video|watch|stories|reels|reel|hashtag|events|messages|notifications|marketplace|search|friends|settings|help|login|recover|pages|share)\\b/i.test(pathname) ||
+        /\\/(?:photo|photos|media|videos|watch|stories|reels|reel|hashtag|events|messages|notifications|marketplace)\\b/i.test(pathname) ||
+        /^\\/groups\\/[^/]+\\/(?:about|members|media|files|events|announcements_rules|discussion|buy_sell_discussion)\\b/i.test(pathname)) {
+      return null;
+    }
+
+    const groupMatch = /^\\/groups\\/([^/]+)\\/(?:posts|permalink)\\/([0-9a-zA-Z_-]+)\\/?$/i.exec(pathname);
+    if (groupMatch) {
+      const scope = groupMatch[1];
+      const postId = groupMatch[2];
+      return {
+        platform: "facebook",
+        postId: postId,
+        scope: scope,
+        canonicalUrl: 'https://www.facebook.com/groups/' + scope + '/posts/' + postId,
+        rawUrl: trimmed
+      };
+    }
+
+    const userPostMatch = /^\\/([a-zA-Z0-9._-]+)\\/posts\\/([0-9a-zA-Z_-]+)\\/?$/i.exec(pathname);
+    if (userPostMatch) {
+      const scope = userPostMatch[1];
+      const postId = userPostMatch[2];
+      if (!/^(?:home|groups|settings|help|login|recover|pages|share|marketplace|watch|gaming|bookmarks|friends|messages|notifications|events|stories|reels|reel|photo|photos|media|videos|hashtag|search)$/i.test(scope)) {
+        return {
+          platform: "facebook",
+          postId: postId,
+          scope: scope,
+          canonicalUrl: 'https://www.facebook.com/' + scope + '/posts/' + postId,
+          rawUrl: trimmed
+        };
+      }
+    }
+
+    if (/^\\/(?:permalink|story|profile)\\.php$/i.test(pathname)) {
+      const fbid = parsed.searchParams.get("story_fbid") || parsed.searchParams.get("fbid");
+      const ownerId = parsed.searchParams.get("id");
+      if (fbid && /^[0-9a-zA-Z_-]+$/.test(fbid)) {
+        const canonical = 'https://www.facebook.com/permalink.php?story_fbid=' + fbid + (ownerId ? '&id=' + ownerId : '');
+        return {
+          platform: "facebook",
+          postId: fbid,
+          scope: ownerId || undefined,
+          canonicalUrl: canonical,
+          rawUrl: trimmed
+        };
+      }
+    }
+
+    return null;
+  }`;
 }
 
 export class ThreadsPermalinkAdapter implements PlatformPermalinkAdapter {

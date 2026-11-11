@@ -1,4 +1,4 @@
-import type { PlatformPermalinkAdapter, PostIdentity } from "./permalink-adapter.js";
+import { buildFacebookPermalinkExtractorJs, type PlatformPermalinkAdapter, type PostIdentity } from "./permalink-adapter.js";
 
 export type BoundaryStatus = "BOUNDARY_FOUND" | "BOUNDARY_AMBIGUOUS" | "BOUNDARY_NOT_FOUND";
 
@@ -18,6 +18,7 @@ export interface AncestorStep {
   className: string;
   role: string | null;
   rect: { x: number; y: number; width: number; height: number };
+  rawUrls?: string[];
   postIdentities: PostIdentity[];
   uniqueKeys: string[];
   hasNestedArticle: boolean;
@@ -42,6 +43,91 @@ export interface BoundaryProbeResult {
     containsActionRow: boolean;
     notes: string[];
   };
+  hitElement?: {
+    tag: string;
+    role: string | null;
+    id: string;
+    className: string;
+    ariaLabel: string;
+    textSnippet: string;
+    rect: { x: number; y: number; width: number; height: number };
+  };
+  ancestorSteps?: AncestorStep[];
+  jumpedZeroToTwoPlus?: boolean;
+  jumpReason?: string | null;
+}
+
+export interface BoundaryDebugRecord {
+  runId: string;
+  frameNumber: number;
+  scrollY: number;
+  browserWebContentsId: number;
+  rowIndex: number;
+  actionRowBbox: { x: number; y: number; width: number; height: number };
+  matchingScore: number;
+  hitPoint: { x: number; y: number };
+  hitElement?: {
+    tag: string;
+    role: string | null;
+    id: string;
+    className: string;
+    ariaLabel: string;
+    textSnippet: string;
+    rect: { x: number; y: number; width: number; height: number };
+  };
+  ancestorDepth: number;
+  ancestors: Array<{
+    level: number;
+    tag: string;
+    role: string | null;
+    id: string;
+    className: string;
+    rect: { x: number; y: number; width: number; height: number };
+    rawUrls: string[];
+    postIdentities: PostIdentity[];
+    uniqueKeys: string[];
+    uniqueCount: number;
+  }>;
+  transitions: {
+    firstPermalinkLevel: number | null;
+    secondPermalinkLevel: number | null;
+    boundaryCrossedLevel: number | null;
+    jumpedZeroToTwoPlus: boolean;
+    jumpReason: string | null;
+  };
+  candidateContainer: ContainerElementInfo | null;
+  crossedContainer: ContainerElementInfo | null;
+  boundaryStatus: BoundaryStatus;
+  riskReason: string | null;
+  ownershipEvidence: {
+    isArticle: boolean;
+    hasDistinctCardLayout: boolean;
+    containsActionRow: boolean;
+    notes: string[];
+  };
+  evidenceScreenshotBase64?: string;
+  evidenceScreenshotSaved?: string;
+}
+
+export interface BoundaryDebugReport {
+  runId: string;
+  timestamp: string;
+  environment: {
+    width: number;
+    height: number;
+    zoom: number;
+    platform: "facebook" | "threads" | "generic";
+  };
+  totalFrames: number;
+  records: BoundaryDebugRecord[];
+  summary: {
+    totalProbed: number;
+    boundaryFoundCount: number;
+    boundaryAmbiguousCount: number;
+    boundaryNotFoundCount: number;
+    jumpedZeroToTwoPlusCount: number;
+    jumpedFrames: number[];
+  };
 }
 
 /**
@@ -62,6 +148,8 @@ export function resolveBoundaryFromAncestors(
   let crossedContainer: ContainerElementInfo | null = null;
   let hasQuoteOrSharedPostRisk = false;
   let riskReason: string | null = null;
+  let jumpedZeroToTwoPlus = false;
+  let jumpReason: string | null = null;
   const postIdentitiesMap = new Map<string, PostIdentity>();
 
   for (let i = 0; i < ancestors.length; i++) {
@@ -119,7 +207,10 @@ export function resolveBoundaryFromAncestors(
           rect: step.rect,
         };
         hasQuoteOrSharedPostRisk = true;
-        riskReason = "Permalink count transitioned directly from 0 to >= 2 without intermediate single-post state";
+        jumpedZeroToTwoPlus = true;
+        const prevLevel = prevStep ? prevStep.level : 0;
+        jumpReason = `Permalink count transitioned directly from 0 (at L${prevLevel}) to ${count} (at L${step.level}) without intermediate single-post state`;
+        riskReason = jumpReason;
       }
       break;
     }
@@ -194,6 +285,9 @@ export function resolveBoundaryFromAncestors(
       containsActionRow,
       notes,
     },
+    ancestorSteps: ancestors,
+    jumpedZeroToTwoPlus,
+    jumpReason,
   };
 }
 
@@ -237,40 +331,36 @@ export function buildBoundaryProbeScript(
     const isFacebook = /(?:facebook\\.com|fb\\.com)/i.test(location.hostname);
     const isThreads = /(?:threads\\.net|threads\\.com)/i.test(location.hostname);
 
-    function extractPost(href) {
+    ${buildFacebookPermalinkExtractorJs()}
+
+    function extractThreadsPost(href, baseOrigin) {
       if (!href || typeof href !== 'string') return null;
       const trimmed = href.trim();
       if (!trimmed || trimmed.startsWith('#') || trimmed.startsWith('javascript:')) return null;
-
       let parsed;
-      try { parsed = new URL(trimmed, location.origin); } catch { return null; }
-
-      if (isFacebook) {
-        if (!/(?:facebook\\.com|fb\\.com)$/i.test(parsed.hostname)) return null;
-        const p = parsed.pathname;
-        if (/\\/(?:photo|photos|media|videos|watch|stories|reels|reel|hashtag|events|messages|notifications|marketplace|groups\\/[^/]+\\/(?:about|members|media|files))\\b/i.test(p)) return null;
-
-        const gm = /^\\/groups\\/([^/]+)\\/(?:posts|permalink)\\/([0-9a-zA-Z_-]+)/i.exec(p);
-        if (gm) return { platform: "facebook", scope: gm[1], postId: gm[2], canonicalUrl: 'https://www.facebook.com/groups/' + gm[1] + '/posts/' + gm[2], rawUrl: trimmed };
-
-        const um = /^\\/([a-zA-Z0-9._-]+)\\/posts\\/([0-9a-zA-Z_-]+)/i.exec(p);
-        if (um && !/^(?:home|groups|settings|help|login|recover|pages|share)$/i.test(um[1])) {
-          return { platform: "facebook", scope: um[1], postId: um[2], canonicalUrl: 'https://www.facebook.com/' + um[1] + '/posts/' + um[2], rawUrl: trimmed };
-        }
-
-        if (/^\\/(?:permalink|story)\\.php$/i.test(p)) {
-          const fbid = parsed.searchParams.get("story_fbid") || parsed.searchParams.get("fbid");
-          if (fbid && /^[0-9a-zA-Z_-]+$/.test(fbid)) {
-            return { platform: "facebook", postId: fbid, scope: parsed.searchParams.get("id") || undefined, canonicalUrl: 'https://www.facebook.com/permalink.php?story_fbid=' + fbid, rawUrl: trimmed };
-          }
-        }
-      } else if (isThreads) {
-        if (!/(?:threads\\.net|threads\\.com)$/i.test(parsed.hostname)) return null;
-        const tm = /^\\/@([a-zA-Z0-9._-]+)\\/post\\/([0-9a-zA-Z_-]+)/i.exec(parsed.pathname);
-        if (tm) return { platform: "threads", scope: '@' + tm[1], postId: tm[2], canonicalUrl: 'https://www.threads.net/@' + tm[1] + '/post/' + tm[2], rawUrl: trimmed };
-      }
+      try { parsed = new URL(trimmed, baseOrigin || location.origin); } catch { return null; }
+      if (!/(?:threads\\.net|threads\\.com)$/i.test(parsed.hostname)) return null;
+      const tm = /^\\/@([a-zA-Z0-9._-]+)\\/post\\/([0-9a-zA-Z_-]+)/i.exec(parsed.pathname);
+      if (tm) return { platform: "threads", scope: '@' + tm[1], postId: tm[2], canonicalUrl: 'https://www.threads.net/@' + tm[1] + '/post/' + tm[2], rawUrl: trimmed };
       return null;
     }
+
+    function extractPost(href) {
+      if (isFacebook) return extractFacebookPost(href, location.origin);
+      if (isThreads) return extractThreadsPost(href, location.origin);
+      return null;
+    }
+
+    const elRect = el.getBoundingClientRect();
+    const hitElement = {
+      tag: el.tagName.toLowerCase(),
+      role: el.getAttribute('role'),
+      id: el.id || '',
+      className: (el.className && typeof el.className === 'string') ? el.className.slice(0, 100) : '',
+      ariaLabel: (el.getAttribute('aria-label') || '').slice(0, 100),
+      textSnippet: (el.innerText || el.textContent || '').replace(/\\s+/g, ' ').trim().slice(0, 120),
+      rect: { x: elRect.x, y: elRect.y, width: elRect.width, height: elRect.height }
+    };
 
     const ancestors = [];
     let curr = el;
@@ -282,9 +372,14 @@ export function buildBoundaryProbeScript(
         : Array.from(curr.querySelectorAll('a[href]'));
       const posts = [];
       const keys = new Set();
+      const rawUrls = [];
 
       for (const a of anchors) {
-        const item = extractPost(a.getAttribute('href') || a.href);
+        const rawHref = a.getAttribute('href') || a.href;
+        if (rawHref && rawUrls.length < 15) {
+          rawUrls.push(typeof rawHref === 'string' ? rawHref.slice(0, 200) : '');
+        }
+        const item = extractPost(rawHref);
         if (item) {
           const k = item.platform + ':' + item.postId;
           if (!keys.has(k)) {
@@ -306,6 +401,7 @@ export function buildBoundaryProbeScript(
         className: (curr.className && typeof curr.className === 'string') ? curr.className.slice(0, 100) : '',
         role: curr.getAttribute('role'),
         rect: { x: rect.x, y: rect.y, width: rect.width, height: rect.height },
+        rawUrls: rawUrls,
         postIdentities: posts,
         uniqueKeys: Array.from(keys),
         hasNestedArticle,
@@ -327,6 +423,8 @@ export function buildBoundaryProbeScript(
     let crossedContainer = null;
     let hasQuoteOrSharedPostRisk = false;
     let riskReason = null;
+    let jumpedZeroToTwoPlus = false;
+    let jumpReason = null;
     const postIdentitiesMap = new Map();
 
     for (let i = 0; i < ancestors.length; i++) {
@@ -375,7 +473,10 @@ export function buildBoundaryProbeScript(
             rect: step.rect
           };
           hasQuoteOrSharedPostRisk = true;
-          riskReason = "Permalink count jumped directly from 0 to >= 2";
+          jumpedZeroToTwoPlus = true;
+          const prevLevel = prevStep ? prevStep.level : 0;
+          jumpReason = "Permalink count jumped directly from 0 (at L" + prevLevel + ") to " + count + " (at L" + step.level + ")";
+          riskReason = jumpReason;
         }
         break;
       }
@@ -527,7 +628,11 @@ export function buildBoundaryProbeScript(
         hasDistinctCardLayout,
         containsActionRow,
         notes
-      }
+      },
+      hitElement,
+      ancestorSteps: ancestors,
+      jumpedZeroToTwoPlus,
+      jumpReason
     };
   })()`;
 }

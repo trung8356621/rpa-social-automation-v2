@@ -6,7 +6,7 @@ import type { FixtureItem } from "../../../../experiments/visual-match-lab/src/f
 import type { MatchCandidate, MatchMethod, RecognizedGroup, Rect } from "../../../../experiments/visual-match-lab/src/types";
 import type { LiveCapture } from "./types";
 import { LiveTemplateCalibration, loadLiveTemplates, type LiveIconTemplates } from "./LiveTemplateCalibration";
-import type { BoundaryProbeResult, BoundaryStatus } from "../../../shared/boundary-probe";
+import type { BoundaryProbeResult, BoundaryStatus, BoundaryDebugRecord, BoundaryDebugReport } from "../../../shared/boundary-probe";
 
 type Invoke = <T>(command: Command) => Promise<T>;
 export type CandidateStatus = "NEW_ITEM" | "DUPLICATE" | "NEEDS_ATTENTION" | "COMMENT_ACTION";
@@ -99,6 +99,7 @@ export function LiveScrollTest({ invoke, currentFixture, actionGroups, method, t
   const [captureFailures, setCaptureFailures] = useState(0);
   const [running, setRunning] = useState(false);
   const [status, setStatus] = useState("Ready — no public Facebook action is performed.");
+  const [debugArtifactPath, setDebugArtifactPath] = useState<string | null>(null);
 
   useEffect(() => {
     try {
@@ -112,6 +113,9 @@ export function LiveScrollTest({ invoke, currentFixture, actionGroups, method, t
     setRunning(true);
     setFrames([]);
     setCaptureFailures(0);
+    setDebugArtifactPath(null);
+    const runId = `run_${Date.now()}_${Math.random().toString(36).slice(2, 7)}`;
+    const debugRecords: BoundaryDebugRecord[] = [];
     const reports: FrameReport[] = [];
     const seen: LiveCandidate[] = [];
     let failedCaptures = 0;
@@ -123,7 +127,7 @@ export function LiveScrollTest({ invoke, currentFixture, actionGroups, method, t
       let priorScrollY: number | null = null;
       let browserWebContentsId: number | null = null;
 
-      for (let frame = 1; frame <= 10; frame++) {
+      for (let frame = 1; frame <= 20; frame++) {
         let capture: LiveCapture;
         try { capture = await invoke<LiveCapture>({ type: "visualMatchLabCapture" }); }
         catch (error) { failedCaptures++; setCaptureFailures(failedCaptures); throw new Error(`CAPTURE_STOPPED_AT_FRAME_${frame}: ${String(error)}`); }
@@ -213,6 +217,44 @@ export function LiveScrollTest({ invoke, currentFixture, actionGroups, method, t
             };
             candidates.push(candidate);
             if (candidateStatus === "NEW_ITEM") seen.push(candidate);
+
+            debugRecords.push({
+              runId,
+              frameNumber: frame,
+              scrollY: capture.viewport.scrollY,
+              browserWebContentsId: capture.webContentsId,
+              rowIndex: detected.rows.indexOf(row),
+              actionRowBbox: actionRowCssBbox,
+              matchingScore: row.score,
+              hitPoint: point,
+              hitElement: boundary?.hitElement,
+              ancestorDepth: boundary?.ancestorsChecked ?? 0,
+              ancestors: (boundary?.ancestorSteps ?? []).map(a => ({
+                level: a.level,
+                tag: a.tag,
+                role: a.role,
+                id: a.id,
+                className: a.className,
+                rect: a.rect,
+                rawUrls: a.rawUrls ?? [],
+                postIdentities: a.postIdentities,
+                uniqueKeys: a.uniqueKeys,
+                uniqueCount: a.uniqueKeys.length,
+              })),
+              transitions: {
+                firstPermalinkLevel: boundary?.firstPermalinkLevel ?? null,
+                secondPermalinkLevel: boundary?.secondPermalinkLevel ?? null,
+                boundaryCrossedLevel: boundary?.boundaryCrossedLevel ?? null,
+                jumpedZeroToTwoPlus: Boolean(boundary?.jumpedZeroToTwoPlus),
+                jumpReason: boundary?.jumpReason ?? null,
+              },
+              candidateContainer: boundary?.candidateContainer ?? null,
+              crossedContainer: boundary?.crossedContainer ?? null,
+              boundaryStatus: boundary?.status ?? "BOUNDARY_NOT_FOUND",
+              riskReason: boundary?.riskReason ?? null,
+              ownershipEvidence: boundary?.ownershipEvidence ?? { isArticle: false, hasDistinctCardLayout: false, containsActionRow: false, notes: [] },
+              evidenceScreenshotBase64: boundary?.evidenceDataUrl,
+            });
           }
 
           const frameBoundary: FrameReport["boundaryStatus"] = detected.rows.length === 0
@@ -253,7 +295,7 @@ export function LiveScrollTest({ invoke, currentFixture, actionGroups, method, t
         setFrames([...reports]);
         priorScrollY = capture.viewport.scrollY;
 
-        if (frame < 10) {
+        if (frame < 20) {
           try {
             await invoke({ type: "visualMatchLabScroll", webContentsId: capture.webContentsId, deltaY: Math.round(capture.viewport.height * 0.65) });
             await wait(1400);
@@ -263,10 +305,36 @@ export function LiveScrollTest({ invoke, currentFixture, actionGroups, method, t
         }
       }
 
-      setStatus(`PARTIAL PASS: ${reports.length}/10 frames captured and processed on BrowserCore webContents.id=${reports[0].capture.webContentsId}.${templateError ? ` ${templateError}` : ""}`);
+      setStatus(`PARTIAL PASS: ${reports.length}/20 frames captured and processed on BrowserCore webContents.id=${reports[0].capture.webContentsId}.${templateError ? ` ${templateError}` : ""}`);
     } catch (error) {
       setStatus(reports.length > 0 ? `PARTIAL PASS: stopped safely after ${reports.length} frames; evidence retained. ${String(error)}` : `FAIL: ${String(error)}`);
     } finally {
+      if (debugRecords.length > 0) {
+        const debugReport: BoundaryDebugReport = {
+          runId,
+          timestamp: new Date().toISOString(),
+          environment: { width: 1024, height: 560, zoom: 1, platform: "facebook" },
+          totalFrames: reports.length,
+          records: debugRecords,
+          summary: {
+            totalProbed: debugRecords.length,
+            boundaryFoundCount: debugRecords.filter(r => r.boundaryStatus === "BOUNDARY_FOUND").length,
+            boundaryAmbiguousCount: debugRecords.filter(r => r.boundaryStatus === "BOUNDARY_AMBIGUOUS").length,
+            boundaryNotFoundCount: debugRecords.filter(r => r.boundaryStatus === "BOUNDARY_NOT_FOUND").length,
+            jumpedZeroToTwoPlusCount: debugRecords.filter(r => r.transitions.jumpedZeroToTwoPlus).length,
+            jumpedFrames: [...new Set(debugRecords.filter(r => r.transitions.jumpedZeroToTwoPlus).map(r => r.frameNumber))],
+          },
+        };
+        try {
+          const res = await invoke<{ ok: boolean; path: string; runPath: string }>({
+            type: "visualMatchLabSaveBoundaryDebug",
+            report: debugReport,
+          });
+          setDebugArtifactPath(res.path);
+        } catch (e) {
+          console.warn("Failed to persist boundary debug report:", e);
+        }
+      }
       setRunning(false);
     }
   };
@@ -338,9 +406,14 @@ export function LiveScrollTest({ invoke, currentFixture, actionGroups, method, t
   return (
     <section className="live-scroll-test">
       <h2>Live Scroll &amp; Permalink Boundary POC</h2>
-      <p>BrowserCore 1024×560 · 65% overlap scroll · maximum 10 frames · OpenCV Action Row → DOM hit-test → parentNode traversal → Permalink Filter → Boundary</p>
+      <p>BrowserCore 1024×560 · 65% overlap scroll · maximum 20 frames · OpenCV Action Row → DOM hit-test → parentNode traversal → Permalink Filter → Boundary</p>
       <button onClick={() => void run()} disabled={running}>{running ? "Running Live Scroll & Boundary Test…" : "Run Live Scroll Test"}</button>
       <div role="status">{status}</div>
+      {debugArtifactPath && (
+        <div style={{ margin: "6px 0", fontSize: "12px", color: "#065f46", background: "#d1fae5", padding: "6px 10px", borderRadius: "4px" }}>
+          <b>Boundary Debug Log saved:</b> <code>scratch/visual-match-lab-boundary-debug.json</code>
+        </div>
+      )}
       <LiveTemplateCalibration captures={frames.map(frame => frame.capture)} templates={templates} onChange={setTemplates} onRerun={() => void rerunExisting()} running={running} />
       {frames.length > 0 && frames.some(f => !f.boundaryStatus || (f.boundaryStatus === "BOUNDARY_NOT_FOUND" && f.candidates.some(c => !c.boundary))) && (
         <div className="boundary-warning" style={{ margin: "10px 0", padding: "8px 12px", background: "#fef3c7", border: "1px solid #f59e0b", borderRadius: "4px", color: "#92400e" }}>
