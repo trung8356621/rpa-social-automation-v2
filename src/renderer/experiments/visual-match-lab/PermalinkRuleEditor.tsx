@@ -131,7 +131,14 @@ export function PermalinkRuleEditor({
   } | null>(null);
   const [saveBanner, setSaveBanner] = useState<string | null>(null);
 
-  // When user clicks "Use This URL" in Permalink Inspector, auto-populate template
+  // Reset test/save state when switching frame or candidate row (Next/Prev)
+  useEffect(() => {
+    setTestResult(null);
+    setSaveBanner(null);
+    setLastTestedTemplate(null);
+  }, [frameNumber, candidateIndex]);
+
+  // When user clicks "Use URL" in Permalink Inspector, auto-populate template
   useEffect(() => {
     if (prefillUrl) {
       const suggestion = generateTemplateSuggestion(prefillUrl);
@@ -403,10 +410,12 @@ export function PermalinkRuleEditor({
   };
 
   return (
-    <div className="permalink-rule-editor">
-      <h5 className="section-subtitle">
-        🛠 User-configurable Permalink Rule Editor
-      </h5>
+    <div className="permalink-rule-editor url-inspector-block">
+      <div className="url-block-header">
+        <h5 className="section-subtitle">
+          3. User-configurable Permalink Rule Editor
+        </h5>
+      </div>
 
       <div className="rule-inputs-grid">
         <div className="input-group">

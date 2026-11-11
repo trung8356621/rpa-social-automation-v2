@@ -1,22 +1,48 @@
-import React, { useState } from "react";
+import React, { useState, useEffect } from "react";
 import type { LiveCandidate } from "./LiveScrollTest";
-import { PermalinkRuleRegistry, type UserPermalinkRule } from "../../../shared/permalink-rules";
+import type { LiveCapture } from "./types";
+import type { BoundaryProbeResult } from "../../../shared/boundary-probe";
+import {
+  PermalinkRuleRegistry,
+  type UserPermalinkRule,
+} from "../../../shared/permalink-rules";
 import type { PostIdentity } from "../../../shared/permalink-adapter";
-import type { BrowserCoreNavigationResult, Command } from "../../../shared/contracts";
+import type {
+  BrowserCoreNavigationResult,
+  Command,
+} from "../../../shared/contracts";
+import { CurrentItemUrlList } from "./CurrentItemUrlList";
+import { UrlVerificationPanel } from "./UrlVerificationPanel";
+import { PermalinkRuleEditor } from "./PermalinkRuleEditor";
+import { PermalinkTechnicalDetails } from "./PermalinkTechnicalDetails";
 
 type Invoke = <T>(command: Command) => Promise<T>;
 
+export type RecognitionBadgeStatus = "RECOGNIZED" | "UNRECOGNIZED";
+export type UrlVerificationStatus = "NOT_TESTED" | "VERIFIED" | "MISMATCH";
+
+export type UrlVerificationInfo = {
+  status: UrlVerificationStatus;
+  label: string;
+  reason?: string;
+};
+
 export type InspectableUrl = {
+  index: number;
   url: string;
   rawUrl?: string;
   canonicalUrl?: string;
+  shortUrl: string;
+  classificationLabel: string;
   level: number;
   tag: string;
   role: string | null;
   matchedRuleId?: string;
+  matchedRuleName?: string;
   identity?: PostIdentity;
   isFeedLevel: boolean;
   status: "MATCHED" | "UNRECOGNIZED" | "CONFLICT";
+  recognitionBadge: RecognitionBadgeStatus;
 };
 
 export function resolveFullUrl(
@@ -35,7 +61,9 @@ export function resolveFullUrl(
     try {
       return new URL(trimmed, baseOrigin).href;
     } catch {
-      return `${baseOrigin.replace(/\/$/, "")}${trimmed.startsWith("/") ? "" : "/"}${trimmed}`;
+      return `${baseOrigin.replace(/\/$/, "")}${
+        trimmed.startsWith("/") ? "" : "/"
+      }${trimmed}`;
     }
   }
   return trimmed;
@@ -60,9 +88,13 @@ export function validateNavigableUrl(
     }
     const host = parsed.hostname.toLowerCase();
     const isFacebook = host.includes("facebook.com") || host.includes("fb.com");
-    const isThreads = host.includes("threads.net") || host.includes("threads.com");
+    const isThreads =
+      host.includes("threads.net") || host.includes("threads.com");
     if (!isFacebook && !isThreads) {
-      return { valid: false, reason: `Domain ${parsed.hostname} không thuộc Facebook hoặc Threads.` };
+      return {
+        valid: false,
+        reason: `Domain ${parsed.hostname} không thuộc Facebook hoặc Threads.`,
+      };
     }
     return { valid: true, resolvedUrl: parsed.href };
   } catch {
@@ -75,7 +107,12 @@ export function stripFacebookTrackingParams(rawUrl: string): string {
     const parsed = new URL(resolveFullUrl(rawUrl));
     const keysToDelete: string[] = [];
     parsed.searchParams.forEach((_v, k) => {
-      if (k.startsWith("__cft__") || k === "__tn__" || k === "refid" || k === "_rdr") {
+      if (
+        k.startsWith("__cft__") ||
+        k === "__tn__" ||
+        k === "refid" ||
+        k === "_rdr"
+      ) {
         keysToDelete.push(k);
       }
     });
@@ -86,35 +123,120 @@ export function stripFacebookTrackingParams(rawUrl: string): string {
   }
 }
 
-export function PermalinkInspector({
-  candidate,
-  rules,
-  onUseUrl,
-  invoke,
-  isLiveRunning,
-  onInspectInBrowserCore,
-  activeUrlInspection,
-}: {
-  candidate: LiveCandidate;
-  rules: UserPermalinkRule[];
-  onUseUrl: (url: string) => void;
-  invoke: Invoke;
-  isLiveRunning?: boolean;
-  onInspectInBrowserCore?: (result: BrowserCoreNavigationResult | null) => void;
-  activeUrlInspection?: BrowserCoreNavigationResult | null;
-}) {
-  const [copiedUrl, setCopiedUrl] = useState<string | null>(null);
-  const [navigatingUrl, setNavigatingUrl] = useState<string | null>(null);
-  const [localNavResult, setLocalNavResult] = useState<BrowserCoreNavigationResult | null>(null);
-  const [navError, setNavError] = useState<string | null>(null);
-  const navResult = activeUrlInspection ?? localNavResult;
+export function classifyUrlCandidate(
+  fullUrl: string,
+  matchedRule?: UserPermalinkRule,
+): string {
+  if (matchedRule?.name) {
+    return matchedRule.name;
+  }
+  try {
+    const parsed = new URL(resolveFullUrl(fullUrl));
+    const host = parsed.hostname.toLowerCase();
+    const pathname = parsed.pathname;
 
+    if (host.includes("threads.net") || host.includes("threads.com")) {
+      if (/^\/@[^/]+\/post\/[^/]+/i.test(pathname)) return "Threads Post";
+      return "Threads Link";
+    }
+
+    if (/^\/groups\/[^/]+\/posts\/[^/]+/i.test(pathname)) {
+      return "Facebook Group Post";
+    }
+    if (/^\/groups\/[^/]+\/permalink\/[^/]+/i.test(pathname)) {
+      return "Facebook Group Permalink";
+    }
+    if (/^\/groups\/[^/]+\/user\/[^/]+/i.test(pathname)) {
+      return "Facebook Group Member";
+    }
+    if (/^\/groups\/[^/]+\/?$/i.test(pathname)) {
+      return "Facebook Group";
+    }
+    if (/^\/(?:photo|photo\.php)\/?$/i.test(pathname)) {
+      const setParam = parsed.searchParams.get("set") ?? "";
+      if (setParam.startsWith("gm.")) return "Facebook Group Photo (gm)";
+      if (setParam.startsWith("pcb.")) return "Facebook Post Photo (pcb)";
+      return "Facebook Photo";
+    }
+    if (/^\/(?:permalink|story)\.php$/i.test(pathname)) {
+      return "Facebook Permalink";
+    }
+    if (/^\/[^/]+\/posts\/[^/]+/i.test(pathname)) {
+      return "Facebook Page / Profile Post";
+    }
+    return "Facebook Link";
+  } catch {
+    return "Unknown URL";
+  }
+}
+
+export function formatShortUrl(rawOrFullUrl: string, maxChars = 76): string {
+  try {
+    const parsed = new URL(resolveFullUrl(rawOrFullUrl));
+    let pathDisplay = parsed.pathname || "/";
+
+    // Shorten overly long path segments in the middle if needed
+    const segments = pathDisplay.split("/").filter(Boolean);
+    if (segments.length >= 3) {
+      const shortenedSegments = segments.map((seg) =>
+        seg.length > 22 ? `${seg.slice(0, 10)}...${seg.slice(-6)}` : seg,
+      );
+      pathDisplay =
+        "/" +
+        shortenedSegments.join("/") +
+        (pathDisplay.endsWith("/") ? "/" : "");
+    }
+
+    // Build compact query representation
+    const meaningfulParams: string[] = [];
+    let hasTracking = false;
+    parsed.searchParams.forEach((val, key) => {
+      if (
+        key.startsWith("__cft__") ||
+        key === "__tn__" ||
+        key === "refid" ||
+        key === "_rdr"
+      ) {
+        hasTracking = true;
+      } else {
+        const shortVal =
+          val.length > 20 ? `${val.slice(0, 12)}...${val.slice(-4)}` : val;
+        meaningfulParams.push(`${key}=${shortVal}`);
+      }
+    });
+
+    let queryDisplay = "";
+    if (meaningfulParams.length > 0) {
+      queryDisplay = `?${meaningfulParams.join("&")}${
+        hasTracking ? "&__cft__..." : ""
+      }`;
+    } else if (hasTracking) {
+      queryDisplay = "?__cft__...";
+    }
+
+    const combined = `${pathDisplay}${queryDisplay}`;
+    if (combined.length <= maxChars) {
+      return combined;
+    }
+    return `${combined.slice(0, maxChars - 3)}...`;
+  } catch {
+    const trimmed = (rawOrFullUrl ?? "").trim();
+    if (trimmed.length <= maxChars) return trimmed;
+    return `${trimmed.slice(0, maxChars - 3)}...`;
+  }
+}
+
+export function extractInspectableUrls(
+  boundary: BoundaryProbeResult | undefined,
+  rules: UserPermalinkRule[],
+): {
+  currentItemUrls: InspectableUrl[];
+  feedNeighborUrls: InspectableUrl[];
+  inferredBaseUrl: string;
+} {
   const registry = new PermalinkRuleRegistry(rules);
-  const boundary = candidate.boundary;
   const crossedLevel = boundary?.boundaryCrossedLevel ?? Infinity;
 
-  // Infer group/feed base URL from ancestor URLs or postIdentities so query-only hrefs (?__cft__[0]=...)
-  // resolve against the active group page (e.g. https://www.facebook.com/groups/{groupId}/) instead of root "/"
   let inferredBaseUrl = "https://www.facebook.com/";
   for (const step of boundary?.ancestorSteps ?? []) {
     for (const u of step.rawUrls ?? []) {
@@ -126,15 +248,18 @@ export function PermalinkInspector({
     }
     if (inferredBaseUrl !== "https://www.facebook.com/") break;
   }
-  if (inferredBaseUrl === "https://www.facebook.com/" && boundary?.postIdentities?.[0]?.scope) {
+  if (
+    inferredBaseUrl === "https://www.facebook.com/" &&
+    boundary?.postIdentities?.[0]?.scope
+  ) {
     const scope = boundary.postIdentities[0].scope;
     if (!scope.startsWith("@")) {
       inferredBaseUrl = `https://www.facebook.com/groups/${scope}/`;
     }
   }
 
-  const currentItemUrls: InspectableUrl[] = [];
-  const feedNeighborUrls: InspectableUrl[] = [];
+  const rawCurrentUrls: Omit<InspectableUrl, "index">[] = [];
+  const rawNeighborUrls: Omit<InspectableUrl, "index">[] = [];
   const seenUrls = new Set<string>();
 
   for (const step of boundary?.ancestorSteps ?? []) {
@@ -144,37 +269,193 @@ export function PermalinkInspector({
       const fullUrl = resolveFullUrl(u, inferredBaseUrl);
       const match = registry.match(fullUrl) ?? registry.match(u);
       const isMatched = Boolean(match?.ruleId);
+      const matchedRule = match?.ruleId
+        ? registry.getRule(match.ruleId)
+        : undefined;
 
-      const info: InspectableUrl = {
+      const info: Omit<InspectableUrl, "index"> = {
         url: fullUrl,
         rawUrl: u !== fullUrl ? u : undefined,
         canonicalUrl: match?.identity?.canonicalUrl,
+        shortUrl: formatShortUrl(fullUrl),
+        classificationLabel: classifyUrlCandidate(fullUrl, matchedRule),
         level: step.level,
         tag: step.tag,
         role: step.role,
         matchedRuleId: match?.ruleId,
+        matchedRuleName: matchedRule?.name,
         identity: match?.identity,
         isFeedLevel: isFeed,
         status: isMatched ? "MATCHED" : "UNRECOGNIZED",
+        recognitionBadge: isMatched ? "RECOGNIZED" : "UNRECOGNIZED",
       };
 
       const dedupKey = `${isFeed ? "feed" : "item"}:${fullUrl}`;
       if (!seenUrls.has(dedupKey)) {
         seenUrls.add(dedupKey);
         if (isFeed) {
-          feedNeighborUrls.push(info);
+          rawNeighborUrls.push(info);
         } else {
-          currentItemUrls.push(info);
+          rawCurrentUrls.push(info);
         }
       }
     }
   }
 
-  currentItemUrls.sort((a, b) => {
+  rawCurrentUrls.sort((a, b) => {
     if (a.status === "MATCHED" && b.status !== "MATCHED") return -1;
     if (a.status !== "MATCHED" && b.status === "MATCHED") return 1;
     return a.level - b.level;
   });
+
+  const currentItemUrls: InspectableUrl[] = rawCurrentUrls.map((item, idx) => ({
+    ...item,
+    index: idx + 1,
+  }));
+
+  const feedNeighborUrls: InspectableUrl[] = rawNeighborUrls.map(
+    (item, idx) => ({
+      ...item,
+      index: idx + 1,
+    }),
+  );
+
+  return { currentItemUrls, feedNeighborUrls, inferredBaseUrl };
+}
+
+export function deriveUrlVerificationStatus(
+  candidateUrl: InspectableUrl | null,
+  navResult: BrowserCoreNavigationResult | null,
+): UrlVerificationInfo {
+  if (!candidateUrl || !navResult) {
+    return {
+      status: "NOT_TESTED",
+      label: "Chưa kiểm tra",
+    };
+  }
+
+  const cleanCandidateUrl = stripFacebookTrackingParams(candidateUrl.url);
+  const isSameTarget =
+    navResult.requestedUrl === candidateUrl.url ||
+    navResult.requestedUrl === cleanCandidateUrl;
+
+  if (!isSameTarget) {
+    return {
+      status: "NOT_TESTED",
+      label: "Chưa kiểm tra",
+    };
+  }
+
+  if (navResult.status === "FAILED" || !navResult.ok) {
+    return {
+      status: "MISMATCH",
+      label: "Lỗi điều hướng",
+      reason: navResult.error || "Không thể điều hướng tới URL này.",
+    };
+  }
+
+  if (navResult.redirected || navResult.status === "REDIRECTED") {
+    return {
+      status: "MISMATCH",
+      label: "Đã bị Redirect (Không khớp)",
+      reason:
+        navResult.redirectReason ||
+        "Facebook đã chuyển hướng URL sang trang khác.",
+    };
+  }
+
+  // Only mark VERIFIED when BrowserCore navigation succeeded without redirect AND the URL has a recognized Post ID present in the final destination
+  if (
+    navResult.status === "SUCCESS" &&
+    !navResult.redirected &&
+    candidateUrl.recognitionBadge === "RECOGNIZED" &&
+    candidateUrl.identity?.postId &&
+    navResult.finalUrl &&
+    navResult.finalUrl.includes(candidateUrl.identity.postId)
+  ) {
+    return {
+      status: "VERIFIED",
+      label: "Đã xác minh (Đúng đích)",
+      reason: `BrowserCore mở đúng bài viết (${candidateUrl.identity.platform}:${candidateUrl.identity.postId}).`,
+    };
+  }
+
+  return {
+    status: "NOT_TESTED",
+    label: "Chưa đủ bằng chứng Post ID",
+    reason:
+      "Đã mở trên BrowserCore nhưng URL chưa có Post ID hợp lệ để tự động xác nhận VERIFIED.",
+  };
+}
+
+export function PermalinkInspector({
+  frameNumber = 1,
+  candidateIndex = 0,
+  candidate,
+  capture,
+  rules,
+  onRuleSaved,
+  onUpdateBoundary,
+  onUseUrl,
+  invoke,
+  isLiveRunning,
+  onInspectInBrowserCore,
+  activeUrlInspection,
+  captureStatus,
+  pipelineStatus,
+  templateStatus,
+  detectionStatus,
+  rawIconMatches,
+  actionClusters,
+}: {
+  frameNumber?: number;
+  candidateIndex?: number;
+  candidate: LiveCandidate;
+  capture?: LiveCapture | null;
+  rules: UserPermalinkRule[];
+  onRuleSaved?: (newRule: UserPermalinkRule) => void;
+  onUpdateBoundary?: (
+    newBoundary: BoundaryProbeResult,
+    evidenceUrl?: string,
+  ) => void;
+  onUseUrl?: (url: string) => void;
+  invoke: Invoke;
+  isLiveRunning?: boolean;
+  onInspectInBrowserCore?: (result: BrowserCoreNavigationResult | null) => void;
+  activeUrlInspection?: BrowserCoreNavigationResult | null;
+  captureStatus?: string;
+  pipelineStatus?: string;
+  templateStatus?: string;
+  detectionStatus?: string;
+  rawIconMatches?: number;
+  actionClusters?: number;
+}) {
+  const [selectedUrl, setSelectedUrl] = useState<string | null>(null);
+  const [prefillUrl, setPrefillUrl] = useState<string | null>(null);
+  const [copiedUrl, setCopiedUrl] = useState<string | null>(null);
+  const [navigatingUrl, setNavigatingUrl] = useState<string | null>(null);
+  const [localNavResult, setLocalNavResult] =
+    useState<BrowserCoreNavigationResult | null>(null);
+  const [navError, setNavError] = useState<string | null>(null);
+
+  const navResult = activeUrlInspection ?? localNavResult;
+
+  // Reset per-frame / per-candidate state on Next/Prev or Row switch so previous frame's candidate is never kept
+  useEffect(() => {
+    setSelectedUrl(null);
+    setPrefillUrl(null);
+    setLocalNavResult(null);
+    setNavError(null);
+    setNavigatingUrl(null);
+  }, [frameNumber, candidateIndex]);
+
+  const { currentItemUrls, inferredBaseUrl } = extractInspectableUrls(
+    candidate.boundary,
+    rules,
+  );
+
+  const selectedCandidate =
+    currentItemUrls.find((item) => item.url === selectedUrl) ?? null;
 
   const handleCopy = async (url: string) => {
     try {
@@ -189,10 +470,12 @@ export function PermalinkInspector({
 
   const handleOpenInBrowserCore = async (url: string) => {
     if (isLiveRunning) {
-      setNavError("Không thể điều hướng BrowserCore khi Live Scroll Test đang chạy.");
+      setNavError(
+        "Không thể điều hướng BrowserCore khi Live Scroll Test đang chạy.",
+      );
       return;
     }
-    const check = validateNavigableUrl(url);
+    const check = validateNavigableUrl(url, inferredBaseUrl);
     if (!check.valid || !check.resolvedUrl) {
       setNavError(`Lỗi URL: ${check.reason}`);
       return;
@@ -209,7 +492,12 @@ export function PermalinkInspector({
         }),
         new Promise<never>((_, reject) => {
           timeoutId = setTimeout(
-            () => reject(new Error("Quá thời gian chờ (16s) khi điều hướng BrowserCore.")),
+            () =>
+              reject(
+                new Error(
+                  "Quá thời gian chờ (16s) khi điều hướng BrowserCore.",
+                ),
+              ),
             16_000,
           );
         }),
@@ -227,274 +515,91 @@ export function PermalinkInspector({
     }
   };
 
+  const handleOpenCard = (item: InspectableUrl) => {
+    setSelectedUrl(item.url);
+    void handleOpenInBrowserCore(item.url);
+  };
+
+  const handleUseCardUrl = (item: InspectableUrl) => {
+    setSelectedUrl(item.url);
+    setPrefillUrl(item.url);
+    onUseUrl?.(item.url);
+  };
+
   const handleCloseInspection = () => {
     setLocalNavResult(null);
     onInspectInBrowserCore?.(null);
   };
 
+  const selectedVerification = deriveUrlVerificationStatus(
+    selectedCandidate,
+    navResult,
+  );
+
   return (
     <div className="permalink-inspector-section">
-      <h5 className="section-subtitle">
-        🔗 Permalink &amp; URL Classification
-      </h5>
+      {/* 1. Current Item URLs (Feed / Neighbor URLs hidden from UI) */}
+      <CurrentItemUrlList
+        urls={currentItemUrls}
+        selectedUrl={selectedUrl}
+        getVerification={(item) => deriveUrlVerificationStatus(item, navResult)}
+        copiedUrl={copiedUrl}
+        navigatingUrl={navigatingUrl}
+        isLiveRunning={isLiveRunning}
+        onOpen={handleOpenCard}
+        onCopy={(u) => void handleCopy(u)}
+        onUseUrl={handleUseCardUrl}
+      />
 
-      {/* BrowserCore Navigation Log & Status Summary */}
-      {navResult && (
-        <div className="browsercore-nav-modal">
-          <div className="nav-modal-header">
-            <span className="nav-modal-title">
-              🌐 BrowserCore #{navResult.webContentsId} &middot;{" "}
-              {navResult.status === "SUCCESS"
-                ? "✔ Đúng đích"
-                : navResult.status === "REDIRECTED"
-                  ? "⚠ Đã bị Redirect"
-                  : "✖ Lỗi điều hướng"}
-            </span>
-            <button
-              type="button"
-              className="nav-modal-close-btn"
-              onClick={handleCloseInspection}
-              title="Quay lại Frame Inspector"
-            >
-              ← Quay lại Visual Match Lab
-            </button>
-          </div>
-          <div className="nav-modal-body">
-            <div className="nav-modal-url">
-              <b>Requested URL:</b> <code>{navResult.requestedUrl}</code>
-            </div>
-            <div className="nav-modal-url" style={{ marginTop: 4 }}>
-              <b>Final URL:</b> <code>{navResult.finalUrl}</code>
-            </div>
-            {navResult.redirected && (
-              <div
-                className="browsercore-nav-error"
-                style={{ marginTop: 6, background: "rgba(245, 158, 11, 0.14)", borderColor: "#f59e0b", color: "#fde68a" }}
-              >
-                <div>
-                  <b>⚠ Phát hiện Facebook Redirect:</b>
-                  <div style={{ marginTop: 2 }}>{navResult.redirectReason}</div>
-                  {navResult.requestedUrl.includes("__cft__") && (
-                    <button
-                      type="button"
-                      className="toolbar-btn"
-                      style={{ marginTop: 6 }}
-                      onClick={() => void handleOpenInBrowserCore(stripFacebookTrackingParams(navResult.requestedUrl))}
-                    >
-                      🔄 Thử mở URL sạch (bỏ __cft__/__tn__)
-                    </button>
-                  )}
-                </div>
-              </div>
-            )}
-            {navResult.error && (
-              <div className="browsercore-nav-error" style={{ marginTop: 6 }}>
-                <span>⚠ Lỗi: {navResult.error}</span>
-              </div>
-            )}
-            {navResult.events && navResult.events.length > 0 && (
-              <details style={{ marginTop: 6, fontSize: 11 }} open={navResult.redirected || !navResult.ok}>
-                <summary style={{ cursor: "pointer", fontWeight: 600 }}>
-                  📋 Navigation Event Log ({navResult.events.length} events)
-                </summary>
-                <div
-                  style={{
-                    maxHeight: 140,
-                    overflowY: "auto",
-                    marginTop: 4,
-                    padding: 6,
-                    background: "rgba(0,0,0,0.3)",
-                    borderRadius: 4,
-                    fontFamily: "monospace",
-                    fontSize: 10.5,
-                  }}
-                >
-                  {navResult.events.map((ev, i) => (
-                    <div key={i} style={{ marginBottom: 3, wordBreak: "break-all" }}>
-                      <span style={{ color: "#93c5fd" }}>+{ev.atMs}ms</span>{" "}
-                      <b>[{ev.type}]</b> {ev.url}
-                      {ev.httpResponseCode ? ` (HTTP ${ev.httpResponseCode})` : ""}
-                      {ev.errorCode ? ` (ERR ${ev.errorCode}: ${ev.errorDescription})` : ""}
-                    </div>
-                  ))}
-                </div>
-              </details>
-            )}
-            <div className="nav-modal-actions" style={{ marginTop: 8 }}>
-              <button
-                type="button"
-                className="toolbar-btn active"
-                onClick={handleCloseInspection}
-              >
-                ← Quay lại Visual Match Lab
-              </button>
-            </div>
-          </div>
-        </div>
+      {/* 2. URL Verification */}
+      <UrlVerificationPanel
+        selectedCandidate={selectedCandidate}
+        verification={selectedVerification}
+        navResult={navResult}
+        navError={navError}
+        isNavigating={Boolean(navigatingUrl)}
+        isLiveRunning={isLiveRunning}
+        onOpenInBrowserCore={(u) => void handleOpenInBrowserCore(u)}
+        onCloseInspection={handleCloseInspection}
+        onDismissError={() => setNavError(null)}
+      />
+
+      {/* 3. User-configurable Permalink Rule Editor */}
+      {capture && onRuleSaved && onUpdateBoundary && (
+        <PermalinkRuleEditor
+          frameNumber={frameNumber}
+          candidateIndex={candidateIndex}
+          candidate={candidate}
+          capture={capture}
+          rules={rules}
+          onRuleSaved={onRuleSaved}
+          onUpdateBoundary={onUpdateBoundary}
+          prefillUrl={prefillUrl}
+          invoke={invoke}
+        />
       )}
 
-      {/* Navigation Error Message */}
-      {navError && (
-        <div className="browsercore-nav-error">
-          <span>⚠ {navError}</span>
-          <button type="button" onClick={() => setNavError(null)}>✕</button>
-        </div>
-      )}
-
-      {/* 1. Current Item URLs */}
-      <div className="url-category-block current-item-block">
-        <div className="category-header">
-          <span className="category-title">Current Item URLs ({currentItemUrls.length})</span>
-          <span className="category-hint">
-            Subtree ancestors L0 &ndash; L{crossedLevel !== Infinity ? crossedLevel - 1 : "max"}
-          </span>
-        </div>
-
-        {currentItemUrls.length === 0 ? (
-          <div className="empty-url-msg">
-            Không tìm thấy URL nào trong subtree của current post. (Có thể là bài ẩn danh hoặc link tương đối).
-          </div>
-        ) : (
-          <div className="url-interactive-list">
-            {currentItemUrls.map((item, idx) => {
-              const isCopied = copiedUrl === item.url;
-              const isThisNavigating = navigatingUrl === item.url;
-              return (
-                <div key={idx} className={`url-interactive-card ${item.status.toLowerCase()}`}>
-                  <div className="card-top-meta">
-                    <div className="meta-left">
-                      <span className="level-badge">L{item.level}</span>
-                      <span className="tag-badge">&lt;{item.tag}{item.role ? ` role="${item.role}"` : ""}&gt;</span>
-                      <span className="scope-tag current">CURRENT_ITEM</span>
-                    </div>
-                    <div className="meta-right">
-                      <span className={`status-pill ${item.status.toLowerCase()}`}>
-                        {item.status === "MATCHED" ? `✔ ${item.matchedRuleId}` : `✖ ${item.status}`}
-                      </span>
-                    </div>
-                  </div>
-
-                  {/* Full Raw URL with multi-line break */}
-                  <div className="url-raw-display">
-                    <b>Raw URL:</b> <span className="raw-url-text">{item.url}</span>
-                  </div>
-
-                  {item.canonicalUrl && (
-                    <div className="url-canonical-display">
-                      <b>Canonical:</b> <span className="canonical-url-text">{item.canonicalUrl}</span>
-                    </div>
-                  )}
-
-                  {item.identity && (
-                    <div className="url-identity-display">
-                      <b>Extracted ID:</b> <code>{item.identity.platform}:{item.identity.postId}</code>
-                    </div>
-                  )}
-
-                  {/* Actions Bar */}
-                  <div className="url-actions-bar">
-                    <button
-                      type="button"
-                      className="url-act-btn open-btn"
-                      onClick={() => handleOpenInBrowserCore(item.url)}
-                      disabled={isLiveRunning || isThisNavigating}
-                      title={
-                        isLiveRunning
-                          ? "Không thể điều hướng BrowserCore khi Live Scroll Test đang chạy"
-                          : "Điều hướng BrowserCore hiện tại (dùng đúng session/cookie Facebook có sẵn)"
-                      }
-                    >
-                      {isThisNavigating ? "⏳ Navigating Browser..." : "🌐 Open in BrowserCore"}
-                    </button>
-                    <button
-                      type="button"
-                      className="url-act-btn copy-btn"
-                      onClick={() => handleCopy(item.url)}
-                      title="Sao chép toàn bộ URL vào clipboard"
-                    >
-                      {isCopied ? "✔ Copied!" : "📋 Copy URL"}
-                    </button>
-                    <button
-                      type="button"
-                      className="url-act-btn use-btn"
-                      onClick={() => onUseUrl(item.url)}
-                      title="Chuyển URL này vào URL Template Editor phía dưới để tạo rule"
-                    >
-                      ⚡ Use This URL
-                    </button>
-                  </div>
-                </div>
-              );
-            })}
-          </div>
-        )}
-      </div>
-
-      {/* 2. Feed / Neighbor URLs */}
-      <div className="url-category-block feed-neighbor-block">
-        <div className="category-header">
-          <span className="category-title">Feed / Neighbor URLs ({feedNeighborUrls.length})</span>
-          <span className="category-hint">Multi-item container (L &ge; {crossedLevel !== Infinity ? crossedLevel : "feed"})</span>
-        </div>
-
-        {feedNeighborUrls.length === 0 ? (
-          <div className="empty-url-msg">Không có URL lân cận vượt ngoài ranh giới feed.</div>
-        ) : (
-          <div className="url-interactive-list">
-            {feedNeighborUrls.map((item, idx) => {
-              const isCopied = copiedUrl === item.url;
-              const isThisNavigating = navigatingUrl === item.url;
-              return (
-                <div key={idx} className="url-interactive-card neighbor">
-                  <div className="card-top-meta">
-                    <div className="meta-left">
-                      <span className="level-badge neighbor">L{item.level}</span>
-                      <span className="tag-badge">&lt;{item.tag}{item.role ? ` role="${item.role}"` : ""}&gt;</span>
-                      <span className="scope-tag neighbor">FEED_NEIGHBOR</span>
-                    </div>
-                    <div className="meta-right">
-                      <span className="status-pill neighbor">
-                        {item.matchedRuleId ? `[neighbor] ${item.identity?.postId}` : `[neighbor unrec]`}
-                      </span>
-                    </div>
-                  </div>
-
-                  <div className="url-raw-display">
-                    <b>Raw URL:</b> <span className="raw-url-text neighbor">{item.url}</span>
-                  </div>
-
-                  <div className="url-actions-bar">
-                    <button
-                      type="button"
-                      className="url-act-btn open-btn"
-                      onClick={() => handleOpenInBrowserCore(item.url)}
-                      disabled={isLiveRunning || isThisNavigating}
-                      title={
-                        isLiveRunning
-                          ? "Không thể điều hướng BrowserCore khi Live Scroll Test đang chạy"
-                          : "Điều hướng BrowserCore hiện tại (dùng đúng session/cookie Facebook có sẵn)"
-                      }
-                    >
-                      {isThisNavigating ? "⏳ Navigating Browser..." : "🌐 Open in BrowserCore"}
-                    </button>
-                    <button type="button" className="url-act-btn copy-btn" onClick={() => handleCopy(item.url)}>
-                      {isCopied ? "✔ Copied!" : "📋 Copy URL"}
-                    </button>
-                    <button
-                      type="button"
-                      className="url-act-btn use-btn"
-                      onClick={() => onUseUrl(item.url)}
-                      title="Chuyển URL này vào URL Template Editor phía dưới để tạo rule"
-                    >
-                      ⚡ Use This URL
-                    </button>
-                  </div>
-                </div>
-              );
-            })}
-          </div>
-        )}
-      </div>
+      {/* 4. Technical Details (collapsed by default) */}
+      <PermalinkTechnicalDetails
+        selectedCandidate={selectedCandidate}
+        allCurrentUrls={currentItemUrls}
+        navResult={navResult}
+        boundary={candidate.boundary}
+        frameNumber={frameNumber}
+        scrollY={capture?.viewport.scrollY}
+        dimensions={capture ? `${capture.width}×${capture.height}` : "1024×560"}
+        captureStatus={captureStatus}
+        detectionStatus={detectionStatus}
+        pipelineStatus={pipelineStatus}
+        templateStatus={templateStatus}
+        rawIconMatches={rawIconMatches}
+        actionClusters={actionClusters}
+        matchScore={`${(candidate.score * 100).toFixed(1)}%`}
+        candidateStatus={candidate.status}
+        candidateContext={candidate.context}
+        copiedUrl={copiedUrl}
+        onCopy={(u) => void handleCopy(u)}
+      />
     </div>
   );
 }

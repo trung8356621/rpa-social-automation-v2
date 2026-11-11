@@ -780,5 +780,285 @@ test("Evidence Storage Isolation (Tests 1–7): Run A vs Run B isolation, SHA-25
   }
 });
 
+test("URL Inspector UI Refactor: formatShortUrl, classifyUrlCandidate, and extractInspectableUrls handle long URLs, missing Post ID, multiple candidates, and preserve feedNeighborUrls in data only", async () => {
+  const {
+    formatShortUrl,
+    classifyUrlCandidate,
+    extractInspectableUrls,
+  } = await import("../src/renderer/experiments/visual-match-lab/PermalinkInspector.js");
+
+  // 1. Long URL with huge __cft__ tracking string is shortened <= 76 chars
+  const longUrl =
+    "https://www.facebook.com/groups/295931577185665/?__cft__[0]=AZV9X0BsjX9N_VERY_LONG_TRACKING_TOKEN_".repeat(4) +
+    "&__tn__=-UC%2CP-R";
+  const short1 = formatShortUrl(longUrl);
+  assert.ok(short1.length <= 76, `shortUrl length ${short1.length} must be <= 76`);
+  assert.match(short1, /^\/groups\/295931577185665\/\?__cft__\.\.\./);
+
+  // 2. Classification for recognized vs unrecognized URLs
+  assert.equal(
+    classifyUrlCandidate("https://www.facebook.com/groups/295931577185665/"),
+    "Facebook Group",
+  );
+  assert.equal(
+    classifyUrlCandidate("https://www.facebook.com/groups/295931577185665/user/1000044444691156/"),
+    "Facebook Group Member",
+  );
+  assert.equal(
+    classifyUrlCandidate("https://www.facebook.com/groups/295931577185665/posts/101589324789/"),
+    "Facebook Group Post",
+  );
+
+  // 3. Multiple candidates + Feed/Neighbor separation
+  const mockBoundary: any = {
+    status: "BOUNDARY_FOUND",
+    firstPermalinkLevel: 2,
+    secondPermalinkLevel: 4,
+    boundaryCrossedLevel: 4,
+    ancestorSteps: [
+      {
+        level: 1,
+        tag: "a",
+        role: "link",
+        rawUrls: [
+          "/groups/295931577185665/?__cft__[0]=AZ1_UNRECOGNIZED_GROUP_LINK",
+          "/groups/295931577185665/user/1000044444691156/?__cft__[0]=AZ1_USER",
+        ],
+      },
+      {
+        level: 2,
+        tag: "div",
+        role: "article",
+        rawUrls: [
+          "https://www.facebook.com/groups/295931577185665/posts/101589324789/?__cft__[0]=AZ1_POST",
+        ],
+      },
+      {
+        level: 4,
+        tag: "div",
+        role: "feed",
+        rawUrls: [
+          "https://www.facebook.com/groups/295931577185665/posts/999999999999/",
+        ],
+      },
+    ],
+  };
+
+  const extracted = extractInspectableUrls(mockBoundary, BUILTIN_PERMALINK_RULES);
+  assert.equal(extracted.currentItemUrls.length, 3);
+  // Feed/Neighbor URLs remain preserved in data structure for internal diagnostics/logs
+  assert.equal(extracted.feedNeighborUrls.length, 1);
+  assert.equal(extracted.feedNeighborUrls[0]!.identity?.postId, "999999999999");
+
+  // Current item URLs are sorted with RECOGNIZED first, numbered 1, 2, 3
+  assert.deepEqual(
+    extracted.currentItemUrls.map(u => u.index),
+    [1, 2, 3],
+  );
+  assert.equal(extracted.currentItemUrls[0]!.recognitionBadge, "RECOGNIZED");
+  assert.equal(extracted.currentItemUrls[0]!.identity?.postId, "101589324789");
+  assert.equal(extracted.currentItemUrls[1]!.recognitionBadge, "UNRECOGNIZED");
+  assert.equal(extracted.currentItemUrls[1]!.identity, undefined);
+  assert.equal(extracted.currentItemUrls[2]!.recognitionBadge, "UNRECOGNIZED");
+  assert.equal(extracted.currentItemUrls[2]!.identity, undefined);
+});
+
+test("URL Inspector UI Refactor: deriveUrlVerificationStatus distinguishes NOT_TESTED, VERIFIED, and MISMATCH without false VERIFIED inference", async () => {
+  const {
+    extractInspectableUrls,
+    deriveUrlVerificationStatus,
+  } = await import("../src/renderer/experiments/visual-match-lab/PermalinkInspector.js");
+
+  const mockBoundary: any = {
+    status: "BOUNDARY_FOUND",
+    boundaryCrossedLevel: 5,
+    ancestorSteps: [
+      {
+        level: 1,
+        tag: "a",
+        role: "link",
+        rawUrls: [
+          "https://www.facebook.com/groups/295931577185665/posts/101589324789/",
+          "https://www.facebook.com/groups/295931577185665/?__cft__[0]=AZ1_GROUP",
+        ],
+      },
+    ],
+  };
+
+  const { currentItemUrls } = extractInspectableUrls(mockBoundary, BUILTIN_PERMALINK_RULES);
+  const recognizedCand = currentItemUrls[0]!;
+  const unrecognizedCand = currentItemUrls[1]!;
+
+  // 1. Before testing in BrowserCore -> strictly NOT_TESTED (even for RECOGNIZED URL)
+  assert.equal(deriveUrlVerificationStatus(recognizedCand, null).status, "NOT_TESTED");
+  assert.equal(deriveUrlVerificationStatus(unrecognizedCand, null).status, "NOT_TESTED");
+
+  // 2. When BrowserCore redirects to homepage -> MISMATCH
+  const redirectedNav: any = {
+    ok: true,
+    status: "REDIRECTED",
+    redirected: true,
+    requestedUrl: recognizedCand.url,
+    finalUrl: "https://www.facebook.com/",
+    redirectReason: "Redirected to home",
+    events: [],
+    webContentsId: 1,
+    title: "Facebook",
+  };
+  assert.equal(deriveUrlVerificationStatus(recognizedCand, redirectedNav).status, "MISMATCH");
+
+  // 3. When BrowserCore navigation fails -> MISMATCH
+  const failedNav: any = {
+    ok: false,
+    status: "FAILED",
+    redirected: false,
+    requestedUrl: recognizedCand.url,
+    finalUrl: "",
+    error: "ERR_ABORTED",
+    events: [],
+    webContentsId: 1,
+    title: "",
+  };
+  assert.equal(deriveUrlVerificationStatus(recognizedCand, failedNav).status, "MISMATCH");
+
+  // 4. When UNRECOGNIZED URL (missing Post ID) opens without HTTP redirect -> still NOT_TESTED (never auto-inferred as VERIFIED)
+  const unrecSuccessNav: any = {
+    ok: true,
+    status: "SUCCESS",
+    redirected: false,
+    requestedUrl: unrecognizedCand.url,
+    finalUrl: unrecognizedCand.url,
+    events: [],
+    webContentsId: 1,
+    title: "Facebook Group",
+  };
+  assert.equal(deriveUrlVerificationStatus(unrecognizedCand, unrecSuccessNav).status, "NOT_TESTED");
+
+  // 5. When RECOGNIZED URL opens without redirect and finalUrl preserves postId -> VERIFIED
+  const recSuccessNav: any = {
+    ok: true,
+    status: "SUCCESS",
+    redirected: false,
+    requestedUrl: recognizedCand.url,
+    finalUrl: "https://www.facebook.com/groups/295931577185665/posts/101589324789/",
+    events: [],
+    webContentsId: 1,
+    title: "Post",
+  };
+  assert.equal(deriveUrlVerificationStatus(recognizedCand, recSuccessNav).status, "VERIFIED");
+});
+
+test("URL Inspector UI Refactor: renders 4 ordered sections, hides Feed / Neighbor URLs in UI, and keeps Technical Details collapsed by default", async () => {
+  const React = await import("react");
+  const ReactDOMServer = await import("react-dom/server");
+  const { FrameDiagnostics } = await import(
+    "../src/renderer/experiments/visual-match-lab/FrameDiagnostics.js"
+  );
+
+  const mockCandidate: any = {
+    bbox: { x: 100, y: 200, width: 120, height: 24 },
+    score: 0.97,
+    iconCount: 3,
+    status: "NEW_ITEM",
+    context: "post",
+    fingerprint: "1111",
+    docY: 500,
+    boundary: {
+      status: "BOUNDARY_FOUND",
+      firstPermalinkLevel: 2,
+      secondPermalinkLevel: 4,
+      boundaryCrossedLevel: 4,
+      ancestorsChecked: 6,
+      postIdentities: [
+        {
+          platform: "facebook",
+          postId: "101589324789",
+          canonicalUrl: "https://www.facebook.com/groups/295931577185665/posts/101589324789",
+          rawUrl: "https://www.facebook.com/groups/295931577185665/posts/101589324789/",
+        },
+      ],
+      ancestorSteps: [
+        {
+          level: 1,
+          tag: "a",
+          role: "link",
+          rawUrls: ["/groups/295931577185665/?__cft__[0]=AZ1_UNREC_LONG_QUERY"],
+        },
+        {
+          level: 2,
+          tag: "div",
+          role: "article",
+          rawUrls: ["https://www.facebook.com/groups/295931577185665/posts/101589324789/"],
+        },
+        {
+          level: 4,
+          tag: "div",
+          role: "feed",
+          rawUrls: ["https://www.facebook.com/groups/295931577185665/posts/8888888888/"],
+        },
+      ],
+    },
+  };
+
+  const mockCapture: any = {
+    id: "capture_1",
+    webContentsId: 10,
+    width: 1024,
+    height: 560,
+    dataUrl: "data:image/png;base64,AAA",
+    viewport: { width: 1024, height: 560, scrollY: 320, url: "https://www.facebook.com/groups/295931577185665/" },
+  };
+
+  const html = ReactDOMServer.renderToStaticMarkup(
+    React.createElement(FrameDiagnostics, {
+      frameNumber: 3,
+      capture: mockCapture,
+      captureStatus: "CAPTURE_PASS",
+      pipelineStatus: "PASS",
+      templateStatus: "READY",
+      detectionStatus: "DETECTION_PASS",
+      boundaryStatus: "BOUNDARY_FOUND",
+      rawIconMatches: 3,
+      actionClusters: 1,
+      candidates: [mockCandidate],
+      selectedCandidateIndex: 0,
+      onSelectCandidate: () => {},
+      rules: BUILTIN_PERMALINK_RULES,
+      onRuleSaved: () => {},
+      onUpdateBoundary: () => {},
+      invoke: async () => ({}) as any,
+    }),
+  );
+
+  // 1. Feed / Neighbor URLs must NOT appear anywhere in the rendered UI
+  assert.doesNotMatch(html, /Feed \/ Neighbor URLs/i);
+  assert.doesNotMatch(html, /FEED_NEIGHBOR/i);
+  assert.doesNotMatch(html, /8888888888/);
+
+  // 2. Verify exact order of the 4 sections in the right panel:
+  const idx1 = html.indexOf("1. Current Item URLs");
+  const idx2 = html.indexOf("2. URL Verification");
+  const idx3 = html.indexOf("3. User-configurable Permalink Rule Editor");
+  const idx4 = html.indexOf("4. Technical Details");
+
+  assert.ok(idx1 >= 0, "Section 1 (Current Item URLs) must be present");
+  assert.ok(idx2 > idx1, "Section 2 (URL Verification) must follow Section 1");
+  assert.ok(idx3 > idx2, "Section 3 (Permalink Rule Editor) must follow Section 2");
+  assert.ok(idx4 > idx3, "Section 4 (Technical Details) must follow Section 3");
+
+  // 3. Technical Details <details> must be collapsed by default (no open="" attribute on .permalink-technical-details)
+  assert.match(html, /<details class="permalink-technical-details">/);
+
+  // 4. Cards show URL #1, URL #2, Post ID, and Open / Copy / Use URL buttons
+  assert.match(html, /URL #1/);
+  assert.match(html, /URL #2/);
+  assert.match(html, /facebook:101589324789/);
+  assert.match(html, /Chưa xác định/);
+  assert.match(html, />Open</);
+  assert.match(html, />Copy</);
+  assert.match(html, />Use URL</);
+});
+
+
 
 
