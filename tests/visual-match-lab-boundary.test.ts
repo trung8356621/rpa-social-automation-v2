@@ -128,6 +128,39 @@ test("FacebookPermalinkAdapter extracts group photo post identity from gm.{postI
   assert.equal(adapter.extractPostIdentity("https://www.facebook.com/photo/?fbid=10229817286489953&set=gm.@invalid!&idorvanity=295931577185665"), null);
 });
 
+test("FacebookPermalinkAdapter extracts group photo post identity from pcb.{postId} (Frame 14) and deduplicates", () => {
+  const adapter = new FacebookPermalinkAdapter();
+
+  // 1. Valid photo URL with pcb.{postId} from Frame 14 live evidence
+  const photo1 = "https://www.facebook.com/photo/?fbid=10229806370657064&set=pcb.29279737605045010&__cft__[0]=AZjP93Vxa48Jr0X7";
+  const post1 = adapter.extractPostIdentity(photo1);
+  assert.notEqual(post1, null);
+  assert.equal(post1?.platform, "facebook");
+  assert.equal(post1?.postId, "29279737605045010"); // extracted from pcb.{postId}, NOT from fbid
+  assert.equal(post1?.canonicalUrl, "https://www.facebook.com/permalink.php?story_fbid=29279737605045010");
+
+  // Valid photo URL with pcb.{postId} and idorvanity
+  const photoWithScope = "https://www.facebook.com/photo/?fbid=10229806370657064&set=pcb.29279737605045010&idorvanity=seovamarketing";
+  const postWithScope = adapter.extractPostIdentity(photoWithScope);
+  assert.notEqual(postWithScope, null);
+  assert.equal(postWithScope?.postId, "29279737605045010");
+  assert.equal(postWithScope?.scope, "seovamarketing");
+  assert.equal(postWithScope?.canonicalUrl, "https://www.facebook.com/groups/seovamarketing/posts/29279737605045010");
+
+  // 2. Multiple photos from same post (different fbid, same pcb.29279737605045010) deduplicate to same post identity
+  const photo2 = "https://www.facebook.com/photo/?fbid=10229807578367256&set=pcb.29279737605045010&__cft__[0]=AZjP93Vxa48Jr0X7";
+  const post2 = adapter.extractPostIdentity(photo2);
+  assert.notEqual(post2, null);
+  assert.equal(post2?.postId, "29279737605045010");
+  assert.equal(post1?.postId, post2?.postId);
+  assert.equal(`${post1?.platform}:${post1?.postId}`, `${post2?.platform}:${post2?.postId}`);
+
+  // 3. Malformed pcb parameter -> rejected
+  assert.equal(adapter.extractPostIdentity("https://www.facebook.com/photo/?fbid=10229806370657064&set=pcb"), null);
+  assert.equal(adapter.extractPostIdentity("https://www.facebook.com/photo/?fbid=10229806370657064&set=pcb."), null);
+  assert.equal(adapter.extractPostIdentity("https://www.facebook.com/photo/?fbid=10229806370657064&set=pcb.@invalid!"), null);
+});
+
 test("FacebookPermalinkAdapter rejects non-post URLs, profiles, photos, and navigation", () => {
   const adapter = new FacebookPermalinkAdapter();
 

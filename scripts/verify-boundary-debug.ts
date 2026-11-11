@@ -32,7 +32,7 @@ async function main() {
     { frame: 11, scrollY: 3640, postUrl: "https://www.facebook.com/groups/mmo_community/posts/pfbid011AABBCCDDEE/?ref=share", title: "Group Post with pfbid" },
     { frame: 12, scrollY: 4004, postUrl: "https://www.facebook.com/meta/posts/10160000000001", title: "Meta Page Post" },
     { frame: 13, scrollY: 4368, postUrl: "https://www.facebook.com/photo/?fbid=999900001&set=gm.29295208876831216&idorvanity=295931577185665", title: "Group Photo matching post 29295208876831216 (deduplicated)" },
-    { frame: 14, scrollY: 4732, postUrl: "https://www.facebook.com/groups/mmo_community/permalink/101589324814/", title: "Group Permalink" },
+    { frame: 14, scrollY: 4732, postUrl: "https://www.facebook.com/photo/?fbid=10229806370657064&set=pcb.29279737605045010&__cft__[0]=AZjP93Vxa", title: "Group Photo Post with set=pcb.{postId} (Frame 14)" },
     { frame: 15, scrollY: 5096, postUrl: "https://www.facebook.com/story.php?story_fbid=pfbid066AsdfGhjkL&id=100012345&notif_t=feedback", title: "Story.php link" },
     { frame: 16, scrollY: 5460, postUrl: "https://www.facebook.com/groups/mmo_community/posts/101589324816/", title: "Group Post" },
     { frame: 17, scrollY: 5824, postUrl: "https://www.facebook.com/groups/mmo_community/posts/pfbid033XxYyZz/", title: "Group Post with pfbid" },

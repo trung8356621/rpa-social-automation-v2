@@ -45,12 +45,13 @@ export class FacebookPermalinkAdapter implements PlatformPermalinkAdapter {
 
     // 0. Special exception for group photo permalinks:
     // /photo/?fbid=...&set=gm.{postId}&idorvanity={groupId}
-    // Must extract postId from gm.{postId}, not fbid. Reject if gm is missing or malformed.
+    // /photo/?fbid=...&set=pcb.{postId}&idorvanity={groupId}
+    // Must extract postId from gm.{postId} or pcb.{postId}, not fbid. Reject if gm/pcb is missing or malformed.
     if (/^\/(?:photo|photo\.php)\/?$/i.test(pathname)) {
       const setParam = parsed.searchParams.get("set");
-      const gmMatch = setParam ? /^gm\.([0-9a-zA-Z_-]+)$/.exec(setParam.trim()) : null;
-      if (gmMatch && gmMatch[1]) {
-        const postId = gmMatch[1];
+      const match = setParam ? /^(?:gm|pcb)\.([0-9a-zA-Z_-]+)$/.exec(setParam.trim()) : null;
+      if (match && match[1]) {
+        const postId = match[1];
         const idorvanity = parsed.searchParams.get("idorvanity");
         const scope = idorvanity && /^[0-9a-zA-Z._-]+$/.test(idorvanity.trim()) ? idorvanity.trim() : undefined;
         const canonicalUrl = scope
@@ -166,9 +167,9 @@ export function buildFacebookPermalinkExtractorJs(): string {
 
     if (/^\\/(?:photo|photo\\.php)\\/?$/i.test(pathname)) {
       const setParam = parsed.searchParams.get("set");
-      const gmMatch = setParam ? /^gm\\.([0-9a-zA-Z_-]+)$/.exec(setParam.trim()) : null;
-      if (gmMatch && gmMatch[1]) {
-        const postId = gmMatch[1];
+      const match = setParam ? /^(?:gm|pcb)\\.([0-9a-zA-Z_-]+)$/.exec(setParam.trim()) : null;
+      if (match && match[1]) {
+        const postId = match[1];
         const idorvanity = parsed.searchParams.get("idorvanity");
         const scope = (idorvanity && /^[0-9a-zA-Z._-]+$/.test(idorvanity.trim())) ? idorvanity.trim() : undefined;
         const canonicalUrl = scope
