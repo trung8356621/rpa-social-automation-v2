@@ -1570,6 +1570,17 @@ function Creator() {
               </>
             ) : (
               <>
+                {mainPage === "visual-match-lab" && (
+                  <button
+                    type="button"
+                    className="primary"
+                    disabled={locked}
+                    onClick={() => navigateApp("visual-match-lab")}
+                    title="Quay lại Frame Inspector trong Visual Match Lab (giữ nguyên run và frame đang chọn)"
+                  >
+                    ← Quay lại Visual Match Lab
+                  </button>
+                )}
                 <input
                   aria-label="URL"
                   value={url}

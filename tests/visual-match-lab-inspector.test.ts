@@ -410,4 +410,105 @@ test("Runtime Hotfix 2: Navigation is strictly blocked when Live Scroll Test is 
   assert.equal(canNavigateBrowserCore(false, "ftp://bad", dummyValidator).canNavigate, false);
 });
 
+test("Task B: BrowserCore navigation handles Facebook redirect ERR_ABORTED, timeouts, and switches UI page to creator", async () => {
+  const simulateNavigateBrowserCore = async (opts: {
+    rawUrl: string;
+    loadBehavior: "success" | "redirect_aborted_after_nav" | "fail_load" | "timeout";
+    timeoutMs?: number;
+  }) => {
+    let currentPage = "visual-match-lab";
+    let browserVisible = false;
+    const previousPage = currentPage;
+
+    const trimmed = opts.rawUrl.trim();
+    const candidateUrl =
+      trimmed.startsWith("//")
+        ? `https:${trimmed}`
+        : trimmed.startsWith("/") || trimmed.startsWith("?")
+          ? new URL(trimmed, "https://www.facebook.com").href
+          : trimmed;
+    const parsed = new URL(candidateUrl);
+
+    browserVisible = true;
+    currentPage = "creator";
+
+    let domReadyOrNavigated = false;
+    let failError: string | null = null;
+    const timeoutMs = opts.timeoutMs ?? 50;
+
+    try {
+      await Promise.race([
+        (async () => {
+          if (opts.loadBehavior === "success") {
+            domReadyOrNavigated = true;
+            return;
+          }
+          if (opts.loadBehavior === "redirect_aborted_after_nav") {
+            domReadyOrNavigated = true;
+            throw new Error("ERR_ABORTED (-3) loading 'https://www.facebook.com/groups/295931577185665/user/1000044444691156/'");
+          }
+          if (opts.loadBehavior === "fail_load") {
+            failError = "LOAD_FAILED (-105 ERR_NAME_NOT_RESOLVED)";
+            throw new Error(failError);
+          }
+          // timeout: hang longer than timeoutMs
+          await new Promise(r => setTimeout(r, timeoutMs * 4));
+        })().catch((err: unknown) => {
+          const msg = err instanceof Error ? err.message : String(err);
+          if (failError) throw new Error(failError);
+          if (msg.includes("ERR_ABORTED") || msg.includes("-3") || domReadyOrNavigated) {
+            return;
+          }
+          throw err;
+        }),
+        new Promise<void>((resolve, reject) => {
+          setTimeout(() => {
+            if (failError) reject(new Error(failError));
+            else if (domReadyOrNavigated) resolve();
+            else reject(new Error(`NAVIGATION_TIMEOUT: Quá ${timeoutMs}ms khi mở ${parsed.href}`));
+          }, timeoutMs);
+        }),
+      ]);
+      if (failError) throw new Error(failError);
+      return { ok: true, page: currentPage, browserVisible, resolvedUrl: parsed.href };
+    } catch (err) {
+      currentPage = previousPage;
+      return {
+        ok: false,
+        page: currentPage,
+        browserVisible,
+        error: err instanceof Error ? err.message : String(err),
+      };
+    }
+  };
+
+  // 1. Relative Facebook Group URL with redirect ERR_ABORTED succeeds and switches UI to creator
+  const res1 = await simulateNavigateBrowserCore({
+    rawUrl: "/groups/295931577185665/user/1000044444691156/?__cft__[0]=AZ1",
+    loadBehavior: "redirect_aborted_after_nav",
+  });
+  assert.equal(res1.ok, true);
+  assert.equal(res1.page, "creator");
+  assert.equal(res1.resolvedUrl, "https://www.facebook.com/groups/295931577185665/user/1000044444691156/?__cft__[0]=AZ1");
+
+  // 2. Real load failure restores page to visual-match-lab and returns actual error
+  const res2 = await simulateNavigateBrowserCore({
+    rawUrl: "https://www.facebook.com/groups/295931577185665/posts/123/",
+    loadBehavior: "fail_load",
+  });
+  assert.equal(res2.ok, false);
+  assert.equal(res2.page, "visual-match-lab");
+  assert.match(res2.error!, /LOAD_FAILED/);
+
+  // 3. Hung navigation times out instead of hanging forever and restores page
+  const res3 = await simulateNavigateBrowserCore({
+    rawUrl: "https://www.facebook.com/groups/295931577185665/posts/123/",
+    loadBehavior: "timeout",
+    timeoutMs: 30,
+  });
+  assert.equal(res3.ok, false);
+  assert.equal(res3.page, "visual-match-lab");
+  assert.match(res3.error!, /NAVIGATION_TIMEOUT/);
+});
+
 

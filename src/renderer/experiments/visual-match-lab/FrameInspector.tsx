@@ -28,15 +28,45 @@ export function FrameInspector({
   invoke: Invoke;
   isLiveRunning?: boolean;
 }) {
-  const [selectedFrameIndex, setSelectedFrameIndex] = useState(0);
-  const [selectedCandidateIndex, setSelectedCandidateIndex] = useState(0);
-  const [filter, setFilter] = useState<FrameFilter>("ALL");
+  const readSavedSelection = (runId: string): { frameIdx: number; candIdx: number; filter: FrameFilter } => {
+    try {
+      const saved = sessionStorage.getItem(`vml_inspector_state_${runId}`);
+      if (saved) {
+        const parsed = JSON.parse(saved);
+        return {
+          frameIdx: typeof parsed.frameIdx === "number" ? parsed.frameIdx : 0,
+          candIdx: typeof parsed.candIdx === "number" ? parsed.candIdx : 0,
+          filter: (parsed.filter as FrameFilter) || "ALL",
+        };
+      }
+    } catch {}
+    return { frameIdx: 0, candIdx: 0, filter: "ALL" as FrameFilter };
+  };
 
-  // A different run has different frames/rows; never carry selection across runs.
+  const [selectedFrameIndex, setSelectedFrameIndex] = useState<number>(() => readSavedSelection(currentRunId).frameIdx);
+  const [selectedCandidateIndex, setSelectedCandidateIndex] = useState<number>(() => readSavedSelection(currentRunId).candIdx);
+  const [filter, setFilter] = useState<FrameFilter>(() => readSavedSelection(currentRunId).filter);
+
+  // A different run has different frames/rows; restore per-run selection or reset to 0.
   useEffect(() => {
-    setSelectedFrameIndex(0);
-    setSelectedCandidateIndex(0);
+    const next = readSavedSelection(currentRunId);
+    setSelectedFrameIndex(next.frameIdx);
+    setSelectedCandidateIndex(next.candIdx);
+    setFilter(next.filter);
   }, [currentRunId]);
+
+  useEffect(() => {
+    try {
+      sessionStorage.setItem(
+        `vml_inspector_state_${currentRunId}`,
+        JSON.stringify({
+          frameIdx: selectedFrameIndex,
+          candIdx: selectedCandidateIndex,
+          filter,
+        }),
+      );
+    } catch {}
+  }, [currentRunId, selectedFrameIndex, selectedCandidateIndex, filter]);
 
   // Calculate filter counts across all frames
   const filterCounts = useMemo(() => {

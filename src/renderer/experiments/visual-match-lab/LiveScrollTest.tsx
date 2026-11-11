@@ -44,6 +44,9 @@ const LIVE_FRAMES_KEY = "visual_match_lab_live_frames_v2";
 const LIVE_RUN_ID_KEY = "visual_match_lab_live_run_id_v2";
 const LIVE_RULES_KEY = "visual_match_lab_permalink_rules_v1";
 
+let inMemoryFramesCache: FrameReport[] | null = null;
+let inMemoryRunIdCache: string | null = null;
+
 function loadSavedRules(): UserPermalinkRule[] {
   try {
     const raw = localStorage.getItem(LIVE_RULES_KEY);
@@ -114,14 +117,17 @@ async function detectActionRows(target: HTMLCanvasElement, templates: HTMLCanvas
 }
 
 export function LiveScrollTest({ invoke, currentFixture, actionGroups, method, threshold }: { invoke: Invoke; currentFixture: FixtureItem | null; actionGroups: RecognizedGroup[]; method: MatchMethod; threshold: number }) {
-  const [frames, setFrames] = useState<FrameReport[]>(() => { try { return JSON.parse(localStorage.getItem(LIVE_FRAMES_KEY) ?? "[]"); } catch { return []; } });
+  const [frames, setFrames] = useState<FrameReport[]>(() => {
+    if (inMemoryFramesCache && inMemoryFramesCache.length > 0) return inMemoryFramesCache;
+    try { return JSON.parse(localStorage.getItem(LIVE_FRAMES_KEY) ?? "[]"); } catch { return []; }
+  });
   const [templates, setTemplates] = useState<LiveIconTemplates>(() => loadLiveTemplates());
   const [rules, setRules] = useState<UserPermalinkRule[]>(() => loadSavedRules());
   const [captureFailures, setCaptureFailures] = useState(0);
   const [running, setRunning] = useState(false);
   const [status, setStatus] = useState("Ready — no public Facebook action is performed.");
   const [debugArtifactPath, setDebugArtifactPath] = useState<string | null>(null);
-  const [currentRunId, setCurrentRunId] = useState<string>(() => localStorage.getItem(LIVE_RUN_ID_KEY) || "live_session");
+  const [currentRunId, setCurrentRunId] = useState<string>(() => inMemoryRunIdCache || localStorage.getItem(LIVE_RUN_ID_KEY) || "live_session");
   const [savedRuns, setSavedRuns] = useState<SavedRunSummaryItem[]>([]);
   const [loadingRun, setLoadingRun] = useState(false);
 
@@ -296,6 +302,8 @@ export function LiveScrollTest({ invoke, currentFixture, actionGroups, method, t
   };
 
   useEffect(() => {
+    inMemoryFramesCache = frames;
+    inMemoryRunIdCache = currentRunId;
     try {
       localStorage.removeItem("visual_match_lab_live_frames_v1");
       localStorage.setItem(LIVE_RUN_ID_KEY, currentRunId);
@@ -303,7 +311,7 @@ export function LiveScrollTest({ invoke, currentFixture, actionGroups, method, t
     try {
       localStorage.setItem(LIVE_FRAMES_KEY, JSON.stringify(frames));
     } catch {
-      // Evidence images can exceed localStorage quota (~5MB); disk-backed loadRun handles reload.
+      // Evidence images can exceed localStorage quota (~5MB); inMemoryFramesCache + disk-backed loadRun handle reload.
     }
   }, [frames, currentRunId]);
 

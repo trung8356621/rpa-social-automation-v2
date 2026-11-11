@@ -159,17 +159,26 @@ export function PermalinkInspector({
     const targetUrl = check.resolvedUrl;
     setNavigatingUrl(url);
     setNavError(null);
+    let timeoutId: ReturnType<typeof setTimeout> | undefined;
     try {
-      const res = await invoke<{
-        ok: boolean;
-        url: string;
-        webContentsId: number;
-        title: string;
-        previewDataUrl?: string;
-      }>({
-        type: "visualMatchLabNavigateBrowserCore",
-        url: targetUrl,
-      });
+      const res = await Promise.race([
+        invoke<{
+          ok: boolean;
+          url: string;
+          webContentsId: number;
+          title: string;
+          previewDataUrl?: string;
+        }>({
+          type: "visualMatchLabNavigateBrowserCore",
+          url: targetUrl,
+        }),
+        new Promise<never>((_, reject) => {
+          timeoutId = setTimeout(
+            () => reject(new Error("Quá thời gian chờ (16s) khi điều hướng BrowserCore.")),
+            16_000,
+          );
+        }),
+      ]);
       if (res.ok) {
         setNavResult(res);
       } else {
@@ -178,6 +187,7 @@ export function PermalinkInspector({
     } catch (e) {
       setNavError(e instanceof Error ? e.message : String(e));
     } finally {
+      if (timeoutId) clearTimeout(timeoutId);
       setNavigatingUrl(null);
     }
   };

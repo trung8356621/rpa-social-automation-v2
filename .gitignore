@@ -61,3 +61,14 @@ Thumbs.db
 desktop.ini
 .idea/
 .vscode/
+
+# Visual Match Lab & runtime evidence in scratch/ (keep scripts/fixtures tracked)
+scratch/runs/
+scratch/boundary-evidence-*.png
+scratch/live-frame-*.png
+scratch/live-template-frame.png
+scratch/visual-match-lab-boundary-debug*.json
+scratch/visual-match-lab-*.png
+scratch/collector-c11-layout-*.png
+scratch/electron-firstwindow.png
+

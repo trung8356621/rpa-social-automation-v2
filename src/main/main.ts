@@ -1891,22 +1891,101 @@ async function boot() {
           throw new Error(`UNSUPPORTED_PLATFORM: Domain ${parsed.hostname} is not Facebook or Threads.`);
         }
         // Navigate existing BrowserCore WebContents using current login session/partition
-        await browser.navigate(parsed.href);
-        await browser.view.webContents.executeJavaScript(
-          `new Promise(r => requestAnimationFrame(() => requestAnimationFrame(r)))`
-        ).catch(() => undefined);
+        const wc = browser.view.webContents;
+        const previousPage = overlays.page;
+        browser.setVisible(true);
+        overlays.setPage("creator");
+        publishLayout();
+
+        const NAV_TIMEOUT_MS = 15_000;
+        let domReadyOrNavigated = false;
+        let failError: string | null = null;
+        const onNav = () => {
+          domReadyOrNavigated = true;
+        };
+        const onFail = (
+          _e: unknown,
+          errorCode: number,
+          errorDescription: string,
+          validatedURL: string,
+          isMainFrame: boolean,
+        ) => {
+          // Ignore ERR_ABORTED (-3) which occurs on Facebook SPA/redirect transitions
+          if (isMainFrame && errorCode !== -3) {
+            failError = `LOAD_FAILED (${errorCode} ${errorDescription || "unknown"}) khi tải ${validatedURL || parsed.href}`;
+          }
+        };
+        wc.on("dom-ready", onNav);
+        wc.on("did-navigate", onNav);
+        wc.on("did-navigate-in-page", onNav);
+        wc.on("did-fail-load", onFail);
+        let timer: ReturnType<typeof setTimeout> | undefined;
+        try {
+          await Promise.race([
+            browser.navigate(parsed.href).catch((err: unknown) => {
+              const msg = err instanceof Error ? err.message : String(err);
+              if (failError) throw new Error(failError);
+              if (msg.includes("ERR_ABORTED") || msg.includes("-3") || domReadyOrNavigated) {
+                return;
+              }
+              throw err;
+            }),
+            new Promise<void>((resolve, reject) => {
+              timer = setTimeout(() => {
+                if (failError) {
+                  reject(new Error(failError));
+                } else if (domReadyOrNavigated) {
+                  resolve();
+                } else {
+                  wc.stop();
+                  reject(
+                    new Error(
+                      `NAVIGATION_TIMEOUT: Quá ${NAV_TIMEOUT_MS / 1000}s khi mở ${parsed.href}`,
+                    ),
+                  );
+                }
+              }, NAV_TIMEOUT_MS);
+            }),
+          ]);
+          if (failError) throw new Error(failError);
+        } catch (err) {
+          overlays.setPage(previousPage);
+          publishLayout();
+          if (!window.webContents.isDestroyed()) {
+            window.webContents.send("creator:case-state", state());
+          }
+          throw err;
+        } finally {
+          if (timer) clearTimeout(timer);
+          wc.removeListener("dom-ready", onNav);
+          wc.removeListener("did-navigate", onNav);
+          wc.removeListener("did-navigate-in-page", onNav);
+          wc.removeListener("did-fail-load", onFail);
+        }
+
+        wc.setZoomFactor(browser.zoom);
+        wc.focus();
+        publishUrl();
+        publishLayout();
+        if (!window.webContents.isDestroyed()) {
+          window.webContents.send("creator:case-state", state());
+        }
+
         let previewDataUrl = "";
         try {
-          const img = await browser.view.webContents.capturePage(undefined, { stayHidden: true });
-          if (!img.isEmpty()) {
+          const img = await Promise.race([
+            wc.capturePage(undefined, { stayHidden: true }),
+            new Promise<null>(r => setTimeout(() => r(null), 1500)),
+          ]);
+          if (img && !img.isEmpty()) {
             previewDataUrl = `data:image/png;base64,${img.toPNG().toString("base64")}`;
           }
         } catch {}
         return {
           ok: true,
-          url: browser.view.webContents.getURL(),
-          webContentsId: browser.view.webContents.id,
-          title: browser.view.webContents.getTitle(),
+          url: wc.getURL(),
+          webContentsId: wc.id,
+          title: wc.getTitle(),
           previewDataUrl,
         };
       }
