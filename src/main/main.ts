@@ -62,7 +62,15 @@ import {
 import { shouldShowBrowserForPage } from "../shared/collector-browser-host.js";
 import { effectiveMatchTo, matchToLabel, matchToLogLabel } from "../shared/match-to.js";
 import { DRAFT_KEYS } from "../shared/contracts.js";
-import type { Command, State, CaseResult, Step, Rect } from "../shared/contracts.js";
+import type {
+  Command,
+  State,
+  CaseResult,
+  Step,
+  Rect,
+  BrowserCoreNavigationEvent,
+  BrowserCoreNavigationResult,
+} from "../shared/contracts.js";
 import { executeManualSync } from "../shared/sync-ipc.js";
 import {
   buildScriptPublishBody,
@@ -1849,6 +1857,9 @@ async function boot() {
       case "visualMatchLabSaveBoundaryDebug":
         isIdle();
         return visualMatchLab.saveBoundaryDebug(command.report);
+      case "visualMatchLabSaveFrameAttempt":
+        isIdle();
+        return visualMatchLab.saveFrameAttempt(command.input);
       case "visualMatchLabListRuns":
         isIdle();
         return visualMatchLab.listRuns();
@@ -1890,42 +1901,121 @@ async function boot() {
         if (!isFacebook && !isThreads) {
           throw new Error(`UNSUPPORTED_PLATFORM: Domain ${parsed.hostname} is not Facebook or Threads.`);
         }
-        // Navigate existing BrowserCore WebContents using current login session/partition
+        // Navigate existing BrowserCore WebContents in Visual Match URL Inspection mode
+        // (NEVER switch overlays.page to "creator" — keep Script Editor completely untouched)
         const wc = browser.view.webContents;
-        const previousPage = overlays.page;
+        const initialUrl = wc.getURL();
+        const requestedUrl = parsed.href;
+        const startedAt = Date.now();
+        const events: BrowserCoreNavigationEvent[] = [];
+        const pushEvent = (
+          type: BrowserCoreNavigationEvent["type"],
+          url: string,
+          extra?: Partial<BrowserCoreNavigationEvent>,
+        ) => {
+          events.push({
+            atMs: Date.now() - startedAt,
+            type,
+            url,
+            ...extra,
+          });
+        };
+
         browser.setVisible(true);
-        overlays.setPage("creator");
+        overlays.layout();
         publishLayout();
 
         const NAV_TIMEOUT_MS = 15_000;
-        let domReadyOrNavigated = false;
+        let mainFrameNavigated = false;
+        let domReadyFired = false;
         let failError: string | null = null;
-        const onNav = () => {
-          domReadyOrNavigated = true;
+
+        const onStartNav = (
+          _e: unknown,
+          url: string,
+          isInPlace: boolean,
+          isMainFrame: boolean,
+        ) => {
+          if (!isMainFrame) return;
+          pushEvent("did-start-navigation", url);
+          if (isInPlace) mainFrameNavigated = true;
         };
-        const onFail = (
+        const onWillRedirect = (
+          _e: unknown,
+          url: string,
+          _isInPlace: boolean,
+          isMainFrame: boolean,
+        ) => {
+          if (!isMainFrame) return;
+          pushEvent("will-redirect", url);
+        };
+        const onDidRedirect = (
+          _e: unknown,
+          url: string,
+          _isInPlace: boolean,
+          isMainFrame: boolean,
+        ) => {
+          if (!isMainFrame) return;
+          pushEvent("did-redirect-navigation", url);
+        };
+        const onDidNavigate = (
+          _e: unknown,
+          url: string,
+          httpResponseCode: number,
+        ) => {
+          mainFrameNavigated = true;
+          pushEvent("did-navigate", url, { httpResponseCode });
+        };
+        const onDidNavigateInPage = (
+          _e: unknown,
+          url: string,
+          isMainFrame: boolean,
+        ) => {
+          if (!isMainFrame) return;
+          mainFrameNavigated = true;
+          pushEvent("did-navigate-in-page", url);
+        };
+        const onDomReady = () => {
+          domReadyFired = true;
+          pushEvent("dom-ready", wc.getURL());
+        };
+        const onFinishLoad = () => {
+          pushEvent("did-finish-load", wc.getURL());
+        };
+        const onFailLoad = (
           _e: unknown,
           errorCode: number,
           errorDescription: string,
           validatedURL: string,
           isMainFrame: boolean,
         ) => {
+          if (!isMainFrame) return;
+          pushEvent("did-fail-load", validatedURL || requestedUrl, {
+            errorCode,
+            errorDescription,
+          });
           // Ignore ERR_ABORTED (-3) which occurs on Facebook SPA/redirect transitions
-          if (isMainFrame && errorCode !== -3) {
-            failError = `LOAD_FAILED (${errorCode} ${errorDescription || "unknown"}) khi tải ${validatedURL || parsed.href}`;
+          if (errorCode !== -3) {
+            failError = `LOAD_FAILED (${errorCode} ${errorDescription || "unknown"}) khi tải ${validatedURL || requestedUrl}`;
           }
         };
-        wc.on("dom-ready", onNav);
-        wc.on("did-navigate", onNav);
-        wc.on("did-navigate-in-page", onNav);
-        wc.on("did-fail-load", onFail);
+
+        wc.on("did-start-navigation", onStartNav);
+        wc.on("will-redirect", onWillRedirect);
+        wc.on("did-redirect-navigation", onDidRedirect);
+        wc.on("did-navigate", onDidNavigate);
+        wc.on("did-navigate-in-page", onDidNavigateInPage);
+        wc.on("dom-ready", onDomReady);
+        wc.on("did-finish-load", onFinishLoad);
+        wc.on("did-fail-load", onFailLoad);
+
         let timer: ReturnType<typeof setTimeout> | undefined;
         try {
           await Promise.race([
-            browser.navigate(parsed.href).catch((err: unknown) => {
+            browser.navigate(requestedUrl).catch((err: unknown) => {
               const msg = err instanceof Error ? err.message : String(err);
               if (failError) throw new Error(failError);
-              if (msg.includes("ERR_ABORTED") || msg.includes("-3") || domReadyOrNavigated) {
+              if (msg.includes("ERR_ABORTED") || msg.includes("-3")) {
                 return;
               }
               throw err;
@@ -1934,42 +2024,90 @@ async function boot() {
               timer = setTimeout(() => {
                 if (failError) {
                   reject(new Error(failError));
-                } else if (domReadyOrNavigated) {
+                } else if (mainFrameNavigated || domReadyFired) {
                   resolve();
                 } else {
                   wc.stop();
                   reject(
                     new Error(
-                      `NAVIGATION_TIMEOUT: Quá ${NAV_TIMEOUT_MS / 1000}s khi mở ${parsed.href}`,
+                      `NAVIGATION_TIMEOUT: Quá ${NAV_TIMEOUT_MS / 1000}s khi mở ${requestedUrl}`,
                     ),
                   );
                 }
               }, NAV_TIMEOUT_MS);
             }),
           ]);
-          if (failError) throw new Error(failError);
+          // Allow 500ms settle for Facebook SPA replaceState / client redirects
+          await new Promise(r => setTimeout(r, 500));
         } catch (err) {
-          overlays.setPage(previousPage);
-          publishLayout();
-          if (!window.webContents.isDestroyed()) {
-            window.webContents.send("creator:case-state", state());
-          }
-          throw err;
+          const errMsg = err instanceof Error ? err.message : String(err);
+          failError = failError || errMsg;
         } finally {
           if (timer) clearTimeout(timer);
-          wc.removeListener("dom-ready", onNav);
-          wc.removeListener("did-navigate", onNav);
-          wc.removeListener("did-navigate-in-page", onNav);
-          wc.removeListener("did-fail-load", onFail);
+          wc.removeListener("did-start-navigation", onStartNav);
+          wc.removeListener("will-redirect", onWillRedirect);
+          wc.removeListener("did-redirect-navigation", onDidRedirect);
+          wc.removeListener("did-navigate", onDidNavigate);
+          wc.removeListener("did-navigate-in-page", onDidNavigateInPage);
+          wc.removeListener("dom-ready", onDomReady);
+          wc.removeListener("did-finish-load", onFinishLoad);
+          wc.removeListener("did-fail-load", onFailLoad);
         }
 
         wc.setZoomFactor(browser.zoom);
-        wc.focus();
-        publishUrl();
-        publishLayout();
-        if (!window.webContents.isDestroyed()) {
-          window.webContents.send("creator:case-state", state());
-        }
+        const finalUrl = wc.getURL();
+        let redirected = false;
+        let redirectReason: string | undefined;
+        try {
+          const reqParsed = new URL(requestedUrl);
+          const finParsed = new URL(finalUrl);
+          const normPath = (p: string) => p.replace(/\/+$/, "") || "/";
+          const reqPath = normPath(reqParsed.pathname);
+          const finPath = normPath(finParsed.pathname);
+          const isQueryOnlyFeedUrl =
+            (reqPath === "/" || /^\/groups\/[^/]+$/i.test(reqPath)) &&
+            !reqParsed.searchParams.has("story_fbid") &&
+            !reqParsed.searchParams.has("fbid") &&
+            !reqParsed.searchParams.has("multi_permalinks") &&
+            Array.from(reqParsed.searchParams.keys()).some(k => k.startsWith("__cft__") || k === "__tn__");
+
+          if (reqPath !== finPath) {
+            redirected = true;
+            if (finPath === "/") {
+              redirectReason = `Facebook đã redirect từ "${reqPath}" về trang chủ "${finalUrl}". Nguyên nhân: (1) URL chỉ là link profile/tracking trong group hoặc thiếu postId hợp lệ, (2) bài viết/member profile bị giới hạn quyền truy cập, hoặc (3) Facebook từ chối deep-link có tham số __cft__ cũ.`;
+            } else if (finPath.includes("/login") || finPath.includes("/checkpoint")) {
+              redirectReason = `Facebook đã redirect sang trang đăng nhập/checkpoint (${finalUrl}). Phiên đăng nhập có thể đã hết hạn.`;
+            } else {
+              redirectReason = `Facebook đã chuyển hướng đường dẫn từ "${reqPath}" sang "${finPath}".`;
+            }
+          } else if (isQueryOnlyFeedUrl) {
+            redirected = true;
+            redirectReason = `URL trong DOM chỉ chứa tham số tracking (?__cft__[0]=...) trên "${reqPath}", không có postId bài viết (trên Facebook, bài ẩn danh không ảnh/comment chỉ gắn href bài viết khi hover vào timestamp). BrowserCore đã mở trang feed "${finalUrl}".`;
+          } else if (
+            events.some(e => e.type === "will-redirect" || e.type === "did-redirect-navigation")
+          ) {
+            redirected = true;
+            redirectReason = `Có HTTP redirect trong quá trình tải (URL đích cuối: ${finalUrl}).`;
+          }
+        } catch {}
+
+        const status: BrowserCoreNavigationResult["status"] = failError
+          ? "FAILED"
+          : redirected
+            ? "REDIRECTED"
+            : "SUCCESS";
+
+        logMainEvent(runDir, "visual-match-lab-navigate-browsercore", {
+          initialUrl,
+          requestedUrl,
+          finalUrl,
+          status,
+          redirected,
+          redirectReason,
+          error: failError ?? undefined,
+          events,
+          webContentsId: wc.id,
+        });
 
         let previewDataUrl = "";
         try {
@@ -1981,13 +2119,22 @@ async function boot() {
             previewDataUrl = `data:image/png;base64,${img.toPNG().toString("base64")}`;
           }
         } catch {}
-        return {
-          ok: true,
-          url: wc.getURL(),
+
+        const navResponse: BrowserCoreNavigationResult = {
+          ok: !failError,
+          status,
+          initialUrl,
+          requestedUrl,
+          finalUrl,
+          redirected,
+          redirectReason,
+          error: failError ?? undefined,
+          events,
           webContentsId: wc.id,
           title: wc.getTitle(),
           previewDataUrl,
         };
+        return navResponse;
       }
       case "visualMatchLabOcr": {
         isIdle();

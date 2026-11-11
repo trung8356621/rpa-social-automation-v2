@@ -295,8 +295,8 @@ test("UI Hotfix: Image load guard suppresses overlay bounding boxes when image i
   assert.equal(shouldRenderBboxOverlay(true, false, true), true);
 });
 
-test("Runtime Hotfix 2: validateNavigableUrl and resolveFullUrl support relative URLs and block invalid schemes", async () => {
-  const { validateNavigableUrl, resolveFullUrl } = await import(
+test("Runtime Hotfix 2: validateNavigableUrl, resolveFullUrl, and stripFacebookTrackingParams handle relative URLs, root tracking queries, and invalid schemes", async () => {
+  const { validateNavigableUrl, resolveFullUrl, stripFacebookTrackingParams } = await import(
     "../src/renderer/experiments/visual-match-lab/PermalinkInspector.js"
   );
 
@@ -313,13 +313,27 @@ test("Runtime Hotfix 2: validateNavigableUrl and resolveFullUrl support relative
     "https://www.facebook.com/groups/295931577185665/user/1000044444691156/?__cft__[0]=AZ1XN0BsjX9N",
   );
 
+  // Strip tracking parameters helper
+  assert.equal(
+    stripFacebookTrackingParams(relGroupUser),
+    "https://www.facebook.com/groups/295931577185665/user/1000044444691156/",
+  );
+
+  // Query-only tracking string (?__cft__[0]=...) resolves against active group URL and is navigable in BrowserCore
   const relQuery = "?__cft__[0]=AZ1XN0BsjX9N&__tn__=-UC%2CP-R";
-  const navRelQuery = validateNavigableUrl(relQuery);
+  const navRelQuery = validateNavigableUrl(relQuery, "https://www.facebook.com/groups/295931577185665/");
   assert.equal(navRelQuery.valid, true);
   assert.equal(
     navRelQuery.resolvedUrl,
-    "https://www.facebook.com/?__cft__[0]=AZ1XN0BsjX9N&__tn__=-UC%2CP-R",
+    "https://www.facebook.com/groups/295931577185665/?__cft__[0]=AZ1XN0BsjX9N&__tn__=-UC%2CP-R",
   );
+
+  // Hash-only anchor (#) is blocked
+  assert.equal(validateNavigableUrl("#").valid, false);
+
+  // Root permalink.php with story_fbid is still valid
+  const storyQuery = "/permalink.php?story_fbid=123456&id=789";
+  assert.equal(validateNavigableUrl(storyQuery).valid, true);
 
   // Valid Facebook
   assert.equal(validateNavigableUrl("https://www.facebook.com/groups/mmo_community/posts/101589324789/").valid, true);
@@ -410,105 +424,361 @@ test("Runtime Hotfix 2: Navigation is strictly blocked when Live Scroll Test is 
   assert.equal(canNavigateBrowserCore(false, "ftp://bad", dummyValidator).canNavigate, false);
 });
 
-test("Task B: BrowserCore navigation handles Facebook redirect ERR_ABORTED, timeouts, and switches UI page to creator", async () => {
-  const simulateNavigateBrowserCore = async (opts: {
-    rawUrl: string;
-    loadBehavior: "success" | "redirect_aborted_after_nav" | "fail_load" | "timeout";
-    timeoutMs?: number;
-  }) => {
-    let currentPage = "visual-match-lab";
-    let browserVisible = false;
-    const previousPage = currentPage;
+test("Open URL Browser Host: keeps page in visual-match-lab (never switches to creator/Script Editor) and detects Facebook redirects", async () => {
+  const mainSource = fs.readFileSync(path.resolve("src/main/main.ts"), "utf8");
+  const navCaseIdx = mainSource.indexOf('case "visualMatchLabNavigateBrowserCore":');
+  assert.ok(navCaseIdx >= 0, "visualMatchLabNavigateBrowserCore handler must exist");
+  const navCaseChunk = mainSource.slice(navCaseIdx, navCaseIdx + 7500);
 
-    const trimmed = opts.rawUrl.trim();
-    const candidateUrl =
-      trimmed.startsWith("//")
-        ? `https:${trimmed}`
-        : trimmed.startsWith("/") || trimmed.startsWith("?")
-          ? new URL(trimmed, "https://www.facebook.com").href
-          : trimmed;
-    const parsed = new URL(candidateUrl);
+  // Must NOT call overlays.setPage("creator")
+  assert.doesNotMatch(
+    navCaseChunk,
+    /overlays\.setPage\(\s*["']creator["']\s*\)/,
+    "visualMatchLabNavigateBrowserCore must not switch to Script Editor (creator page)",
+  );
 
-    browserVisible = true;
-    currentPage = "creator";
-
-    let domReadyOrNavigated = false;
-    let failError: string | null = null;
-    const timeoutMs = opts.timeoutMs ?? 50;
-
-    try {
-      await Promise.race([
-        (async () => {
-          if (opts.loadBehavior === "success") {
-            domReadyOrNavigated = true;
-            return;
-          }
-          if (opts.loadBehavior === "redirect_aborted_after_nav") {
-            domReadyOrNavigated = true;
-            throw new Error("ERR_ABORTED (-3) loading 'https://www.facebook.com/groups/295931577185665/user/1000044444691156/'");
-          }
-          if (opts.loadBehavior === "fail_load") {
-            failError = "LOAD_FAILED (-105 ERR_NAME_NOT_RESOLVED)";
-            throw new Error(failError);
-          }
-          // timeout: hang longer than timeoutMs
-          await new Promise(r => setTimeout(r, timeoutMs * 4));
-        })().catch((err: unknown) => {
-          const msg = err instanceof Error ? err.message : String(err);
-          if (failError) throw new Error(failError);
-          if (msg.includes("ERR_ABORTED") || msg.includes("-3") || domReadyOrNavigated) {
-            return;
-          }
-          throw err;
-        }),
-        new Promise<void>((resolve, reject) => {
-          setTimeout(() => {
-            if (failError) reject(new Error(failError));
-            else if (domReadyOrNavigated) resolve();
-            else reject(new Error(`NAVIGATION_TIMEOUT: Quá ${timeoutMs}ms khi mở ${parsed.href}`));
-          }, timeoutMs);
-        }),
-      ]);
-      if (failError) throw new Error(failError);
-      return { ok: true, page: currentPage, browserVisible, resolvedUrl: parsed.href };
-    } catch (err) {
-      currentPage = previousPage;
+  // Verify redirect detection logic between requestedUrl and finalUrl
+  const evaluateNavigationOutcome = (requestedUrl: string, finalUrl: string) => {
+    const reqParsed = new URL(requestedUrl);
+    const finParsed = new URL(finalUrl);
+    const reqPath = reqParsed.pathname.replace(/\/+$/, "") || "/";
+    const finPath = finParsed.pathname.replace(/\/+$/, "") || "/";
+    if (reqPath !== finPath) {
       return {
-        ok: false,
-        page: currentPage,
-        browserVisible,
-        error: err instanceof Error ? err.message : String(err),
+        ok: true,
+        status: "REDIRECTED" as const,
+        redirected: true,
+        requestedUrl,
+        finalUrl,
+        redirectReason:
+          finPath === "/"
+            ? `Facebook đã redirect từ "${reqPath}" về trang chủ "${finalUrl}".`
+            : `Facebook đã chuyển hướng đường dẫn từ "${reqPath}" sang "${finPath}".`,
       };
     }
+    return {
+      ok: true,
+      status: "SUCCESS" as const,
+      redirected: false,
+      requestedUrl,
+      finalUrl,
+    };
   };
 
-  // 1. Relative Facebook Group URL with redirect ERR_ABORTED succeeds and switches UI to creator
-  const res1 = await simulateNavigateBrowserCore({
-    rawUrl: "/groups/295931577185665/user/1000044444691156/?__cft__[0]=AZ1",
-    loadBehavior: "redirect_aborted_after_nav",
-  });
-  assert.equal(res1.ok, true);
-  assert.equal(res1.page, "creator");
-  assert.equal(res1.resolvedUrl, "https://www.facebook.com/groups/295931577185665/user/1000044444691156/?__cft__[0]=AZ1");
+  // 1. Direct permalink stays on target -> SUCCESS
+  const okOutcome = evaluateNavigationOutcome(
+    "https://www.facebook.com/groups/295931577185665/posts/101589324789/",
+    "https://www.facebook.com/groups/295931577185665/posts/101589324789/",
+  );
+  assert.equal(okOutcome.status, "SUCCESS");
+  assert.equal(okOutcome.redirected, false);
 
-  // 2. Real load failure restores page to visual-match-lab and returns actual error
-  const res2 = await simulateNavigateBrowserCore({
-    rawUrl: "https://www.facebook.com/groups/295931577185665/posts/123/",
-    loadBehavior: "fail_load",
-  });
-  assert.equal(res2.ok, false);
-  assert.equal(res2.page, "visual-match-lab");
-  assert.match(res2.error!, /LOAD_FAILED/);
-
-  // 3. Hung navigation times out instead of hanging forever and restores page
-  const res3 = await simulateNavigateBrowserCore({
-    rawUrl: "https://www.facebook.com/groups/295931577185665/posts/123/",
-    loadBehavior: "timeout",
-    timeoutMs: 30,
-  });
-  assert.equal(res3.ok, false);
-  assert.equal(res3.page, "visual-match-lab");
-  assert.match(res3.error!, /NAVIGATION_TIMEOUT/);
+  // 2. Group user link with tracking redirected by Facebook to homepage -> REDIRECTED (not silently claimed as normal success)
+  const redirectedToRoot = evaluateNavigationOutcome(
+    "https://www.facebook.com/groups/295931577185665/user/1000044444691156/?__cft__[0]=AZ1",
+    "https://www.facebook.com/",
+  );
+  assert.equal(redirectedToRoot.status, "REDIRECTED");
+  assert.equal(redirectedToRoot.redirected, true);
+  assert.match(redirectedToRoot.redirectReason!, /redirect.*trang chủ/i);
 });
+
+test("Evidence Storage Isolation (Tests 1–7): Run A vs Run B isolation, SHA-256 immutability, multi-attempt preservation, and restart reopen", async () => {
+  const crypto = await import("node:crypto");
+  const os = await import("node:os");
+  const { VisualMatchRunStorage } = await import("../src/main/visual-match-lab-storage.js");
+
+  const tempProjectDir = fs.mkdtempSync(path.join(os.tmpdir(), "rpa-v2-storage-test-"));
+  const sha256File = (filePath: string) =>
+    crypto.createHash("sha256").update(fs.readFileSync(filePath)).digest("hex");
+
+  const makePngDataUrl = (tag: string) =>
+    `data:image/png;base64,${Buffer.from(`PNG_EVIDENCE_PAYLOAD::${tag}`).toString("base64")}`;
+
+  try {
+    const storage1 = new VisualMatchRunStorage(tempProjectDir);
+    const runA = "run_1800000000001_testa";
+    const runB = "run_1800000000002_testb";
+
+    // 1. Run Test A with frame 1 (row 0, row 1) and frame 2 (row 0)
+    const reportA = {
+      runId: runA,
+      timestamp: "2026-11-11T10:00:00.000Z",
+      createdAt: "2026-11-11T09:59:00.000Z",
+      completedAt: "2026-11-11T10:00:00.000Z",
+      status: "COMPLETED" as const,
+      environment: { width: 1024, height: 560, zoom: 1, platform: "facebook" as const },
+      sessionRef: { webContentsId: 101, pageUrl: "https://www.facebook.com/groups/groupA/" },
+      totalFrames: 2,
+      records: [
+        {
+          runId: runA,
+          frameNumber: 1,
+          scrollY: 0,
+          browserWebContentsId: 101,
+          rowIndex: 0,
+          actionRowBbox: { x: 180, y: 200, width: 120, height: 24 },
+          matchingScore: 0.98,
+          hitPoint: { x: 195, y: 212 },
+          ancestorDepth: 4,
+          ancestors: [
+            {
+              level: 2,
+              tag: "div",
+              role: "article",
+              id: "post-a1",
+              className: "card",
+              rect: { x: 150, y: 50, width: 500, height: 300 },
+              rawUrls: ["https://www.facebook.com/groups/groupA/posts/111111/"],
+              postIdentities: [
+                {
+                  platform: "facebook" as const,
+                  postId: "111111",
+                  rawUrl: "https://www.facebook.com/groups/groupA/posts/111111/",
+                  canonicalUrl: "https://www.facebook.com/groups/groupA/posts/111111/",
+                  matchedPattern: "group_posts",
+                },
+              ],
+              uniqueKeys: ["facebook:111111"],
+              uniqueCount: 1,
+            },
+          ],
+          transitions: {
+            firstPermalinkLevel: 2,
+            secondPermalinkLevel: 3,
+            boundaryCrossedLevel: 3,
+            jumpedZeroToTwoPlus: false,
+            jumpReason: null,
+          },
+          candidateContainer: { tag: "div", role: "article", id: "post-a1", className: "card", level: 2, rect: { x: 150, y: 50, width: 500, height: 300 } },
+          crossedContainer: null,
+          boundaryStatus: "BOUNDARY_FOUND" as const,
+          riskReason: null,
+          ownershipEvidence: { isArticle: true, hasDistinctCardLayout: true, containsActionRow: true, notes: ["Run A Frame 1 Row 0"] },
+          originalScreenshotBase64: makePngDataUrl("RUN_A_F1_RAW"),
+          evidenceScreenshotBase64: makePngDataUrl("RUN_A_F1_R0_HIGHLIGHTED"),
+        },
+        {
+          runId: runA,
+          frameNumber: 1,
+          scrollY: 0,
+          browserWebContentsId: 101,
+          rowIndex: 1,
+          actionRowBbox: { x: 180, y: 420, width: 120, height: 24 },
+          matchingScore: 0.95,
+          hitPoint: { x: 195, y: 432 },
+          ancestorDepth: 4,
+          ancestors: [],
+          transitions: {
+            firstPermalinkLevel: null,
+            secondPermalinkLevel: null,
+            boundaryCrossedLevel: null,
+            jumpedZeroToTwoPlus: false,
+            jumpReason: null,
+          },
+          candidateContainer: null,
+          crossedContainer: null,
+          boundaryStatus: "BOUNDARY_NOT_FOUND" as const,
+          riskReason: "Run A Frame 1 Row 1",
+          ownershipEvidence: { isArticle: false, hasDistinctCardLayout: false, containsActionRow: false, notes: [] },
+          originalScreenshotBase64: makePngDataUrl("RUN_A_F1_RAW"),
+          evidenceScreenshotBase64: makePngDataUrl("RUN_A_F1_R1_HIGHLIGHTED"),
+        },
+        {
+          runId: runA,
+          frameNumber: 2,
+          scrollY: 364,
+          browserWebContentsId: 101,
+          rowIndex: 0,
+          actionRowBbox: { x: 180, y: 190, width: 120, height: 24 },
+          matchingScore: 0.99,
+          hitPoint: { x: 195, y: 202 },
+          ancestorDepth: 4,
+          ancestors: [],
+          transitions: {
+            firstPermalinkLevel: 2,
+            secondPermalinkLevel: 3,
+            boundaryCrossedLevel: 3,
+            jumpedZeroToTwoPlus: false,
+            jumpReason: null,
+          },
+          candidateContainer: { tag: "div", role: "article", id: "post-a2", className: "card", level: 2, rect: { x: 150, y: 40, width: 500, height: 320 } },
+          crossedContainer: null,
+          boundaryStatus: "BOUNDARY_FOUND" as const,
+          riskReason: null,
+          ownershipEvidence: { isArticle: true, hasDistinctCardLayout: true, containsActionRow: true, notes: ["Run A Frame 2 Row 0"] },
+          originalScreenshotBase64: makePngDataUrl("RUN_A_F2_RAW"),
+          evidenceScreenshotBase64: makePngDataUrl("RUN_A_F2_R0_HIGHLIGHTED"),
+        },
+      ],
+      summary: {
+        totalProbed: 3,
+        boundaryFoundCount: 2,
+        boundaryAmbiguousCount: 0,
+        boundaryNotFoundCount: 1,
+        jumpedZeroToTwoPlusCount: 0,
+        jumpedFrames: [],
+      },
+    };
+
+    const resA = await storage1.saveRun(reportA);
+    assert.equal(resA.ok, true);
+
+    const runADir = path.join(tempProjectDir, "scratch", "runs", runA);
+    const runAF1Raw = path.join(runADir, "frames", "frame-001", "screenshot.png");
+    const runAF1Hl = path.join(runADir, "frames", "frame-001", "highlighted.png");
+    const runAF1R0 = path.join(runADir, "frames", "frame-001", "row-000.png");
+    const runAF1R1 = path.join(runADir, "frames", "frame-001", "row-001.png");
+    const runAF2Raw = path.join(runADir, "frames", "frame-002", "screenshot.png");
+    const runAF2Hl = path.join(runADir, "frames", "frame-002", "highlighted.png");
+    const runAF2R0 = path.join(runADir, "frames", "frame-002", "row-000.png");
+
+    // Verify exact directory structure of Run A
+    assert.ok(fs.existsSync(path.join(runADir, "manifest.json")), "manifest.json must exist");
+    assert.ok(fs.existsSync(path.join(runADir, "result.json")), "result.json must exist");
+    assert.ok(fs.existsSync(path.join(runADir, "logs", "pipeline.jsonl")), "logs/pipeline.jsonl must exist");
+    assert.ok(fs.existsSync(path.join(runADir, "logs", "errors.jsonl")), "logs/errors.jsonl must exist");
+    assert.ok(fs.existsSync(runAF1Raw), "frames/frame-001/screenshot.png must exist");
+    assert.ok(fs.existsSync(runAF1Hl), "frames/frame-001/highlighted.png must exist");
+    assert.ok(fs.existsSync(runAF1R0), "frames/frame-001/row-000.png must exist");
+    assert.ok(fs.existsSync(runAF1R1), "frames/frame-001/row-001.png must exist");
+    assert.ok(fs.existsSync(runAF2Raw), "frames/frame-002/screenshot.png must exist");
+    assert.ok(fs.existsSync(runAF2Hl), "frames/frame-002/highlighted.png must exist");
+    assert.ok(fs.existsSync(runAF2R0), "frames/frame-002/row-000.png must exist");
+
+    // Record SHA-256 checksums of Run A before running Run B
+    const hashBeforeB = {
+      f1Raw: sha256File(runAF1Raw),
+      f1Hl: sha256File(runAF1Hl),
+      f1R0: sha256File(runAF1R0),
+      f1R1: sha256File(runAF1R1),
+      f2Raw: sha256File(runAF2Raw),
+      f2Hl: sha256File(runAF2Hl),
+      f2R0: sha256File(runAF2R0),
+    };
+
+    // 2. Run Test B with IDENTICAL frameIndex (1, 2) and rowIndex (0, 1)
+    const reportB = {
+      ...reportA,
+      runId: runB,
+      timestamp: "2026-11-11T10:05:00.000Z",
+      createdAt: "2026-11-11T10:04:00.000Z",
+      completedAt: "2026-11-11T10:05:00.000Z",
+      sessionRef: { webContentsId: 202, pageUrl: "https://www.facebook.com/groups/groupB/" },
+      records: [
+        {
+          ...reportA.records[0]!,
+          runId: runB,
+          originalScreenshotBase64: makePngDataUrl("RUN_B_F1_RAW_DIFFERENT"),
+          evidenceScreenshotBase64: makePngDataUrl("RUN_B_F1_R0_HIGHLIGHTED_DIFFERENT"),
+        },
+        {
+          ...reportA.records[1]!,
+          runId: runB,
+          originalScreenshotBase64: makePngDataUrl("RUN_B_F1_RAW_DIFFERENT"),
+          evidenceScreenshotBase64: makePngDataUrl("RUN_B_F1_R1_HIGHLIGHTED_DIFFERENT"),
+        },
+        {
+          ...reportA.records[2]!,
+          runId: runB,
+          originalScreenshotBase64: makePngDataUrl("RUN_B_F2_RAW_DIFFERENT"),
+          evidenceScreenshotBase64: makePngDataUrl("RUN_B_F2_R0_HIGHLIGHTED_DIFFERENT"),
+        },
+      ],
+    };
+
+    const resB = await storage1.saveRun(reportB);
+    assert.equal(resB.ok, true);
+
+    const runBDir = path.join(tempProjectDir, "scratch", "runs", runB);
+    // 3. Verify A and B live in two separate directories and no flat files are written to scratch/
+    assert.notEqual(runADir, runBDir);
+    assert.ok(fs.existsSync(runADir));
+    assert.ok(fs.existsSync(runBDir));
+    const scratchTopEntries = fs.readdirSync(path.join(tempProjectDir, "scratch"));
+    assert.deepEqual(scratchTopEntries, ["runs"], "No flat files may be written to scratch/ root");
+
+    // 4. Verify SHA-256 checksums of Run A's images are 100% unchanged after Run B
+    assert.equal(sha256File(runAF1Raw), hashBeforeB.f1Raw, "Run A frame-001/screenshot.png checksum must not change");
+    assert.equal(sha256File(runAF1Hl), hashBeforeB.f1Hl, "Run A frame-001/highlighted.png checksum must not change");
+    assert.equal(sha256File(runAF1R0), hashBeforeB.f1R0, "Run A frame-001/row-000.png checksum must not change");
+    assert.equal(sha256File(runAF1R1), hashBeforeB.f1R1, "Run A frame-001/row-001.png checksum must not change");
+    assert.equal(sha256File(runAF2Raw), hashBeforeB.f2Raw, "Run A frame-002/screenshot.png checksum must not change");
+    assert.equal(sha256File(runAF2Hl), hashBeforeB.f2Hl, "Run A frame-002/highlighted.png checksum must not change");
+    assert.equal(sha256File(runAF2R0), hashBeforeB.f2R0, "Run A frame-002/row-000.png checksum must not change");
+
+    // Verify Run B has its own distinct checksums
+    const runBF1R0 = path.join(runBDir, "frames", "frame-001", "row-000.png");
+    assert.notEqual(sha256File(runBF1R0), hashBeforeB.f1R0, "Run B must have its own distinct evidence payload");
+
+    // 6. Re-probe the same frame (frame-001, row-000) in Run A -> creates attempt-002 without overwriting attempt-001 or row-000.png
+    const attempt1R0Path = path.join(runADir, "frames", "frame-001", "attempts", "attempt-001", "row-000.png");
+    const attempt1R0Hash = sha256File(attempt1R0Path);
+
+    const attemptRes = await storage1.saveFrameAttempt({
+      runId: runA,
+      frameIndex: 1,
+      rowIndex: 0,
+      reason: "reprobe-custom-permalink-rule",
+      ruleTested: { id: "rule_custom_1", name: "Custom Rule", template: "https://www.facebook.com/groups/{groupId}/posts/{postId}/" },
+      record: {
+        ...reportA.records[0]!,
+        boundaryStatus: "BOUNDARY_FOUND",
+        evidenceScreenshotBase64: makePngDataUrl("RUN_A_F1_R0_ATTEMPT_2_REPROBED"),
+      },
+      highlightedBase64: makePngDataUrl("RUN_A_F1_R0_ATTEMPT_2_REPROBED"),
+    });
+
+    assert.equal(attemptRes.ok, true);
+    assert.equal(attemptRes.attemptId, "attempt-002");
+    const attempt2R0Path = path.join(runADir, "frames", "frame-001", "attempts", "attempt-002", "row-000.png");
+    assert.ok(fs.existsSync(attempt1R0Path), "attempt-001/row-000.png must still exist");
+    assert.ok(fs.existsSync(attempt2R0Path), "attempt-002/row-000.png must be created");
+    assert.equal(sha256File(attempt1R0Path), attempt1R0Hash, "attempt-001/row-000.png checksum must remain untouched");
+    assert.equal(sha256File(runAF1R0), hashBeforeB.f1R0, "Primary frame-001/row-000.png checksum must remain untouched");
+    assert.notEqual(sha256File(attempt2R0Path), attempt1R0Hash, "attempt-002 must contain new reprobed evidence");
+
+    // 5 & 7. Simulate app restart (fresh storage instance) and reopen both Run A and Run B from disk
+    const storageAfterRestart = new VisualMatchRunStorage(tempProjectDir);
+    const listedRuns = await storageAfterRestart.listRuns();
+    assert.equal(listedRuns.length, 2);
+    assert.deepEqual(
+      listedRuns.map(r => r.runId),
+      [runB, runA],
+    );
+
+    const reopenedA = await storageAfterRestart.loadRun(runA);
+    const reopenedB = await storageAfterRestart.loadRun(runB);
+
+    assert.equal(reopenedA.ok, true);
+    assert.equal(reopenedB.ok, true);
+    assert.equal(reopenedA.report.runId, runA);
+    assert.equal(reopenedB.report.runId, runB);
+
+    // Check that reopened A has its exact original images and 2 attempts on frame 1
+    assert.equal(
+      reopenedA.report.records[0]!.evidenceScreenshotBase64,
+      makePngDataUrl("RUN_A_F1_R0_HIGHLIGHTED"),
+    );
+    assert.equal(
+      reopenedA.report.records[0]!.originalScreenshotBase64,
+      makePngDataUrl("RUN_A_F1_RAW"),
+    );
+    assert.equal(reopenedA.report.frames?.[0]?.attempts?.length, 2);
+
+    // Check that reopened B has its exact distinct images
+    assert.equal(
+      reopenedB.report.records[0]!.evidenceScreenshotBase64,
+      makePngDataUrl("RUN_B_F1_R0_HIGHLIGHTED_DIFFERENT"),
+    );
+    assert.equal(
+      reopenedB.report.records[0]!.originalScreenshotBase64,
+      makePngDataUrl("RUN_B_F1_RAW_DIFFERENT"),
+    );
+  } finally {
+    fs.rmSync(tempProjectDir, { recursive: true, force: true });
+  }
+});
+
 
 

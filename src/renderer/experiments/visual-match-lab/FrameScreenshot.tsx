@@ -1,4 +1,5 @@
 import React, { useState, useEffect } from "react";
+import { getExpectedFrameEvidenceDisplayPath } from "../../../shared/visual-match-lab-storage";
 import type { LiveCapture } from "./types";
 import type { LiveCandidate } from "./LiveScrollTest";
 
@@ -54,7 +55,7 @@ export function FrameScreenshot({
   const captureH = capture?.height || 560;
 
   const expectedImagePath =
-    evidenceSavedPath || `scratch/boundary-evidence-f${frameNumber}-r0.png`;
+    evidenceSavedPath || getExpectedFrameEvidenceDisplayPath(runId, frameNumber, selectedCandidateIndex);
 
   // The highlighted evidence PNG already has the DOM-probe annotations baked into
   // its pixels. Drawing React bboxes on it duplicates annotations, and for saved runs

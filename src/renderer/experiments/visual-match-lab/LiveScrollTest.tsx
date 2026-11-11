@@ -11,6 +11,11 @@ import {
   BUILTIN_PERMALINK_RULES,
   type UserPermalinkRule,
 } from "../../../shared/permalink-rules";
+import {
+  getExpectedFrameEvidenceDisplayPath,
+  type VisualMatchLogEntry,
+  type VisualMatchStoredFrame,
+} from "../../../shared/visual-match-lab-storage";
 import { FrameInspector } from "./FrameInspector";
 import { RunSummary } from "./RunSummary";
 
@@ -26,6 +31,7 @@ export type LiveCandidate = {
   docY: number;
   boundary?: BoundaryProbeResult;
   highlightedEvidenceUrl?: string;
+  evidenceSavedPath?: string;
 };
 export type FrameReport = {
   frame: number;
@@ -171,12 +177,64 @@ export function LiveScrollTest({ invoke, currentFixture, actionGroups, method, t
       if (f.frame !== frameNumber) return f;
       const nextCandidates = f.candidates.map((c, idx) => {
         if (idx !== candidateIndex) return c;
-        return {
+        const updatedCand: LiveCandidate = {
           ...c,
           boundary: newBoundary,
           highlightedEvidenceUrl: evidenceUrl || c.highlightedEvidenceUrl,
           status: classifyLiveCandidate(c.context, c.iconCount, c.docY, c.fingerprint, [], newBoundary.status),
         };
+        if (currentRunId && currentRunId !== "live_session") {
+          const record: BoundaryDebugRecord = {
+            runId: currentRunId,
+            frameNumber,
+            scrollY: f.capture.viewport.scrollY,
+            browserWebContentsId: f.capture.webContentsId,
+            rowIndex: candidateIndex,
+            actionRowBbox: c.bbox,
+            matchingScore: c.score,
+            hitPoint: newBoundary.actionPoint,
+            hitElement: newBoundary.hitElement,
+            ancestorDepth: newBoundary.ancestorsChecked,
+            ancestors: (newBoundary.ancestorSteps ?? []).map(a => ({
+              level: a.level,
+              tag: a.tag,
+              role: a.role,
+              id: a.id,
+              className: a.className,
+              rect: a.rect,
+              rawUrls: a.rawUrls ?? [],
+              postIdentities: a.postIdentities,
+              uniqueKeys: a.uniqueKeys,
+              uniqueCount: a.uniqueKeys.length,
+            })),
+            transitions: {
+              firstPermalinkLevel: newBoundary.firstPermalinkLevel,
+              secondPermalinkLevel: newBoundary.secondPermalinkLevel,
+              boundaryCrossedLevel: newBoundary.boundaryCrossedLevel,
+              jumpedZeroToTwoPlus: Boolean(newBoundary.jumpedZeroToTwoPlus),
+              jumpReason: newBoundary.jumpReason ?? null,
+            },
+            candidateContainer: newBoundary.candidateContainer,
+            crossedContainer: newBoundary.crossedContainer,
+            boundaryStatus: newBoundary.status,
+            riskReason: newBoundary.riskReason,
+            ownershipEvidence: newBoundary.ownershipEvidence,
+          };
+          void invoke({
+            type: "visualMatchLabSaveFrameAttempt",
+            input: {
+              runId: currentRunId,
+              frameIndex: frameNumber,
+              rowIndex: candidateIndex,
+              reason: "inspector-reprobe",
+              record,
+              highlightedBase64: evidenceUrl || c.highlightedEvidenceUrl,
+              screenshotBase64: f.capture.dataUrl,
+              customRules: rules,
+            },
+          }).catch(err => console.warn("Failed to save frame attempt:", err));
+        }
+        return updatedCand;
       });
       const frameBoundary: FrameReport["boundaryStatus"] =
         nextCandidates.some(c => c.boundary?.status === "BOUNDARY_FOUND")
@@ -201,93 +259,175 @@ export function LiveScrollTest({ invoke, currentFixture, actionGroups, method, t
       });
       if (res.ok && res.report) {
         const loadedReports: FrameReport[] = [];
-        const recordsByFrame = new Map<number, BoundaryDebugRecord[]>();
-        for (const r of res.report.records) {
-          const list = recordsByFrame.get(r.frameNumber) || [];
-          list.push(r);
-          recordsByFrame.set(r.frameNumber, list);
-        }
 
-        const sortedFrames = Array.from(recordsByFrame.keys()).sort((a, b) => a - b);
-        for (const frameNum of sortedFrames) {
-          const frameRecs = recordsByFrame.get(frameNum) || [];
-          const firstRec = frameRecs[0];
-          const candidates: LiveCandidate[] = frameRecs.map(r => ({
-            bbox: r.actionRowBbox,
-            score: r.matchingScore,
-            iconCount: 3,
-            status: r.boundaryStatus === "BOUNDARY_FOUND" ? "NEW_ITEM" : "NEEDS_ATTENTION",
-            context: `Loaded run (${r.boundaryStatus})`,
-            fingerprint: "",
-            docY: r.scrollY + r.actionRowBbox.y,
-            boundary: {
-              status: r.boundaryStatus,
-              ancestorsChecked: r.ancestorDepth,
-              ancestorSteps: r.ancestors.map(a => ({
-                level: a.level,
-                tag: a.tag,
-                role: a.role,
-                id: a.id,
-                className: a.className,
-                rect: a.rect,
-                rawUrls: a.rawUrls,
-                postIdentities: a.postIdentities,
-                uniqueKeys: a.uniqueKeys,
-                hasNestedArticle: false,
-                hasQuoteOrReplyHint: false,
-              })),
-              firstPermalinkLevel: r.transitions.firstPermalinkLevel,
-              secondPermalinkLevel: r.transitions.secondPermalinkLevel,
-              boundaryCrossedLevel: r.transitions.boundaryCrossedLevel,
-              jumpedZeroToTwoPlus: r.transitions.jumpedZeroToTwoPlus,
-              jumpReason: r.transitions.jumpReason ?? null,
-              candidateContainer: r.candidateContainer ?? null,
-              crossedContainer: r.crossedContainer ?? null,
-              postIdentities: r.ancestors.flatMap(a => a.postIdentities),
-              hasQuoteOrSharedPostRisk: false,
-              riskReason: r.riskReason ?? null,
-              actionPoint: r.hitPoint,
-              hitElement: r.hitElement,
-              ownershipEvidence: r.ownershipEvidence,
-            },
-            highlightedEvidenceUrl: r.evidenceScreenshotBase64,
-          }));
+        if (Array.isArray(res.report.frames) && res.report.frames.length > 0) {
+          // V2 isolated run with full frame records (including NO_ACTION_ROW frames & original screenshots)
+          const sortedStored = [...res.report.frames].sort((a, b) => a.frameIndex - b.frameIndex);
+          for (const sf of sortedStored) {
+            const candidates: LiveCandidate[] = (sf.rows ?? []).map(r => ({
+              bbox: r.actionRowBbox,
+              score: r.matchingScore,
+              iconCount: r.iconCount ?? 3,
+              status: r.candidateStatus ?? (r.boundaryStatus === "BOUNDARY_FOUND" ? "NEW_ITEM" : "NEEDS_ATTENTION"),
+              context: `Loaded run (${r.boundaryStatus})`,
+              fingerprint: r.fingerprint ?? "",
+              docY: r.docY ?? sf.scrollY + r.actionRowBbox.y,
+              boundary: {
+                status: r.boundaryStatus,
+                ancestorsChecked: r.ancestors.length,
+                ancestorSteps: r.ancestors.map(a => ({
+                  level: a.level,
+                  tag: a.tag,
+                  role: a.role,
+                  id: a.id,
+                  className: a.className,
+                  rect: a.rect,
+                  rawUrls: a.rawUrls,
+                  postIdentities: a.postIdentities,
+                  uniqueKeys: a.uniqueKeys,
+                  hasNestedArticle: false,
+                  hasQuoteOrReplyHint: false,
+                })),
+                firstPermalinkLevel: r.transitions.firstPermalinkLevel,
+                secondPermalinkLevel: r.transitions.secondPermalinkLevel,
+                boundaryCrossedLevel: r.transitions.boundaryCrossedLevel,
+                jumpedZeroToTwoPlus: r.transitions.jumpedZeroToTwoPlus,
+                jumpReason: r.transitions.jumpReason ?? null,
+                candidateContainer: r.candidateContainer ?? null,
+                crossedContainer: r.crossedContainer ?? null,
+                postIdentities: r.postIdentities ?? r.ancestors.flatMap(a => a.postIdentities),
+                hasQuoteOrSharedPostRisk: false,
+                riskReason: r.riskReason ?? null,
+                actionPoint: r.hitPoint,
+                hitElement: r.hitElement,
+                ownershipEvidence: r.ownershipEvidence,
+              },
+              highlightedEvidenceUrl: sf.rowBase64Map?.[r.rowIndex] || sf.highlightedBase64,
+              evidenceSavedPath: r.evidencePaths?.rowEvidence
+                ? `scratch/runs/${runId}/${r.evidencePaths.rowEvidence}`
+                : getExpectedFrameEvidenceDisplayPath(runId, sf.frameIndex, r.rowIndex),
+            }));
 
-          const frameBoundary: FrameReport["boundaryStatus"] = frameRecs.length === 0
-            ? "NO_ACTION_ROW"
-            : frameRecs.some(r => r.boundaryStatus === "BOUNDARY_FOUND")
-              ? "BOUNDARY_FOUND"
-              : frameRecs.some(r => r.boundaryStatus === "BOUNDARY_AMBIGUOUS")
-                ? "BOUNDARY_AMBIGUOUS"
-                : "BOUNDARY_NOT_FOUND";
+            loadedReports.push({
+              frame: sf.frameIndex,
+              capture: {
+                id: sf.captureId || `capture_${sf.frameIndex}_${runId}`,
+                webContentsId: sf.browserWebContentsId ?? 1,
+                width: res.report.environment?.width ?? 1024,
+                height: res.report.environment?.height ?? 560,
+                dataUrl: sf.screenshotBase64 || sf.highlightedBase64 || "",
+                url: sf.viewportUrl || "https://www.facebook.com",
+                viewport: {
+                  width: res.report.environment?.width ?? 1024,
+                  height: res.report.environment?.height ?? 560,
+                  scrollX: 0,
+                  scrollY: sf.scrollY ?? 0,
+                  dpr: res.report.environment?.dpr ?? 1,
+                  url: sf.viewportUrl || "https://www.facebook.com",
+                },
+              },
+              captureStatus: sf.captureStatus === "CAPTURE_PASS" ? "CAPTURE_PASS" : "CAPTURE_PASS",
+              pipelineStatus: sf.pipelineStatus || `PIPELINE_PASS: Loaded evidence from run ${runId}`,
+              templateStatus: sf.templateStatus || "TEMPLATE_READY: saved evidence",
+              detectionStatus: sf.detectionStatus || "DETECTION_PASS",
+              boundaryStatus: sf.boundaryStatus,
+              rawIconMatches: sf.rawIconMatches ?? candidates.length * 3,
+              actionClusters: sf.actionClusters ?? candidates.length,
+              candidates,
+            });
+          }
+        } else {
+          // Legacy or V1 structured run fallback
+          const recordsByFrame = new Map<number, BoundaryDebugRecord[]>();
+          for (const r of res.report.records) {
+            const list = recordsByFrame.get(r.frameNumber) || [];
+            list.push(r);
+            recordsByFrame.set(r.frameNumber, list);
+          }
 
-          loadedReports.push({
-            frame: frameNum,
-            capture: {
-              id: `capture_${frameNum}_${runId}`,
-              webContentsId: firstRec?.browserWebContentsId ?? 1,
-              width: 1024,
-              height: 560,
-              dataUrl: firstRec?.evidenceScreenshotBase64 ?? "",
-              url: "https://www.facebook.com",
-              viewport: {
+          const sortedFrames = Array.from(recordsByFrame.keys()).sort((a, b) => a - b);
+          for (const frameNum of sortedFrames) {
+            const frameRecs = recordsByFrame.get(frameNum) || [];
+            const firstRec = frameRecs[0];
+            const candidates: LiveCandidate[] = frameRecs.map(r => ({
+              bbox: r.actionRowBbox,
+              score: r.matchingScore,
+              iconCount: r.iconCount ?? 3,
+              status: r.boundaryStatus === "BOUNDARY_FOUND" ? "NEW_ITEM" : "NEEDS_ATTENTION",
+              context: `Loaded run (${r.boundaryStatus})`,
+              fingerprint: r.fingerprint ?? "",
+              docY: r.scrollY + r.actionRowBbox.y,
+              boundary: {
+                status: r.boundaryStatus,
+                ancestorsChecked: r.ancestorDepth,
+                ancestorSteps: r.ancestors.map(a => ({
+                  level: a.level,
+                  tag: a.tag,
+                  role: a.role,
+                  id: a.id,
+                  className: a.className,
+                  rect: a.rect,
+                  rawUrls: a.rawUrls,
+                  postIdentities: a.postIdentities,
+                  uniqueKeys: a.uniqueKeys,
+                  hasNestedArticle: false,
+                  hasQuoteOrReplyHint: false,
+                })),
+                firstPermalinkLevel: r.transitions.firstPermalinkLevel,
+                secondPermalinkLevel: r.transitions.secondPermalinkLevel,
+                boundaryCrossedLevel: r.transitions.boundaryCrossedLevel,
+                jumpedZeroToTwoPlus: r.transitions.jumpedZeroToTwoPlus,
+                jumpReason: r.transitions.jumpReason ?? null,
+                candidateContainer: r.candidateContainer ?? null,
+                crossedContainer: r.crossedContainer ?? null,
+                postIdentities: r.ancestors.flatMap(a => a.postIdentities),
+                hasQuoteOrSharedPostRisk: false,
+                riskReason: r.riskReason ?? null,
+                actionPoint: r.hitPoint,
+                hitElement: r.hitElement,
+                ownershipEvidence: r.ownershipEvidence,
+              },
+              highlightedEvidenceUrl: r.evidenceScreenshotBase64,
+              evidenceSavedPath:
+                r.evidenceScreenshotSaved || getExpectedFrameEvidenceDisplayPath(runId, frameNum, r.rowIndex),
+            }));
+
+            const frameBoundary: FrameReport["boundaryStatus"] = frameRecs.length === 0
+              ? "NO_ACTION_ROW"
+              : frameRecs.some(r => r.boundaryStatus === "BOUNDARY_FOUND")
+                ? "BOUNDARY_FOUND"
+                : frameRecs.some(r => r.boundaryStatus === "BOUNDARY_AMBIGUOUS")
+                  ? "BOUNDARY_AMBIGUOUS"
+                  : "BOUNDARY_NOT_FOUND";
+
+            loadedReports.push({
+              frame: frameNum,
+              capture: {
+                id: `capture_${frameNum}_${runId}`,
+                webContentsId: firstRec?.browserWebContentsId ?? 1,
                 width: 1024,
                 height: 560,
-                scrollX: 0,
-                scrollY: firstRec?.scrollY ?? 0,
-                dpr: 1,
+                dataUrl: firstRec?.originalScreenshotBase64 ?? firstRec?.evidenceScreenshotBase64 ?? "",
                 url: "https://www.facebook.com",
+                viewport: {
+                  width: 1024,
+                  height: 560,
+                  scrollX: 0,
+                  scrollY: firstRec?.scrollY ?? 0,
+                  dpr: 1,
+                  url: "https://www.facebook.com",
+                },
               },
-            },
-            captureStatus: "CAPTURE_PASS",
-            pipelineStatus: `PIPELINE_PASS: Loaded evidence from run ${runId}`,
-            templateStatus: "TEMPLATE_READY: saved evidence",
-            detectionStatus: "DETECTION_PASS",
-            boundaryStatus: frameBoundary,
-            rawIconMatches: frameRecs.length * 3,
-            actionClusters: frameRecs.length,
-            candidates,
-          });
+              captureStatus: "CAPTURE_PASS",
+              pipelineStatus: `PIPELINE_PASS: Loaded evidence from run ${runId}`,
+              templateStatus: "TEMPLATE_READY: saved evidence",
+              detectionStatus: "DETECTION_PASS",
+              boundaryStatus: frameBoundary,
+              rawIconMatches: frameRecs.length * 3,
+              actionClusters: frameRecs.length,
+              candidates,
+            });
+          }
         }
 
         setFrames(loadedReports);
@@ -320,28 +460,58 @@ export function LiveScrollTest({ invoke, currentFixture, actionGroups, method, t
     setFrames([]);
     setCaptureFailures(0);
     setDebugArtifactPath(null);
+    const createdAt = new Date().toISOString();
     const runId = `run_${Date.now()}_${Math.random().toString(36).slice(2, 7)}`;
     setCurrentRunId(runId);
     const debugRecords: BoundaryDebugRecord[] = [];
+    const storedFrames: VisualMatchStoredFrame[] = [];
+    const pipelineLogs: VisualMatchLogEntry[] = [];
+    const errorLogs: VisualMatchLogEntry[] = [];
     const reports: FrameReport[] = [];
     const seen: LiveCandidate[] = [];
     let failedCaptures = 0;
+    let runErrorMessage: string | null = null;
+    let templateError: string | null = null;
+    let browserWebContentsId: number | null = null;
+    let lastPageUrl = "https://www.facebook.com/";
 
     try {
       const missing = (["like", "comment", "share"] as const).filter(kind => !templates[kind]);
-      const templateError = missing.length ? `TEMPLATE_NOT_READY: missing confirmed Facebook ${missing.join(", ")} crop(s). Create them from an evidence frame below.` : null;
+      templateError = missing.length ? `TEMPLATE_NOT_READY: missing confirmed Facebook ${missing.join(", ")} crop(s). Create them from an evidence frame below.` : null;
       const templateCanvases = templateError ? [] : await Promise.all((["like", "comment", "share"] as const).map(kind => imageCanvas(templates[kind]!.dataUrl, templates[kind]!.width, templates[kind]!.height)));
       let priorScrollY: number | null = null;
-      let browserWebContentsId: number | null = null;
+
+      pipelineLogs.push({
+        timestamp: new Date().toISOString(),
+        runId,
+        level: "INFO",
+        stage: "RUN",
+        message: `Live Scroll Test started (frameLimit=50, method=${method}, threshold=${threshold}).`,
+      });
 
       for (let frame = 1; frame <= 50; frame++) {
         let capture: LiveCapture;
-        try { capture = await invoke<LiveCapture>({ type: "visualMatchLabCapture" }); }
-        catch (error) { failedCaptures++; setCaptureFailures(failedCaptures); throw new Error(`CAPTURE_STOPPED_AT_FRAME_${frame}: ${String(error)}`); }
+        try {
+          capture = await invoke<LiveCapture>({ type: "visualMatchLabCapture" });
+        } catch (error) {
+          failedCaptures++;
+          setCaptureFailures(failedCaptures);
+          const errMsg = `CAPTURE_STOPPED_AT_FRAME_${frame}: ${String(error)}`;
+          errorLogs.push({
+            timestamp: new Date().toISOString(),
+            runId,
+            level: "ERROR",
+            stage: "CAPTURE",
+            frameIndex: frame,
+            message: errMsg,
+          });
+          throw new Error(errMsg);
+        }
         if (capture.width !== 1024 || capture.height !== 560 || capture.viewport.width !== 1024 || capture.viewport.height !== 560) {
           throw new Error(`VIEWPORT_MISMATCH: expected 1024×560, got ${capture.width}×${capture.height} / viewport ${capture.viewport.width}×${capture.viewport.height}`);
         }
         browserWebContentsId ??= capture.webContentsId;
+        lastPageUrl = capture.viewport.url || lastPageUrl;
         if (capture.webContentsId !== browserWebContentsId) throw new Error("BROWSER_INSTANCE_CHANGED");
         if (priorScrollY !== null && capture.viewport.scrollY === priorScrollY) throw new Error("SCROLL_DID_NOT_MOVE");
 
@@ -356,8 +526,12 @@ export function LiveScrollTest({ invoke, currentFixture, actionGroups, method, t
           } : await detectActionRows(target, templateCanvases, method, threshold, pipeline.candidates.filter(candidate => candidate.type === "icon").map(candidate => candidate.bbox));
 
           const candidates: LiveCandidate[] = [];
+          const rowBase64Map: Record<number, string> = {};
+          const frameWarnings: string[] = [];
+          const frameErrors: string[] = [];
 
-          for (const row of detected.rows) {
+          for (let rowIdx = 0; rowIdx < detected.rows.length; rowIdx++) {
+            const row = detected.rows[rowIdx]!;
             const targetIcon = row.items[0];
             const iconCenterX = targetIcon
               ? targetIcon.bbox.x + targetIcon.bbox.width / 2
@@ -395,6 +569,16 @@ export function LiveScrollTest({ invoke, currentFixture, actionGroups, method, t
             } catch (probeError) {
               const probeMsg = probeError instanceof Error ? probeError.message : String(probeError);
               console.warn(`Frame ${frame} boundary probe error:`, probeMsg);
+              frameErrors.push(probeMsg);
+              errorLogs.push({
+                timestamp: new Date().toISOString(),
+                runId,
+                level: "ERROR",
+                stage: "BOUNDARY_PROBE",
+                frameIndex: frame,
+                rowIndex: rowIdx,
+                message: probeMsg,
+              });
               try {
                 const inspected = await invoke<{ element: { context?: string } | null }>({
                   type: "visualMatchLabInspect",
@@ -411,6 +595,15 @@ export function LiveScrollTest({ invoke, currentFixture, actionGroups, method, t
             const hash = fingerprint(target, row.bbox);
             const docY = capture.viewport.scrollY + row.bbox.y;
             const candidateStatus = classifyLiveCandidate(context, row.items.length, docY, hash, seen, boundary?.status);
+            const candidateId = `${runId}_f${frame}_r${rowIdx}`;
+            const evidenceSavedPath = getExpectedFrameEvidenceDisplayPath(runId, frame, rowIdx);
+            if (boundary?.evidenceDataUrl) {
+              rowBase64Map[rowIdx] = boundary.evidenceDataUrl;
+            }
+            if (boundary?.riskReason) {
+              frameWarnings.push(boundary.riskReason);
+            }
+
             const candidate: LiveCandidate = {
               bbox: row.bbox,
               score: row.score,
@@ -421,6 +614,7 @@ export function LiveScrollTest({ invoke, currentFixture, actionGroups, method, t
               docY,
               boundary,
               highlightedEvidenceUrl: boundary?.evidenceDataUrl,
+              evidenceSavedPath,
             };
             candidates.push(candidate);
             if (candidateStatus === "NEW_ITEM") seen.push(candidate);
@@ -430,7 +624,12 @@ export function LiveScrollTest({ invoke, currentFixture, actionGroups, method, t
               frameNumber: frame,
               scrollY: capture.viewport.scrollY,
               browserWebContentsId: capture.webContentsId,
-              rowIndex: detected.rows.indexOf(row),
+              rowIndex: rowIdx,
+              candidateId,
+              candidateStatus,
+              iconCount: row.items.length,
+              fingerprint: hash,
+              docY,
               actionRowBbox: actionRowCssBbox,
               matchingScore: row.score,
               hitPoint: point,
@@ -461,6 +660,7 @@ export function LiveScrollTest({ invoke, currentFixture, actionGroups, method, t
               riskReason: boundary?.riskReason ?? null,
               ownershipEvidence: boundary?.ownershipEvidence ?? { isArticle: false, hasDistinctCardLayout: false, containsActionRow: false, notes: [] },
               evidenceScreenshotBase64: boundary?.evidenceDataUrl,
+              originalScreenshotBase64: capture.dataUrl,
             });
           }
 
@@ -472,30 +672,86 @@ export function LiveScrollTest({ invoke, currentFixture, actionGroups, method, t
                 ? "BOUNDARY_AMBIGUOUS"
                 : "BOUNDARY_NOT_FOUND";
 
+          const pipelineStatusText = `PIPELINE_PASS: Stage A–D processed ${pipeline.candidates.length} candidates / ${pipelineGroups.length} action groups in ${pipeline.processingTimeMs.toFixed(1)} ms; Stage E ${templateError ? "blocked" : "executed"}.`;
+          const templateStatusText = templateError ?? "TEMPLATE_READY: confirmed Facebook Like / Comment / Share crops";
+          const detectionStatusText: FrameReport["detectionStatus"] = templateError
+            ? "DETECTION_BLOCKED"
+            : detected.rows.length > 0
+              ? "DETECTION_PASS"
+              : "DETECTION_FAIL";
+
           reports.push({
             frame,
             capture,
             captureStatus: "CAPTURE_PASS",
-            pipelineStatus: `PIPELINE_PASS: Stage A–D processed ${pipeline.candidates.length} candidates / ${pipelineGroups.length} action groups in ${pipeline.processingTimeMs.toFixed(1)} ms; Stage E ${templateError ? "blocked" : "executed"}.`,
-            templateStatus: templateError ?? "TEMPLATE_READY: confirmed Facebook Like / Comment / Share crops",
-            detectionStatus: templateError ? "DETECTION_BLOCKED" : detected.rows.length > 0 ? "DETECTION_PASS" : "DETECTION_FAIL",
+            pipelineStatus: pipelineStatusText,
+            templateStatus: templateStatusText,
+            detectionStatus: detectionStatusText,
             boundaryStatus: frameBoundary,
             rawIconMatches: detected.rawIconMatches,
             actionClusters: detected.rows.length,
             candidates,
           });
+
+          storedFrames.push({
+            frameIndex: frame,
+            scrollY: capture.viewport.scrollY,
+            viewportUrl: capture.viewport.url,
+            captureId: capture.id,
+            browserWebContentsId: capture.webContentsId,
+            captureStatus: "CAPTURE_PASS",
+            pipelineStatus: pipelineStatusText,
+            templateStatus: templateStatusText,
+            detectionStatus: detectionStatusText,
+            boundaryStatus: frameBoundary,
+            rawIconMatches: detected.rawIconMatches,
+            actionClusters: detected.rows.length,
+            rows: [],
+            evidencePaths: { rows: {} },
+            diagnostics: { errors: frameErrors, warnings: frameWarnings },
+            screenshotBase64: capture.dataUrl,
+            highlightedBase64: candidates[0]?.highlightedEvidenceUrl,
+            rowBase64Map,
+          });
         } catch (error) {
+          const errStr = String(error);
+          errorLogs.push({
+            timestamp: new Date().toISOString(),
+            runId,
+            level: "ERROR",
+            stage: "OPENCV",
+            frameIndex: frame,
+            message: errStr,
+          });
           reports.push({
             frame,
             capture,
             captureStatus: "CAPTURE_PASS",
-            pipelineStatus: `PIPELINE_FAIL: ${String(error)}`,
+            pipelineStatus: `PIPELINE_FAIL: ${errStr}`,
             templateStatus: templateError ?? "TEMPLATE_READY",
             detectionStatus: "DETECTION_BLOCKED",
             boundaryStatus: "NO_ACTION_ROW",
             rawIconMatches: 0,
             actionClusters: 0,
             candidates: [],
+          });
+          storedFrames.push({
+            frameIndex: frame,
+            scrollY: capture.viewport.scrollY,
+            viewportUrl: capture.viewport.url,
+            captureId: capture.id,
+            browserWebContentsId: capture.webContentsId,
+            captureStatus: "CAPTURE_PASS",
+            pipelineStatus: `PIPELINE_FAIL: ${errStr}`,
+            templateStatus: templateError ?? "TEMPLATE_READY",
+            detectionStatus: "DETECTION_BLOCKED",
+            boundaryStatus: "NO_ACTION_ROW",
+            rawIconMatches: 0,
+            actionClusters: 0,
+            rows: [],
+            evidencePaths: { rows: {} },
+            diagnostics: { errors: [errStr], warnings: [] },
+            screenshotBase64: capture.dataUrl,
           });
         }
 
@@ -511,23 +767,51 @@ export function LiveScrollTest({ invoke, currentFixture, actionGroups, method, t
           }
         }
       }
-
-      setStatus(`PARTIAL PASS: ${reports.length}/50 frames captured and processed on BrowserCore webContents.id=${reports[0].capture.webContentsId}.${templateError ? ` ${templateError}` : ""}`);
     } catch (error) {
-      setStatus(reports.length > 0 ? `PARTIAL PASS: stopped safely after ${reports.length} frames; evidence retained. ${String(error)}` : `FAIL: ${String(error)}`);
+      runErrorMessage = String(error);
     } finally {
-      if (debugRecords.length > 0) {
+      let storageErrorMessage: string | null = null;
+      if (reports.length > 0 || debugRecords.length > 0) {
+        const completedAt = new Date().toISOString();
         const debugReport: BoundaryDebugReport = {
           runId,
-          timestamp: new Date().toISOString(),
+          timestamp: completedAt,
+          createdAt,
+          completedAt,
+          status: runErrorMessage ? (reports.length > 0 ? "PARTIAL" : "FAILED") : "COMPLETED",
           environment: { width: 1024, height: 560, zoom: 1, platform: "facebook" },
+          sessionRef: {
+            webContentsId: browserWebContentsId ?? reports[0]?.capture?.webContentsId ?? 0,
+            pageUrl: lastPageUrl,
+          },
+          scrollSettings: {
+            overlapRatio: 0.65,
+            deltaY: Math.round(560 * 0.65),
+            settleWaitMs: 1400,
+          },
+          frameLimit: 50,
+          configVersion: {
+            matchMethod: method,
+            threshold,
+            templateStatus: templateError ?? "TEMPLATE_READY",
+            templatesCalibrated: {
+              like: Boolean(templates.like),
+              comment: Boolean(templates.comment),
+              share: Boolean(templates.share),
+            },
+            rules,
+          },
           totalFrames: reports.length,
           records: debugRecords,
+          frames: storedFrames,
+          pipelineLogs,
+          errorLogs,
           summary: {
             totalProbed: debugRecords.length,
             boundaryFoundCount: debugRecords.filter(r => r.boundaryStatus === "BOUNDARY_FOUND").length,
             boundaryAmbiguousCount: debugRecords.filter(r => r.boundaryStatus === "BOUNDARY_AMBIGUOUS").length,
             boundaryNotFoundCount: debugRecords.filter(r => r.boundaryStatus === "BOUNDARY_NOT_FOUND").length,
+            noActionRowCount: reports.filter(r => r.boundaryStatus === "NO_ACTION_ROW").length,
             jumpedZeroToTwoPlusCount: debugRecords.filter(r => r.transitions.jumpedZeroToTwoPlus).length,
             jumpedFrames: [...new Set(debugRecords.filter(r => r.transitions.jumpedZeroToTwoPlus).map(r => r.frameNumber))],
           },
@@ -539,9 +823,24 @@ export function LiveScrollTest({ invoke, currentFixture, actionGroups, method, t
           });
           setDebugArtifactPath(res.path);
         } catch (e) {
-          console.warn("Failed to persist boundary debug report:", e);
+          storageErrorMessage = e instanceof Error ? e.message : String(e);
+          console.error("Failed to persist boundary debug report:", e);
         }
         void fetchSavedRuns();
+      }
+
+      if (storageErrorMessage) {
+        setStatus(`FAIL: Evidence storage failed — ${storageErrorMessage}`);
+      } else if (runErrorMessage) {
+        setStatus(
+          reports.length > 0
+            ? `PARTIAL PASS: stopped safely after ${reports.length} frames; evidence retained in scratch/runs/${runId}/. ${runErrorMessage}`
+            : `FAIL: ${runErrorMessage}`,
+        );
+      } else if (reports.length > 0) {
+        setStatus(
+          `PARTIAL PASS: ${reports.length}/50 frames captured and saved to scratch/runs/${runId}/ on BrowserCore webContents.id=${reports[0].capture.webContentsId}.${templateError ? ` ${templateError}` : ""}`,
+        );
       }
       setRunning(false);
     }
@@ -625,7 +924,7 @@ export function LiveScrollTest({ invoke, currentFixture, actionGroups, method, t
 
       {debugArtifactPath && (
         <div style={{ margin: "6px 0", fontSize: "12px", color: "#065f46", background: "#d1fae5", padding: "6px 10px", borderRadius: "4px" }}>
-          <b>Boundary Debug Log saved:</b> <code>scratch/visual-match-lab-boundary-debug.json</code>
+          <b>Isolated Run Evidence saved:</b> <code>scratch/runs/{currentRunId}/result.json</code>
         </div>
       )}
 

@@ -8,6 +8,7 @@ import type {
 } from "./collectors/types.js";
 import type { BoundaryDebugReport } from "./boundary-probe.js";
 import type { UserPermalinkRule } from "./permalink-rules.js";
+import type { VisualMatchSaveFrameAttemptInput } from "./visual-match-lab-storage.js";
 export type { ScriptReleaseManifest } from "./script-release.js";
 export type Rect = { x: number; y: number; width: number; height: number };
 export type MainPage = "scenarios" | "browser-sessions" | "test-lab" | "visual-match-lab" | "settings" | "variations" | "widget-registry" | "workflows" | "builds-releases" | "collectors" | "collector-test-lab";
@@ -509,6 +510,10 @@ export type Command =
       type: "visualMatchLabSaveBoundaryDebug";
       report: BoundaryDebugReport;
     }
+  | {
+      type: "visualMatchLabSaveFrameAttempt";
+      input: VisualMatchSaveFrameAttemptInput;
+    }
   | { type: "visualMatchLabListRuns" }
   | { type: "visualMatchLabLoadRun"; runId: string }
   | { type: "openExternalUrl"; url: string }
@@ -663,3 +668,35 @@ export interface CreatorApi {
   onExecution(callback: (execution: ExecutionStart) => void): () => void;
   onTest(callback: (result: Result[] | { error: string }) => void): () => void;
 }
+
+export type BrowserCoreNavigationEvent = {
+  atMs: number;
+  type:
+    | "did-start-navigation"
+    | "will-redirect"
+    | "did-redirect-navigation"
+    | "did-navigate"
+    | "did-navigate-in-page"
+    | "dom-ready"
+    | "did-finish-load"
+    | "did-fail-load";
+  url: string;
+  httpResponseCode?: number;
+  errorCode?: number;
+  errorDescription?: string;
+};
+
+export type BrowserCoreNavigationResult = {
+  ok: boolean;
+  status: "SUCCESS" | "REDIRECTED" | "FAILED";
+  initialUrl: string;
+  requestedUrl: string;
+  finalUrl: string;
+  redirected: boolean;
+  redirectReason?: string;
+  error?: string;
+  events: BrowserCoreNavigationEvent[];
+  webContentsId: number;
+  title: string;
+  previewDataUrl?: string;
+};

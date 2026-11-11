@@ -1,5 +1,10 @@
 import { buildFacebookPermalinkExtractorJs, type PlatformPermalinkAdapter, type PostIdentity } from "./permalink-adapter.js";
 import { compileRule, type UserPermalinkRule } from "./permalink-rules.js";
+import type {
+  VisualMatchLogEntry,
+  VisualMatchRunManifest,
+  VisualMatchStoredFrame,
+} from "./visual-match-lab-storage.js";
 
 export type BoundaryStatus = "BOUNDARY_FOUND" | "BOUNDARY_AMBIGUOUS" | "BOUNDARY_NOT_FOUND";
 
@@ -108,24 +113,56 @@ export interface BoundaryDebugRecord {
   };
   evidenceScreenshotBase64?: string;
   evidenceScreenshotSaved?: string;
+  originalScreenshotBase64?: string;
+  originalScreenshotSaved?: string;
+  highlightedScreenshotSaved?: string;
+  candidateId?: string;
+  candidateStatus?: "NEW_ITEM" | "DUPLICATE" | "NEEDS_ATTENTION" | "COMMENT_ACTION";
+  iconCount?: number;
+  fingerprint?: string;
+  docY?: number;
+  diagnostics?: {
+    errors: string[];
+    warnings: string[];
+    notes: string[];
+  };
 }
 
 export interface BoundaryDebugReport {
   runId: string;
   timestamp: string;
+  createdAt?: string;
+  completedAt?: string;
+  status?: "RUNNING" | "COMPLETED" | "PARTIAL" | "FAILED";
   environment: {
     width: number;
     height: number;
     zoom: number;
+    dpr?: number;
     platform: "facebook" | "threads" | "generic";
   };
+  sessionRef?: {
+    webContentsId: number;
+    pageUrl: string;
+  };
+  scrollSettings?: {
+    overlapRatio: number;
+    deltaY: number;
+    settleWaitMs: number;
+  };
+  frameLimit?: number;
+  configVersion?: Partial<VisualMatchRunManifest["configVersion"]>;
   totalFrames: number;
   records: BoundaryDebugRecord[];
+  frames?: VisualMatchStoredFrame[];
+  pipelineLogs?: VisualMatchLogEntry[];
+  errorLogs?: VisualMatchLogEntry[];
   summary: {
     totalProbed: number;
     boundaryFoundCount: number;
     boundaryAmbiguousCount: number;
     boundaryNotFoundCount: number;
+    noActionRowCount?: number;
     jumpedZeroToTwoPlusCount: number;
     jumpedFrames: number[];
   };

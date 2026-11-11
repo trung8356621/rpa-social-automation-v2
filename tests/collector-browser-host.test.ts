@@ -38,6 +38,14 @@ test("C2.2 browser visible only for Creator or active Collector Capture host", (
     false,
   );
   assert.equal(
+    shouldShowBrowserForPage({ page: "visual-match-lab", browserVisible: true, collectorHostActive: true }),
+    true,
+  );
+  assert.equal(
+    shouldShowBrowserForPage({ page: "visual-match-lab", browserVisible: true, collectorHostActive: false }),
+    false,
+  );
+  assert.equal(
     shouldShowBrowserForPage({ page: "settings", browserVisible: true, collectorHostActive: true }),
     false,
   );
@@ -65,6 +73,10 @@ test("C2.2 collectors use measured host bounds; Creator keeps workspaceLayout br
   );
   assert.deepEqual(
     resolveBrowserViewBounds({ page: "collectors", collectorHost: host, creatorBrowser: creator }),
+    { x: 240, y: 160, width: 900, height: 480 },
+  );
+  assert.deepEqual(
+    resolveBrowserViewBounds({ page: "visual-match-lab", collectorHost: host, creatorBrowser: creator }),
     { x: 240, y: 160, width: 900, height: 480 },
   );
   assert.deepEqual(

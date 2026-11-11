@@ -1,7 +1,7 @@
 import React, { useState } from "react";
 import type { LiveCandidate } from "./LiveScrollTest";
 import type { LiveCapture } from "./types";
-import type { Command } from "../../../shared/contracts";
+import type { BrowserCoreNavigationResult, Command } from "../../../shared/contracts";
 import type { BoundaryProbeResult } from "../../../shared/boundary-probe";
 import type { UserPermalinkRule } from "../../../shared/permalink-rules";
 import { PermalinkInspector } from "./PermalinkInspector";
@@ -27,6 +27,8 @@ export function FrameDiagnostics({
   onUpdateBoundary,
   invoke,
   isLiveRunning,
+  onInspectInBrowserCore,
+  activeUrlInspection,
 }: {
   frameNumber: number;
   capture: LiveCapture | null;
@@ -45,6 +47,8 @@ export function FrameDiagnostics({
   onUpdateBoundary: (candidateIndex: number, newBoundary: BoundaryProbeResult, evidenceUrl?: string) => void;
   invoke: Invoke;
   isLiveRunning?: boolean;
+  onInspectInBrowserCore?: (result: BrowserCoreNavigationResult | null) => void;
+  activeUrlInspection?: BrowserCoreNavigationResult | null;
 }) {
   const [prefillUrl, setPrefillUrl] = useState<string | null>(null);
   const currentCandidate = candidates[selectedCandidateIndex] ?? candidates[0];
@@ -245,6 +249,8 @@ export function FrameDiagnostics({
                 onUseUrl={setPrefillUrl}
                 invoke={invoke}
                 isLiveRunning={isLiveRunning}
+                onInspectInBrowserCore={onInspectInBrowserCore}
+                activeUrlInspection={activeUrlInspection}
               />
             )}
 
