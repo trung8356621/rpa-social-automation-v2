@@ -422,7 +422,7 @@ export function BrowserCaptureStep({
           </div>
         </div>
 
-        <aside className="pdc-side-panel">
+        <div className="pdc-side-panel">
           <h3>ROI & Visual References</h3>
           <p className="pdc-panel-desc">
             Visual reference ≠ OCR frame. Capture chỉ khi trang hiện tại là Facebook/Threads.
@@ -460,7 +460,7 @@ export function BrowserCaptureStep({
           <button type="button" className="pdc-btn pdc-btn-primary" disabled={!contentRoi && !roi} onClick={onNext}>
             Next: Visual Region →
           </button>
-        </aside>
+        </div>
       </div>
 
       {frozen && shot && hostClient && imageBox && (

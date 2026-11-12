@@ -305,7 +305,7 @@ export function OcrPreviewStep({
           </div>
         </div>
 
-        <aside className="pdc-side-panel">
+        <div className="pdc-side-panel">
           <h3>OCR diagnostics</h3>
           {active ? (
             <dl className="pdc-dl">
@@ -359,7 +359,7 @@ export function OcrPreviewStep({
           <p className="pdc-panel-desc">
             Evidence: <code>scratch/post-detail-runs/&#123;runId&#125;/</code> — không ghi đè run cũ · không lưu cookie/token.
           </p>
-        </aside>
+        </div>
       </div>
     </div>
   );

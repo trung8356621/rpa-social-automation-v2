@@ -311,7 +311,7 @@ export function VisualRegionStep({
             <div ref={hostRef} className="collector-browser-host" data-browser-core-host="" aria-label="Browser Core host" />
           </div>
         </div>
-        <aside className="pdc-side-panel">
+        <div className="pdc-side-panel">
           <h3>Match result</h3>
           {lastMatch ? (
             <dl className="pdc-dl">
@@ -333,7 +333,7 @@ export function VisualRegionStep({
           <button type="button" className="pdc-btn pdc-btn-primary" disabled={!roi && !contentRoi} onClick={onNext}>
             Next: OCR Preview →
           </button>
-        </aside>
+        </div>
       </div>
 
       {frozen && shot && hostClient && imageBox && (

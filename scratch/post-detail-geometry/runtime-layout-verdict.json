@@ -1,0 +1,14 @@
+{
+  "verifiedAt": "2026-11-12T07:51:55.963Z",
+  "canvasAnalysis": "scratch/post-detail-geometry/after-anhtho-loaded.png (1456x840 computer-use canvas)",
+  "atY420": {
+    "sidebarEndsApprox": 234,
+    "browserWhiteStartsApprox": 252,
+    "browserWhiteEndsApprox": 1104,
+    "roiPanelStartsApprox": 1118,
+    "overlapBrowserVsRoi": false,
+    "note": "Browser white band ends before ROI panel; matches grid host|280px panel"
+  },
+  "domBefore": "sidePanel left:0 width:320 (global aside absolute)",
+  "domAfterPass": "sidePanel left:1304 width:280 overlapSidePanelPx:0"
+}

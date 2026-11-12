@@ -1,0 +1,27 @@
+{
+  "head": "bfdbc93ea9f6251e00e1c263f15023c74e373581",
+  "rootCause": "Global style.css rule `aside { position:absolute; left:0; top:88px; width:320px }` pulled Post Detail `.pdc-side-panel` out of the calibration grid. Feed Item uses `<div class=\"fic-sidebar-panel\">` so it was unaffected.",
+  "before": {
+    "source": "scratch/post-detail-geometry/pdc-1366x768-sidebar-open-1794467977615.json",
+    "sidebar": { "left": 0, "width": 208 },
+    "page": { "left": 208, "width": 1136 },
+    "workspace": { "left": 224, "width": 1104 },
+    "host": { "left": 225, "top": 267, "width": 812, "height": 372 },
+    "sidePanel": { "left": 0, "top": 88, "width": 320, "height": 560 },
+    "nativeWebContentsViewBounds": { "x": 225, "y": 267, "width": 812, "height": 372 },
+    "overlapSidePanelPx": 35340,
+    "status": "FAIL"
+  },
+  "after": {
+    "source": "scratch/post-detail-geometry/pdc-after-capture-live-1794468916760.json",
+    "sidebar": { "left": 0, "width": 208 },
+    "page": { "left": 208, "width": 1392 },
+    "workspace": { "left": 224, "width": 1360 },
+    "host": { "left": 225, "top": 267, "width": 1068, "height": 624 },
+    "sidePanel": { "left": 1304, "top": 266, "width": 280, "height": 626 },
+    "nativeWebContentsViewBounds": { "x": 225, "y": 267, "width": 1068, "height": 624 },
+    "overlapSidePanelPx": 0,
+    "status": "PASS"
+  },
+  "fix": "Changed `<aside className=\"pdc-side-panel\">` → `<div className=\"pdc-side-panel\">` and reset absolute Creator-aside styles on `.pdc-side-panel`."
+}

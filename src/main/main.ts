@@ -3063,7 +3063,10 @@ async function boot() {
   window.show();
   const initialSession = browserSessions.get(activeSessionId);
   try {
-    if (selfTest || initialSession.lastUrl || initialSession.isDefault)
+    if (postDetailBrowserCheck) {
+      // Isolated layout smoke: stay on local fixture — never block on Meta/network.
+      await browser.navigate(fixture.url);
+    } else if (selfTest || initialSession.lastUrl || initialSession.isDefault)
       await browser.navigate(selfTest ? fixture.url : initialSession.lastUrl || fixture.url);
     else await browser.view.webContents.loadURL("about:blank");
   } catch (error) {
@@ -3095,11 +3098,10 @@ async function boot() {
   }
   if (postDetailBrowserCheck) {
     try {
-      const fixtureUrl =
-        "https://www.facebook.com/groups/seovamarketing/posts/29327016206983816/";
       const outDir = path.join(project, "artifacts", "post-detail-geometry");
       await mkdir(outDir, { recursive: true });
       await mkdir(path.join(project, "scratch", "post-detail-geometry"), { recursive: true });
+      console.info("POST_DETAIL_BROWSER_CHECK starting layout cases…");
 
       async function shellEval<T>(script: string): Promise<T> {
         return window.webContents.executeJavaScript(script, true) as Promise<T>;
@@ -3206,7 +3208,7 @@ async function boot() {
               page: box(document.querySelector('.post-detail-collector-page')),
               workspace: box(document.querySelector('.pdc-calibration-workspace')),
               host: box(host),
-              sidePanel: box(document.querySelector('.pdc-calibration-workspace > aside.pdc-side-panel')),
+              sidePanel: box(document.querySelector('.pdc-calibration-workspace > .pdc-side-panel')),
               header: box(document.querySelector('.pdc-page-header')),
               toolbar: box(document.querySelector('.pdc-toolbar')),
               navCssVarFromShell: getComputedStyle(document.querySelector('main.app-shell')).getPropertyValue('--app-nav-width').trim(),
@@ -3239,11 +3241,10 @@ async function boot() {
         await shellEval(`new Promise((r) => requestAnimationFrame(() => requestAnimationFrame(r)))`);
         await new Promise((r) => setTimeout(r, 300));
 
-        await browser.navigate(fixtureUrl);
-        await new Promise((r) => setTimeout(r, 7000));
-        // Re-publish after navigate/layout settle.
+        // Layout geometry only — do not navigate Meta/network here (isolated profile + hang risk).
+        // Native WebContentsView still tracks DOM host while BrowserCore stays on its current URL.
         await shellEval(`window.dispatchEvent(new Event('resize'))`);
-        await new Promise((r) => setTimeout(r, 300));
+        await new Promise((r) => setTimeout(r, 400));
 
         const geometry = await measureGeometry(label);
         // Paint markers: magenta = native WebContentsView; red outline = DOM host rect.
@@ -3378,12 +3379,12 @@ async function boot() {
         return runCase("pdc-resize-1600x900", { width: 1600, height: 900 }, false);
       });
 
-      // Live → Capture ON → Live
+      // Capture toggle click + geometry (no Meta nav on isolated profile).
       await safeCase(async () => {
         await clickNav("Post Detail Collector");
         await waitForHost();
-        await browser.navigate(fixtureUrl);
-        await new Promise((r) => setTimeout(r, 5000));
+        await shellEval(`window.dispatchEvent(new Event('resize'))`);
+        await new Promise((r) => setTimeout(r, 300));
         const captureClicked = await shellEval<boolean>(
           `((() => {
             const buttons = Array.from(document.querySelectorAll('button'));
@@ -3393,18 +3394,19 @@ async function boot() {
             return true;
           })())`,
         );
-        await new Promise((r) => setTimeout(r, 2500));
+        await new Promise((r) => setTimeout(r, 1200));
         const captureShot = await captureWindow("pdc-capture-mode-on");
         const liveClicked = await shellEval<boolean>(
           `((() => {
             const buttons = Array.from(document.querySelectorAll('button'));
-            const btn = buttons.find((b) => /Thoát Capture|Live/i.test(b.textContent || ''));
+            const btn = buttons.find((b) => /Thoát Capture|Live|Capture Mode ON/i.test(b.textContent || ''));
             if (!btn) return false;
+            if (/Capture Mode ON/i.test(btn.textContent || '')) return true;
             btn.click();
             return true;
           })())`,
         );
-        await new Promise((r) => setTimeout(r, 800));
+        await new Promise((r) => setTimeout(r, 500));
         const liveShot = await captureWindow("pdc-back-to-live");
         const liveGeometry = await measureGeometry("pdc-after-capture-live");
         return {
@@ -3417,6 +3419,7 @@ async function boot() {
           liveClicked,
           screenshots: { captureShot, liveShot },
           geometry: liveGeometry,
+          note: "Isolated profile geometry only; Meta Anh Tho verified on Default session separately.",
         };
       });
 

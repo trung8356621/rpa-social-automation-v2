@@ -189,6 +189,15 @@ test("Post Detail host publish matches Feed Item (no sidebar clamp)", async () =
   assert.match(css, /margin-left:\s*var\(--app-nav-width\)/);
   const fic = read("src/renderer/feed-item-collector/feed-item-collector.css");
   assert.match(fic, /margin-left:\s*var\(--app-nav-width\)/);
+
+  // Global style.css pins bare <aside> to Creator steps (absolute left:0 width:320). Feed Item uses <div>.
+  assert.doesNotMatch(step1, /<aside\s+className="pdc-side-panel"/);
+  assert.match(step1, /<div\s+className="pdc-side-panel"/);
+  assert.match(css, /\.pdc-side-panel\s*\{[\s\S]*position:\s*relative/);
+  const step2 = read("src/renderer/post-detail-collector/VisualRegionStep.tsx");
+  const step3 = read("src/renderer/post-detail-collector/OcrPreviewStep.tsx");
+  assert.doesNotMatch(step2, /<aside\s+className="pdc-side-panel"/);
+  assert.doesNotMatch(step3, /<aside\s+className="pdc-side-panel"/);
 });
 
 test("Post Detail separates navigateToTarget from captureFromSocialPage", async () => {

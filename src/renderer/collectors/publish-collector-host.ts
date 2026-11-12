@@ -75,7 +75,7 @@ export function snapshotCollectorHostGeometry(hostEl: HTMLElement | null): Recor
     document.querySelector(".pdc-calibration-workspace") ||
     document.querySelector(".fic-calibration-workspace");
   const sidePanel =
-    document.querySelector(".pdc-calibration-workspace > aside.pdc-side-panel") ||
+    document.querySelector(".pdc-calibration-workspace > .pdc-side-panel") ||
     document.querySelector(".fic-calibration-workspace .fic-sidebar-panel") ||
     document.querySelector(".fic-sidebar-panel");
   const header =
