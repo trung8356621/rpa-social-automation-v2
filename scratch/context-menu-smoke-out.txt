@@ -1,0 +1,7 @@
+{
+  "ok": true,
+  "copiedFromMenu": "https://www.facebook.com/groups/seovamarketing/posts/29327016206983816/",
+  "textMenuHasCopy": true,
+  "menuEvents": 2,
+  "listenerCount": 1
+}
