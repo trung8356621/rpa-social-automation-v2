@@ -2,34 +2,43 @@ import React, { useEffect, useMemo, useRef, useState } from "react";
 import type { Rect, State } from "../../shared/contracts";
 import { dragToCaptureRoi } from "../../shared/collector-browser-host";
 import { clientToImageCoords } from "../../shared/collectors/roi-preview-interaction";
-import { classifyVisualMatchStatus } from "../../shared/post-detail-collector/match-status";
 import { assertCaptureFromSocialPage } from "../../shared/post-detail-collector/social-url";
+import type {
+  PostDetailContainerResult,
+  PostDetailScanFrame,
+  VisualReferenceSample,
+} from "../../shared/post-detail-collector/types";
 import {
   BROWSER_CORE_UNAVAILABLE,
-  collectorFreezeFrame,
   collectorReportBrowserHost,
   collectorSetBrowserVisible,
   isElectronBrowserCoreAvailable,
 } from "../collectors/browser-capture";
-import { TemplateMatcher } from "../experiments/visual-match-lab/template-matcher";
 import {
   claimCollectorHostOwner,
   isCollectorHostOwner,
   releaseCollectorHostOwner,
 } from "../collectors/collector-host-owner";
-import { imageToCanvas } from "./image-utils";
+import { runPostDetailAutoScan, type AutoScanProgress } from "./auto-scan-runner";
 import { publishPostDetailBrowserHost } from "./publish-browser-host";
-import type { BrowserProbe, Invoke, PostDetailMatchResult, VisualReferenceSample } from "./types";
+import type { BrowserProbe, Invoke, PostDetailMatchResult } from "./types";
 
 type Props = {
   invoke: Invoke;
   state?: State | null;
+  sourceUrl: string;
   visualReferences: VisualReferenceSample[];
+  containerResult: PostDetailContainerResult | null;
+  scanFrames: PostDetailScanFrame[];
   contentRoi: Rect | null;
   lastMatch: PostDetailMatchResult | null;
+  lastScreenshot: { id: string; dataUrl: string; width: number; height: number } | null;
+  onContainerResult: (result: PostDetailContainerResult | null) => void;
+  onScanFrames: (frames: PostDetailScanFrame[]) => void;
   onContentRoi: (roi: Rect | null) => void;
   onMatch: (match: PostDetailMatchResult | null) => void;
   onScreenshot: (shot: { id: string; dataUrl: string; width: number; height: number } | null) => void;
+  onRunId: (runId: string) => void;
   onProbeRefresh: () => Promise<BrowserProbe | null>;
   onBack: () => void;
   onNext: () => void;
@@ -41,39 +50,49 @@ type HostClient = { left: number; top: number; width: number; height: number };
 export function VisualRegionStep({
   invoke,
   state,
+  sourceUrl,
   visualReferences,
+  containerResult,
+  scanFrames,
   contentRoi,
   lastMatch,
+  lastScreenshot,
+  onContainerResult,
+  onScanFrames,
   onContentRoi,
   onMatch,
   onScreenshot,
+  onRunId,
   onProbeRefresh,
   onBack,
   onNext,
 }: Props) {
   const electron = isElectronBrowserCoreAvailable();
-  const [busy, setBusy] = useState(false);
+  const [progress, setProgress] = useState<AutoScanProgress>({
+    phase: "idle",
+    frameIndex: 0,
+    maxFrames: 8,
+    message: visualReferences.length
+      ? `Sẵn sàng Auto Scan với ${visualReferences.length} visual reference(s).`
+      : "Thiếu visual reference — quay lại Step 1.",
+  });
   const [error, setError] = useState("");
-  const [message, setMessage] = useState(
-    "Chụp frame hiện tại rồi chạy visual matching trên các visual reference samples.",
-  );
-  const [shot, setShot] = useState<{ id: string; dataUrl: string; width: number; height: number }>();
-  const [frozen, setFrozen] = useState(false);
-  const [roi, setRoi] = useState<Rect | undefined>(contentRoi ?? undefined);
+  const [frameIndex, setFrameIndex] = useState(0);
+  const [manualMode, setManualMode] = useState(false);
   const [drag, setDrag] = useState<DragState>();
   const [hostClient, setHostClient] = useState<HostClient | null>(null);
-  const [manualConfirmRequired, setManualConfirmRequired] = useState(false);
+  const cancelRef = useRef(false);
+  const scanningRef = useRef(false);
 
   const hostRef = useRef<HTMLDivElement>(null);
   const previewScrollRef = useRef<HTMLDivElement>(null);
   const dragRef = useRef<DragState | undefined>(undefined);
-  const hostClientRef = useRef<HostClient | null>(null);
-  const imageBoxRef = useRef<{ width: number; height: number } | null>(null);
-  const imageSizeRef = useRef({ width: 0, height: 0 });
 
-  const imageWidth = shot?.width ?? 0;
-  const imageHeight = shot?.height ?? 0;
-  imageSizeRef.current = { width: imageWidth, height: imageHeight };
+  const frames = scanFrames;
+  const active = frames[frameIndex] || frames[frames.length - 1];
+  const imageWidth = active?.width ?? lastScreenshot?.width ?? 0;
+  const imageHeight = active?.height ?? lastScreenshot?.height ?? 0;
+  const shotUrl = active?.screenshotDataUrl || lastScreenshot?.dataUrl;
 
   const imageBox = useMemo(() => {
     if (!hostClient || !imageWidth || !imageHeight) return null;
@@ -81,7 +100,6 @@ export function VisualRegionStep({
     const height = (imageHeight / imageWidth) * width;
     return { width, height };
   }, [hostClient, imageWidth, imageHeight]);
-  imageBoxRef.current = imageBox;
 
   const publishHost = React.useCallback(() => {
     if (!electron || !invoke) return;
@@ -107,9 +125,7 @@ export function VisualRegionStep({
     if (el && ro) ro.observe(el);
     window.addEventListener("resize", safePublish);
     window.addEventListener("scroll", safePublish, true);
-    void collectorSetBrowserVisible(invoke, true).then(() => {
-      requestAnimationFrame(safePublish);
-    });
+    void collectorSetBrowserVisible(invoke, true).then(() => requestAnimationFrame(safePublish));
     return () => {
       for (const id of rafIds) cancelAnimationFrame(id);
       ro?.disconnect();
@@ -122,96 +138,158 @@ export function VisualRegionStep({
     };
   }, [electron, invoke, publishHost]);
 
-  async function captureAndMatch() {
-    if (!invoke || busy) return;
+  async function startAutoScan() {
+    if (!invoke || scanningRef.current) return;
     if (!visualReferences.length) {
-      setError("Cần ít nhất một visual reference từ Step 1.");
-      setManualConfirmRequired(true);
+      setError("Cần visual references từ Step 1 trước khi Auto Scan.");
       return;
     }
-    setBusy(true);
     setError("");
-    setMessage("Đang capture + visual match...");
+    cancelRef.current = false;
+    scanningRef.current = true;
+    onScanFrames([]);
+    onContainerResult(null);
+    onContentRoi(null);
+    setFrameIndex(0);
+    setManualMode(false);
     try {
       const probe = await onProbeRefresh();
-      assertCaptureFromSocialPage(probe?.url || state?.url || "");
+      assertCaptureFromSocialPage(probe?.url || state?.url || sourceUrl || "");
       publishHost();
-      const image = await collectorFreezeFrame(invoke);
-      setShot(image);
-      onScreenshot(image);
-      setFrozen(true);
-      publishHost();
-
-      const target = await imageToCanvas(image.dataUrl);
-      const allScores: number[] = [];
-      let best: { score: number; templateId: string; bbox: Rect } | null = null;
-
-      for (const sample of visualReferences) {
-        if (!sample.dataUrl) continue;
-        const tpl = await imageToCanvas(sample.dataUrl);
-        const result = await TemplateMatcher.match(tpl, target, "grayscale", 0.55);
-        for (const m of result.matches) {
-          allScores.push(m.score);
-          if (!best || m.score > best.score) {
-            best = { score: m.score, templateId: sample.sampleId, bbox: m.bbox };
+      const { runId, frames: nextFrames, container } = await runPostDetailAutoScan({
+        invoke,
+        sourceUrl,
+        visualReferences,
+        isCancelled: () => cancelRef.current,
+        onProgress: setProgress,
+        onFrame: (frame, all) => {
+          onScanFrames(all);
+          setFrameIndex(all.length - 1);
+          if (frame.screenshotDataUrl) {
+            onScreenshot({
+              id: frame.frameId,
+              dataUrl: frame.screenshotDataUrl,
+              width: frame.width,
+              height: frame.height,
+            });
           }
-        }
+        },
+      });
+      onRunId(runId);
+      onScanFrames(nextFrames);
+      onContainerResult(container);
+      setFrameIndex(Math.max(0, nextFrames.length - 1));
+
+      if (container.status === "FOUND" && container.containerBounds) {
+        // Preview bounds only — Step 3 unlocks after Confirm Container.
+        onContentRoi(container.containerBounds);
+        onMatch({
+          status: "AMBIGUOUS",
+          score: container.confidence,
+          templateId: container.visualAnchors[0]?.templateId ?? null,
+          bbox: container.containerBounds,
+          candidateCount: container.visualAnchors.length,
+          scores: container.visualAnchors.map((a) => a.score),
+          screenshotDataUrl: nextFrames[nextFrames.length - 1]?.screenshotDataUrl,
+          notes: [...container.notes, "Review overlay then Confirm Container."],
+        });
+      } else if (container.status === "AMBIGUOUS") {
+        setManualMode(true);
+        onMatch({
+          status: "AMBIGUOUS",
+          score: container.confidence,
+          templateId: null,
+          bbox: null,
+          candidateCount: container.visualAnchors.length,
+          scores: container.visualAnchors.map((a) => a.score),
+          notes: [...container.notes, "Manual Confirm fallback available."],
+        });
+      } else {
+        onMatch({
+          status: "NOT_FOUND",
+          score: container.confidence,
+          templateId: null,
+          bbox: null,
+          candidateCount: container.visualAnchors.length,
+          scores: container.visualAnchors.map((a) => a.score),
+          notes: container.notes,
+        });
       }
 
-      const status = classifyVisualMatchStatus(allScores);
-      const match: PostDetailMatchResult = {
-        status,
-        score: best?.score ?? null,
-        templateId: best?.templateId ?? null,
-        bbox: best?.bbox ?? null,
-        candidateCount: allScores.length,
-        scores: allScores.slice(0, 8),
-        screenshotDataUrl: image.dataUrl,
-        notes: [
-          TemplateMatcher.isOpenCvReady()
-            ? "OpenCV matcher available"
-            : "Pure-JS NCC fallback (OpenCV.js not loaded in shell)",
-          `templates tried: ${visualReferences.length}`,
-        ],
-      };
-      onMatch(match);
-
-      if (status === "MATCHED" && contentRoi) {
-        setRoi(contentRoi);
-        onContentRoi(contentRoi);
-        setManualConfirmRequired(false);
-        setMessage(`MATCHED (score=${best?.score?.toFixed(3)}) · dùng content ROI đã xác nhận từ Step 1.`);
-      } else if (status === "MATCHED" && best?.bbox) {
-        setRoi(undefined);
-        setManualConfirmRequired(true);
-        setMessage(
-          `MATCHED anchor ${Math.round(best.bbox.width)}×${Math.round(best.bbox.height)}. Xác nhận ROI OCR thủ công.`,
-        );
-      } else {
-        setManualConfirmRequired(true);
-        setMessage(
-          `${status}${best ? ` (best=${best.score.toFixed(3)})` : ""} · Không đủ bằng chứng — kéo ROI thủ công.`,
-        );
+      try {
+        await invoke({
+          type: "postDetailSaveAutoScan",
+          input: {
+            runId,
+            sourceUrl,
+            visualReferences,
+            frames: nextFrames.map((f) => ({
+              frameId: f.frameId,
+              frameIndex: f.frameIndex,
+              scrollDeltaApplied: f.scrollDeltaApplied,
+              width: f.width,
+              height: f.height,
+              anchors: f.anchors,
+              notes: f.notes,
+              screenshotDataUrl: f.screenshotDataUrl,
+            })),
+            container,
+          },
+        });
+      } catch (saveErr) {
+        setProgress((p) => ({
+          ...p,
+          message: `${p.message} · evidence save warn: ${saveErr instanceof Error ? saveErr.message : String(saveErr)}`,
+        }));
       }
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e));
+      setProgress((p) => ({ ...p, phase: "error", message: String(e) }));
     } finally {
-      setBusy(false);
+      scanningRef.current = false;
+      try {
+        await collectorSetBrowserVisible(invoke, true);
+        publishHost();
+      } catch {
+        /* ignore */
+      }
     }
   }
 
-  async function exitToLive() {
-    if (!invoke) return;
-    setFrozen(false);
-    setShot(undefined);
-    await collectorSetBrowserVisible(invoke, true);
-    publishHost();
+  function stopScan() {
+    cancelRef.current = true;
+    setProgress((p) => ({ ...p, phase: "stopped", message: "Đang dừng…" }));
+  }
+
+  function confirmContainer() {
+    if (!containerResult?.containerBounds && !contentRoi) {
+      setError("Chưa có container bounds để Confirm.");
+      return;
+    }
+    const bounds = containerResult?.containerBounds || contentRoi;
+    if (!bounds) return;
+    onContentRoi(bounds);
+    onMatch({
+      status: containerResult?.status === "FOUND" ? "MATCHED" : "MANUALLY_CONFIRMED",
+      score: containerResult?.confidence ?? lastMatch?.score ?? null,
+      templateId: lastMatch?.templateId ?? null,
+      bbox: bounds,
+      candidateCount: containerResult?.visualAnchors.length ?? lastMatch?.candidateCount ?? 0,
+      scores: containerResult?.visualAnchors.map((a) => a.score) ?? lastMatch?.scores ?? [],
+      screenshotDataUrl: active?.screenshotDataUrl || lastScreenshot?.dataUrl,
+      notes: [
+        ...(containerResult?.notes ?? lastMatch?.notes ?? []),
+        "Container confirmed for Step 3 OCR handoff.",
+      ],
+    });
+    if (containerResult) {
+      onContainerResult({ ...containerResult, status: "FOUND", containerBounds: bounds });
+    }
+    setProgress((p) => ({ ...p, message: "Container đã Confirm · có thể sang Step 3." }));
   }
 
   function pointerPos(e: { clientX: number; clientY: number }) {
-    const box = imageBoxRef.current;
-    const { width: iw, height: ih } = imageSizeRef.current;
-    if (!box || !iw || !ih || !previewScrollRef.current) return { x: 0, y: 0 };
+    if (!imageBox || !imageWidth || !imageHeight || !previewScrollRef.current) return { x: 0, y: 0 };
     const rect = previewScrollRef.current.getBoundingClientRect();
     return clientToImageCoords(
       e.clientX,
@@ -222,14 +300,14 @@ export function VisualRegionStep({
         scrollLeft: previewScrollRef.current.scrollLeft,
         scrollTop: previewScrollRef.current.scrollTop,
       },
-      box,
-      iw,
-      ih,
+      imageBox,
+      imageWidth,
+      imageHeight,
     );
   }
 
   function onPointerDown(e: React.PointerEvent) {
-    if (!frozen || !shot) return;
+    if (!manualMode || !shotUrl) return;
     e.currentTarget.setPointerCapture(e.pointerId);
     const p = pointerPos(e);
     const next: DragState = { kind: "select", startX: p.x, startY: p.y, currentX: p.x, currentY: p.y };
@@ -255,23 +333,50 @@ export function VisualRegionStep({
     setDrag(undefined);
     dragRef.current = undefined;
     const nextRoi = dragToCaptureRoi(d.startX, d.startY, d.currentX, d.currentY);
-    if (nextRoi) {
-      setRoi(nextRoi);
+    if (nextRoi && nextRoi.width >= 4 && nextRoi.height >= 4) {
       onContentRoi(nextRoi);
-      setManualConfirmRequired(false);
-      setMessage(`User confirmed OCR ROI ${nextRoi.width}×${nextRoi.height}.`);
+      onMatch({
+        status: "MANUALLY_CONFIRMED",
+        score: lastMatch?.score ?? null,
+        templateId: lastMatch?.templateId ?? null,
+        bbox: nextRoi,
+        candidateCount: lastMatch?.candidateCount ?? 0,
+        scores: lastMatch?.scores ?? [],
+        screenshotDataUrl: shotUrl,
+        notes: ["Manual container/OCR region confirmed (AMBIGUOUS fallback)."],
+      });
+      if (containerResult) {
+        onContainerResult({
+          ...containerResult,
+          status: "FOUND",
+          containerBounds: nextRoi,
+          notes: [...containerResult.notes, "Manual override bounds."],
+        });
+      }
     }
   }
 
-  hostClientRef.current = hostClient;
-  const liveRoi = drag
+  const liveDrag = drag
     ? {
         x: Math.min(drag.startX, drag.currentX),
         y: Math.min(drag.startY, drag.currentY),
         width: Math.abs(drag.currentX - drag.startX),
         height: Math.abs(drag.currentY - drag.startY),
       }
-    : roi;
+    : null;
+
+  const canNext =
+    Boolean(contentRoi && contentRoi.width >= 4 && (lastScreenshot || shotUrl)) &&
+    Boolean(
+      lastMatch &&
+        (lastMatch.status === "MATCHED" || lastMatch.status === "MANUALLY_CONFIRMED") &&
+        lastMatch.bbox,
+    ) &&
+    Boolean(containerResult?.containerBounds || contentRoi);
+
+  const running = progress.phase === "running";
+  const overlayBounds = containerResult?.containerBounds || contentRoi;
+  const overlayAnchors = active?.anchors || containerResult?.visualAnchors.filter((a) => a.frameId === active?.frameId) || [];
 
   if (!electron) {
     return <div className="pdc-alert pdc-alert-warn">{BROWSER_CORE_UNAVAILABLE}</div>;
@@ -281,28 +386,43 @@ export function VisualRegionStep({
     <div className="pdc-step pdc-step-calibration">
       <div className="pdc-section-header">
         <div>
-          <h2>Step 2 — Visual Region Detection</h2>
-          <p className="pdc-subtitle">Capture chỉ khi trang hiện tại là Facebook/Threads. TemplateMatcher tái sử dụng Lab.</p>
+          <h2>Step 2 — Auto Scroll & Container Detection</h2>
+          <p className="pdc-subtitle">
+            Start Auto Scan một lần: capture → match → wheel tại tâm viewport → lặp. Không chọn OCR ROI thủ công
+            trừ khi AMBIGUOUS.
+          </p>
         </div>
         <div className="pdc-btn-row">
-          <button type="button" className="pdc-btn pdc-btn-secondary" disabled={busy} onClick={onBack}>
+          <button type="button" className="pdc-btn pdc-btn-secondary" disabled={running} onClick={onBack}>
             ← Back
           </button>
-          <button type="button" className="pdc-btn pdc-btn-primary" disabled={busy} onClick={() => void captureAndMatch()}>
-            Capture & Match
+          <button
+            type="button"
+            className="pdc-btn pdc-btn-primary"
+            disabled={running || !visualReferences.length}
+            onClick={() => void startAutoScan()}
+          >
+            Start Auto Scan
           </button>
-          {frozen && (
-            <button type="button" className="pdc-btn pdc-btn-secondary" disabled={busy} onClick={() => void exitToLive()}>
-              Live Mode
-            </button>
-          )}
+          <button type="button" className="pdc-btn pdc-btn-warn" disabled={!running} onClick={stopScan}>
+            Stop
+          </button>
         </div>
       </div>
 
+      <div className="pdc-scan-status" role="status">
+        <span className={`pdc-mode ${running ? "frozen" : "live"}`}>{progress.phase.toUpperCase()}</span>
+        <span>
+          Frames: {frames.length}/{progress.maxFrames}
+        </span>
+        <span>{progress.message}</span>
+      </div>
+
       {error && <div className="pdc-alert pdc-alert-error">{error}</div>}
-      {message && <div className="pdc-alert pdc-alert-info">{message}</div>}
-      {manualConfirmRequired && (
-        <div className="pdc-alert pdc-alert-warn">Cần user xác nhận ROI — không tự chọn vùng OCR khi bằng chứng yếu.</div>
+      {manualMode && (
+        <div className="pdc-alert pdc-alert-warn">
+          Kết quả AMBIGUOUS — kéo vùng container thủ công trên frame rồi Confirm Container.
+        </div>
       )}
 
       <div className="pdc-calibration-workspace">
@@ -310,103 +430,190 @@ export function VisualRegionStep({
           <div className="collector-capture-workspace collector-browser-workspace">
             <div ref={hostRef} className="collector-browser-host" data-browser-core-host="" aria-label="Browser Core host" />
           </div>
-        </div>
-        <div className="pdc-side-panel">
-          <h3>Match result</h3>
-          {lastMatch ? (
-            <dl className="pdc-dl">
-              <dt>Status</dt>
-              <dd className={`pdc-status-${lastMatch.status.toLowerCase()}`}>{lastMatch.status}</dd>
-              <dt>Score</dt>
-              <dd>{lastMatch.score != null ? lastMatch.score.toFixed(3) : "—"}</dd>
-              <dt>Template</dt>
-              <dd>{lastMatch.templateId || "—"}</dd>
-              <dt>Candidates</dt>
-              <dd>{lastMatch.candidateCount}</dd>
-              <dt>Notes</dt>
-              <dd>{lastMatch.notes.join(" · ")}</dd>
-            </dl>
-          ) : (
-            <p className="pdc-muted">Chưa chạy match.</p>
+          {shotUrl && hostClient && imageBox && (
+            <div
+              className="collector-capture-freeze snapshot pdc-scan-overlay"
+              style={{
+                position: "fixed",
+                left: hostClient.left,
+                top: hostClient.top,
+                width: hostClient.width,
+                height: hostClient.height,
+                zIndex: running ? 10 : 40,
+                margin: 0,
+                boxSizing: "border-box",
+                pointerEvents: manualMode && !running ? "auto" : "none",
+              }}
+              onPointerDown={onPointerDown}
+              onPointerMove={onPointerMove}
+              onPointerUp={onPointerUp}
+              onPointerCancel={onPointerUp}
+            >
+              <div
+                ref={previewScrollRef}
+                className="collector-capture-preview-scroll"
+                style={{ width: "100%", height: "100%", overflow: "hidden" }}
+              >
+                <div style={{ width: imageBox.width, height: imageBox.height, position: "relative" }}>
+                  <img
+                    src={shotUrl}
+                    alt={`Scan frame ${active?.frameIndex ?? ""}`}
+                    draggable={false}
+                    style={{
+                      display: "block",
+                      width: imageBox.width,
+                      height: imageBox.height,
+                      maxWidth: "none",
+                      objectFit: "fill",
+                      pointerEvents: "none",
+                    }}
+                  />
+                  {overlayAnchors.map((a) => (
+                    <div
+                      key={`${a.type}-${a.templateId}-${a.frameId}`}
+                      className="collector-roi-highlight"
+                      style={{
+                        left: (a.bbox.x / imageWidth) * imageBox.width,
+                        top: (a.bbox.y / imageHeight) * imageBox.height,
+                        width: (a.bbox.width / imageWidth) * imageBox.width,
+                        height: (a.bbox.height / imageHeight) * imageBox.height,
+                        border: "2px solid #fbbf24",
+                        background: "rgba(251, 191, 36, 0.15)",
+                        position: "absolute",
+                        pointerEvents: "none",
+                      }}
+                      title={`${a.type} ${a.score.toFixed(3)}`}
+                    />
+                  ))}
+                  {overlayBounds && (
+                    <div
+                      className="collector-roi-highlight"
+                      style={{
+                        left: (overlayBounds.x / imageWidth) * imageBox.width,
+                        top: (overlayBounds.y / imageHeight) * imageBox.height,
+                        width: (overlayBounds.width / imageWidth) * imageBox.width,
+                        height: (overlayBounds.height / imageHeight) * imageBox.height,
+                        border: "2px solid #34d399",
+                        background: "rgba(52, 211, 153, 0.12)",
+                        position: "absolute",
+                        pointerEvents: "none",
+                      }}
+                    />
+                  )}
+                  {liveDrag && liveDrag.width > 0 && (
+                    <div
+                      className="collector-roi-highlight"
+                      style={{
+                        left: (liveDrag.x / imageWidth) * imageBox.width,
+                        top: (liveDrag.y / imageHeight) * imageBox.height,
+                        width: (liveDrag.width / imageWidth) * imageBox.width,
+                        height: (liveDrag.height / imageHeight) * imageBox.height,
+                        border: "2px dashed #7dd3fc",
+                        background: "rgba(125, 211, 252, 0.15)",
+                        position: "absolute",
+                        pointerEvents: "none",
+                      }}
+                    />
+                  )}
+                </div>
+              </div>
+            </div>
           )}
-          <p className="pdc-panel-desc">References: {visualReferences.length}</p>
-          <button type="button" className="pdc-btn pdc-btn-primary" disabled={!roi && !contentRoi} onClick={onNext}>
+        </div>
+
+        <div className="pdc-side-panel">
+          <h3>Detection</h3>
+          <dl className="pdc-dl">
+            <dt>Status</dt>
+            <dd className={`pdc-status-${(containerResult?.status || "not_found").toLowerCase()}`}>
+              {containerResult?.status || "—"}
+            </dd>
+            <dt>Confidence</dt>
+            <dd>{containerResult?.confidence != null ? containerResult.confidence.toFixed(3) : "—"}</dd>
+            <dt>Container</dt>
+            <dd>
+              {overlayBounds
+                ? `${Math.round(overlayBounds.width)}×${Math.round(overlayBounds.height)} @ (${Math.round(overlayBounds.x)},${Math.round(overlayBounds.y)})`
+                : "—"}
+            </dd>
+            <dt>Wheel</dt>
+            <dd>
+              {containerResult
+                ? `${containerResult.scrollMetadata.wheelPoint.x},${containerResult.scrollMetadata.wheelPoint.y} Δ${containerResult.scrollMetadata.deltaY}`
+                : "viewport center"}
+            </dd>
+            <dt>Stop</dt>
+            <dd>{containerResult?.scrollMetadata.stoppedReason || "—"}</dd>
+          </dl>
+
+          <h3>References ({visualReferences.length})</h3>
+          <ul className="pdc-sample-list">
+            {visualReferences.map((s) => (
+              <li key={s.sampleId}>
+                {s.dataUrl ? <img src={s.dataUrl} alt={s.label} /> : null}
+                <span>
+                  {s.label} · {s.width}×{s.height}
+                </span>
+              </li>
+            ))}
+          </ul>
+
+          <h3>Anchors (frame)</h3>
+          <ul className="pdc-sample-list">
+            {(active?.anchors || []).map((a) => (
+              <li key={`${a.type}-${a.score}`}>
+                <span>
+                  {a.type} · {a.score.toFixed(3)} · {Math.round(a.bbox.width)}×{Math.round(a.bbox.height)}
+                </span>
+              </li>
+            ))}
+            {!active?.anchors?.length && <li className="pdc-muted">Chưa có anchor trên frame này.</li>}
+          </ul>
+
+          <div className="pdc-frame-nav">
+            <button
+              type="button"
+              className="pdc-btn pdc-btn-tiny"
+              disabled={frameIndex <= 0 || running}
+              onClick={() => setFrameIndex((i) => Math.max(0, i - 1))}
+            >
+              ← Prev
+            </button>
+            <span>
+              Frame {frames.length ? frameIndex + 1 : 0}/{frames.length}
+            </span>
+            <button
+              type="button"
+              className="pdc-btn pdc-btn-tiny"
+              disabled={frameIndex >= frames.length - 1 || running}
+              onClick={() => setFrameIndex((i) => Math.min(frames.length - 1, i + 1))}
+            >
+              Next →
+            </button>
+          </div>
+
+          <div className="pdc-btn-row">
+            <button
+              type="button"
+              className="pdc-btn pdc-btn-primary"
+              disabled={running || (!containerResult?.containerBounds && !contentRoi)}
+              onClick={confirmContainer}
+            >
+              Confirm Container
+            </button>
+          </div>
+          <p className="pdc-panel-desc">{(containerResult?.notes || []).join(" · ") || "Chưa có diagnostics."}</p>
+          <button
+            type="button"
+            className="pdc-btn pdc-btn-primary"
+            disabled={!canNext || running}
+            title={canNext ? undefined : "Cần Confirm Container (FOUND hoặc manual) + evidence"}
+            onClick={onNext}
+          >
             Next: OCR Preview →
           </button>
         </div>
       </div>
-
-      {frozen && shot && hostClient && imageBox && (
-        <div
-          className="collector-capture-freeze snapshot"
-          style={{
-            position: "fixed",
-            left: hostClient.left,
-            top: hostClient.top,
-            width: hostClient.width,
-            height: hostClient.height,
-            zIndex: 40,
-            margin: 0,
-            boxSizing: "border-box",
-          }}
-          onPointerDown={onPointerDown}
-          onPointerMove={onPointerMove}
-          onPointerUp={onPointerUp}
-          onPointerCancel={onPointerUp}
-        >
-          <div
-            ref={previewScrollRef}
-            className="collector-capture-preview-scroll"
-            style={{ width: "100%", height: "100%", overflow: "hidden" }}
-          >
-            <div style={{ width: imageBox.width, height: imageBox.height, position: "relative" }}>
-              <img
-                src={shot.dataUrl}
-                alt="Match frame"
-                draggable={false}
-                style={{
-                  display: "block",
-                  width: imageBox.width,
-                  height: imageBox.height,
-                  maxWidth: "none",
-                  objectFit: "fill",
-                  pointerEvents: "none",
-                }}
-              />
-              {lastMatch?.bbox && (
-                <div
-                  className="collector-roi-highlight"
-                  style={{
-                    left: (lastMatch.bbox.x / imageWidth) * imageBox.width,
-                    top: (lastMatch.bbox.y / imageHeight) * imageBox.height,
-                    width: (lastMatch.bbox.width / imageWidth) * imageBox.width,
-                    height: (lastMatch.bbox.height / imageHeight) * imageBox.height,
-                    border: "2px solid #fbbf24",
-                    background: "rgba(251, 191, 36, 0.15)",
-                    position: "absolute",
-                    pointerEvents: "none",
-                  }}
-                />
-              )}
-              {liveRoi && liveRoi.width > 0 && (
-                <div
-                  className="collector-roi-highlight"
-                  style={{
-                    left: (liveRoi.x / imageWidth) * imageBox.width,
-                    top: (liveRoi.y / imageHeight) * imageBox.height,
-                    width: (liveRoi.width / imageWidth) * imageBox.width,
-                    height: (liveRoi.height / imageHeight) * imageBox.height,
-                    border: "2px solid #34d399",
-                    background: "rgba(52, 211, 153, 0.2)",
-                    position: "absolute",
-                    pointerEvents: "none",
-                  }}
-                />
-              )}
-            </div>
-          </div>
-        </div>
-      )}
     </div>
   );
 }

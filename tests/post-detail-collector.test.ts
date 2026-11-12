@@ -205,6 +205,8 @@ test("Post Detail separates navigateToTarget from captureFromSocialPage", async 
     assertNavigateToSocialTarget,
     assertCaptureFromSocialPage,
     isSupportedSocialUrl,
+    resolvePostDetailNavigationOutcome,
+    socialHostsCompatible,
   } = await import("../src/shared/post-detail-collector/social-url.js");
 
   assert.equal(isSupportedSocialUrl("https://www.facebook.com/groups/x/posts/1/"), true);
@@ -227,20 +229,62 @@ test("Post Detail separates navigateToTarget from captureFromSocialPage", async 
     "facebook",
   );
 
+  assert.equal(
+    socialHostsCompatible(
+      "https://www.facebook.com/groups/x/posts/1/",
+      "https://www.facebook.com/groups/x/posts/1/?ref=share",
+    ),
+    true,
+  );
+  const abortedOk = resolvePostDetailNavigationOutcome({
+    requestedUrl: "https://www.facebook.com/groups/x/posts/1/",
+    finalUrl: "https://www.facebook.com/groups/x/posts/1/",
+    navOk: false,
+    navStatus: "FAILED",
+    navError: "Error: ERR_ABORTED (-3) loading 'https://www.facebook.com/...'",
+  });
+  assert.equal(abortedOk.ok, true);
+  const hardFail = resolvePostDetailNavigationOutcome({
+    requestedUrl: "https://www.facebook.com/groups/x/posts/1/",
+    finalUrl: "about:blank",
+    navOk: false,
+    navStatus: "FAILED",
+    navError: "Error (-3) loading facebook.com",
+  });
+  assert.equal(hardFail.ok, false);
+
   const page = read("src/renderer/post-detail-collector/PostDetailCollectorPage.tsx");
   assert.match(page, /postDetailBrowserProbe/);
   assert.doesNotMatch(page, /visualMatchLabState/);
+  assert.match(page, /canEnterStep2/);
+  assert.match(page, /canEnterStep3/);
+  assert.match(page, /MANUALLY_CONFIRMED/);
 
   const step1 = read("src/renderer/post-detail-collector/BrowserCaptureStep.tsx");
   assert.match(step1, /assertNavigateToSocialTarget/);
   assert.match(step1, /assertCaptureFromSocialPage/);
+  assert.match(step1, /postDetailNavigate/);
+  assert.match(step1, /resolvePostDetailNavigationOutcome/);
+  assert.match(step1, /confirmAndLive/);
+  assert.match(step1, /buildReferenceFromRoi/);
+  assert.match(step1, /Source URL/);
+  assert.match(step1, /Browser URL/);
+  assert.doesNotMatch(step1, /onContentRoi/);
   assert.match(step1, /collector-capture-freeze snapshot/);
   assert.match(step1, /position:\s*"fixed"/);
   assert.match(step1, /collectorReportBrowserHost/);
   assert.match(step1, /data-browser-core-host=""/);
 
+  const step2 = read("src/renderer/post-detail-collector/VisualRegionStep.tsx");
+  assert.match(step2, /Start Auto Scan/);
+  assert.match(step2, /Confirm Container/);
+  assert.match(step2, /MANUALLY_CONFIRMED/);
+  assert.match(step2, /References \(/);
+  assert.doesNotMatch(step2, /Capture & Match/);
+
   const main = read("src/main/main.ts");
   assert.match(main, /case "postDetailBrowserProbe"/);
+  assert.match(main, /case "postDetailNavigate"/);
   // Lab facebook() guard remains for Lab capture ops.
   assert.match(read("src/main/visual-match-lab.ts"), /BROWSER_NOT_FACEBOOK/);
 });

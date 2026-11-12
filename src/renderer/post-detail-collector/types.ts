@@ -1,7 +1,9 @@
 import type { Command } from "../../shared/contracts";
 import type {
+  PostDetailContainerResult,
   PostDetailMatchResult,
   PostDetailOcrFrame,
+  PostDetailScanFrame,
   PostDetailStep,
   VisualReferenceSample,
 } from "../../shared/post-detail-collector/types";
@@ -18,11 +20,16 @@ export type BrowserProbe = {
 
 export type PostDetailCollectorState = {
   step: PostDetailStep;
+  /** User-intended post URL (Open URL target). */
   sourceUrl: string;
+  /** Live BrowserCore URL (probe / navigation result). */
+  browserUrl: string;
   runId: string | null;
   visualReferences: VisualReferenceSample[];
-  /** Confirmed OCR content ROI from Step 1/2 (image pixel coords). */
+  /** Confirmed Post Detail container / OCR region from Step 2 (never action-row template ROI). */
   contentRoi: import("../../shared/contracts").Rect | null;
+  containerResult: PostDetailContainerResult | null;
+  scanFrames: PostDetailScanFrame[];
   lastMatch: PostDetailMatchResult | null;
   lastScreenshot: { id: string; dataUrl: string; width: number; height: number } | null;
   frames: PostDetailOcrFrame[];
@@ -31,8 +38,10 @@ export type PostDetailCollectorState = {
 };
 
 export type {
+  PostDetailContainerResult,
   PostDetailMatchResult,
   PostDetailOcrFrame,
+  PostDetailScanFrame,
   PostDetailStep,
   VisualReferenceSample,
 };

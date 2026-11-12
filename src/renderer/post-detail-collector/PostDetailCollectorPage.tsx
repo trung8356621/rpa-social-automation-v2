@@ -16,6 +16,24 @@ import { usePostDetailCollectorStore } from "./store";
 import type { BrowserProbe, Invoke, PostDetailStep } from "./types";
 import "./post-detail-collector.css";
 
+function canEnterStep2(refs: number): boolean {
+  return refs > 0;
+}
+
+function canEnterStep3(state: {
+  contentRoi: { width: number; height: number } | null;
+  containerResult: { containerBounds: unknown } | null;
+  lastMatch: { status: string; bbox: unknown } | null;
+  lastScreenshot: unknown;
+}): boolean {
+  // Step 3 only after confirmed container (contentRoi from Confirm / FOUND) — never action-row template ROI alone.
+  if (!state.contentRoi || state.contentRoi.width < 4 || state.contentRoi.height < 4) return false;
+  if (!state.lastScreenshot) return false;
+  if (!state.containerResult?.containerBounds) return false;
+  if (!state.lastMatch?.bbox) return false;
+  return state.lastMatch.status === "MATCHED" || state.lastMatch.status === "MANUALLY_CONFIRMED";
+}
+
 export function PostDetailCollectorPage({ invoke, state: parentState }: { invoke: Invoke; state?: State | null }) {
   const [state, updateStore] = usePostDetailCollectorStore();
   const [probe, setProbe] = useState<BrowserProbe | null>(null);
@@ -33,10 +51,11 @@ export function PostDetailCollectorPage({ invoke, state: parentState }: { invoke
       const next = await invoke<BrowserProbe>({ type: "postDetailBrowserProbe" });
       setProbe(next);
       setProbeError("");
+      if (next.url) updateStore({ browserUrl: next.url });
       setConnStatus(
         next.isSocialPage
           ? `BrowserCore sẵn sàng · webContents.id=${next.webContentsId} · ${next.url}`
-          : `BrowserCore sẵn sàng · webContents.id=${next.webContentsId} · trang hiện tại chưa phải Facebook/Threads — dùng Open URL để điều hướng.`,
+          : `BrowserCore sẵn sàng · webContents.id=${next.webContentsId} · trang hiện tại chưa phải Facebook/Threads — dùng Open URL.`,
       );
       return next;
     } catch (err) {
@@ -45,7 +64,7 @@ export function PostDetailCollectorPage({ invoke, state: parentState }: { invoke
       setConnStatus(`BrowserCore chưa sẵn sàng: ${String(err)}`);
       return null;
     }
-  }, [invoke]);
+  }, [invoke, updateStore]);
 
   // Probe only. Host clear is ownership-gated so Step remounts / sibling collectors are not wiped.
   useEffect(() => {
@@ -61,6 +80,8 @@ export function PostDetailCollectorPage({ invoke, state: parentState }: { invoke
   }, [invoke]);
 
   const goToStep = (step: PostDetailStep) => {
+    if (step === 2 && !canEnterStep2(state.visualReferences.length)) return;
+    if (step === 3 && !canEnterStep3(state)) return;
     if (step !== 1 && step !== 2) {
       void collectorReportBrowserHost(invoke, null);
       void collectorSetBrowserVisible(invoke, false);
@@ -69,6 +90,8 @@ export function PostDetailCollectorPage({ invoke, state: parentState }: { invoke
   };
 
   const connected = Boolean(probe?.available) && !probeError;
+  const step2Ready = canEnterStep2(state.visualReferences.length);
+  const step3Ready = canEnterStep3(state);
 
   return (
     <section className="app-page post-detail-collector-page" aria-label="Post Detail Collector">
@@ -80,7 +103,7 @@ export function PostDetailCollectorPage({ invoke, state: parentState }: { invoke
         <nav className="pdc-stepper" aria-label="Post Detail Collector Stepper">
           <button
             type="button"
-            className={`pdc-step-pill ${state.step === 1 ? "active" : ""} ${state.contentRoi ? "completed" : ""}`}
+            className={`pdc-step-pill ${state.step === 1 ? "active" : ""} ${state.visualReferences.length ? "completed" : ""}`}
             onClick={() => goToStep(1)}
           >
             <span className="pdc-step-num">1</span>
@@ -89,7 +112,9 @@ export function PostDetailCollectorPage({ invoke, state: parentState }: { invoke
           <span className="pdc-step-arrow">→</span>
           <button
             type="button"
-            className={`pdc-step-pill ${state.step === 2 ? "active" : ""} ${state.lastMatch ? "completed" : ""}`}
+            className={`pdc-step-pill ${state.step === 2 ? "active" : ""} ${state.lastMatch && state.contentRoi ? "completed" : ""}`}
+            disabled={!step2Ready && state.step !== 2}
+            title={step2Ready ? undefined : "Cần ≥1 visual reference từ Step 1"}
             onClick={() => goToStep(2)}
           >
             <span className="pdc-step-num">2</span>
@@ -99,7 +124,8 @@ export function PostDetailCollectorPage({ invoke, state: parentState }: { invoke
           <button
             type="button"
             className={`pdc-step-pill ${state.step === 3 ? "active" : ""}`}
-            disabled={!state.contentRoi}
+            disabled={!step3Ready && state.step !== 3}
+            title={step3Ready ? undefined : "Cần OCR content ROI + screenshot + match/manual confirm"}
             onClick={() => goToStep(3)}
           >
             <span className="pdc-step-num">3</span>
@@ -119,11 +145,11 @@ export function PostDetailCollectorPage({ invoke, state: parentState }: { invoke
             invoke={invoke}
             state={parentState}
             sourceUrl={state.sourceUrl}
+            browserUrl={state.browserUrl}
             visualReferences={state.visualReferences}
-            contentRoi={state.contentRoi}
             onSourceUrl={(sourceUrl) => updateStore({ sourceUrl })}
+            onBrowserUrl={(browserUrl) => updateStore({ browserUrl })}
             onUpdateReferences={(visualReferences) => updateStore({ visualReferences })}
-            onContentRoi={(contentRoi) => updateStore({ contentRoi })}
             onScreenshot={(lastScreenshot) => updateStore({ lastScreenshot })}
             onProbeRefresh={refreshProbe}
             onNext={() => goToStep(2)}
@@ -133,12 +159,19 @@ export function PostDetailCollectorPage({ invoke, state: parentState }: { invoke
           <VisualRegionStep
             invoke={invoke}
             state={parentState}
+            sourceUrl={state.sourceUrl}
             visualReferences={state.visualReferences}
+            containerResult={state.containerResult}
+            scanFrames={state.scanFrames}
             contentRoi={state.contentRoi}
             lastMatch={state.lastMatch}
+            lastScreenshot={state.lastScreenshot}
+            onContainerResult={(containerResult) => updateStore({ containerResult })}
+            onScanFrames={(scanFrames) => updateStore({ scanFrames })}
             onContentRoi={(contentRoi) => updateStore({ contentRoi })}
             onMatch={(lastMatch) => updateStore({ lastMatch })}
             onScreenshot={(lastScreenshot) => updateStore({ lastScreenshot })}
+            onRunId={(runId) => updateStore({ runId })}
             onProbeRefresh={refreshProbe}
             onBack={() => goToStep(1)}
             onNext={() => goToStep(3)}

@@ -2,7 +2,7 @@ import type { OcrResult, Rect } from "../contracts.js";
 
 export type PostDetailStep = 1 | 2 | 3;
 
-export type VisualMatchStatus = "MATCHED" | "AMBIGUOUS" | "NOT_FOUND";
+export type VisualMatchStatus = "MATCHED" | "AMBIGUOUS" | "NOT_FOUND" | "MANUALLY_CONFIRMED";
 
 export type OcrFrameStatus = "PENDING" | "OCR_DONE" | "OCR_FAILED" | "NEEDS_REVIEW";
 
@@ -110,3 +110,78 @@ export type PostDetailLoadRunResult = {
 export const POST_DETAIL_SCHEMA_VERSION = "1.0.0";
 export const DEFAULT_POST_DETAIL_FIXTURE_URL =
   "https://www.facebook.com/groups/seovamarketing/posts/29327016206983816/";
+
+export type PostDetailAnchorType = "LIKE" | "COMMENT" | "SHARE";
+
+export type PostDetailVisualAnchor = {
+  type: PostDetailAnchorType;
+  frameId: string;
+  frameIndex: number;
+  bbox: Rect;
+  score: number;
+  templateId: string;
+};
+
+export type PostDetailScanFrame = {
+  frameId: string;
+  frameIndex: number;
+  /** Cumulative wheel delta applied before this capture (CSS/DIP px). */
+  scrollDeltaApplied: number;
+  screenshotDataUrl?: string;
+  width: number;
+  height: number;
+  anchors: PostDetailVisualAnchor[];
+  notes: string[];
+};
+
+export type PostDetailContainerStatus = "FOUND" | "AMBIGUOUS" | "NOT_FOUND";
+
+/** Step 2 primary output — Post Detail container from visual scan (not DOM). */
+export type PostDetailContainerResult = {
+  status: PostDetailContainerStatus;
+  containerBounds: Rect | null;
+  frameIds: string[];
+  visualAnchors: PostDetailVisualAnchor[];
+  confidence: number | null;
+  evidenceRefs: string[];
+  runId: string;
+  sourceUrl: string;
+  scrollMetadata: {
+    wheelPoint: { x: number; y: number };
+    deltaY: number;
+    settleMs: number;
+    maxFrames: number;
+    framesCaptured: number;
+    stoppedReason: string;
+  };
+  notes: string[];
+};
+
+export const POST_DETAIL_AUTO_SCAN_DEFAULTS = Object.freeze({
+  maxFrames: 8,
+  /** Reuse Feed Item default scroll step (CSS px), without editing Feed Item code. */
+  deltaY: 280,
+  settleMs: 450,
+  matchThreshold: 0.55,
+});
+
+/** Step 2 Auto Scan evidence — does not write final OCR manifest.json (Step 3 owns that). */
+export type PostDetailSaveAutoScanInput = {
+  runId: string;
+  sourceUrl: string;
+  visualReferences: Array<Omit<VisualReferenceSample, "dataUrl"> & { dataUrl?: string }>;
+  frames: Array<
+    Omit<PostDetailScanFrame, "screenshotDataUrl"> & {
+      screenshotDataUrl?: string;
+    }
+  >;
+  container: PostDetailContainerResult;
+};
+
+export type PostDetailSaveAutoScanResult = {
+  ok: boolean;
+  runId: string;
+  runDir: string;
+  autoScanManifestPath: string;
+  frameCount: number;
+};

@@ -44,6 +44,15 @@ export async function collectorNavigate(invoke: CollectorInvoke, url: string): P
   await invoke({ type: "browserVisible", visible: true });
 }
 
+/** Wheel at BrowserCore viewport center for Post Detail Auto Scan. */
+export async function collectorPostDetailWheel(
+  invoke: CollectorInvoke,
+  deltaY: number,
+): Promise<{ ok: boolean; deltaY: number; wheelPoint: { x: number; y: number }; viewport: { width: number; height: number } }> {
+  if (!isElectronBrowserCoreAvailable()) throw new Error(BROWSER_CORE_UNAVAILABLE);
+  return invoke({ type: "postDetailWheel", deltaY });
+}
+
 export async function collectorSetBrowserVisible(
   invoke: CollectorInvoke,
   visible: boolean,

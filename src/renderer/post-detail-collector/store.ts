@@ -17,6 +17,7 @@ function loadPersisted(): Partial<PostDetailCollectorState> {
     return {
       runId: parsed.runId ?? null,
       sourceUrl: parsed.sourceUrl,
+      browserUrl: typeof parsed.browserUrl === "string" ? parsed.browserUrl : "",
       frames: parsed.frames ?? [],
       visualReferences: (parsed.visualReferences ?? []).map((s: VisualReferenceSample) => ({
         ...s,
@@ -36,9 +37,12 @@ const persisted = loadPersisted();
 const INITIAL: PostDetailCollectorState = {
   step: 1,
   sourceUrl: persisted.sourceUrl || DEFAULT_POST_DETAIL_FIXTURE_URL,
+  browserUrl: persisted.browserUrl || "",
   runId: persisted.runId ?? null,
   visualReferences: persisted.visualReferences ?? [],
   contentRoi: persisted.contentRoi ?? null,
+  containerResult: null,
+  scanFrames: [],
   lastMatch: null,
   lastScreenshot: null,
   frames: persisted.frames ?? [],
@@ -57,6 +61,7 @@ function persistLightweight(state: PostDetailCollectorState) {
       JSON.stringify({
         runId: state.runId,
         sourceUrl: state.sourceUrl,
+        browserUrl: state.browserUrl,
         contentRoi: state.contentRoi,
         selectedFrameIndex: state.selectedFrameIndex,
         // Persist OCR text + metadata; strip huge screenshots from localStorage.

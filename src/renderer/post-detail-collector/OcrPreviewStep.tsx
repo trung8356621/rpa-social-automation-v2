@@ -86,12 +86,16 @@ export function OcrPreviewStep({
   async function runOcrOnCurrentRoi() {
     if (!invoke || busy) return;
     if (!contentRoi) {
-      setError("Thiếu content ROI — quay lại Step 1/2 để xác nhận.");
+      setError("Thiếu OCR content ROI — quay lại Step 2 để Confirm OCR ROI (không dùng visual reference ROI).");
+      return;
+    }
+    if (!lastScreenshot?.dataUrl && !isElectronBrowserCoreAvailable()) {
+      setError("Thiếu screenshot evidence.");
       return;
     }
     setBusy(true);
     setError("");
-    setMessage("Đang OCR ROI bằng Tesseract local...");
+    setMessage("Đang OCR vùng nội dung (content ROI) bằng Tesseract local — không mock...");
     try {
       const shot = await ensureScreenshot();
       const cropped = await cropDataUrl(shot.dataUrl, contentRoi);

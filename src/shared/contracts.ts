@@ -9,7 +9,10 @@ import type {
 import type { BoundaryDebugReport } from "./boundary-probe.js";
 import type { UserPermalinkRule } from "./permalink-rules.js";
 import type { VisualMatchSaveFrameAttemptInput } from "./visual-match-lab-storage.js";
-import type { PostDetailSaveRunInput } from "./post-detail-collector/types.js";
+import type {
+  PostDetailSaveAutoScanInput,
+  PostDetailSaveRunInput,
+} from "./post-detail-collector/types.js";
 export type { ScriptReleaseManifest } from "./script-release.js";
 export type Rect = { x: number; y: number; width: number; height: number };
 export type MainPage = "scenarios" | "browser-sessions" | "test-lab" | "visual-match-lab" | "settings" | "variations" | "widget-registry" | "workflows" | "builds-releases" | "collectors" | "collector-test-lab" | "feed-item-collector" | "post-detail-collector";
@@ -519,9 +522,14 @@ export type Command =
   | { type: "visualMatchLabLoadRun"; runId: string }
   | { type: "openExternalUrl"; url: string }
   | { type: "visualMatchLabNavigateBrowserCore"; url: string }
+  /** Post Detail Open URL — same robust BrowserCore nav as Lab (ERR_ABORTED-aware). */
+  | { type: "postDetailNavigate"; url: string }
+  /** Wheel at BrowserCore viewport center (Post Detail Auto Scan). */
+  | { type: "postDetailWheel"; deltaY: number }
   | { type: "feedItemPermalinkDiagnostic"; hover?: boolean; runId?: string; candidateId?: string }
   | { type: "visualMatchLabOcr"; dataUrl: string }
   | { type: "postDetailSaveRun"; input: PostDetailSaveRunInput }
+  | { type: "postDetailSaveAutoScan"; input: PostDetailSaveAutoScanInput }
   | { type: "postDetailListRuns" }
   | { type: "postDetailLoadRun"; runId: string }
   /** Lightweight BrowserCore probe — no BROWSER_NOT_FACEBOOK guard (navigate may start from any page). */

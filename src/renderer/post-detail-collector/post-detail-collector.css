@@ -221,14 +221,56 @@
   flex-wrap: wrap;
 }
 
+.pdc-toolbar-stack {
+  align-items: flex-end;
+}
+
+.pdc-url-field {
+  flex: 1 1 320px;
+  min-width: 200px;
+}
+
 .pdc-url-input {
   flex: 1 1 320px;
   min-width: 200px;
+  width: 100%;
   background: #0b1a14;
   border: 1px solid #1f3d30;
   color: #ecfdf5;
   border-radius: 6px;
   padding: 6px 10px;
+  box-sizing: border-box;
+}
+
+.pdc-browser-url {
+  margin: 0 0 8px;
+  font-size: 11px;
+  color: #94a3b8;
+  word-break: break-all;
+}
+
+.pdc-browser-url code {
+  color: #6ee7b7;
+}
+
+.pdc-scan-status {
+  flex: 0 0 auto;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+  align-items: center;
+  font-size: 12px;
+  color: #94a3b8;
+  margin-bottom: 8px;
+  padding: 6px 10px;
+  background: #0b1a14;
+  border: 1px solid #1f3d30;
+  border-radius: 6px;
+}
+
+.pdc-status-found {
+  color: #34d399;
+  font-weight: 700;
 }
 
 .pdc-mode {
@@ -449,6 +491,10 @@
 }
 .pdc-status-not_found {
   color: #f87171;
+  font-weight: 700;
+}
+.pdc-status-manually_confirmed {
+  color: #7dd3fc;
   font-weight: 700;
 }
 

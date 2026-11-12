@@ -460,7 +460,11 @@ export class BrowserCore {
     }
     return { method, focus };
   }
-  scroll(deltaY: number) {
+  /**
+   * Wheel at BrowserCore viewport center (or explicit DIP point inside the view).
+   * Coordinates are relative to the WebContentsView, not the Windows desktop.
+   */
+  scroll(deltaY: number, point?: { x: number; y: number }) {
     if (!Number.isFinite(deltaY) || Math.abs(deltaY) > 3000)
       throw new Error("Scroll cần trong khoảng -3000 đến 3000 DIP.");
     if (
@@ -469,10 +473,13 @@ export class BrowserCore {
       !this.view.webContents.isFocused()
     )
       throw new Error("SCROLL: browser cần đang hiển thị và có focus.");
+    const bounds = this.view.getBounds();
+    const x = point && Number.isFinite(point.x) ? Math.round(point.x) : Math.round(bounds.width / 2);
+    const y = point && Number.isFinite(point.y) ? Math.round(point.y) : Math.round(bounds.height / 2);
     this.view.webContents.sendInputEvent({
       type: "mouseWheel",
-      x: 512,
-      y: 320,
+      x,
+      y,
       deltaY,
       deltaX: 0,
     });

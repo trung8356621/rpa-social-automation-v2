@@ -1895,6 +1895,7 @@ async function boot() {
           return { ok: true };
         }
         return { ok: false, error: "INVALID_URL" };
+      case "postDetailNavigate":
       case "visualMatchLabNavigateBrowserCore": {
         isIdle();
         const rawUrl = command.url;
@@ -2168,6 +2169,10 @@ async function boot() {
         isIdle();
         return postDetailStorage.saveRun(command.input);
       }
+      case "postDetailSaveAutoScan": {
+        isIdle();
+        return postDetailStorage.saveAutoScan(command.input);
+      }
       case "postDetailListRuns": {
         isIdle();
         return postDetailStorage.listRuns();
@@ -2205,6 +2210,37 @@ async function boot() {
           url,
           isSocialPage,
           sessionId: activeSessionId,
+        };
+      }
+      case "postDetailWheel": {
+        isIdle();
+        const deltaY = Number(command.deltaY);
+        if (!Number.isFinite(deltaY) || Math.abs(deltaY) > 3000) {
+          throw new Error("postDetailWheel deltaY must be finite and within ±3000.");
+        }
+        browser.setVisible(true);
+        overlays.layout();
+        publishLayout();
+        const wc = browser.view.webContents;
+        if (!wc || wc.isDestroyed()) {
+          throw new Error("BROWSER_CORE_UNAVAILABLE: BrowserCore webContents is not ready.");
+        }
+        try {
+          wc.focus();
+        } catch {
+          /* ignore */
+        }
+        const bounds = browser.view.getBounds();
+        const point = {
+          x: Math.round(Math.max(1, bounds.width) / 2),
+          y: Math.round(Math.max(1, bounds.height) / 2),
+        };
+        browser.scroll(deltaY, point);
+        return {
+          ok: true,
+          deltaY,
+          wheelPoint: point,
+          viewport: { width: bounds.width, height: bounds.height },
         };
       }
       case "postDetailGeometryDiagnostic": {

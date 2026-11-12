@@ -6,6 +6,7 @@ import {
   getPostDetailCropPath,
   getPostDetailFrameMetaPath,
   getPostDetailOcrTextPath,
+  getPostDetailRelativeFrameDir,
   getPostDetailScreenshotPath,
   getPostDetailTemplatePath,
 } from "../shared/post-detail-collector/storage-paths.js";
@@ -14,6 +15,8 @@ import {
   type PostDetailLoadRunResult,
   type PostDetailOcrFrame,
   type PostDetailRunManifest,
+  type PostDetailSaveAutoScanInput,
+  type PostDetailSaveAutoScanResult,
   type PostDetailSaveRunInput,
   type PostDetailSaveRunResult,
   type PostDetailSavedRunSummary,
@@ -46,6 +49,115 @@ export class PostDetailRunStorage {
 
   getRunDir(runId: string): string {
     return path.join(this.getRunsDir(), assertSafeRunId(runId));
+  }
+
+  /**
+   * Persist Step 2 Auto Scan evidence without writing final OCR `manifest.json`.
+   * Never overwrites an existing auto-scan-manifest for the same runId.
+   */
+  async saveAutoScan(input: PostDetailSaveAutoScanInput): Promise<PostDetailSaveAutoScanResult> {
+    const runId = assertSafeRunId(input.runId);
+    const runDir = this.getRunDir(runId);
+    const autoScanManifestPath = path.join(runDir, "auto-scan-manifest.json");
+    const containerPath = path.join(runDir, "container-result.json");
+
+    try {
+      const existing = await stat(autoScanManifestPath);
+      if (existing.isFile() && existing.size > 0) {
+        throw new Error(`POST_DETAIL_AUTO_SCAN_EXISTS: runId "${runId}" already has auto-scan evidence.`);
+      }
+    } catch (err) {
+      if (err instanceof Error && err.message.startsWith("POST_DETAIL_AUTO_SCAN_EXISTS")) throw err;
+    }
+
+    await mkdir(runDir, { recursive: true });
+    await mkdir(path.join(runDir, "frames"), { recursive: true });
+    await mkdir(path.join(runDir, "templates"), { recursive: true });
+    await mkdir(path.join(runDir, "logs"), { recursive: true });
+
+    const nowIso = new Date().toISOString();
+    const visualReferences: Array<Record<string, unknown>> = [];
+    for (const sample of input.visualReferences ?? []) {
+      const rel = getPostDetailTemplatePath(sample.sampleId);
+      const abs = path.join(runDir, rel);
+      const buf = decodeDataUrlPng(sample.dataUrl);
+      if (buf) await writeFileAtomic(abs, buf);
+      visualReferences.push({
+        sampleId: sample.sampleId,
+        label: sample.label,
+        width: sample.width,
+        height: sample.height,
+        sourceCaptureId: sample.sourceCaptureId,
+        bbox: sample.bbox,
+        createdAt: sample.createdAt,
+        templatePath: rel,
+      });
+    }
+
+    const framesMeta: Array<Record<string, unknown>> = [];
+    for (const frame of input.frames ?? []) {
+      const idx = Math.max(1, frame.frameIndex);
+      const shotRel = getPostDetailScreenshotPath(idx);
+      const metaRel = getPostDetailFrameMetaPath(idx);
+      await mkdir(path.join(runDir, getPostDetailRelativeFrameDir(idx)), { recursive: true });
+
+      const shotBuf = decodeDataUrlPng(frame.screenshotDataUrl);
+      if (shotBuf) await writeFileAtomic(path.join(runDir, shotRel), shotBuf);
+
+      const meta = {
+        runId,
+        frameId: frame.frameId,
+        frameIndex: idx,
+        scrollDeltaApplied: frame.scrollDeltaApplied,
+        width: frame.width,
+        height: frame.height,
+        anchors: frame.anchors,
+        notes: frame.notes,
+        screenshotPath: shotBuf ? shotRel : undefined,
+        phase: "auto-scan",
+        createdAt: nowIso,
+      };
+      await writeFileAtomic(path.join(runDir, metaRel), JSON.stringify(meta, null, 2));
+      framesMeta.push(meta);
+    }
+
+    const containerWithoutSecrets = {
+      ...input.container,
+      // Never persist credentials — sourceUrl only.
+      notes: [...(input.container.notes || []), `failureOrStop=${input.container.scrollMetadata.stoppedReason}`],
+    };
+    await writeFileAtomic(containerPath, JSON.stringify(containerWithoutSecrets, null, 2));
+    await writeFileAtomic(
+      path.join(runDir, "scroll-metadata.json"),
+      JSON.stringify(input.container.scrollMetadata, null, 2),
+    );
+
+    const autoScanManifest = {
+      schemaVersion: POST_DETAIL_SCHEMA_VERSION,
+      kind: "POST_DETAIL_AUTO_SCAN",
+      runId,
+      sourceUrl: input.sourceUrl || "",
+      createdAt: nowIso,
+      frameCount: framesMeta.length,
+      visualReferenceCount: visualReferences.length,
+      containerStatus: input.container.status,
+      confidence: input.container.confidence,
+      containerBounds: input.container.containerBounds,
+      scrollMetadata: input.container.scrollMetadata,
+      visualReferences,
+      frames: framesMeta,
+      evidenceRefs: input.container.evidenceRefs,
+      notes: input.container.notes,
+    };
+    await writeFileAtomic(autoScanManifestPath, JSON.stringify(autoScanManifest, null, 2));
+
+    return {
+      ok: true,
+      runId,
+      runDir,
+      autoScanManifestPath,
+      frameCount: framesMeta.length,
+    };
   }
 
   async saveRun(input: PostDetailSaveRunInput): Promise<PostDetailSaveRunResult> {

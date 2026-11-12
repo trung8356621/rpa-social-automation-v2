@@ -1,16 +1,16 @@
 import React, { useEffect, useMemo, useRef, useState } from "react";
-import type { Rect, State } from "../../shared/contracts";
+import type { BrowserCoreNavigationResult, Rect, State } from "../../shared/contracts";
 import { dragToCaptureRoi } from "../../shared/collector-browser-host";
 import { clientToImageCoords } from "../../shared/collectors/roi-preview-interaction";
 import { DEFAULT_POST_DETAIL_FIXTURE_URL } from "../../shared/post-detail-collector/types";
 import {
   assertCaptureFromSocialPage,
   assertNavigateToSocialTarget,
+  resolvePostDetailNavigationOutcome,
 } from "../../shared/post-detail-collector/social-url";
 import {
   BROWSER_CORE_UNAVAILABLE,
   collectorFreezeFrame,
-  collectorNavigate,
   collectorReportBrowserHost,
   collectorSetBrowserVisible,
   isElectronBrowserCoreAvailable,
@@ -28,11 +28,11 @@ type Props = {
   invoke: Invoke;
   state?: State | null;
   sourceUrl: string;
+  browserUrl: string;
   visualReferences: VisualReferenceSample[];
-  contentRoi: Rect | null;
   onSourceUrl: (url: string) => void;
+  onBrowserUrl: (url: string) => void;
   onUpdateReferences: (samples: VisualReferenceSample[]) => void;
-  onContentRoi: (roi: Rect | null) => void;
   onScreenshot: (shot: { id: string; dataUrl: string; width: number; height: number } | null) => void;
   onProbeRefresh: () => Promise<BrowserProbe | null>;
   onNext: () => void;
@@ -41,35 +41,44 @@ type Props = {
 type DragState = { kind: "select"; startX: number; startY: number; currentX: number; currentY: number };
 type HostClient = { left: number; top: number; width: number; height: number };
 
+function sameRect(a: Rect, b: Rect, tol = 2): boolean {
+  return (
+    Math.abs(a.x - b.x) <= tol &&
+    Math.abs(a.y - b.y) <= tol &&
+    Math.abs(a.width - b.width) <= tol &&
+    Math.abs(a.height - b.height) <= tol
+  );
+}
+
 export function BrowserCaptureStep({
   invoke,
   state,
   sourceUrl,
+  browserUrl,
   visualReferences,
-  contentRoi,
   onSourceUrl,
+  onBrowserUrl,
   onUpdateReferences,
-  onContentRoi,
   onScreenshot,
   onProbeRefresh,
   onNext,
 }: Props) {
   const electron = isElectronBrowserCoreAvailable();
-  const [url, setUrl] = useState(sourceUrl || DEFAULT_POST_DETAIL_FIXTURE_URL);
-  const [opened, setOpened] = useState(
-    Boolean(state?.url && state.url !== "about:blank" && /^https?:\/\//i.test(state.url)),
-  );
+  /** Source URL = user intent. Never assume BrowserCore is already here. */
+  const [sourceDraft, setSourceDraft] = useState(sourceUrl || DEFAULT_POST_DETAIL_FIXTURE_URL);
   const [frozen, setFrozen] = useState(false);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
+  const [warning, setWarning] = useState("");
   const [message, setMessage] = useState(
-    "Browser Live Mode: Open URL điều hướng tới Facebook/Threads từ bất kỳ trang hiện tại. Capture chỉ khi đã ở trang social.",
+    "Source URL ≠ Browser URL. Bấm Open URL để điều hướng BrowserCore Default tới bài cần capture.",
   );
   const [shot, setShot] = useState<{ id: string; dataUrl: string; width: number; height: number }>();
-  const [roi, setRoi] = useState<Rect | undefined>(contentRoi ?? undefined);
+  /** Step 1 ROI = visual reference / action-row anchor — NOT OCR content ROI. */
+  const [anchorRoi, setAnchorRoi] = useState<Rect | undefined>();
   const [drag, setDrag] = useState<DragState>();
   const [hostClient, setHostClient] = useState<HostClient | null>(null);
-  const [sampleLabel, setSampleLabel] = useState("content-region");
+  const [sampleLabel, setSampleLabel] = useState("like");
 
   const hostRef = useRef<HTMLDivElement>(null);
   const surfaceRef = useRef<HTMLDivElement>(null);
@@ -80,6 +89,7 @@ export function BrowserCaptureStep({
   const frozenRef = useRef(frozen);
   const imageBoxRef = useRef<{ width: number; height: number } | null>(null);
   const imageSizeRef = useRef({ width: 0, height: 0 });
+  const confirmingRef = useRef(false);
 
   const imageWidth = shot?.width ?? 0;
   const imageHeight = shot?.height ?? 0;
@@ -133,52 +143,72 @@ export function BrowserCaptureStep({
     };
   }, [electron, invoke, publishHost]);
 
+  // Sync browser URL from live BrowserCore / parent state — do not overwrite Source URL.
   useEffect(() => {
-    if (state?.url && state.url !== "about:blank" && /^https?:\/\//i.test(state.url)) {
-      setUrl((prev) => (prev?.trim() ? prev : state.url!));
-      setOpened(true);
-    }
-  }, [state?.url]);
+    const live = state?.url && state.url !== "about:blank" && /^https?:\/\//i.test(state.url) ? state.url : "";
+    if (live) onBrowserUrl(live);
+  }, [state?.url, onBrowserUrl]);
+
+  useEffect(() => {
+    setSourceDraft(sourceUrl || DEFAULT_POST_DETAIL_FIXTURE_URL);
+  }, [sourceUrl]);
 
   async function openUrl() {
     if (!invoke || busy || frozen) return;
     setError("");
+    setWarning("");
     setBusy(true);
     try {
-      const target = assertNavigateToSocialTarget(url);
-      await collectorNavigate(invoke, target.url);
-      const probe = await onProbeRefresh();
-      if (!probe?.available) {
-        throw new Error("BrowserCore probe failed after navigate.");
-      }
-      const actual = probe.url || "";
-      let actualHost = "";
-      try {
-        actualHost = new URL(actual).hostname.toLowerCase();
-      } catch {
-        actualHost = actual;
-      }
-      const expectedHost = new URL(target.url).hostname.toLowerCase();
-      const hostOk =
-        actualHost === expectedHost ||
-        actualHost.endsWith(`.${expectedHost.replace(/^www\./, "")}`) ||
-        expectedHost.endsWith(`.${actualHost.replace(/^www\./, "")}`) ||
-        (target.platform === "facebook" && (actualHost.includes("facebook.com") || actualHost.includes("fb.com"))) ||
-        (target.platform === "threads" && (actualHost.includes("threads.net") || actualHost.includes("threads.com")));
-      if (!hostOk) {
-        throw new Error(
-          `NAVIGATION_MISMATCH: expected ${expectedHost} but BrowserCore is at ${actual || "(empty)"}`,
-        );
-      }
-      setOpened(true);
-      setUrl(target.url);
+      const target = assertNavigateToSocialTarget(sourceDraft);
       onSourceUrl(target.url);
-      setFrozen(false);
-      setShot(undefined);
-      onScreenshot(null);
-      setMessage(`Đã điều hướng tới ${probe.url}. Browser Live Mode — có thể tương tác bình thường.`);
+      setSourceDraft(target.url);
+
+      const nav = await invoke<BrowserCoreNavigationResult>({
+        type: "postDetailNavigate",
+        url: target.url,
+      });
+      const probe = await onProbeRefresh();
+      const finalUrl = (probe?.url || nav.finalUrl || "").trim();
+      const outcome = resolvePostDetailNavigationOutcome({
+        requestedUrl: target.url,
+        finalUrl,
+        navOk: Boolean(nav.ok),
+        navStatus: nav.status,
+        navError: nav.error,
+      });
+      onBrowserUrl(outcome.browserUrl);
+
+      if (!outcome.ok) {
+        throw new Error(outcome.error || "Navigation failed.");
+      }
+      if (outcome.warning) setWarning(outcome.warning);
+      setMessage(`Browser URL: ${outcome.browserUrl}. Browser Live Mode — có thể tương tác bình thường.`);
       publishHost();
     } catch (e) {
+      // Last-chance: if BrowserCore already landed on social despite thrown ERR_ABORTED.
+      try {
+        const probe = await onProbeRefresh();
+        const actual = probe?.url || "";
+        if (probe?.isSocialPage && actual) {
+          const recovered = resolvePostDetailNavigationOutcome({
+            requestedUrl: sourceDraft,
+            finalUrl: actual,
+            navOk: false,
+            navStatus: "FAILED",
+            navError: e instanceof Error ? e.message : String(e),
+          });
+          if (recovered.ok) {
+            onBrowserUrl(recovered.browserUrl);
+            setWarning(recovered.warning || "Navigation aborted nhưng trang social đã sẵn sàng.");
+            setError("");
+            setMessage(`Browser URL: ${recovered.browserUrl}`);
+            publishHost();
+            return;
+          }
+        }
+      } catch {
+        /* fall through */
+      }
       setError(e instanceof Error ? e.message : String(e));
     } finally {
       setBusy(false);
@@ -188,11 +218,13 @@ export function BrowserCaptureStep({
   async function enterCaptureMode() {
     if (!invoke || busy) return;
     setError("");
+    setWarning("");
     setBusy(true);
     setMessage("Đang kiểm tra trang social rồi đóng băng screenshot...");
     try {
       const probe = await onProbeRefresh();
-      assertCaptureFromSocialPage(probe?.url || state?.url || "");
+      if (probe?.url) onBrowserUrl(probe.url);
+      assertCaptureFromSocialPage(probe?.url || browserUrl || state?.url || "");
       publishHost();
       const image = await collectorFreezeFrame(invoke);
       if (!image.bounds || image.bounds.width < 4 || image.bounds.height < 4) {
@@ -201,12 +233,14 @@ export function BrowserCaptureStep({
       setShot(image);
       shotRef.current = image;
       onScreenshot(image);
-      setRoi(undefined);
+      setAnchorRoi(undefined);
       setDrag(undefined);
       setFrozen(true);
       frozenRef.current = true;
       publishHost();
-      setMessage("Capture Mode ON · Kéo ROI vùng nội dung trên ảnh đóng băng (overlay cố định theo host bounds).");
+      setMessage(
+        "Capture Mode ON · Kéo ROI visual reference (Like/Comment/Share). Confirm sẽ tự lưu reference — không phải OCR content ROI.",
+      );
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e));
       setFrozen(false);
@@ -229,7 +263,7 @@ export function BrowserCaptureStep({
     setError("");
     setDrag(undefined);
     setShot(undefined);
-    setRoi(undefined);
+    setAnchorRoi(undefined);
     setFrozen(false);
     frozenRef.current = false;
     try {
@@ -272,7 +306,7 @@ export function BrowserCaptureStep({
   }
 
   function onPointerDown(e: React.PointerEvent) {
-    if (!frozen || !shot || roi) return;
+    if (!frozen || !shot || anchorRoi) return;
     e.currentTarget.setPointerCapture(e.pointerId);
     const p = pointerPos(e);
     const next: DragState = { kind: "select", startX: p.x, startY: p.y, currentX: p.x, currentY: p.y };
@@ -301,49 +335,67 @@ export function BrowserCaptureStep({
     dragRef.current = undefined;
     const nextRoi = dragToCaptureRoi(d.startX, d.startY, d.currentX, d.currentY);
     if (nextRoi && nextRoi.width >= 4 && nextRoi.height >= 4) {
-      setRoi(nextRoi);
-      onContentRoi(nextRoi);
-      setMessage(`Đã chọn ROI ${Math.round(nextRoi.width)}×${Math.round(nextRoi.height)}px.`);
+      setAnchorRoi(nextRoi);
+      setMessage(
+        `Đã chọn visual reference ROI ${Math.round(nextRoi.width)}×${Math.round(nextRoi.height)}px. Confirm để lưu.`,
+      );
     } else {
-      setRoi(undefined);
-      onContentRoi(null);
+      setAnchorRoi(undefined);
     }
   }
 
-  async function saveVisualReference() {
-    if (!shot || !roi) return;
-    setBusy(true);
-    setError("");
-    try {
-      const cropped = await cropDataUrl(shot.dataUrl, roi);
-      const sample: VisualReferenceSample = {
-        sampleId: `vr_${Date.now().toString(36)}`,
-        label: sampleLabel.trim() || `sample-${visualReferences.length + 1}`,
-        dataUrl: cropped.dataUrl,
-        width: cropped.width,
-        height: cropped.height,
-        sourceCaptureId: shot.id,
-        bbox: roi,
-        createdAt: new Date().toISOString(),
-      };
-      onUpdateReferences([...visualReferences, sample]);
-      onContentRoi(roi);
-      setMessage(`Đã lưu visual reference “${sample.label}”.`);
-    } catch (e) {
-      setError(e instanceof Error ? e.message : String(e));
-    } finally {
-      setBusy(false);
-    }
+  async function buildReferenceFromRoi(
+    image: { id: string; dataUrl: string; width: number; height: number },
+    roi: Rect,
+    existing: VisualReferenceSample[],
+  ): Promise<VisualReferenceSample[]> {
+    const dup = existing.find((s) => sameRect(s.bbox, roi));
+    if (dup) return existing;
+    const cropped = await cropDataUrl(image.dataUrl, roi);
+    const sample: VisualReferenceSample = {
+      sampleId: `vr_${Date.now().toString(36)}`,
+      label: sampleLabel.trim() || `sample-${existing.length + 1}`,
+      dataUrl: cropped.dataUrl,
+      width: cropped.width,
+      height: cropped.height,
+      sourceCaptureId: image.id,
+      bbox: roi,
+      createdAt: new Date().toISOString(),
+    };
+    return [...existing, sample];
   }
 
   async function confirmAndLive() {
-    if (!roi) {
-      setError("Cần ROI nội dung trước khi Confirm.");
+    if (confirmingRef.current) return;
+    if (!anchorRoi) {
+      setError("Cần kéo chọn ROI visual reference trước khi Confirm.");
       return;
     }
-    onContentRoi(roi);
-    if (shot) onScreenshot(shot);
-    await exitCaptureMode("ROI đã xác nhận · quay lại Browser Live Mode.");
+    if (!shot) {
+      setError("Thiếu screenshot evidence — bật Capture Mode lại.");
+      return;
+    }
+    confirmingRef.current = true;
+    setBusy(true);
+    setError("");
+    setWarning("");
+    try {
+      const nextRefs = await buildReferenceFromRoi(shot, anchorRoi, visualReferences);
+      if (nextRefs === visualReferences) {
+        setWarning("Reference trùng ROI đã có — không tạo duplicate.");
+      }
+      onUpdateReferences(nextRefs);
+      onScreenshot(shot);
+      // contentRoi is Step 2 OCR region — never set from action-row ROI here.
+      await exitCaptureMode(
+        `Đã lưu ${nextRefs.length} visual reference · quay lại Browser Live Mode.`,
+      );
+    } catch (e) {
+      setError(e instanceof Error ? e.message : String(e));
+      setBusy(false);
+    } finally {
+      confirmingRef.current = false;
+    }
   }
 
   hostClientRef.current = hostClient;
@@ -356,7 +408,10 @@ export function BrowserCaptureStep({
         width: Math.abs(drag.currentX - drag.startX),
         height: Math.abs(drag.currentY - drag.startY),
       }
-    : roi;
+    : anchorRoi;
+
+  const canNext = visualReferences.length > 0;
+  const browserLive = Boolean(browserUrl && browserUrl !== "about:blank");
 
   if (!electron) {
     return <div className="pdc-alert pdc-alert-warn">{BROWSER_CORE_UNAVAILABLE}</div>;
@@ -368,7 +423,8 @@ export function BrowserCaptureStep({
         <div>
           <h2>Step 1 — Browser & Detail Capture</h2>
           <p className="pdc-subtitle">
-            BrowserCore Default session · host bounds đo từ DOM (giống Feed Item) · fixture Anh Tho chỉ là URL mặc định.
+            Source URL là URL muốn xử lý · Browser URL là trang thực tế. Confirm tự lưu visual reference (action
+            row), không phải OCR content ROI.
           </p>
         </div>
         <button
@@ -384,15 +440,18 @@ export function BrowserCaptureStep({
         </button>
       </div>
 
-      <div className="pdc-toolbar">
-        <input
-          className="pdc-url-input"
-          disabled={busy || frozen}
-          value={url}
-          onChange={(e) => setUrl(e.target.value)}
-          placeholder={DEFAULT_POST_DETAIL_FIXTURE_URL}
-          aria-label="Post URL"
-        />
+      <div className="pdc-toolbar pdc-toolbar-stack">
+        <label className="pdc-field pdc-url-field">
+          Source URL
+          <input
+            className="pdc-url-input"
+            disabled={busy || frozen}
+            value={sourceDraft}
+            onChange={(e) => setSourceDraft(e.target.value)}
+            placeholder={DEFAULT_POST_DETAIL_FIXTURE_URL}
+            aria-label="Source URL"
+          />
+        </label>
         <button type="button" className="pdc-btn pdc-btn-secondary" disabled={busy || frozen} onClick={() => void openUrl()}>
           Open URL
         </button>
@@ -400,8 +459,12 @@ export function BrowserCaptureStep({
           {frozen ? "CAPTURE MODE" : "BROWSER LIVE"}
         </span>
       </div>
+      <p className="pdc-browser-url" title={browserUrl || "(chưa có)"}>
+        Browser URL: <code>{browserUrl || "(chưa điều hướng — bấm Open URL)"}</code>
+      </p>
 
       {error && <div className="pdc-alert pdc-alert-error">{error}</div>}
+      {warning && <div className="pdc-alert pdc-alert-warn">{warning}</div>}
       {message && <div className="pdc-alert pdc-alert-info">{message}</div>}
 
       <div className="pdc-calibration-workspace">
@@ -413,9 +476,9 @@ export function BrowserCaptureStep({
               data-browser-core-host=""
               aria-label="Browser Core live workspace"
             >
-              {!opened && !frozen && (
+              {!browserLive && !frozen && (
                 <div className="collector-sample-empty collector-browser-host-placeholder">
-                  Nhập Post URL rồi bấm Open URL. BrowserCore sẽ gắn đúng vào khung này.
+                  Nhập Source URL rồi bấm Open URL. BrowserCore Default sẽ điều hướng vào khung này.
                 </div>
               )}
             </div>
@@ -423,22 +486,25 @@ export function BrowserCaptureStep({
         </div>
 
         <div className="pdc-side-panel">
-          <h3>ROI & Visual References</h3>
+          <h3>Visual References</h3>
           <p className="pdc-panel-desc">
-            Visual reference ≠ OCR frame. Capture chỉ khi trang hiện tại là Facebook/Threads.
+            Confirm = lưu reference từ ROI vừa chọn rồi về Live. OCR content ROI chọn ở Step 2.
           </p>
           <label className="pdc-field">
             Sample label
             <input value={sampleLabel} disabled={!frozen || busy} onChange={(e) => setSampleLabel(e.target.value)} />
           </label>
           <div className="pdc-btn-row">
-            <button type="button" className="pdc-btn pdc-btn-secondary" disabled={!frozen || !roi || busy} onClick={() => void saveVisualReference()}>
-              Save visual reference
-            </button>
-            <button type="button" className="pdc-btn pdc-btn-primary" disabled={!roi || busy} onClick={() => void confirmAndLive()}>
-              Confirm ROI → Live
+            <button
+              type="button"
+              className="pdc-btn pdc-btn-primary"
+              disabled={!frozen || !anchorRoi || busy}
+              onClick={() => void confirmAndLive()}
+            >
+              Confirm → Save ref → Live
             </button>
           </div>
+          <p className="pdc-panel-desc">References: {visualReferences.length}</p>
           <ul className="pdc-sample-list">
             {visualReferences.map((s) => (
               <li key={s.sampleId}>
@@ -455,9 +521,15 @@ export function BrowserCaptureStep({
                 </button>
               </li>
             ))}
-            {!visualReferences.length && <li className="pdc-muted">Chưa có visual reference.</li>}
+            {!visualReferences.length && <li className="pdc-muted">Chưa có visual reference — Confirm sau khi kéo ROI.</li>}
           </ul>
-          <button type="button" className="pdc-btn pdc-btn-primary" disabled={!contentRoi && !roi} onClick={onNext}>
+          <button
+            type="button"
+            className="pdc-btn pdc-btn-primary"
+            disabled={!canNext}
+            title={canNext ? undefined : "Cần ≥1 visual reference trước khi sang Step 2"}
+            onClick={onNext}
+          >
             Next: Visual Region →
           </button>
         </div>
@@ -482,7 +554,7 @@ export function BrowserCaptureStep({
           onPointerUp={onPointerUp}
           onPointerCancel={onPointerUp}
           role="img"
-          aria-label="Frozen browser capture for ROI crop"
+          aria-label="Frozen browser capture for visual reference crop"
         >
           <div
             ref={previewScrollRef}
