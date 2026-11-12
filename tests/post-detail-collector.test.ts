@@ -168,24 +168,27 @@ test("Post Detail POC reuses OCR IPC and does not mock OCR text in UI", () => {
   assert.doesNotMatch(feed, /Post Detail Collector/);
 });
 
-test("Post Detail host bounds clamp left of sidebar", async () => {
-  const { clampHostLeftOfSidebar } = await import(
-    "../src/shared/post-detail-collector/host-bounds.js"
-  );
-  assert.deepEqual(
-    clampHostLeftOfSidebar({ x: 120, y: 160, width: 900, height: 480 }, 208),
-    { x: 208, y: 160, width: 812, height: 480 },
-  );
-  assert.deepEqual(
-    clampHostLeftOfSidebar({ x: 240, y: 160, width: 900, height: 480 }, 208),
-    { x: 240, y: 160, width: 900, height: 480 },
-  );
+test("Post Detail host publish matches Feed Item (no sidebar clamp)", async () => {
+  const publish = read("src/renderer/post-detail-collector/publish-browser-host.ts");
+  assert.match(publish, /publishCollectorHostFromElement/);
+  assert.doesNotMatch(publish, /clampHostLeftOfSidebar/);
+  const shared = read("src/renderer/collectors/publish-collector-host.ts");
+  assert.match(shared, /domRectToShellBounds/);
+  assert.doesNotMatch(shared, /clampHostLeftOfSidebar/);
 
   const step1 = read("src/renderer/post-detail-collector/BrowserCaptureStep.tsx");
   assert.match(step1, /publishPostDetailBrowserHost/);
+  assert.match(step1, /claimCollectorHostOwner/);
   const page = read("src/renderer/post-detail-collector/PostDetailCollectorPage.tsx");
   // Page cleanup must not depend on refreshProbe (would tear down host while Step 1 is live).
   assert.doesNotMatch(page, /}, \[invoke, refreshProbe\]\)/);
+  assert.match(page, /releaseCollectorHostOwner/);
+
+  // Page CSS clears sidebar once (same as Feed Item); do not subtract nav again in publish.
+  const css = read("src/renderer/post-detail-collector/post-detail-collector.css");
+  assert.match(css, /margin-left:\s*var\(--app-nav-width\)/);
+  const fic = read("src/renderer/feed-item-collector/feed-item-collector.css");
+  assert.match(fic, /margin-left:\s*var\(--app-nav-width\)/);
 });
 
 test("Post Detail separates navigateToTarget from captureFromSocialPage", async () => {

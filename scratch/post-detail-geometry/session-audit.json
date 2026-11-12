@@ -1,0 +1,88 @@
+{
+  "generatedAt": "2026-11-12T14:23:49",
+  "note": "Metadata only. No cookie names/values exported.",
+  "expectedNormalUserData": "D:\\work-app\\new\\rpa-social-automation-v2\\.local\\creator",
+  "expectedDefaultPartition": "persist:creator-default",
+  "smokeTestUserDataPattern": ".local/post-detail-check-<pid>",
+  "results": [
+    {
+      "label": "creator/persist:creator-default",
+      "partition": "persist:creator-default",
+      "cookiesDbPathExists": true,
+      "cookiesDbRel": "creator\\chromium\\Partitions\\creator-default\\Network\\Cookies",
+      "cookiesDbBytes": 20480,
+      "cookiesDbMtime": "2026-11-12T14:06:51",
+      "tables": [
+        "meta",
+        "cookies"
+      ],
+      "cookieCount": 8,
+      "facebookRelatedCookieCount": 8,
+      "facebookRelatedHostCount": 1,
+      "facebookRelatedHosts": [
+        ".facebook.com"
+      ]
+    },
+    {
+      "label": "post-detail-check-25884/creator-default",
+      "partition": "persist:creator-default",
+      "cookiesDbPathExists": true,
+      "cookiesDbRel": "post-detail-check-25884\\chromium\\Partitions\\creator-default\\Network\\Cookies",
+      "cookiesDbBytes": 20480,
+      "cookiesDbMtime": "2026-11-12T12:29:46",
+      "tables": [
+        "meta",
+        "cookies"
+      ],
+      "cookieCount": 5,
+      "facebookRelatedCookieCount": 5,
+      "facebookRelatedHostCount": 1,
+      "facebookRelatedHosts": [
+        ".facebook.com"
+      ]
+    },
+    {
+      "label": "post-detail-check-26504/creator-default",
+      "partition": "persist:creator-default",
+      "cookiesDbPathExists": true,
+      "cookiesDbRel": "post-detail-check-26504\\chromium\\Partitions\\creator-default\\Network\\Cookies",
+      "cookiesDbBytes": 20480,
+      "cookiesDbMtime": "2026-11-12T14:22:04",
+      "tables": [
+        "meta",
+        "cookies"
+      ],
+      "cookieCount": 3,
+      "facebookRelatedCookieCount": 3,
+      "facebookRelatedHostCount": 1,
+      "facebookRelatedHosts": [
+        ".facebook.com"
+      ]
+    },
+    {
+      "label": "creator.sqlite",
+      "exists": true,
+      "tables": [
+        "settings",
+        "flows",
+        "steps",
+        "overrides",
+        "runs",
+        "action_tags"
+      ],
+      "settings": {
+        "browserSessions": [
+          {
+            "id": "default",
+            "name": "Default",
+            "partition": "persist:creator-default",
+            "isDefault": true,
+            "updatedAt": "2026-11-12T03:11:40.573Z",
+            "domainCount": 2,
+            "lastUrlHost": "www.facebook.com"
+          }
+        ]
+      }
+    }
+  ]
+}

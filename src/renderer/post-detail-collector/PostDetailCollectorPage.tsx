@@ -5,6 +5,10 @@ import {
   collectorSetBrowserVisible,
   isElectronBrowserCoreAvailable,
 } from "../collectors/browser-capture";
+import {
+  claimCollectorHostOwner,
+  releaseCollectorHostOwner,
+} from "../collectors/collector-host-owner";
 import { BrowserCaptureStep } from "./BrowserCaptureStep";
 import { OcrPreviewStep } from "./OcrPreviewStep";
 import { VisualRegionStep } from "./VisualRegionStep";
@@ -43,14 +47,15 @@ export function PostDetailCollectorPage({ invoke, state: parentState }: { invoke
     }
   }, [invoke]);
 
-  // Match Feed Item: only clear BrowserCore host when leaving the page (not on probe refresh).
+  // Probe only. Host clear is ownership-gated so Step remounts / sibling collectors are not wiped.
   useEffect(() => {
-    let active = true;
+    const { ownerId } = claimCollectorHostOwner("pdc-page");
     void refreshProbe();
     return () => {
-      active = false;
-      void collectorReportBrowserHost(invoke, null);
-      void collectorSetBrowserVisible(invoke, false);
+      releaseCollectorHostOwner(ownerId, () => {
+        void collectorReportBrowserHost(invoke, null);
+        void collectorSetBrowserVisible(invoke, false);
+      });
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps -- probe refresh must not tear down host
   }, [invoke]);

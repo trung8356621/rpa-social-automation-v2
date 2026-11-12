@@ -1,7 +1,10 @@
 import type { Rect } from "../contracts.js";
 
 /**
- * Keep BrowserCore host to the right of the app sidebar (same coordinate space).
+ * @deprecated Do not use for live host publishing.
+ * App pages already apply `margin-left: var(--app-nav-width)`.
+ * Live path: getBoundingClientRect → domRectToShellBounds(adminUiZoom) only.
+ * Kept for reference / emergency diagnostics.
  */
 export function clampHostLeftOfSidebar(host: Rect, sidebarRight: number): Rect {
   if (!Number.isFinite(sidebarRight) || sidebarRight <= 0) return host;

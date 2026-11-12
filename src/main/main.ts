@@ -119,6 +119,14 @@ const dataPath = path.join(
 );
 app.setPath("userData", dataPath);
 app.setPath("sessionData", path.join(dataPath, "chromium"));
+if (postDetailBrowserCheck) {
+  // Isolated smoke profile — NOT .local/creator. Do not treat login/passkey prompts here as Default session loss.
+  console.warn(
+    "[POST_DETAIL_BROWSER_CHECK] Using ISOLATED userData:",
+    dataPath,
+    "| Default BrowserCore cookies remain in .local/creator (persist:creator-default).",
+  );
+}
 if (!app.requestSingleInstanceLock()) {
   app.quit();
 } else {
@@ -2199,6 +2207,115 @@ async function boot() {
           sessionId: activeSessionId,
         };
       }
+      case "postDetailGeometryDiagnostic": {
+        isIdle();
+        const contentBounds = window.getContentBounds();
+        const nativeBounds = browser.view.getBounds();
+        const collectorHost = overlays.collectorHost;
+        const renderer = command.renderer && typeof command.renderer === "object" ? command.renderer : {};
+        const hostDom = (renderer as { host?: { left: number; top: number; right?: number; bottom?: number; width: number; height: number } }).host;
+        const sidebarDom = (renderer as { sidebar?: { left: number; top: number; right: number; bottom: number; width: number; height: number } }).sidebar;
+        const sidePanelDom = (renderer as { sidePanel?: { left: number; top: number; right: number; bottom: number } }).sidePanel;
+        const headerDom = (renderer as { header?: { bottom: number } }).header;
+        const toolbarDom = (renderer as { toolbar?: { bottom: number } }).toolbar;
+        const pageDom = (renderer as { page?: { left: number; width: number } }).page;
+        const navCssVar = String((renderer as { navCssVar?: string }).navCssVar || "").trim();
+        const navVarPx = Number.parseFloat(navCssVar);
+        const zoom = Number((renderer as { adminUiZoom?: number }).adminUiZoom) || 1;
+        // Same conversion Feed Item uses: shell DIP = round(DOM client rect / adminUiZoom).
+        const expectedFromDom = hostDom
+          ? {
+              x: Math.round(hostDom.left / zoom),
+              y: Math.round(hostDom.top / zoom),
+              width: Math.max(4, Math.round(hostDom.width / zoom)),
+              height: Math.max(4, Math.round(hostDom.height / zoom)),
+            }
+          : null;
+        const overlap = (a: { x: number; y: number; width: number; height: number }, b: { left: number; top: number; right: number; bottom: number }) => {
+          const ax2 = a.x + a.width;
+          const ay2 = a.y + a.height;
+          const bx1 = b.left / zoom;
+          const by1 = b.top / zoom;
+          const bx2 = b.right / zoom;
+          const by2 = b.bottom / zoom;
+          const ix = Math.max(0, Math.min(ax2, bx2) - Math.max(a.x, bx1));
+          const iy = Math.max(0, Math.min(ay2, by2) - Math.max(a.y, by1));
+          return ix * iy;
+        };
+        // Layout ownership: page margin already clears the sidebar once. Double offset ≈ 2× nav.
+        const pageLeft = pageDom?.left ?? null;
+        const sidebarRight = sidebarDom?.right ?? null;
+        const sidebarWidth = sidebarDom?.width ?? null;
+        const hostLeft = hostDom?.left ?? null;
+        const pageOffsetOnce =
+          pageLeft == null || sidebarWidth == null
+            ? null
+            : Math.abs(pageLeft - sidebarWidth) <= 12 ||
+              (Number.isFinite(navVarPx) && Math.abs(pageLeft - navVarPx * zoom) <= 12);
+        const pageNotDoubleOffset =
+          pageLeft == null || sidebarWidth == null
+            ? null
+            : pageLeft < sidebarWidth * 1.6;
+        const domHostRightOfSidebar =
+          hostLeft == null || sidebarRight == null ? null : hostLeft >= sidebarRight - 2;
+        const checks = {
+          hostDomExists: Boolean(hostDom),
+          pageOffsetOnce,
+          pageNotDoubleOffset,
+          domHostRightOfSidebar,
+          nativeMatchesExpected: expectedFromDom
+            ? nativeBounds.x === expectedFromDom.x &&
+              nativeBounds.y === expectedFromDom.y &&
+              nativeBounds.width === expectedFromDom.width &&
+              nativeBounds.height === expectedFromDom.height
+            : false,
+          collectorHostMatchesNative: collectorHost
+            ? collectorHost.x === nativeBounds.x &&
+              collectorHost.y === nativeBounds.y &&
+              collectorHost.width === nativeBounds.width &&
+              collectorHost.height === nativeBounds.height
+            : false,
+          overlapSidebarPx: sidebarDom ? overlap(nativeBounds, sidebarDom) : null,
+          overlapSidePanelPx: sidePanelDom ? overlap(nativeBounds, sidePanelDom) : null,
+          coversHeader: headerDom ? nativeBounds.y < headerDom.bottom / zoom - 1 : null,
+          coversToolbar: toolbarDom ? nativeBounds.y < toolbarDom.bottom / zoom - 1 : null,
+        };
+        const report = {
+          timestamp: new Date().toISOString(),
+          label: typeof command.label === "string" ? command.label : "post-detail-geometry",
+          page: overlays.page,
+          browserVisible: browser.visible,
+          webContentsId: browser.view.webContents.id,
+          windowContentBounds: contentBounds,
+          collectorHostIpc: collectorHost,
+          nativeWebContentsViewBounds: nativeBounds,
+          expectedFromDomHost: expectedFromDom,
+          coordinateRule: "native = round(getBoundingClientRect(host) / adminUiZoom); page already margin-left: var(--app-nav-width); no sidebar clamp",
+          renderer,
+          checks,
+          status:
+            checks.hostDomExists &&
+            checks.pageOffsetOnce !== false &&
+            checks.pageNotDoubleOffset !== false &&
+            checks.domHostRightOfSidebar !== false &&
+            checks.nativeMatchesExpected &&
+            checks.collectorHostMatchesNative &&
+            (checks.overlapSidebarPx ?? 0) === 0 &&
+            (checks.overlapSidePanelPx ?? 0) === 0 &&
+            checks.coversHeader === false &&
+            checks.coversToolbar === false
+              ? "PASS"
+              : "FAIL",
+        };
+        const outDir = path.join(project, "scratch", "post-detail-geometry");
+        await mkdir(outDir, { recursive: true });
+        const file = path.join(
+          outDir,
+          `${String(report.label).replace(/[^a-zA-Z0-9_-]+/g, "_")}-${Date.now()}.json`,
+        );
+        await writeFile(file, JSON.stringify(report, null, 2));
+        return { ...report, path: file };
+      }
       case "collectorBrowserHost": {
         isIdle();
         if (event.sender !== window.webContents) throw new Error("Invalid collector host sender");
@@ -2978,88 +3095,334 @@ async function boot() {
   }
   if (postDetailBrowserCheck) {
     try {
-      await new Promise((resolve) => setTimeout(resolve, 1500));
       const fixtureUrl =
         "https://www.facebook.com/groups/seovamarketing/posts/29327016206983816/";
-      const wc = browser.view.webContents;
-      const startUrl = wc.getURL();
-      // Ensure we can navigateToTarget from a non-social page when possible.
-      if (!/facebook\.com|fb\.com|threads\.(net|com)/i.test(startUrl)) {
-        // already non-social — good
-      } else {
-        await wc.loadURL("about:blank");
-        await new Promise((resolve) => setTimeout(resolve, 400));
+      const outDir = path.join(project, "artifacts", "post-detail-geometry");
+      await mkdir(outDir, { recursive: true });
+      await mkdir(path.join(project, "scratch", "post-detail-geometry"), { recursive: true });
+
+      async function shellEval<T>(script: string): Promise<T> {
+        return window.webContents.executeJavaScript(script, true) as Promise<T>;
       }
-      const probeBefore = {
-        available: !wc.isDestroyed(),
-        webContentsId: wc.id,
-        url: wc.getURL(),
-        isSocialPage: false,
-      };
-      overlays.setPage("post-detail-collector");
-      const host = { x: 240, y: 160, width: 900, height: 480, active: true };
-      overlays.setCollectorHost(host);
-      browser.setVisible(true);
-      overlays.layout();
-      const boundsLive = browser.view.getBounds();
-      await browser.navigate(fixtureUrl);
-      await new Promise((resolve) => setTimeout(resolve, 10000));
-      const afterUrl = browser.view.webContents.getURL();
-      const navigatedSocial = /(?:^|\.)(?:facebook\.com|fb\.com|threads\.net|threads\.com)$/i.test(
-        (() => {
+
+      async function waitForHost(timeoutMs = 10000): Promise<boolean> {
+        const started = Date.now();
+        while (Date.now() - started < timeoutMs) {
+          const ready = await shellEval<boolean>(
+            `Boolean(document.querySelector('.post-detail-collector-page [data-browser-core-host]'))`,
+          );
+          if (ready) return true;
+          await new Promise((r) => setTimeout(r, 100));
+        }
+        return false;
+      }
+
+      async function waitForFeedHost(timeoutMs = 8000): Promise<boolean> {
+        const started = Date.now();
+        while (Date.now() - started < timeoutMs) {
+          const ready = await shellEval<boolean>(
+            `Boolean(document.querySelector('.feed-item-collector-page [data-browser-core-host]'))`,
+          );
+          if (ready) return true;
+          await new Promise((r) => setTimeout(r, 100));
+        }
+        return false;
+      }
+
+      /** Drive React navigation (setState). IPC-only appPage leaves React on the old page. */
+      async function clickNav(ariaLabel: string) {
+        const clicked = await shellEval<boolean>(
+          `((() => {
+            const btn = document.querySelector('.app-menu button[aria-label=${JSON.stringify(ariaLabel)}]');
+            if (!btn) return false;
+            btn.click();
+            return true;
+          })())`,
+        );
+        if (!clicked) throw new Error(`NAV_BUTTON_MISSING:${ariaLabel}`);
+        await new Promise((r) => setTimeout(r, 500));
+      }
+
+      async function ensureSidebarCollapsed(collapsed: boolean) {
+        const current = await shellEval<boolean>(
+          `Boolean(document.querySelector('.app-sidebar.collapsed'))`,
+        );
+        if (current === collapsed) return;
+        const toggled = await shellEval<boolean>(
+          `((() => {
+            const btn = document.querySelector('.app-sidebar-heading button');
+            if (!btn) return false;
+            btn.click();
+            return true;
+          })())`,
+        );
+        if (!toggled) throw new Error("SIDEBAR_TOGGLE_MISSING");
+        await new Promise((r) => setTimeout(r, 400));
+        const after = await shellEval<boolean>(
+          `Boolean(document.querySelector('.app-sidebar.collapsed'))`,
+        );
+        if (after !== collapsed) throw new Error(`SIDEBAR_STATE_MISMATCH:want=${collapsed}:got=${after}`);
+      }
+
+      async function captureWindow(label: string) {
+        const image = await window.capturePage();
+        const file = path.join(outDir, `${label}.png`);
+        await writeFile(file, image.toPNG());
+        return file;
+      }
+
+      async function measureGeometry(label: string) {
+        const labelLiteral = JSON.stringify(label);
+        return shellEval<{
+          ok: boolean;
+          report?: {
+            status: string;
+            path?: string;
+            checks?: Record<string, unknown>;
+            nativeWebContentsViewBounds?: unknown;
+            expectedFromDomHost?: unknown;
+            collectorHostIpc?: unknown;
+            renderer?: unknown;
+          };
+          error?: string;
+        }>(`((async () => {
           try {
-            return new URL(afterUrl).hostname;
-          } catch {
-            return "";
+            const host = document.querySelector('.post-detail-collector-page [data-browser-core-host]');
+            const box = (el) => {
+              if (!el) return null;
+              const r = el.getBoundingClientRect();
+              return { left: r.left, top: r.top, right: r.right, bottom: r.bottom, width: r.width, height: r.height };
+            };
+            const zoomRaw = getComputedStyle(document.documentElement).zoom || '1';
+            const adminUiZoom = Number(localStorage.getItem('rpa.admin.uiZoom') || zoomRaw) || 1;
+            const renderer = {
+              windowInner: { width: window.innerWidth, height: window.innerHeight },
+              devicePixelRatio: devicePixelRatio,
+              cssZoomStyle: zoomRaw,
+              adminUiZoom,
+              navCssVar: getComputedStyle(document.documentElement).getPropertyValue('--app-nav-width').trim(),
+              shell: box(document.querySelector('main.app-shell')),
+              sidebar: box(document.querySelector('.app-sidebar')),
+              page: box(document.querySelector('.post-detail-collector-page')),
+              workspace: box(document.querySelector('.pdc-calibration-workspace')),
+              host: box(host),
+              sidePanel: box(document.querySelector('.pdc-calibration-workspace > aside.pdc-side-panel')),
+              header: box(document.querySelector('.pdc-page-header')),
+              toolbar: box(document.querySelector('.pdc-toolbar')),
+              navCssVarFromShell: getComputedStyle(document.querySelector('main.app-shell')).getPropertyValue('--app-nav-width').trim(),
+            };
+            const report = await window.creator.invoke({
+              type: 'postDetailGeometryDiagnostic',
+              renderer,
+              label: ${labelLiteral},
+            });
+            return { ok: true, report };
+          } catch (e) {
+            return { ok: false, error: String(e && e.message || e) };
           }
-        })(),
-      );
-      // Menu switch regression: Feed Item → Post Detail must not leave duplicate hosts.
-      overlays.setPage("feed-item-collector");
-      overlays.layout();
-      overlays.setPage("post-detail-collector");
-      overlays.setCollectorHost(host);
-      browser.setVisible(true);
-      overlays.layout();
-      const boundsAfterSwitch = browser.view.getBounds();
-      const shot = await browser.capture({ requireCanonical: false });
-      browser.setVisible(true);
-      overlays.layout();
-      const report = {
-        timestamp: new Date().toISOString(),
-        probeBefore,
-        startUrl,
-        afterUrl,
-        navigatedSocial,
-        sameWebContentsId: browser.view.webContents.id === probeBefore.webContentsId,
-        boundsLive,
-        boundsAfterSwitch,
-        host,
-        boundsMatchHost:
-          boundsLive.x === host.x &&
-          boundsLive.y === host.y &&
-          boundsLive.width === host.width &&
-          boundsLive.height === host.height,
-        capture: {
-          id: shot.id,
-          width: shot.width,
-          height: shot.height,
-        },
-        status:
-          navigatedSocial &&
-          boundsLive.width === host.width &&
-          boundsLive.height === host.height &&
-          browser.view.webContents.id === probeBefore.webContentsId
-            ? "PASS"
-            : "FAIL",
+        })())`);
+      }
+
+      async function runCase(label: string, size: { width: number; height: number }, collapsed: boolean) {
+        window.setContentSize(size.width, size.height);
+        publishLayout();
+        await new Promise((r) => setTimeout(r, 250));
+
+        await clickNav("Post Detail Collector");
+        await ensureSidebarCollapsed(collapsed);
+        const hostReady = await waitForHost();
+        if (!hostReady) {
+          const shot = await captureWindow(`${label}-no-host`);
+          return { label, size, collapsed, status: "FAIL", error: "HOST_DOM_MISSING", screenshot: shot };
+        }
+
+        await shellEval(`new Promise((r) => requestAnimationFrame(() => requestAnimationFrame(r)))`);
+        await new Promise((r) => setTimeout(r, 300));
+
+        await browser.navigate(fixtureUrl);
+        await new Promise((r) => setTimeout(r, 7000));
+        // Re-publish after navigate/layout settle.
+        await shellEval(`window.dispatchEvent(new Event('resize'))`);
+        await new Promise((r) => setTimeout(r, 300));
+
+        const geometry = await measureGeometry(label);
+        // Paint markers: magenta = native WebContentsView; red outline = DOM host rect.
+        const prevBg = "#00000000";
+        try {
+          browser.view.setBackgroundColor("#FF00FF");
+        } catch {
+          /* ignore */
+        }
+        await shellEval(`((() => {
+          document.querySelectorAll('[data-pdc-geom-mark]').forEach((n) => n.remove());
+          const host = document.querySelector('.post-detail-collector-page [data-browser-core-host]');
+          if (!host) return false;
+          const r = host.getBoundingClientRect();
+          const mark = document.createElement('div');
+          mark.setAttribute('data-pdc-geom-mark', '1');
+          mark.style.cssText = [
+            'position:fixed',
+            'left:' + r.left + 'px',
+            'top:' + r.top + 'px',
+            'width:' + r.width + 'px',
+            'height:' + r.height + 'px',
+            'border:3px solid #ff0000',
+            'box-sizing:border-box',
+            'pointer-events:none',
+            'z-index:99999',
+            'background:rgba(255,0,0,0.08)',
+          ].join(';');
+          document.body.appendChild(mark);
+          return true;
+        })())`);
+        overlays.layout();
+        await new Promise((r) => setTimeout(r, 100));
+        const boundsAtCapture = browser.view.getBounds();
+        const screenshot = await captureWindow(label);
+        try {
+          browser.view.setBackgroundColor(prevBg);
+        } catch {
+          /* ignore */
+        }
+        await shellEval(`document.querySelectorAll('[data-pdc-geom-mark]').forEach((n) => n.remove())`);
+
+        const status = geometry.ok && geometry.report?.status === "PASS" ? "PASS" : "FAIL";
+        return {
+          label,
+          size,
+          collapsed,
+          status,
+          screenshot,
+          url: browser.view.webContents.getURL(),
+          webContentsId: browser.view.webContents.id,
+          nativeBounds: boundsAtCapture,
+          geometry,
+        };
+      }
+
+      await new Promise((r) => setTimeout(r, 1500));
+      // Normalize zoom so coordinate hypothesis is measurable at 1:1 first.
+      await shellEval(`localStorage.setItem('rpa.admin.uiZoom','1'); document.documentElement.style.zoom='1';`);
+
+      const cases = [] as Array<Record<string, unknown>>;
+      const flush = async (statusHint?: string) => {
+        const failed = cases.filter((c) => c.status === "FAIL");
+        const summary = {
+          timestamp: new Date().toISOString(),
+          status: failed.length === 0 ? "PASS" : "FAIL",
+          failedCount: failed.length,
+          statusHint: statusHint || null,
+          cases,
+          coordinateRule:
+            "nativeBounds = round(getBoundingClientRect(host) / adminUiZoom); no sidebar clamp; page already margin-left: var(--app-nav-width)",
+          artifactsDir: outDir,
+        };
+        await writeFile(path.join(outDir, "summary.json"), JSON.stringify(summary, null, 2));
+        await writeFile(
+          path.join(project, "artifacts", "post-detail-browser-check.json"),
+          JSON.stringify(summary, null, 2),
+        );
+        return summary;
       };
-      await mkdir(path.join(project, "artifacts"), { recursive: true });
-      await writeFile(
-        path.join(project, "artifacts", "post-detail-browser-check.json"),
-        JSON.stringify(report, null, 2),
-      );
-      console.info("POST_DETAIL_BROWSER_CHECK", report.status, afterUrl);
-      app.exit(report.status === "PASS" ? 0 : 1);
+
+      const safeCase = async (fn: () => Promise<Record<string, unknown>>) => {
+        try {
+          const result = await fn();
+          cases.push(result);
+          await flush("progress");
+          return result;
+        } catch (error) {
+          const result = {
+            status: "FAIL",
+            error: error instanceof Error ? error.message : String(error),
+          };
+          cases.push(result);
+          await flush("case-error");
+          return result;
+        }
+      };
+
+      await safeCase(() => runCase("pdc-1366x768-sidebar-open", { width: 1366, height: 768 }, false));
+      await safeCase(() => runCase("pdc-1920x1080-sidebar-open", { width: 1920, height: 1080 }, false));
+      await safeCase(() => runCase("pdc-1366x768-sidebar-collapsed", { width: 1366, height: 768 }, true));
+
+      // Feed Item → Post Detail → Feed Item (React nav)
+      await safeCase(async () => {
+        await ensureSidebarCollapsed(false);
+        await clickNav("Feed Item Collector");
+        await waitForFeedHost();
+        await new Promise((r) => setTimeout(r, 400));
+        await clickNav("Post Detail Collector");
+        await waitForHost();
+        await new Promise((r) => setTimeout(r, 400));
+        await clickNav("Feed Item Collector");
+        await waitForFeedHost();
+        const switchShot = await captureWindow("pdc-switch-feed-item-post-detail");
+        return {
+          label: "page-switch-feed-post-feed",
+          status: "INFO",
+          screenshot: switchShot,
+          note: "React nav switch cycle completed.",
+        };
+      });
+
+      // Resize while on Post Detail
+      await safeCase(async () => {
+        await clickNav("Post Detail Collector");
+        await waitForHost();
+        window.setContentSize(1600, 900);
+        overlays.layout();
+        publishLayout();
+        await shellEval(`window.dispatchEvent(new Event('resize'))`);
+        await new Promise((r) => setTimeout(r, 500));
+        return runCase("pdc-resize-1600x900", { width: 1600, height: 900 }, false);
+      });
+
+      // Live → Capture ON → Live
+      await safeCase(async () => {
+        await clickNav("Post Detail Collector");
+        await waitForHost();
+        await browser.navigate(fixtureUrl);
+        await new Promise((r) => setTimeout(r, 5000));
+        const captureClicked = await shellEval<boolean>(
+          `((() => {
+            const buttons = Array.from(document.querySelectorAll('button'));
+            const btn = buttons.find((b) => /Capture Mode ON/i.test(b.textContent || ''));
+            if (!btn) return false;
+            btn.click();
+            return true;
+          })())`,
+        );
+        await new Promise((r) => setTimeout(r, 2500));
+        const captureShot = await captureWindow("pdc-capture-mode-on");
+        const liveClicked = await shellEval<boolean>(
+          `((() => {
+            const buttons = Array.from(document.querySelectorAll('button'));
+            const btn = buttons.find((b) => /Thoát Capture|Live/i.test(b.textContent || ''));
+            if (!btn) return false;
+            btn.click();
+            return true;
+          })())`,
+        );
+        await new Promise((r) => setTimeout(r, 800));
+        const liveShot = await captureWindow("pdc-back-to-live");
+        const liveGeometry = await measureGeometry("pdc-after-capture-live");
+        return {
+          label: "live-capture-live",
+          status:
+            captureClicked && liveClicked && liveGeometry.ok && liveGeometry.report?.status === "PASS"
+              ? "PASS"
+              : "FAIL",
+          captureClicked,
+          liveClicked,
+          screenshots: { captureShot, liveShot },
+          geometry: liveGeometry,
+        };
+      });
+
+      const summary = await flush("final");
+      console.info("POST_DETAIL_BROWSER_CHECK", summary.status, `failed=${summary.failedCount}`);
+      app.exit(summary.status === "PASS" ? 0 : 1);
       return;
     } catch (error) {
       console.error("POST_DETAIL_BROWSER_CHECK_FAILED", error);

@@ -1,0 +1,197 @@
+{
+  "meta": {
+    "format": "png",
+    "mediaType": "image/png",
+    "width": 1366,
+    "height": 768,
+    "space": "srgb",
+    "channels": 3,
+    "depth": "uchar",
+    "density": 72,
+    "isProgressive": false,
+    "isPalette": false,
+    "bitsPerSample": 8,
+    "hasProfile": false,
+    "hasAlpha": false,
+    "autoOrient": {
+      "width": 1366,
+      "height": 768
+    }
+  },
+  "expected": {
+    "x": 225,
+    "y": 267,
+    "width": 834,
+    "height": 492
+  },
+  "analysis": {
+    "280": {
+      "firstBrowser": 320,
+      "lastBrowser": 1058,
+      "browserWidth": 739,
+      "firstSidebar": 0,
+      "lastSidebar": 207,
+      "at100": [
+        17,
+        31,
+        48
+      ],
+      "at225": [
+        11,
+        26,
+        20
+      ],
+      "at320": [
+        5,
+        10,
+        8
+      ],
+      "at500": [
+        5,
+        10,
+        8
+      ],
+      "at1059": [
+        31,
+        61,
+        48
+      ],
+      "at1100": [
+        7,
+        20,
+        15
+      ],
+      "at1200": [
+        7,
+        20,
+        15
+      ]
+    },
+    "400": {
+      "firstBrowser": 320,
+      "lastBrowser": 1058,
+      "browserWidth": 739,
+      "firstSidebar": 0,
+      "lastSidebar": 207,
+      "at100": [
+        17,
+        31,
+        48
+      ],
+      "at225": [
+        11,
+        26,
+        20
+      ],
+      "at320": [
+        5,
+        10,
+        8
+      ],
+      "at500": [
+        5,
+        10,
+        8
+      ],
+      "at1059": [
+        31,
+        61,
+        48
+      ],
+      "at1100": [
+        7,
+        20,
+        15
+      ],
+      "at1200": [
+        7,
+        20,
+        15
+      ]
+    },
+    "500": {
+      "firstBrowser": 320,
+      "lastBrowser": 1058,
+      "browserWidth": 739,
+      "firstSidebar": 0,
+      "lastSidebar": 207,
+      "at100": [
+        17,
+        31,
+        48
+      ],
+      "at225": [
+        11,
+        26,
+        20
+      ],
+      "at320": [
+        5,
+        10,
+        8
+      ],
+      "at500": [
+        5,
+        10,
+        8
+      ],
+      "at1059": [
+        31,
+        61,
+        48
+      ],
+      "at1100": [
+        7,
+        20,
+        15
+      ],
+      "at1200": [
+        7,
+        20,
+        15
+      ]
+    },
+    "600": {
+      "firstBrowser": 320,
+      "lastBrowser": 1058,
+      "browserWidth": 739,
+      "firstSidebar": 0,
+      "lastSidebar": 207,
+      "at100": [
+        17,
+        31,
+        48
+      ],
+      "at225": [
+        11,
+        26,
+        20
+      ],
+      "at320": [
+        5,
+        10,
+        8
+      ],
+      "at500": [
+        5,
+        10,
+        8
+      ],
+      "at1059": [
+        31,
+        61,
+        48
+      ],
+      "at1100": [
+        7,
+        20,
+        15
+      ],
+      "at1200": [
+        7,
+        20,
+        15
+      ]
+    }
+  }
+}

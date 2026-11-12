@@ -12,6 +12,11 @@ import {
   isElectronBrowserCoreAvailable,
 } from "../collectors/browser-capture";
 import { TemplateMatcher } from "../experiments/visual-match-lab/template-matcher";
+import {
+  claimCollectorHostOwner,
+  isCollectorHostOwner,
+  releaseCollectorHostOwner,
+} from "../collectors/collector-host-owner";
 import { imageToCanvas } from "./image-utils";
 import { publishPostDetailBrowserHost } from "./publish-browser-host";
 import type { BrowserProbe, Invoke, PostDetailMatchResult, VisualReferenceSample } from "./types";
@@ -87,29 +92,33 @@ export function VisualRegionStep({
 
   useEffect(() => {
     if (!electron || !invoke) return;
-    publishHost();
+    const { ownerId } = claimCollectorHostOwner("pdc-step2");
+    const safePublish = () => {
+      if (!isCollectorHostOwner(ownerId)) return;
+      publishHost();
+    };
+    safePublish();
     const rafIds = [
-      requestAnimationFrame(publishHost),
-      requestAnimationFrame(() => requestAnimationFrame(publishHost)),
+      requestAnimationFrame(safePublish),
+      requestAnimationFrame(() => requestAnimationFrame(safePublish)),
     ];
     const el = hostRef.current;
-    const sidebar = document.querySelector(".app-sidebar");
-    const ro = typeof ResizeObserver !== "undefined" ? new ResizeObserver(() => publishHost()) : null;
+    const ro = typeof ResizeObserver !== "undefined" ? new ResizeObserver(() => safePublish()) : null;
     if (el && ro) ro.observe(el);
-    if (sidebar && ro) ro.observe(sidebar);
-    window.addEventListener("resize", publishHost);
-    window.addEventListener("scroll", publishHost, true);
+    window.addEventListener("resize", safePublish);
+    window.addEventListener("scroll", safePublish, true);
     void collectorSetBrowserVisible(invoke, true).then(() => {
-      requestAnimationFrame(publishHost);
-      window.setTimeout(publishHost, 50);
+      requestAnimationFrame(safePublish);
     });
     return () => {
       for (const id of rafIds) cancelAnimationFrame(id);
       ro?.disconnect();
-      window.removeEventListener("resize", publishHost);
-      window.removeEventListener("scroll", publishHost, true);
-      void collectorReportBrowserHost(invoke, null);
-      void collectorSetBrowserVisible(invoke, false);
+      window.removeEventListener("resize", safePublish);
+      window.removeEventListener("scroll", safePublish, true);
+      releaseCollectorHostOwner(ownerId, () => {
+        void collectorReportBrowserHost(invoke, null);
+        void collectorSetBrowserVisible(invoke, false);
+      });
     };
   }, [electron, invoke, publishHost]);
 

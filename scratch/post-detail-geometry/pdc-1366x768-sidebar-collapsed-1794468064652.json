@@ -1,0 +1,121 @@
+{
+  "timestamp": "2026-11-12T07:21:04.652Z",
+  "label": "pdc-1366x768-sidebar-collapsed",
+  "page": "post-detail-collector",
+  "browserVisible": true,
+  "webContentsId": 2,
+  "windowContentBounds": {
+    "x": 11,
+    "y": 51,
+    "width": 1366,
+    "height": 768
+  },
+  "collectorHostIpc": {
+    "x": 225,
+    "y": 267,
+    "width": 812,
+    "height": 372,
+    "active": true
+  },
+  "nativeWebContentsViewBounds": {
+    "x": 225,
+    "y": 267,
+    "width": 812,
+    "height": 372
+  },
+  "expectedFromDomHost": {
+    "x": 73,
+    "y": 267,
+    "width": 986,
+    "height": 492
+  },
+  "coordinateRule": "native = round(getBoundingClientRect(host) / adminUiZoom); page already margin-left: var(--app-nav-width); no sidebar clamp",
+  "renderer": {
+    "windowInner": {
+      "width": 1366,
+      "height": 768
+    },
+    "devicePixelRatio": 1,
+    "cssZoomStyle": "1",
+    "adminUiZoom": 1,
+    "navCssVar": "",
+    "shell": {
+      "left": 0,
+      "top": 0,
+      "right": 1366,
+      "bottom": 768,
+      "width": 1366,
+      "height": 768
+    },
+    "sidebar": {
+      "left": 0,
+      "top": 0,
+      "right": 56,
+      "bottom": 768,
+      "width": 56,
+      "height": 768
+    },
+    "page": {
+      "left": 56,
+      "top": 36,
+      "right": 1366,
+      "bottom": 768,
+      "width": 1310,
+      "height": 732
+    },
+    "workspace": {
+      "left": 72,
+      "top": 266,
+      "right": 1350,
+      "bottom": 760,
+      "width": 1278,
+      "height": 494
+    },
+    "host": {
+      "left": 73,
+      "top": 267,
+      "right": 1059,
+      "bottom": 759,
+      "width": 986,
+      "height": 492
+    },
+    "sidePanel": {
+      "left": 0,
+      "top": 88,
+      "right": 320,
+      "bottom": 768,
+      "width": 320,
+      "height": 680
+    },
+    "header": {
+      "left": 72,
+      "top": 44,
+      "right": 1350,
+      "bottom": 96,
+      "width": 1278,
+      "height": 52
+    },
+    "toolbar": {
+      "left": 72,
+      "top": 189,
+      "right": 1350,
+      "bottom": 220,
+      "width": 1278,
+      "height": 31
+    },
+    "navCssVarFromShell": "56px"
+  },
+  "checks": {
+    "hostDomExists": true,
+    "pageOffsetOnce": true,
+    "pageNotDoubleOffset": true,
+    "domHostRightOfSidebar": true,
+    "nativeMatchesExpected": false,
+    "collectorHostMatchesNative": true,
+    "overlapSidebarPx": 0,
+    "overlapSidePanelPx": 35340,
+    "coversHeader": false,
+    "coversToolbar": false
+  },
+  "status": "FAIL"
+}

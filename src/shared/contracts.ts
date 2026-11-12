@@ -526,6 +526,8 @@ export type Command =
   | { type: "postDetailLoadRun"; runId: string }
   /** Lightweight BrowserCore probe — no BROWSER_NOT_FACEBOOK guard (navigate may start from any page). */
   | { type: "postDetailBrowserProbe" }
+  /** Merge renderer DOM geometry with main-process native view bounds; write scratch diagnostic. */
+  | { type: "postDetailGeometryDiagnostic"; renderer: Record<string, unknown>; label?: string }
   /** Collector Capture workspace hole — null/inactive hides Browser Core on collectors pages. */
   | {
       type: "collectorBrowserHost";
