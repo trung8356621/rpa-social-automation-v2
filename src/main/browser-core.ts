@@ -463,6 +463,9 @@ export class BrowserCore {
   /**
    * Wheel at BrowserCore viewport center (or explicit DIP point inside the view).
    * Coordinates are relative to the WebContentsView, not the Windows desktop.
+   * mouseMove first so Chromium routes the wheel to the element under the cursor
+   * (required for Facebook nested scroll containers / post-detail modals).
+   * Sign convention (verified by self-test): negative deltaY increases page scrollY (content moves up).
    */
   scroll(deltaY: number, point?: { x: number; y: number }) {
     if (!Number.isFinite(deltaY) || Math.abs(deltaY) > 3000)
@@ -476,10 +479,13 @@ export class BrowserCore {
     const bounds = this.view.getBounds();
     const x = point && Number.isFinite(point.x) ? Math.round(point.x) : Math.round(bounds.width / 2);
     const y = point && Number.isFinite(point.y) ? Math.round(point.y) : Math.round(bounds.height / 2);
+    const p = { x, y };
+    this.inputRoute = "browser";
+    // Park pointer on the wheel target before wheel — same pattern as click().
+    this.view.webContents.sendInputEvent({ type: "mouseMove", ...p });
     this.view.webContents.sendInputEvent({
       type: "mouseWheel",
-      x,
-      y,
+      ...p,
       deltaY,
       deltaX: 0,
     });

@@ -109,9 +109,18 @@ export class PostDetailRunStorage {
         frameId: frame.frameId,
         frameIndex: idx,
         scrollDeltaApplied: frame.scrollDeltaApplied,
+        observedScrollPx: frame.observedScrollPx,
         width: frame.width,
         height: frame.height,
         anchors: frame.anchors,
+        anchorCandidates: frame.anchorCandidates,
+        diagnostics: frame.diagnostics
+          ? {
+              ...frame.diagnostics,
+              // Drop bulky per-pixel data; keep scores/bboxes only.
+              matchLogs: frame.diagnostics.matchLogs,
+            }
+          : undefined,
         notes: frame.notes,
         screenshotPath: shotBuf ? shotRel : undefined,
         phase: "auto-scan",

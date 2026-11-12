@@ -227,9 +227,12 @@ export function VisualRegionStep({
               frameId: f.frameId,
               frameIndex: f.frameIndex,
               scrollDeltaApplied: f.scrollDeltaApplied,
+              observedScrollPx: f.observedScrollPx,
               width: f.width,
               height: f.height,
               anchors: f.anchors,
+              anchorCandidates: f.anchorCandidates,
+              diagnostics: f.diagnostics,
               notes: f.notes,
               screenshotDataUrl: f.screenshotDataUrl,
             })),
@@ -542,8 +545,22 @@ export function VisualRegionStep({
                 ? `${containerResult.scrollMetadata.wheelPoint.x},${containerResult.scrollMetadata.wheelPoint.y} Δ${containerResult.scrollMetadata.deltaY}`
                 : "viewport center"}
             </dd>
+            <dt>Scroll</dt>
+            <dd>
+              {containerResult
+                ? `req=${containerResult.scrollMetadata.requestedScrollPx} · obs=${containerResult.scrollMetadata.observedScrollPx} · confirmedFrames=${containerResult.scrollMetadata.visualScrollConfirmedFrames}`
+                : active?.diagnostics
+                  ? `obs=${active.diagnostics.observedScrollPx} · ${active.diagnostics.scrollConfirmLabel} · motion=${active.diagnostics.visualMotionScore ?? "—"}`
+                  : "—"}
+            </dd>
+            <dt>Frame diag</dt>
+            <dd>
+              {active?.diagnostics
+                ? `${active.diagnostics.wheelOutcome} · matches=${active.diagnostics.matchLogs.filter((m) => m.accepted).length}/${active.diagnostics.matchLogs.length}`
+                : "—"}
+            </dd>
             <dt>Stop</dt>
-            <dd>{containerResult?.scrollMetadata.stoppedReason || "—"}</dd>
+            <dd>{containerResult?.scrollMetadata.stoppedReason || active?.diagnostics?.stopOrRejectReason || "—"}</dd>
           </dl>
 
           <h3>References ({visualReferences.length})</h3>

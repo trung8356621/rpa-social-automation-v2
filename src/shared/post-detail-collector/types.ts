@@ -120,17 +120,57 @@ export type PostDetailVisualAnchor = {
   bbox: Rect;
   score: number;
   templateId: string;
+  /** Rank among same-template candidates (0 = best). */
+  candidateRank?: number;
+  rejectionReason?: string | null;
+};
+
+export type PostDetailWheelOutcome = "WHEEL_SENT" | "WHEEL_BLOCKED" | "WHEEL_SKIPPED" | "NONE";
+
+export type PostDetailScrollConfirm = "VISUAL_SCROLL_CONFIRMED" | "SCROLL_NOT_MOVING" | "PENDING" | "N/A";
+
+/** Per-frame Auto Scan diagnostics (no secrets). */
+export type PostDetailFrameDiagnostics = {
+  frameIndex: number;
+  wheelTarget: { x: number; y: number } | null;
+  requestedDeltaY: number | null;
+  wheelOutcome: PostDetailWheelOutcome;
+  wheelReason?: string;
+  screenshotBeforeRef?: string;
+  screenshotAfterRef?: string;
+  visualMotionScore: number | null;
+  scrollConfirmed: boolean | null;
+  scrollConfirmLabel: PostDetailScrollConfirm;
+  /** Cumulative visually confirmed scroll (magnitude), not requested wheel sum. */
+  observedScrollPx: number;
+  matchLogs: Array<{
+    type: PostDetailAnchorType;
+    templateId: string;
+    score: number;
+    threshold: number;
+    bbox: Rect | null;
+    accepted: boolean;
+    rejectionReason: string | null;
+    candidateRank: number;
+  }>;
+  containerCandidate: Rect | null;
+  stopOrRejectReason?: string;
 };
 
 export type PostDetailScanFrame = {
   frameId: string;
   frameIndex: number;
-  /** Cumulative wheel delta applied before this capture (CSS/DIP px). */
+  /** Cumulative *requested* wheel magnitude before this capture (for audit). */
   scrollDeltaApplied: number;
+  /** Cumulative visually confirmed scroll magnitude. */
+  observedScrollPx: number;
   screenshotDataUrl?: string;
   width: number;
   height: number;
   anchors: PostDetailVisualAnchor[];
+  /** Extra same-type candidates retained for main vs comment action-row disambiguation. */
+  anchorCandidates?: PostDetailVisualAnchor[];
+  diagnostics?: PostDetailFrameDiagnostics;
   notes: string[];
 };
 
@@ -148,21 +188,32 @@ export type PostDetailContainerResult = {
   sourceUrl: string;
   scrollMetadata: {
     wheelPoint: { x: number; y: number };
+    /** Signed wheel delta sent to BrowserCore (negative = content down per self-test). */
     deltaY: number;
     settleMs: number;
     maxFrames: number;
     framesCaptured: number;
     stoppedReason: string;
+    requestedScrollPx: number;
+    observedScrollPx: number;
+    visualScrollConfirmedFrames: number;
   };
   notes: string[];
 };
 
 export const POST_DETAIL_AUTO_SCAN_DEFAULTS = Object.freeze({
   maxFrames: 8,
-  /** Reuse Feed Item default scroll step (CSS px), without editing Feed Item code. */
-  deltaY: 280,
-  settleMs: 450,
+  /**
+   * Signed mouseWheel deltaY. Negative scrolls content down in BrowserCore
+   * (self-test: scroll(-400) increases scrollY). Magnitude matches Feed Item step.
+   */
+  deltaY: -280,
+  settleMs: 550,
   matchThreshold: 0.55,
+  /** Content-band MAD threshold for VISUAL_SCROLL_CONFIRMED. */
+  motionThreshold: 6.5,
+  /** Stop after this many consecutive wheels with no visual movement. */
+  maxStaleWheels: 2,
 });
 
 /** Step 2 Auto Scan evidence — does not write final OCR manifest.json (Step 3 owns that). */

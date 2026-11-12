@@ -30,11 +30,14 @@ function container(runId: string): PostDetailContainerResult {
     sourceUrl: "https://www.facebook.com/groups/x/posts/1/",
     scrollMetadata: {
       wheelPoint: { x: 512, y: 280 },
-      deltaY: 280,
+      deltaY: -280,
       settleMs: 450,
       maxFrames: 5,
       framesCaptured: 1,
       stoppedReason: "max-frames",
+      requestedScrollPx: 0,
+      observedScrollPx: 0,
+      visualScrollConfirmedFrames: 0,
     },
     notes: ["single like"],
   };
@@ -65,6 +68,7 @@ test("auto-scan evidence writes once and refuses overwrite", async () => {
           frameId: "frame-001",
           frameIndex: 1,
           scrollDeltaApplied: 0,
+          observedScrollPx: 0,
           width: 1024,
           height: 560,
           anchors: container(runId).visualAnchors,

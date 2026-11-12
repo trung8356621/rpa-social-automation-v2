@@ -48,9 +48,26 @@ export async function collectorNavigate(invoke: CollectorInvoke, url: string): P
 export async function collectorPostDetailWheel(
   invoke: CollectorInvoke,
   deltaY: number,
-): Promise<{ ok: boolean; deltaY: number; wheelPoint: { x: number; y: number }; viewport: { width: number; height: number } }> {
+): Promise<{
+  ok: boolean;
+  outcome: "WHEEL_SENT" | "WHEEL_BLOCKED";
+  deltaY: number;
+  wheelPoint: { x: number; y: number };
+  viewport: { width: number; height: number };
+  focused?: boolean;
+  visible?: boolean;
+  webContentsId?: number;
+  reason?: string;
+}> {
   if (!isElectronBrowserCoreAvailable()) throw new Error(BROWSER_CORE_UNAVAILABLE);
   return invoke({ type: "postDetailWheel", deltaY });
+}
+
+/** Capture while keeping BrowserCore visible (Auto Scan continuous scroll). */
+export async function collectorCaptureKeepVisible(invoke: CollectorInvoke): Promise<Capture> {
+  if (!isElectronBrowserCoreAvailable()) throw new Error(BROWSER_CORE_UNAVAILABLE);
+  await invoke({ type: "browserVisible", visible: true });
+  return invoke<Capture>({ type: "capture" });
 }
 
 export async function collectorSetBrowserVisible(

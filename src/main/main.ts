@@ -2226,21 +2226,57 @@ async function boot() {
           throw new Error("BROWSER_CORE_UNAVAILABLE: BrowserCore webContents is not ready.");
         }
         try {
+          window.focus();
+        } catch {
+          /* ignore */
+        }
+        try {
           wc.focus();
         } catch {
           /* ignore */
+        }
+        // Focus + layout settle before dispatch (focus is async on Windows).
+        await new Promise((r) => setTimeout(r, 50));
+        if (!wc.isFocused()) {
+          try {
+            wc.focus();
+          } catch {
+            /* ignore */
+          }
+          await new Promise((r) => setTimeout(r, 30));
         }
         const bounds = browser.view.getBounds();
         const point = {
           x: Math.round(Math.max(1, bounds.width) / 2),
           y: Math.round(Math.max(1, bounds.height) / 2),
         };
+        const focused = wc.isFocused();
+        const visible = browser.visible && window.isVisible();
+        if (!visible || !focused) {
+          return {
+            ok: false,
+            outcome: "WHEEL_BLOCKED",
+            deltaY,
+            wheelPoint: point,
+            viewport: { width: bounds.width, height: bounds.height },
+            focused,
+            visible,
+            webContentsId: wc.id,
+            reason: !visible
+              ? "BrowserCore not visible"
+              : "BrowserCore webContents not focused",
+          };
+        }
         browser.scroll(deltaY, point);
         return {
           ok: true,
+          outcome: "WHEEL_SENT",
           deltaY,
           wheelPoint: point,
           viewport: { width: bounds.width, height: bounds.height },
+          focused: true,
+          visible: true,
+          webContentsId: wc.id,
         };
       }
       case "postDetailGeometryDiagnostic": {
