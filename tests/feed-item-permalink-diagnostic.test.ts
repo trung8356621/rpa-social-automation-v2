@@ -36,7 +36,7 @@ test("Task A: context menu offers Copy link address only from params.linkURL", (
 
   const core = read("src/main/browser-core.ts");
   assert.match(core, /wc\.on\("context-menu"/);
-  assert.match(core, /clipboard\.writeText\(params\.linkURL\)/);
+  assert.match(core, /await clipboard\.writeText\(params\.linkURL\)/);
   // Single menu, attached inside createView (same BrowserCore webContents, no new partition).
   assert.equal((core.match(/"context-menu"/g) ?? []).length, 1);
 });
@@ -81,6 +81,13 @@ test("Task B evidence: Anh Tho permalink is absent from raw DOM evidence; card h
   // Hit point lies inside the card rect → action row belongs to this card (Case D ruled out).
   const r = card.rect;
   assert.ok(row.hitPoint.y >= r.y && row.hitPoint.y <= r.y + r.height);
+  // Post extraction is uncapped (only rawUrls storage is capped). Entire attempt has zero
+  // identities for Anh Tho → permalink was not present in feed DOM (Case B ruled out).
+  const allPostIds = row.ancestors.flatMap((a: any) => (a.postIdentities || []).map((p: any) => p.postId));
+  assert.ok(!allPostIds.includes("29327016206983816"));
+  // Neighbor cards in the same feed DO expose /posts/ URLs (comment permalinks) — so absence
+  // on this card is card-local lazy href, not a global parser failure (Case C).
+  assert.ok(all.includes("/groups/seovamarketing/posts/"), "other posts in feed have real /posts/ hrefs");
 
   // Resolver replay on saved trajectory is deterministic: 0 → 3 jump at feed → NOT_FOUND (correct, not loosened).
   const steps = row.ancestors.map((a: any) => ({ ...a, hasNestedArticle: false, hasQuoteOrReplyHint: false }));

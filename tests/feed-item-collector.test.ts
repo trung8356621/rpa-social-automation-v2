@@ -900,13 +900,18 @@ test("Phase 5: Task 1-5 URL Confirmation & Offline Boundary Re-evaluation", () =
       dataUrl: "data:image/png;base64,mock",
       width: 1024,
       height: 560,
-      timestamp: Date.now(),
-      viewport: { width: 1024, height: 560, scrollX: 0, scrollY: 1000, url: "https://facebook.com" },
+      url: "https://facebook.com",
+      viewport: { width: 1024, height: 560, scrollX: 0, scrollY: 1000, dpr: 1, url: "https://facebook.com" },
       webContentsId: 1,
     },
-    candidates: [candNeedsAttention, candDuplicate],
-    detectedRowCount: 2,
+    captureStatus: "CAPTURE_PASS",
+    pipelineStatus: "OK",
+    templateStatus: "READY",
+    detectionStatus: "DETECTION_PASS",
     boundaryStatus: "BOUNDARY_NOT_FOUND",
+    rawIconMatches: 2,
+    actionClusters: 2,
+    candidates: [candNeedsAttention, candDuplicate],
   };
 
   const updatedReports = updateCandidateInReports(

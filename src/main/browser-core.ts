@@ -122,12 +122,13 @@ export class BrowserCore {
       canGoBack: wc.navigationHistory.canGoBack(),
       canGoForward: wc.navigationHistory.canGoForward(),
     });
-    const run = (id: string) => {
+    // Electron 44 clipboard.writeText is async — must await or the copy can be dropped.
+    const run = async (id: string) => {
       if (wc.isDestroyed()) return;
       switch (id) {
         case "copy-link":
           // Exact linkURL from Chromium params; never saved to Collector.
-          if (isCopyableLinkUrl(params.linkURL)) clipboard.writeText(params.linkURL);
+          if (isCopyableLinkUrl(params.linkURL)) await clipboard.writeText(params.linkURL);
           return;
         case "copy": return wc.copy();
         case "cut": return wc.cut();
@@ -142,7 +143,7 @@ export class BrowserCore {
       spec.map((item) =>
         item.type === "separator"
           ? { type: "separator" as const }
-          : { label: item.label, enabled: item.enabled, click: () => run(item.id) },
+          : { label: item.label, enabled: item.enabled, click: () => { void run(item.id); } },
       ),
     );
     menu.popup({ window: this.window });
