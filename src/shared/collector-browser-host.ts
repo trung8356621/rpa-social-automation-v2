@@ -10,7 +10,7 @@ export function shouldShowBrowserForPage(opts: {
 }): boolean {
   if (!opts.browserVisible) return false;
   if (opts.page === "creator" || opts.page === "studio-run") return true;
-  if (opts.page === "collectors" || opts.page === "visual-match-lab") {
+  if (opts.page === "collectors" || opts.page === "visual-match-lab" || opts.page === "feed-item-collector") {
     return opts.collectorHostActive;
   }
   return false;
@@ -23,7 +23,7 @@ export function resolveBrowserViewBounds(opts: {
 }): Rect {
   const host = opts.collectorHost;
   if (
-    (opts.page === "collectors" || opts.page === "visual-match-lab") &&
+    (opts.page === "collectors" || opts.page === "visual-match-lab" || opts.page === "feed-item-collector") &&
     host?.active &&
     Number.isFinite(host.x) &&
     Number.isFinite(host.y) &&

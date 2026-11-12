@@ -11,6 +11,7 @@ import { BrowserSessionsPage, SessionSelector } from "./browser-sessions";
 import { TestLabPage, TestCaseEditor, CaseResultView, ExecutionErrorView, type CaseEditorHandle } from "./test-lab";
 import { CollectorsPage } from "./collectors/CollectorsPage";
 import { VisualMatchLabPage } from "./experiments/visual-match-lab/VisualMatchLabPage";
+import { FeedItemCollectorPage } from "./feed-item-collector/FeedItemCollectorPage";
 import type { CollectorEditorHandle } from "./collectors/CollectorEditor";
 import { Variables, Groups } from "./flow-controls";
 import { SeoOpsAuthPanel, scriptVersionLabel, syncBadge, type SeoOpsSessionState } from "./seo-ops-panel";
@@ -211,7 +212,7 @@ function Creator() {
   const creatorVisible = appPage === "creator";
   const activeCaseTab = tabs.find(t => t.id === activeTabId && t.kind === "test-case");
   useEffect(() => {
-    if (["scenarios", "browser-sessions", "test-lab", "visual-match-lab", "settings", "variations", "widget-registry", "workflows", "builds-releases", "collectors", "collector-test-lab"].includes(appPage)) setMainPage(appPage as MainPage);
+    if (["scenarios", "browser-sessions", "test-lab", "visual-match-lab", "settings", "variations", "widget-registry", "workflows", "builds-releases", "collectors", "collector-test-lab", "feed-item-collector"].includes(appPage)) setMainPage(appPage as MainPage);
   }, [appPage]);
   useEffect(() => {
     if (!shell || !creatorVisible) return;
@@ -821,7 +822,7 @@ function Creator() {
   async function changeAppPage(page: AppPage) {
     const next = await invoke<State>({ type: "appPage", page });
     setState(next);
-    if (["scenarios", "browser-sessions", "test-lab", "visual-match-lab", "settings", "variations", "widget-registry", "workflows", "builds-releases", "collectors", "collector-test-lab"].includes(page)) setMainPage(page as MainPage);
+    if (["scenarios", "browser-sessions", "test-lab", "visual-match-lab", "settings", "variations", "widget-registry", "workflows", "builds-releases", "collectors", "collector-test-lab", "feed-item-collector"].includes(page)) setMainPage(page as MainPage);
     setPageError("");
     window.scrollTo({ left: 0, top: 0 });
   }
@@ -1368,6 +1369,7 @@ function Creator() {
         open={openCase} run={runCase} canRun={canRunCase} create={() => openCase()} canDelete={id => !tabsRef.current.some(t => t.caseId === id)}
         navigate={navigateApp} />}
       {shell && appPage === "visual-match-lab" && <VisualMatchLabPage invoke={invoke} />}
+      {shell && appPage === "feed-item-collector" && <FeedItemCollectorPage invoke={invoke} />}
       {shell && (appPage === "collectors" || appPage === "collector-test-lab") && (
         <CollectorsPage
           page={appPage}

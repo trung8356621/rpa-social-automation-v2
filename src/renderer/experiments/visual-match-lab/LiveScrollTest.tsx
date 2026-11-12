@@ -53,7 +53,7 @@ const LIVE_RULES_KEY = "visual_match_lab_permalink_rules_v1";
 let inMemoryFramesCache: FrameReport[] | null = null;
 let inMemoryRunIdCache: string | null = null;
 
-function loadSavedRules(): UserPermalinkRule[] {
+export function loadSavedRules(): UserPermalinkRule[] {
   try {
     const raw = localStorage.getItem(LIVE_RULES_KEY);
     if (raw) {
@@ -64,15 +64,15 @@ function loadSavedRules(): UserPermalinkRule[] {
   return BUILTIN_PERMALINK_RULES;
 }
 
-const wait = (ms: number) => new Promise(resolve => setTimeout(resolve, ms));
-const imageCanvas = async (dataUrl: string, width?: number, height?: number) => {
+export const wait = (ms: number) => new Promise(resolve => setTimeout(resolve, ms));
+export const imageCanvas = async (dataUrl: string, width?: number, height?: number) => {
   const image = new Image(); image.src = dataUrl;
   await new Promise<void>((resolve, reject) => { image.onload = () => resolve(); image.onerror = () => reject(new Error("IMAGE_LOAD_FAILED")); });
   const canvas = document.createElement("canvas"); canvas.width = width ?? image.width; canvas.height = height ?? image.height;
   canvas.getContext("2d")!.drawImage(image, 0, 0, canvas.width, canvas.height); return canvas;
 };
-const union = (boxes: Rect[]): Rect => { const x = Math.min(...boxes.map(box => box.x)), y = Math.min(...boxes.map(box => box.y)); const right = Math.max(...boxes.map(box => box.x + box.width)), bottom = Math.max(...boxes.map(box => box.y + box.height)); return { x, y, width: right - x, height: bottom - y }; };
-const fingerprint = (canvas: HTMLCanvasElement, bbox: Rect) => {
+export const union = (boxes: Rect[]): Rect => { const x = Math.min(...boxes.map(box => box.x)), y = Math.min(...boxes.map(box => box.y)); const right = Math.max(...boxes.map(box => box.x + box.width)), bottom = Math.max(...boxes.map(box => box.y + box.height)); return { x, y, width: right - x, height: bottom - y }; };
+export const fingerprint = (canvas: HTMLCanvasElement, bbox: Rect) => {
   const source = document.createElement("canvas"); source.width = 9; source.height = 8;
   const x = Math.max(0, bbox.x - 60), y = Math.max(0, bbox.y - 140), right = Math.min(canvas.width, bbox.x + bbox.width + 60), bottom = Math.min(canvas.height, bbox.y + bbox.height + 20);
   source.getContext("2d")!.drawImage(canvas, x, y, Math.max(1, right - x), Math.max(1, bottom - y), 0, 0, 9, 8);
@@ -80,7 +80,7 @@ const fingerprint = (canvas: HTMLCanvasElement, bbox: Rect) => {
   for (let row = 0; row < 8; row++) for (let col = 0; col < 8; col++) { const at = (row * 9 + col) * 4, next = at + 4; const a = pixels[at] + pixels[at + 1] + pixels[at + 2], b = pixels[next] + pixels[next + 1] + pixels[next + 2]; bits += a > b ? "1" : "0"; }
   return bits;
 };
-const distance = (a: string, b: string) => [...a].reduce((sum, bit, index) => sum + Number(bit !== b[index]), 0);
+export const distance = (a: string, b: string) => [...a].reduce((sum, bit, index) => sum + Number(bit !== b[index]), 0);
 
 export const classifyLiveCandidate = (
   context: string,
@@ -98,7 +98,7 @@ export const classifyLiveCandidate = (
   return context === "post" && iconCount === 3 ? "NEW_ITEM" : "NEEDS_ATTENTION";
 };
 
-async function detectActionRows(target: HTMLCanvasElement, templates: HTMLCanvasElement[], method: MatchMethod, threshold: number, searchRects: Rect[]) {
+export async function detectActionRows(target: HTMLCanvasElement, templates: HTMLCanvasElement[], method: MatchMethod, threshold: number, searchRects: Rect[]) {
   const typed: Array<MatchCandidate & { icon: number }> = [];
   for (let icon = 0; icon < templates.length; icon++) {
     for (const rect of searchRects) {

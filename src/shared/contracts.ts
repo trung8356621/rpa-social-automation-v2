@@ -11,7 +11,7 @@ import type { UserPermalinkRule } from "./permalink-rules.js";
 import type { VisualMatchSaveFrameAttemptInput } from "./visual-match-lab-storage.js";
 export type { ScriptReleaseManifest } from "./script-release.js";
 export type Rect = { x: number; y: number; width: number; height: number };
-export type MainPage = "scenarios" | "browser-sessions" | "test-lab" | "visual-match-lab" | "settings" | "variations" | "widget-registry" | "workflows" | "builds-releases" | "collectors" | "collector-test-lab";
+export type MainPage = "scenarios" | "browser-sessions" | "test-lab" | "visual-match-lab" | "settings" | "variations" | "widget-registry" | "workflows" | "builds-releases" | "collectors" | "collector-test-lab" | "feed-item-collector";
 export type AppPage = MainPage | "creator" | "test-case" | "studio-run";
 export type VariableValues = Record<string, string | string[] | number>;
 export type CaseRunStatus = "RUNNING" | "PASS" | "BLOCKED" | "SKIPPED" | "ERROR" | "ACTION_SENT";

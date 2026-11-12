@@ -9,6 +9,7 @@ import { ScriptHealthPanel } from "./script-health-panel";
 const menus = [
   { page: "scenarios", label: "Scripts", color: "#68d6a6", path: "M4 4h6v6H4zM14 14h6v6h-6zM7 10v7h7M10 7h7v7" },
   { page: "collectors", label: "Collectors", color: "#e0b35a", path: "M4 7h16M4 12h16M4 17h10M14 15l4 2-4 2v-4Z" },
+  { page: "feed-item-collector", label: "Feed Item Collector", color: "#38bdf8", path: "M19 11H5m14 0a2 2 0 012 2v6a2 2 0 01-2 2H5a2 2 0 01-2-2v-6a2 2 0 012-2m14 0V9a2 2 0 00-2-2M5 11V9a2 2 0 012-2m0 0V5a2 2 0 012-2h6a2 2 0 012 2v2M7 7h10" },
   { page: "browser-sessions", label: "Browser Sessions", color: "#75b9ff", path: "M21 12a9 9 0 1 1-18 0 9 9 0 0 1 18 0ZM3 12h18M12 3c5 5 5 13 0 18-5-5-5-13 0-18Z" },
   { page: "visual-match-lab", label: "Visual Match Lab", color: "#c084fc", path: "M4 5h16v12H4zM8 21h8M12 17v4M8 9h2v2H8zM14 9h2v2h-2z" },
   { page: "settings", label: "Settings", color: "#a8b2c2", path: "m9 3-1 3-3 1 1 3-2 2 2 2-1 3 3 1 1 3ZM15 12a3 3 0 1 1-6 0 3 3 0 0 1 6 0Z" },
