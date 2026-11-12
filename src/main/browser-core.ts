@@ -3,8 +3,10 @@ import {
   type WebContents,
   clipboard,
   ClipboardItem,
+  Menu,
   type BrowserWindow,
 } from "electron";
+import { buildBrowserContextMenuSpec, isCopyableLinkUrl } from "../shared/browser-context-menu.js";
 import { createHash } from "node:crypto";
 import { pasteWithClipboard } from "./clipboard-guard.js";
 import { chooseUploadFiles } from "./file-chooser.js";
@@ -109,7 +111,41 @@ export class BrowserCore {
     wc.session.setPermissionRequestHandler((_wc, _permission, callback) =>
       callback(false),
     );
+    // WebContentsView has no default context menu. Provide the standard
+    // browser actions on this same webContents (no new browser/session).
+    wc.on("context-menu", (_event, params) => this.showContextMenu(wc, params));
     return view;
+  }
+  private showContextMenu(wc: WebContents, params: Electron.ContextMenuParams) {
+    if (wc.isDestroyed()) return;
+    const spec = buildBrowserContextMenuSpec(params, {
+      canGoBack: wc.navigationHistory.canGoBack(),
+      canGoForward: wc.navigationHistory.canGoForward(),
+    });
+    const run = (id: string) => {
+      if (wc.isDestroyed()) return;
+      switch (id) {
+        case "copy-link":
+          // Exact linkURL from Chromium params; never saved to Collector.
+          if (isCopyableLinkUrl(params.linkURL)) clipboard.writeText(params.linkURL);
+          return;
+        case "copy": return wc.copy();
+        case "cut": return wc.cut();
+        case "paste": return wc.paste();
+        case "select-all": return wc.selectAll();
+        case "back": return wc.navigationHistory.goBack();
+        case "forward": return wc.navigationHistory.goForward();
+        case "reload": return wc.reload();
+      }
+    };
+    const menu = Menu.buildFromTemplate(
+      spec.map((item) =>
+        item.type === "separator"
+          ? { type: "separator" as const }
+          : { label: item.label, enabled: item.enabled, click: () => run(item.id) },
+      ),
+    );
+    menu.popup({ window: this.window });
   }
   onViewCreated(listener: (contents: WebContents) => void) {
     this.viewListeners.add(listener);

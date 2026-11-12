@@ -3,16 +3,36 @@ import { loadLiveTemplates, LIVE_TEMPLATE_KEY } from "../experiments/visual-matc
 import { loadSavedRules } from "../experiments/visual-match-lab/LiveScrollTest";
 import type { FeedCollectorState, RunSummaryStats } from "./types";
 
+export const FEED_COLLECTOR_STATE_KEY = "rpa:feed-item-collector:run";
+
+function loadSavedRun(): Partial<FeedCollectorState> {
+  if (typeof localStorage === "undefined") return {};
+  try {
+    const raw = localStorage.getItem(FEED_COLLECTOR_STATE_KEY);
+    if (!raw) return {};
+    const parsed = JSON.parse(raw);
+    return {
+      reports: parsed.reports ?? [],
+      summaryStats: parsed.summaryStats ?? null,
+      currentRunId: parsed.currentRunId ?? null,
+    };
+  } catch {
+    return {};
+  }
+}
+
+const savedRun = loadSavedRun();
+
 const INITIAL_STATE: FeedCollectorState = {
   step: 1,
   templates: loadLiveTemplates(),
   calibrationCapture: null,
-  reports: [],
-  currentRunId: null,
+  reports: savedRun.reports ?? [],
+  currentRunId: savedRun.currentRunId ?? null,
   selectedFrameIndex: 0,
   selectedCandidateIndex: 0,
   rules: loadSavedRules(),
-  summaryStats: null,
+  summaryStats: savedRun.summaryStats ?? null,
 };
 
 let globalState: FeedCollectorState = { ...INITIAL_STATE };
@@ -22,17 +42,48 @@ export function getFeedCollectorState(): FeedCollectorState {
   return globalState;
 }
 
+export function hydrateFeedCollectorFromStorage(): FeedCollectorState {
+  const loaded = loadSavedRun();
+  globalState = {
+    ...globalState,
+    reports: loaded.reports ?? globalState.reports,
+    summaryStats: loaded.summaryStats ?? globalState.summaryStats,
+    currentRunId: loaded.currentRunId ?? globalState.currentRunId,
+  };
+  listeners.forEach(fn => fn(globalState));
+  return globalState;
+}
+
 export function setFeedCollectorState(patch: Partial<FeedCollectorState>) {
   globalState = { ...globalState, ...patch };
-  if (patch.templates) {
-    try {
-      localStorage.setItem(LIVE_TEMPLATE_KEY, JSON.stringify(globalState.templates));
-    } catch {}
+  if (typeof localStorage !== "undefined") {
+    if (patch.templates) {
+      try {
+        localStorage.setItem(LIVE_TEMPLATE_KEY, JSON.stringify(globalState.templates));
+      } catch {}
+    }
+    if (patch.reports !== undefined || patch.summaryStats !== undefined || patch.currentRunId !== undefined) {
+      try {
+        localStorage.setItem(
+          FEED_COLLECTOR_STATE_KEY,
+          JSON.stringify({
+            reports: globalState.reports,
+            summaryStats: globalState.summaryStats,
+            currentRunId: globalState.currentRunId,
+          }),
+        );
+      } catch {}
+    }
   }
   listeners.forEach(fn => fn(globalState));
 }
 
 export function resetFeedCollectorRun() {
+  if (typeof localStorage !== "undefined") {
+    try {
+      localStorage.removeItem(FEED_COLLECTOR_STATE_KEY);
+    } catch {}
+  }
   setFeedCollectorState({
     reports: [],
     currentRunId: null,

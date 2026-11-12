@@ -882,7 +882,7 @@ export class VisualMatchRunStorage {
       for (const ent of entries) {
         if (!ent.isDirectory()) continue;
         const runId = ent.name;
-        if (runId.startsWith("run_audit_")) continue;
+        if (runId.startsWith("run_audit_") || runId.startsWith("fic_run_")) continue;
         const manifestPath = path.join(runsDir, runId, "manifest.json");
         try {
           const data = JSON.parse(await readFile(manifestPath, "utf8"));

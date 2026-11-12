@@ -1641,7 +1641,7 @@ async function boot() {
       case "capture": {
         isIdle();
         // Collectors use measured Capture host bounds (not Creator's fixed 1024×560).
-        if (overlays.page === "collectors") {
+        if (overlays.page === "collectors" || overlays.page === "feed-item-collector") {
           const image = await browser.capture({ requireCanonical: false });
           captures.set(image.id, {
             width: image.width,
@@ -1866,6 +1866,13 @@ async function boot() {
       case "visualMatchLabLoadRun":
         isIdle();
         return visualMatchLab.loadRun(command.runId);
+      case "feedItemPermalinkDiagnostic":
+        isIdle();
+        return visualMatchLab.permalinkDiagnostic({
+          hover: command.hover === true,
+          runId: typeof command.runId === "string" ? command.runId : undefined,
+          candidateId: typeof command.candidateId === "string" ? command.candidateId : undefined,
+        });
       case "openExternalUrl":
         isIdle();
         if (typeof command.url === "string" && /^https?:\/\//i.test(command.url)) {

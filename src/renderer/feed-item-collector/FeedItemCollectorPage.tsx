@@ -1,14 +1,24 @@
 import React, { useEffect, useState } from "react";
 import type { BoundaryProbeResult } from "../../shared/boundary-probe";
+import type { State } from "../../shared/contracts";
 import type { UserPermalinkRule } from "../../shared/permalink-rules";
+import {
+  collectorReportBrowserHost,
+  collectorSetBrowserVisible,
+} from "../collectors/browser-capture";
 import {
   useFeedCollectorStore,
   setFeedCollectorState,
   computeRunSummaryStats,
 } from "./store";
+import {
+  deriveFrameBoundaryStatus,
+  extractCandidatePostIdentity,
+} from "./scroll-sampling";
 import { CalibrationStep } from "./CalibrationStep";
 import { AutoMatchStep } from "./AutoMatchStep";
 import { UrlBoundaryReviewStep } from "./UrlBoundaryReviewStep";
+import { updateCandidateInReports } from "./boundary-reevaluation";
 import type {
   Invoke,
   FeedCollectorStep,
@@ -22,7 +32,7 @@ import "./feed-item-collector.css";
 
 type LabState = { connected: boolean; loggedIn: boolean; webContentsId: number; url: string };
 
-export function FeedItemCollectorPage({ invoke }: { invoke: Invoke }) {
+export function FeedItemCollectorPage({ invoke, state: parentState }: { invoke: Invoke; state?: State | null }) {
   const [state, updateStore] = useFeedCollectorStore();
   const [connection, setConnection] = useState<LabState | null>(null);
   const [connStatus, setConnStatus] = useState("Đang kết nối BrowserCore...");
@@ -45,10 +55,16 @@ export function FeedItemCollectorPage({ invoke }: { invoke: Invoke }) {
       });
     return () => {
       active = false;
+      void collectorReportBrowserHost(invoke, null);
+      void collectorSetBrowserVisible(invoke, false);
     };
   }, [invoke]);
 
   const goToStep = (step: FeedCollectorStep) => {
+    if (step !== 1) {
+      void collectorReportBrowserHost(invoke, null);
+      void collectorSetBrowserVisible(invoke, false);
+    }
     updateStore({ step });
   };
 
@@ -62,21 +78,23 @@ export function FeedItemCollectorPage({ invoke }: { invoke: Invoke }) {
       if (fIdx !== frameIndex) return f;
       const nextCandidates = f.candidates.map((c, cIdx) => {
         if (cIdx !== candIndex) return c;
+        const isDuplicate = c.dedupeStatus === "DUPLICATE" || c.status === "DUPLICATE";
         const updatedCand: LiveCandidate = {
           ...c,
           boundary: newBoundary,
+          boundaryStatus: newBoundary.status,
+          postIdentity: extractCandidatePostIdentity(newBoundary) ?? c.postIdentity,
           highlightedEvidenceUrl: evidenceUrl || c.highlightedEvidenceUrl,
-          status: newBoundary.status === "BOUNDARY_FOUND" ? "NEW_ITEM" : "NEEDS_ATTENTION",
+          status: isDuplicate
+            ? "DUPLICATE"
+            : newBoundary.status === "BOUNDARY_FOUND"
+              ? "NEW_ITEM"
+              : "NEEDS_ATTENTION",
         };
         return updatedCand;
       });
 
-      const frameBoundary: FrameReport["boundaryStatus"] =
-        nextCandidates.some((c) => c.boundary?.status === "BOUNDARY_FOUND")
-          ? "BOUNDARY_FOUND"
-          : nextCandidates.some((c) => c.boundary?.status === "BOUNDARY_AMBIGUOUS")
-            ? "BOUNDARY_AMBIGUOUS"
-            : "BOUNDARY_NOT_FOUND";
+      const frameBoundary: FrameReport["boundaryStatus"] = deriveFrameBoundaryStatus(nextCandidates);
 
       return {
         ...f,
@@ -85,6 +103,24 @@ export function FeedItemCollectorPage({ invoke }: { invoke: Invoke }) {
       };
     });
 
+    const newStats = computeRunSummaryStats(nextReports);
+    updateStore({
+      reports: nextReports,
+      summaryStats: newStats,
+    });
+  };
+
+  const handleUpdateCandidate = (
+    frameIndex: number,
+    candIndex: number,
+    updatedCandidate: LiveCandidate,
+  ) => {
+    const nextReports = updateCandidateInReports(
+      state.reports,
+      frameIndex,
+      candIndex,
+      updatedCandidate,
+    );
     const newStats = computeRunSummaryStats(nextReports);
     updateStore({
       reports: nextReports,
@@ -151,10 +187,9 @@ export function FeedItemCollectorPage({ invoke }: { invoke: Invoke }) {
       <div className="fic-content-area">
         {state.step === 1 && (
           <CalibrationStep
-            capture={state.calibrationCapture}
             templates={state.templates}
             invoke={invoke}
-            onCapture={(cap: LiveCapture) => updateStore({ calibrationCapture: cap })}
+            state={parentState}
             onUpdateTemplates={(tpl: LiveIconTemplates) => updateStore({ templates: tpl })}
             onNext={() => goToStep(2)}
           />
@@ -196,6 +231,7 @@ export function FeedItemCollectorPage({ invoke }: { invoke: Invoke }) {
             invoke={invoke}
             onSelectFrame={(idx: number) => updateStore({ selectedFrameIndex: idx })}
             onSelectCandidate={(idx: number) => updateStore({ selectedCandidateIndex: idx })}
+            onUpdateCandidate={handleUpdateCandidate}
             onUpdateBoundary={handleUpdateBoundary}
             onSaveRule={handleSaveRule}
             onPrevious={() => goToStep(2)}

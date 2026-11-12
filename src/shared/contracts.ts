@@ -518,6 +518,7 @@ export type Command =
   | { type: "visualMatchLabLoadRun"; runId: string }
   | { type: "openExternalUrl"; url: string }
   | { type: "visualMatchLabNavigateBrowserCore"; url: string }
+  | { type: "feedItemPermalinkDiagnostic"; hover?: boolean; runId?: string; candidateId?: string }
   | { type: "visualMatchLabOcr"; dataUrl: string }
   /** Collector Capture workspace hole — null/inactive hides Browser Core on collectors pages. */
   | {

@@ -20,6 +20,199 @@ import type {
   RunSummaryStats,
 } from "./types";
 import { computeRunSummaryStats } from "./store";
+import {
+  pickScrollSplit,
+  evaluateScrollProgress,
+  dedupeCandidates,
+  deriveFrameBoundaryStatus,
+  computeFrameCandidateCounts,
+  extractCandidatePostIdentity,
+} from "./scroll-sampling";
+
+async function processCaptureSingle({
+  capture,
+  subIndex,
+  frameIndex,
+  runId,
+  templateCanvases,
+  rules,
+  seen,
+  invoke,
+  startRowOffset,
+}: {
+  capture: LiveCapture;
+  subIndex: 1 | 2;
+  frameIndex: number;
+  runId: string;
+  templateCanvases: HTMLCanvasElement[];
+  rules: UserPermalinkRule[];
+  seen: LiveCandidate[];
+  invoke: Invoke;
+  startRowOffset: number;
+}): Promise<{
+  candidates: LiveCandidate[];
+  debugRecords: BoundaryDebugRecord[];
+  rawIconMatches: number;
+  detectedRowCount: number;
+}> {
+  const fixture: FixtureItem = {
+    id: `${capture.id}_s${subIndex}`,
+    name: `Sample ${frameIndex}.${subIndex}`,
+    description: capture.viewport.url,
+    width: capture.width,
+    height: capture.height,
+    isRealFixture: true,
+    dataUrl: capture.dataUrl,
+  };
+  const pipeline = await runRecognitionPipeline(fixture);
+  const target = await imageCanvas(capture.dataUrl, capture.width, capture.height);
+
+  const detected = await detectActionRows(
+    target,
+    templateCanvases,
+    "grayscale",
+    0.72,
+    pipeline.candidates.filter((c) => c.type === "icon").map((c) => c.bbox),
+  );
+
+  const candidates: LiveCandidate[] = [];
+  const debugRecords: BoundaryDebugRecord[] = [];
+
+  for (let rowIdx = 0; rowIdx < detected.rows.length; rowIdx++) {
+    const row = detected.rows[rowIdx]!;
+    const overallRowIndex = startRowOffset + rowIdx;
+    const targetIcon = row.items[0];
+    const iconCenterX = targetIcon
+      ? targetIcon.bbox.x + targetIcon.bbox.width / 2
+      : row.bbox.x + Math.min(24, row.bbox.width / 2);
+    const iconCenterY = targetIcon
+      ? targetIcon.bbox.y + targetIcon.bbox.height / 2
+      : row.bbox.y + row.bbox.height / 2;
+
+    const point = {
+      x: Math.round((iconCenterX * capture.viewport.width) / capture.width),
+      y: Math.round((iconCenterY * capture.viewport.height) / capture.height),
+    };
+    const actionRowCssBbox = {
+      x: Math.round((row.bbox.x * capture.viewport.width) / capture.width),
+      y: Math.round((row.bbox.y * capture.viewport.height) / capture.height),
+      width: Math.round((row.bbox.width * capture.viewport.width) / capture.width),
+      height: Math.round((row.bbox.height * capture.viewport.height) / capture.height),
+    };
+
+    let boundary: (BoundaryProbeResult & { evidenceDataUrl?: string }) | undefined;
+    let context = "unknown";
+
+    try {
+      boundary = await invoke<BoundaryProbeResult & { evidenceDataUrl?: string }>({
+        type: "visualMatchLabProbeBoundary",
+        captureId: capture.id,
+        webContentsId: capture.webContentsId,
+        point,
+        actionRowBbox: actionRowCssBbox,
+        options: { highlight: true, captureEvidence: true, customRules: rules },
+      });
+      if (boundary.candidateContainer?.role === "article" || boundary.status === "BOUNDARY_FOUND") {
+        context = "post";
+      }
+    } catch (probeError) {
+      console.warn(`Sample ${frameIndex}.${subIndex} probe error row ${rowIdx}:`, probeError);
+      context = "unknown";
+    }
+
+    const hash = fingerprint(target, row.bbox);
+    const docY = capture.viewport.scrollY + row.bbox.y;
+    const boundaryStatus = boundary?.status ?? "BOUNDARY_NOT_FOUND";
+    const postIdentity = extractCandidatePostIdentity(boundary);
+    const candidateId = `cand_${runId}_f${frameIndex}_r${overallRowIndex}`;
+    const evidenceSavedPath = getExpectedFrameEvidenceDisplayPath(runId, frameIndex, overallRowIndex);
+
+    const initialStatus =
+      boundaryStatus === "BOUNDARY_FOUND" && row.items.length >= 2 ? "NEW_ITEM" : "NEEDS_ATTENTION";
+
+    const candidate: LiveCandidate = {
+      candidateId,
+      frameId: frameIndex,
+      bbox: row.bbox,
+      score: row.score,
+      matchScore: row.score,
+      iconCount: row.items.length,
+      status: initialStatus,
+      boundaryStatus,
+      dedupeStatus: "NEW_ITEM",
+      postIdentity,
+      evidenceRef: evidenceSavedPath,
+      context,
+      fingerprint: hash,
+      docY,
+      boundary,
+      highlightedEvidenceUrl: boundary?.evidenceDataUrl,
+      evidenceSavedPath,
+    };
+    candidates.push(candidate);
+
+    if (boundary) {
+      const record: BoundaryDebugRecord = {
+        runId,
+        frameNumber: frameIndex,
+        scrollY: capture.viewport.scrollY,
+        browserWebContentsId: capture.webContentsId,
+        rowIndex: overallRowIndex,
+        actionRowBbox: row.bbox,
+        matchingScore: row.score,
+        hitPoint: point,
+        hitElement: boundary.hitElement,
+        ancestorDepth: boundary.ancestorsChecked,
+        ancestors: (boundary.ancestorSteps ?? []).map((a) => ({
+          level: a.level,
+          tag: a.tag,
+          role: a.role,
+          id: a.id,
+          className: a.className,
+          rect: a.rect,
+          rawUrls: a.rawUrls ?? [],
+          postIdentities: a.postIdentities,
+          uniqueKeys: a.uniqueKeys,
+          uniqueCount: a.uniqueKeys.length,
+        })),
+        transitions: {
+          firstPermalinkLevel: boundary.firstPermalinkLevel,
+          secondPermalinkLevel: boundary.secondPermalinkLevel,
+          boundaryCrossedLevel: boundary.boundaryCrossedLevel,
+          jumpedZeroToTwoPlus: Boolean(boundary.jumpedZeroToTwoPlus),
+          jumpReason: boundary.jumpReason ?? null,
+        },
+        candidateContainer: boundary.candidateContainer,
+        crossedContainer: boundary.crossedContainer,
+        boundaryStatus: boundary.status,
+        riskReason: boundary.riskReason,
+        ownershipEvidence: boundary.ownershipEvidence,
+      };
+      debugRecords.push(record);
+
+      void invoke({
+        type: "visualMatchLabSaveFrameAttempt",
+        input: {
+          runId,
+          frameIndex,
+          rowIndex: overallRowIndex,
+          reason: `fic-auto-match-s${subIndex}`,
+          record,
+          highlightedBase64: boundary.evidenceDataUrl,
+          screenshotBase64: capture.dataUrl,
+          customRules: rules,
+        },
+      }).catch(() => undefined);
+    }
+  }
+
+  return {
+    candidates,
+    debugRecords,
+    rawIconMatches: detected.rawIconMatches,
+    detectedRowCount: detected.rows.length,
+  };
+}
 
 export function AutoMatchStep({
   templates,
@@ -73,205 +266,162 @@ export function AutoMatchStep({
       );
 
       let browserWebContentsId: number | null = null;
+      try {
+        const state = await invoke<{ webContentsId: number; connected: boolean; loggedIn: boolean }>({
+          type: "visualMatchLabState",
+        });
+        browserWebContentsId = state.webContentsId;
+      } catch (err) {
+        throw new Error(`BrowserCore chưa sẵn sàng: ${String(err)}`);
+      }
+
+      let priorScrollY: number | null = null;
 
       for (let frame = 1; frame <= 5; frame++) {
         setCurrentFrameNum(frame);
-        setProgressMsg(`Đang capture và phân tích Sample ${frame}/5...`);
+        const split = pickScrollSplit();
+        setProgressMsg(
+          `Sample ${frame}/5: Chia cuộn ${split.ratio} (${split.firstDelta}px + ${split.secondDelta}px, tổng 400px)...`,
+        );
 
-        // 1. Capture BrowserCore
-        let capture: LiveCapture;
+        // --- SUB-SEGMENT 1 ---
+        setProgressMsg(`Sample ${frame}/5: Cuộn đoạn 1 (${split.firstDelta}px)...`);
+        await invoke({
+          type: "visualMatchLabScroll",
+          webContentsId: browserWebContentsId,
+          deltaY: split.firstDelta,
+        });
+        await wait(600);
+
+        let capture1: LiveCapture;
         try {
-          capture = await invoke<LiveCapture>({ type: "visualMatchLabCapture" });
+          capture1 = await invoke<LiveCapture>({ type: "visualMatchLabCapture" });
         } catch (err) {
-          throw new Error(`Lỗi capture tại Sample ${frame}: ${String(err)}`);
+          throw new Error(`Lỗi capture đoạn 1 tại Sample ${frame}: ${String(err)}`);
         }
 
-        browserWebContentsId ??= capture.webContentsId;
-        if (capture.webContentsId !== browserWebContentsId) {
+        if (capture1.webContentsId !== browserWebContentsId) {
           throw new Error("Phiên BrowserCore bị thay đổi trong quá trình chạy.");
         }
 
-        // 2. OpenCV Stage A-D Pipeline
-        const fixture: FixtureItem = {
-          id: capture.id,
-          name: `Sample ${frame}`,
-          description: capture.viewport.url,
-          width: capture.width,
-          height: capture.height,
-          isRealFixture: true,
-          dataUrl: capture.dataUrl,
-        };
-        const pipeline = await runRecognitionPipeline(fixture);
-        const target = await imageCanvas(capture.dataUrl, capture.width, capture.height);
+        const check1 = evaluateScrollProgress(priorScrollY, capture1.viewport.scrollY, split.firstDelta);
+        priorScrollY = capture1.viewport.scrollY;
 
-        // 3. Stage E Template Matcher
-        const detected = await detectActionRows(
-          target,
-          templateCanvases,
-          "grayscale",
-          0.72,
-          pipeline.candidates.filter((c) => c.type === "icon").map((c) => c.bbox),
-        );
-
-        const candidates: LiveCandidate[] = [];
-
-        // 4. Hit-test DOM & Boundary Probe for each detected action row
-        for (let rowIdx = 0; rowIdx < detected.rows.length; rowIdx++) {
-          const row = detected.rows[rowIdx]!;
-          const targetIcon = row.items[0];
-          const iconCenterX = targetIcon
-            ? targetIcon.bbox.x + targetIcon.bbox.width / 2
-            : row.bbox.x + Math.min(24, row.bbox.width / 2);
-          const iconCenterY = targetIcon
-            ? targetIcon.bbox.y + targetIcon.bbox.height / 2
-            : row.bbox.y + row.bbox.height / 2;
-
-          const point = {
-            x: Math.round((iconCenterX * capture.viewport.width) / capture.width),
-            y: Math.round((iconCenterY * capture.viewport.height) / capture.height),
-          };
-          const actionRowCssBbox = {
-            x: Math.round((row.bbox.x * capture.viewport.width) / capture.width),
-            y: Math.round((row.bbox.y * capture.viewport.height) / capture.height),
-            width: Math.round((row.bbox.width * capture.viewport.width) / capture.width),
-            height: Math.round((row.bbox.height * capture.viewport.height) / capture.height),
-          };
-
-          let boundary: (BoundaryProbeResult & { evidenceDataUrl?: string }) | undefined;
-          let context = "unknown";
-
-          try {
-            boundary = await invoke<BoundaryProbeResult & { evidenceDataUrl?: string }>({
-              type: "visualMatchLabProbeBoundary",
-              captureId: capture.id,
-              webContentsId: capture.webContentsId,
-              point,
-              actionRowBbox: actionRowCssBbox,
-              options: { highlight: true, captureEvidence: true, customRules: rules },
-            });
-            if (boundary.candidateContainer?.role === "article" || boundary.status === "BOUNDARY_FOUND") {
-              context = "post";
-            }
-          } catch (probeError) {
-            console.warn(`Sample ${frame} probe error row ${rowIdx}:`, probeError);
-            context = "unknown";
-          }
-
-          const hash = fingerprint(target, row.bbox);
-          const docY = capture.viewport.scrollY + row.bbox.y;
-          const candidateStatus = classifyLiveCandidate(
-            context,
-            row.items.length,
-            docY,
-            hash,
-            seen,
-            boundary?.status,
+        if (!check1.moved) {
+          console.warn(
+            `Sample ${frame} đoạn 1: scroll dừng lại (thực tế ${check1.actualDelta}px, dự kiến ${check1.intendedDelta}px, scrollY ${capture1.viewport.scrollY}). Dừng theo guard.`,
           );
-
-          const evidenceSavedPath = getExpectedFrameEvidenceDisplayPath(runId, frame, rowIdx);
-
-          const candidate: LiveCandidate = {
-            bbox: row.bbox,
-            score: row.score,
-            iconCount: row.items.length,
-            status: candidateStatus,
-            context,
-            fingerprint: hash,
-            docY,
-            boundary,
-            highlightedEvidenceUrl: boundary?.evidenceDataUrl,
-            evidenceSavedPath,
-          };
-          candidates.push(candidate);
-          seen.push(candidate);
-
-          if (boundary) {
-            const record: BoundaryDebugRecord = {
-              runId,
-              frameNumber: frame,
-              scrollY: capture.viewport.scrollY,
-              browserWebContentsId: capture.webContentsId,
-              rowIndex: rowIdx,
-              actionRowBbox: row.bbox,
-              matchingScore: row.score,
-              hitPoint: point,
-              hitElement: boundary.hitElement,
-              ancestorDepth: boundary.ancestorsChecked,
-              ancestors: (boundary.ancestorSteps ?? []).map((a) => ({
-                level: a.level,
-                tag: a.tag,
-                role: a.role,
-                id: a.id,
-                className: a.className,
-                rect: a.rect,
-                rawUrls: a.rawUrls ?? [],
-                postIdentities: a.postIdentities,
-                uniqueKeys: a.uniqueKeys,
-                uniqueCount: a.uniqueKeys.length,
-              })),
-              transitions: {
-                firstPermalinkLevel: boundary.firstPermalinkLevel,
-                secondPermalinkLevel: boundary.secondPermalinkLevel,
-                boundaryCrossedLevel: boundary.boundaryCrossedLevel,
-                jumpedZeroToTwoPlus: Boolean(boundary.jumpedZeroToTwoPlus),
-                jumpReason: boundary.jumpReason ?? null,
-              },
-              candidateContainer: boundary.candidateContainer,
-              crossedContainer: boundary.crossedContainer,
-              boundaryStatus: boundary.status,
-              riskReason: boundary.riskReason,
-              ownershipEvidence: boundary.ownershipEvidence,
-            };
-            debugRecords.push(record);
-
-            void invoke({
-              type: "visualMatchLabSaveFrameAttempt",
-              input: {
-                runId,
-                frameIndex: frame,
-                rowIndex: rowIdx,
-                reason: "fic-auto-match",
-                record,
-                highlightedBase64: boundary.evidenceDataUrl,
-                screenshotBase64: capture.dataUrl,
-                customRules: rules,
-              },
-            }).catch(() => undefined);
-          }
+          setProgressMsg(`Sample ${frame}: Scroll không tiến triển (${check1.actualDelta}px). Dừng lấy mẫu.`);
+          break;
         }
 
-        const frameBoundary: FrameReport["boundaryStatus"] =
-          candidates.length === 0
-            ? "NO_ACTION_ROW"
-            : candidates.some((c) => c.boundary?.status === "BOUNDARY_FOUND")
-              ? "BOUNDARY_FOUND"
-              : candidates.some((c) => c.boundary?.status === "BOUNDARY_AMBIGUOUS")
-                ? "BOUNDARY_AMBIGUOUS"
-                : "BOUNDARY_NOT_FOUND";
+        setProgressMsg(`Sample ${frame}/5: Phân tích OpenCV đoạn 1...`);
+        const result1 = await processCaptureSingle({
+          capture: capture1,
+          subIndex: 1,
+          frameIndex: frame,
+          runId,
+          templateCanvases,
+          rules,
+          seen,
+          invoke,
+          startRowOffset: 0,
+        });
+
+        // --- SUB-SEGMENT 2 ---
+        setProgressMsg(`Sample ${frame}/5: Cuộn đoạn 2 (${split.secondDelta}px)...`);
+        await invoke({
+          type: "visualMatchLabScroll",
+          webContentsId: browserWebContentsId,
+          deltaY: split.secondDelta,
+        });
+        await wait(600);
+
+        let capture2: LiveCapture;
+        try {
+          capture2 = await invoke<LiveCapture>({ type: "visualMatchLabCapture" });
+        } catch (err) {
+          throw new Error(`Lỗi capture đoạn 2 tại Sample ${frame}: ${String(err)}`);
+        }
+
+        if (capture2.webContentsId !== browserWebContentsId) {
+          throw new Error("Phiên BrowserCore bị thay đổi trong quá trình chạy.");
+        }
+
+        const check2 = evaluateScrollProgress(priorScrollY, capture2.viewport.scrollY, split.secondDelta);
+        priorScrollY = capture2.viewport.scrollY;
+
+        if (!check2.moved) {
+          console.warn(
+            `Sample ${frame} đoạn 2: scroll dừng lại (thực tế ${check2.actualDelta}px, dự kiến ${check2.intendedDelta}px, scrollY ${capture2.viewport.scrollY}). Dừng theo guard.`,
+          );
+          setProgressMsg(`Sample ${frame}: Scroll đoạn 2 không tiến triển (${check2.actualDelta}px). Gộp kết quả đoạn 1 và dừng.`);
+
+          const { merged } = dedupeCandidates(result1.candidates, [], seen);
+          for (const cand of merged) {
+            if (cand.status !== "DUPLICATE") seen.push(cand);
+          }
+          debugRecords.push(...result1.debugRecords);
+
+          const frameBoundary = deriveFrameBoundaryStatus(merged);
+          const counts = computeFrameCandidateCounts(merged);
+          const actualStepScroll = check1.actualDelta;
+          newReports.push({
+            frame,
+            capture: capture1,
+            captureStatus: "CAPTURE_PASS",
+            pipelineStatus: `PIPELINE_PASS: ${counts.found} FOUND · ${counts.needsAttention} NEEDS_ATTENTION · ${counts.duplicate} DUPLICATE (cuộn thực tế ${actualStepScroll}px, split ${split.ratio}: ${split.firstDelta}px)`,
+            templateStatus: "TEMPLATE_READY",
+            detectionStatus: "DETECTION_PASS",
+            boundaryStatus: frameBoundary,
+            rawIconMatches: result1.rawIconMatches,
+            actionClusters: result1.detectedRowCount,
+            candidates: merged,
+          });
+          break;
+        }
+
+        setProgressMsg(`Sample ${frame}/5: Phân tích OpenCV đoạn 2...`);
+        const result2 = await processCaptureSingle({
+          capture: capture2,
+          subIndex: 2,
+          frameIndex: frame,
+          runId,
+          templateCanvases,
+          rules,
+          seen,
+          invoke,
+          startRowOffset: result1.detectedRowCount,
+        });
+
+        // --- GỘP KẾT QUẢ CỦA HAI LẦN & DEDUPE ---
+        const { merged } = dedupeCandidates(result1.candidates, result2.candidates, seen);
+        for (const cand of merged) {
+          if (cand.status !== "DUPLICATE") {
+            seen.push(cand);
+          }
+        }
+        debugRecords.push(...result1.debugRecords, ...result2.debugRecords);
+
+        const totalActionClusters = result1.detectedRowCount + result2.detectedRowCount;
+        const totalRawIconMatches = result1.rawIconMatches + result2.rawIconMatches;
+        const actualStepScroll = check1.actualDelta + check2.actualDelta;
+
+        const frameBoundary = deriveFrameBoundaryStatus(merged);
+        const counts = computeFrameCandidateCounts(merged);
 
         newReports.push({
           frame,
-          capture,
+          capture: capture2,
           captureStatus: "CAPTURE_PASS",
-          pipelineStatus: `PIPELINE_PASS: Found ${detected.rows.length} rows`,
+          pipelineStatus: `PIPELINE_PASS: ${counts.found} FOUND · ${counts.needsAttention} NEEDS_ATTENTION · ${counts.duplicate} DUPLICATE (cuộn thực tế ${actualStepScroll}px / dự kiến ${split.totalDelta}px, split ${split.ratio}: ${split.firstDelta}px + ${split.secondDelta}px)`,
           templateStatus: "TEMPLATE_READY",
           detectionStatus: "DETECTION_PASS",
           boundaryStatus: frameBoundary,
-          rawIconMatches: detected.rawIconMatches,
-          actionClusters: detected.rows.length,
-          candidates,
+          rawIconMatches: totalRawIconMatches,
+          actionClusters: totalActionClusters,
+          candidates: merged,
         });
-
-        // 5. Scroll for next frame if not last
-        if (frame < 5) {
-          setProgressMsg(`Đã xong Sample ${frame}/5. Đang cuộn màn hình...`);
-          await invoke({
-            type: "visualMatchLabScroll",
-            webContentsId: capture.webContentsId,
-            deltaY: 650,
-          });
-          await wait(750);
-        }
       }
 
       // 6. Save Run Summary & Evidence Report

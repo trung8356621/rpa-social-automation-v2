@@ -1369,7 +1369,7 @@ function Creator() {
         open={openCase} run={runCase} canRun={canRunCase} create={() => openCase()} canDelete={id => !tabsRef.current.some(t => t.caseId === id)}
         navigate={navigateApp} />}
       {shell && appPage === "visual-match-lab" && <VisualMatchLabPage invoke={invoke} />}
-      {shell && appPage === "feed-item-collector" && <FeedItemCollectorPage invoke={invoke} />}
+      {shell && appPage === "feed-item-collector" && <FeedItemCollectorPage invoke={invoke} state={state} />}
       {shell && (appPage === "collectors" || appPage === "collector-test-lab") && (
         <CollectorsPage
           page={appPage}

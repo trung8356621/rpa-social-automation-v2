@@ -110,8 +110,8 @@ export class CreatorOverlays {
   setPage(page: AppPage) {
     this.page = page;
     this.scroll = { left: 0, top: 0 };
-    // Leaving Collectors / Visual Match Lab drops Capture/Inspection host so Browser Core does not linger over other pages.
-    if (page !== "collectors" && page !== "visual-match-lab") this.collectorHost = null;
+    // Leaving Collectors / Visual Match Lab / Feed Item Collector drops Capture/Inspection host so Browser Core does not linger over other pages.
+    if (page !== "collectors" && page !== "visual-match-lab" && page !== "feed-item-collector") this.collectorHost = null;
     this.layout();
   }
   setSidebarCollapsed(collapsed: boolean) {

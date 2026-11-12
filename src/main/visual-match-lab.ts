@@ -8,6 +8,14 @@ import {
 } from "../shared/boundary-probe.js";
 import type { VisualMatchSaveFrameAttemptInput } from "../shared/visual-match-lab-storage.js";
 import { VisualMatchRunStorage } from "./visual-match-lab-storage.js";
+import {
+  buildPermalinkDiagnosticScript,
+  buildAnchorAtPointScript,
+  type PermalinkDiagnosticSnapshot,
+  type PermalinkHoverObservation,
+} from "../shared/permalink-diagnostic.js";
+import { mkdir, writeFile } from "node:fs/promises";
+import path from "node:path";
 
 type Point = { x: number; y: number };
 type Snapshot = { webContentsId: number; url: string; scrollX: number; scrollY: number };
@@ -135,6 +143,59 @@ export class VisualMatchLabRuntime {
     await wc.executeJavaScript(`scrollBy({top:${Number(deltaY) || 0},behavior:'instant'})`);
     this.captures.clear();
     return { webContentsId, scrolled: true };
+  }
+  /**
+   * Permalink runtime diagnostic on the current BrowserCore page.
+   * Phase 1 is strictly read-only. Phase 2 (opt-in `hover`) sends trusted
+   * mouse-move events only over placeholder anchors (no click, no navigation)
+   * and re-reads their href to detect hover-time href rewriting.
+   * Result is written to a NEW file under scratch/diagnostics; run evidence is untouched.
+   */
+  async permalinkDiagnostic(options: { hover?: boolean; runId?: string; candidateId?: string } = {}) {
+    const wc = await this.facebook();
+    const before = (await wc.executeJavaScript(buildPermalinkDiagnosticScript())) as PermalinkDiagnosticSnapshot;
+    const hoverObservations: PermalinkHoverObservation[] = [];
+    if (options.hover) {
+      const zoom = wc.getZoomFactor() || 1;
+      const targets = before.anchors
+        .filter(a => a.inViewport && (a.classification === "QUERY_ONLY_PLACEHOLDER" || a.classification === "PLACEHOLDER_HASH"))
+        .slice(0, 12);
+      for (const a of targets) {
+        const point = { x: Math.round(a.rect.x + a.rect.width / 2), y: Math.round(a.rect.y + a.rect.height / 2) };
+        wc.sendInputEvent({ type: "mouseMove", x: Math.round(point.x * zoom), y: Math.round(point.y * zoom) });
+        await new Promise(r => setTimeout(r, 400));
+        const after = (await wc.executeJavaScript(buildAnchorAtPointScript(point.x, point.y))) as
+          | { rawHref: string; classification: PermalinkHoverObservation["classificationAfter"]; postIdentity: PermalinkHoverObservation["postIdentityAfter"] }
+          | null;
+        hoverObservations.push({
+          cardIndex: a.cardIndex,
+          anchorIndex: a.anchorIndex,
+          point,
+          hrefBefore: a.rawHref,
+          hrefAfter: after?.rawHref ?? null,
+          changed: Boolean(after && after.rawHref !== a.rawHref),
+          classificationAfter: after?.classification ?? null,
+          postIdentityAfter: after?.postIdentity ?? null,
+        });
+      }
+      // Park the pointer outside content; no click is ever sent.
+      wc.sendInputEvent({ type: "mouseMove", x: 0, y: 0 });
+    }
+    const report = {
+      kind: "permalink-diagnostic",
+      createdAt: new Date().toISOString(),
+      webContentsId: wc.id,
+      runId: options.runId ?? null,
+      candidateId: options.candidateId ?? null,
+      hoverEnabled: Boolean(options.hover),
+      before,
+      hoverObservations,
+    };
+    const dir = path.join(this.projectDir, "scratch", "diagnostics");
+    await mkdir(dir, { recursive: true });
+    const file = path.join(dir, `permalink-diagnostic-${Date.now()}.json`);
+    await writeFile(file, JSON.stringify(report, null, 2), "utf8");
+    return { ...report, savedPath: path.relative(this.projectDir, file).replace(/\\/g, "/") };
   }
   async saveBoundaryDebug(report: BoundaryDebugReport) {
     return this.storage.saveRun(report);

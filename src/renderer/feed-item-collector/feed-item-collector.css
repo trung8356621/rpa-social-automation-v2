@@ -1,21 +1,28 @@
-/* Feed Item Collector V2 Styles */
-.feed-item-collector-page {
+/* Feed Item Collector V2 Styles - Isolated Shell Layout matching Collector V1 */
+.workspace-page-strip ~ .app-page.feed-item-collector-page,
+.app-page.feed-item-collector-page {
+  height: calc(100vh - 36px);
+  max-height: calc(100vh - 36px);
+  overflow: hidden;
+  box-sizing: border-box;
+  padding: 8px 16px 8px;
   display: flex;
   flex-direction: column;
-  padding: 16px 24px;
+  min-height: 0;
+  margin-left: var(--app-nav-width);
+  width: calc(100% - var(--app-nav-width));
   background: #090f1d;
   color: #f1f5f9;
-  min-height: 100vh;
-  box-sizing: border-box;
 }
 
 .fic-page-header {
+  flex: 0 0 auto;
   display: flex;
   justify-content: space-between;
   align-items: center;
-  margin-bottom: 12px;
+  margin-bottom: 6px;
   flex-wrap: wrap;
-  gap: 16px;
+  gap: 12px;
 }
 
 .fic-title-group {
@@ -104,13 +111,14 @@
 
 /* Connection Banner */
 .fic-banner {
+  flex: 0 0 auto;
   display: flex;
   align-items: center;
   gap: 8px;
-  padding: 8px 12px;
+  padding: 4px 10px;
   border-radius: 6px;
-  font-size: 13px;
-  margin-bottom: 16px;
+  font-size: 12px;
+  margin-bottom: 6px;
 }
 
 .banner-connected {
@@ -125,28 +133,38 @@
   color: #fca5a5;
 }
 
+.fic-content-area {
+  flex: 1 1 auto;
+  min-width: 0;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+
 /* Common Section Headers & Subtitles */
 .fic-section-header {
+  flex: 0 0 auto;
   display: flex;
   justify-content: space-between;
-  align-items: flex-start;
-  margin-bottom: 16px;
-  gap: 16px;
+  align-items: center;
+  margin-bottom: 6px;
+  gap: 12px;
 }
 
 .fic-section-header h2 {
-  font-size: 17px;
+  font-size: 15px;
   font-weight: 600;
-  margin: 0 0 4px 0;
+  margin: 0 0 2px 0;
   color: #f8fafc;
 }
 
 .fic-subtitle {
-  font-size: 13px;
+  font-size: 12px;
   color: #94a3b8;
   margin: 0;
-  max-width: 800px;
-  line-height: 1.4;
+  max-width: 700px;
+  line-height: 1.3;
 }
 
 .fic-header-actions {
@@ -282,25 +300,63 @@
   border-radius: 4px;
 }
 
-.fic-calibration-workspace {
-  display: grid;
-  grid-template-columns: 1fr 320px;
-  gap: 16px;
+.fic-step-calibration {
+  flex: 1 1 auto;
+  min-width: 0;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  height: 100%;
 }
 
-@media (max-width: 1200px) {
-  .fic-calibration-workspace {
-    grid-template-columns: 1fr;
-  }
+.fic-calibration-workspace {
+  flex: 1 1 auto;
+  min-width: 0;
+  min-height: 0;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 280px;
+  gap: 10px;
+  align-items: stretch;
+  overflow: hidden;
+  height: 100%;
 }
 
 .fic-crop-container {
+  flex: 1 1 auto;
+  min-width: 0;
+  min-height: 0;
+  height: 100%;
   display: flex;
   flex-direction: column;
   background: #0f172a;
   border: 1px solid #1e293b;
   border-radius: 8px;
   overflow: hidden;
+  position: relative;
+}
+
+.fic-crop-container .collector-capture-workspace {
+  flex: 1 1 auto;
+  min-width: 0;
+  min-height: 0;
+  width: 100%;
+  height: 100%;
+  position: relative;
+  overflow: hidden;
+  border: none;
+  border-radius: 0;
+  background: transparent;
+}
+
+.fic-crop-container .collector-browser-host {
+  flex: 1 1 auto;
+  min-width: 0;
+  min-height: 0;
+  width: 100%;
+  height: 100%;
+  position: relative;
+  background: #0a1018;
 }
 
 .fic-crop-toolbar {
@@ -379,12 +435,18 @@
 }
 
 .fic-sidebar-panel {
+  flex: 0 0 280px;
+  min-height: 0;
+  max-height: 100%;
+  display: flex;
+  flex-direction: column;
+  overflow-y: auto;
+  overflow-x: hidden;
+  padding: 12px;
   background: #0f172a;
   border: 1px solid #1e293b;
   border-radius: 8px;
-  padding: 16px;
-  display: flex;
-  flex-direction: column;
+  box-sizing: border-box;
 }
 
 .fic-sidebar-panel h3 {
@@ -807,3 +869,359 @@
 .card {
   box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.1), 0 2px 4px -1px rgba(0, 0, 0, 0.06);
 }
+
+/* Toolbar & Address Bar for Live Mode */
+.fic-toolbar {
+  flex: 0 0 auto;
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 6px 12px;
+  background: #0f172a;
+  border: 1px solid #1e293b;
+  border-radius: 6px;
+  margin-bottom: 8px;
+  flex-wrap: wrap;
+  gap: 10px;
+}
+
+.fic-step-auto-match,
+.fic-step-review {
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow-y: auto;
+  padding-bottom: 16px;
+}
+
+.fic-address-bar {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex: 1;
+  max-width: 600px;
+}
+
+.fic-address-label {
+  font-size: 12px;
+  font-weight: 600;
+  color: #94a3b8;
+}
+
+.fic-url-input {
+  flex: 1;
+  background: #1e293b;
+  border: 1px solid #334155;
+  color: #f1f5f9;
+  padding: 6px 10px;
+  border-radius: 6px;
+  font-size: 13px;
+}
+
+.fic-url-input:focus {
+  outline: none;
+  border-color: #3b82f6;
+}
+
+.fic-mode-indicator {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 12px;
+}
+
+.dot-live {
+  background: #10b981;
+  box-shadow: 0 0 8px #10b981;
+}
+
+.dot-frozen {
+  background: #f59e0b;
+  box-shadow: 0 0 8px #f59e0b;
+}
+
+.fic-btn-capture-active {
+  background: #f59e0b;
+  color: #0f172a;
+  font-weight: 700;
+  border-color: #fbbf24;
+}
+
+.fic-btn-capture-active:hover {
+  background: #d97706;
+}
+
+/* Freeze Toolbar inside Sidebar */
+.fic-freeze-toolbar {
+  background: #111e33;
+  border: 1px solid #1e3a8a;
+  border-radius: 6px;
+  padding: 10px 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin-bottom: 14px;
+}
+
+.fic-icon-chips {
+  display: flex;
+  gap: 6px;
+}
+
+.fic-roi-summary {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  background: #1e293b;
+  padding: 8px 10px;
+  border-radius: 4px;
+  font-size: 12px;
+}
+
+.fic-roi-actions {
+  display: flex;
+  gap: 6px;
+}
+
+/* Confirmation & Offline Re-evaluation Styles */
+.fic-confirmation-card {
+  background: #0f172a;
+  border: 1px solid #1e293b;
+  border-radius: 6px;
+  padding: 12px 14px;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.fic-confirm-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  border-bottom: 1px solid #1e293b;
+  padding-bottom: 6px;
+}
+
+.fic-confirm-header h5 {
+  margin: 0;
+  font-size: 13px;
+  font-weight: 600;
+  color: #e2e8f0;
+}
+
+.fic-offline-badge {
+  font-size: 11px;
+  background: #1e3a8a;
+  color: #93c5fd;
+  padding: 2px 8px;
+  border-radius: 4px;
+  font-weight: 600;
+}
+
+.fic-verification-trio {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 8px;
+}
+
+.fic-trio-item {
+  background: #131d33;
+  border: 1px solid #1e293b;
+  border-radius: 6px;
+  padding: 8px 10px;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  transition: all 0.2s ease;
+}
+
+.fic-trio-item.active {
+  border-color: #3b82f6;
+  background: #1e293b;
+}
+
+.fic-trio-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: #64748b;
+  display: inline-block;
+}
+
+.fic-trio-item.active .fic-trio-dot {
+  background: #10b981;
+  box-shadow: 0 0 6px #10b981;
+}
+
+.fic-trio-label {
+  font-size: 11px;
+  font-weight: 700;
+  color: #cbd5e1;
+}
+
+.fic-trio-item small {
+  font-size: 10px;
+  color: #94a3b8;
+}
+
+.fic-confirm-action-box {
+  background: #111e33;
+  border: 1px solid #1e3a8a;
+  border-radius: 6px;
+  padding: 10px 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.fic-confirm-url-preview {
+  font-size: 12px;
+  word-break: break-all;
+}
+
+.fic-confirm-url-preview code {
+  color: #38bdf8;
+  font-size: 11px;
+}
+
+.fic-confirm-buttons {
+  display: flex;
+  gap: 8px;
+}
+
+.fic-btn-success {
+  background: #059669;
+  color: #ffffff;
+  border: 1px solid #10b981;
+  padding: 6px 14px;
+  border-radius: 4px;
+  font-size: 12px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: background 0.15s ease;
+}
+
+.fic-btn-success:hover:not(:disabled) {
+  background: #047857;
+}
+
+.fic-btn-success:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.fic-confirm-error-alert {
+  background: #450a0a;
+  border: 1px solid #dc2626;
+  border-radius: 4px;
+  padding: 8px 10px;
+  font-size: 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.fic-confirm-error-alert .fic-alert-title {
+  color: #f87171;
+  font-weight: 700;
+}
+
+.fic-confirm-error-alert .fic-alert-body {
+  color: #fca5a5;
+}
+
+.fic-confirm-error-alert .fic-alert-hint {
+  color: #fca5a5;
+  opacity: 0.8;
+  font-size: 11px;
+}
+
+.fic-confirm-hint {
+  font-size: 12px;
+  color: #94a3b8;
+  font-style: italic;
+}
+
+.fic-reeval-box {
+  background: #0a1122;
+  border: 1px solid #1e293b;
+  border-radius: 6px;
+  padding: 10px 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.fic-reeval-title {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  font-size: 12px;
+  font-weight: 600;
+  color: #38bdf8;
+}
+
+.fic-reeval-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 11px;
+}
+
+.fic-reeval-table th,
+.fic-reeval-table td {
+  border: 1px solid #1e293b;
+  padding: 6px 8px;
+  text-align: left;
+}
+
+.fic-reeval-table th {
+  background: #111e33;
+  color: #94a3b8;
+}
+
+.fic-reeval-footer-note {
+  font-size: 11px;
+  color: #64748b;
+  font-style: italic;
+}
+
+.fic-history-section {
+  border-top: 1px solid #1e293b;
+  padding-top: 6px;
+}
+
+.fic-btn-link {
+  background: none;
+  border: none;
+  color: #38bdf8;
+  font-size: 11px;
+  cursor: pointer;
+  padding: 0;
+}
+
+.fic-btn-link:hover {
+  text-decoration: underline;
+}
+
+.fic-history-list {
+  list-style: none;
+  padding: 0;
+  margin: 6px 0 0;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.fic-history-item {
+  background: #111e33;
+  padding: 6px 8px;
+  border-radius: 4px;
+  font-size: 11px;
+}
+
+.fic-history-item-header {
+  display: flex;
+  justify-content: space-between;
+  margin-bottom: 2px;
+  color: #94a3b8;
+}
+
