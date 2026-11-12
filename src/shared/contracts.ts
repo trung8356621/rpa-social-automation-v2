@@ -9,9 +9,10 @@ import type {
 import type { BoundaryDebugReport } from "./boundary-probe.js";
 import type { UserPermalinkRule } from "./permalink-rules.js";
 import type { VisualMatchSaveFrameAttemptInput } from "./visual-match-lab-storage.js";
+import type { PostDetailSaveRunInput } from "./post-detail-collector/types.js";
 export type { ScriptReleaseManifest } from "./script-release.js";
 export type Rect = { x: number; y: number; width: number; height: number };
-export type MainPage = "scenarios" | "browser-sessions" | "test-lab" | "visual-match-lab" | "settings" | "variations" | "widget-registry" | "workflows" | "builds-releases" | "collectors" | "collector-test-lab" | "feed-item-collector";
+export type MainPage = "scenarios" | "browser-sessions" | "test-lab" | "visual-match-lab" | "settings" | "variations" | "widget-registry" | "workflows" | "builds-releases" | "collectors" | "collector-test-lab" | "feed-item-collector" | "post-detail-collector";
 export type AppPage = MainPage | "creator" | "test-case" | "studio-run";
 export type VariableValues = Record<string, string | string[] | number>;
 export type CaseRunStatus = "RUNNING" | "PASS" | "BLOCKED" | "SKIPPED" | "ERROR" | "ACTION_SENT";
@@ -520,6 +521,11 @@ export type Command =
   | { type: "visualMatchLabNavigateBrowserCore"; url: string }
   | { type: "feedItemPermalinkDiagnostic"; hover?: boolean; runId?: string; candidateId?: string }
   | { type: "visualMatchLabOcr"; dataUrl: string }
+  | { type: "postDetailSaveRun"; input: PostDetailSaveRunInput }
+  | { type: "postDetailListRuns" }
+  | { type: "postDetailLoadRun"; runId: string }
+  /** Lightweight BrowserCore probe — no BROWSER_NOT_FACEBOOK guard (navigate may start from any page). */
+  | { type: "postDetailBrowserProbe" }
   /** Collector Capture workspace hole — null/inactive hides Browser Core on collectors pages. */
   | {
       type: "collectorBrowserHost";

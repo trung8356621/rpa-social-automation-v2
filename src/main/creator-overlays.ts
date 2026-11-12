@@ -1,6 +1,7 @@
 import { WebContentsView, type BrowserWindow } from "electron";
 import type { BrowserCore } from "./browser-core.js";
 import {
+  isCollectorBrowserHostPage,
   resolveBrowserViewBounds,
   shouldShowBrowserForPage,
   type CollectorBrowserHost,
@@ -110,8 +111,8 @@ export class CreatorOverlays {
   setPage(page: AppPage) {
     this.page = page;
     this.scroll = { left: 0, top: 0 };
-    // Leaving Collectors / Visual Match Lab / Feed Item Collector drops Capture/Inspection host so Browser Core does not linger over other pages.
-    if (page !== "collectors" && page !== "visual-match-lab" && page !== "feed-item-collector") this.collectorHost = null;
+    // Leaving collector-host pages drops Capture/Inspection host so Browser Core does not linger over other pages.
+    if (!isCollectorBrowserHostPage(page)) this.collectorHost = null;
     this.layout();
   }
   setSidebarCollapsed(collapsed: boolean) {

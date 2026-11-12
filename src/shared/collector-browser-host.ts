@@ -3,6 +3,18 @@ import type { AppPage, Rect } from "./contracts.js";
 /** Measured Capture workspace hole in shell window DIP (from getBoundingClientRect). */
 export type CollectorBrowserHost = Rect & { active: boolean };
 
+/** Pages that host BrowserCore inside a measured Capture hole (not Creator fixed 1024×560). */
+export const COLLECTOR_BROWSER_HOST_PAGES = [
+  "collectors",
+  "visual-match-lab",
+  "feed-item-collector",
+  "post-detail-collector",
+] as const satisfies ReadonlyArray<AppPage>;
+
+export function isCollectorBrowserHostPage(page: AppPage): boolean {
+  return (COLLECTOR_BROWSER_HOST_PAGES as ReadonlyArray<AppPage>).includes(page);
+}
+
 export function shouldShowBrowserForPage(opts: {
   page: AppPage;
   browserVisible: boolean;
@@ -10,7 +22,7 @@ export function shouldShowBrowserForPage(opts: {
 }): boolean {
   if (!opts.browserVisible) return false;
   if (opts.page === "creator" || opts.page === "studio-run") return true;
-  if (opts.page === "collectors" || opts.page === "visual-match-lab" || opts.page === "feed-item-collector") {
+  if (isCollectorBrowserHostPage(opts.page)) {
     return opts.collectorHostActive;
   }
   return false;
@@ -23,7 +35,7 @@ export function resolveBrowserViewBounds(opts: {
 }): Rect {
   const host = opts.collectorHost;
   if (
-    (opts.page === "collectors" || opts.page === "visual-match-lab" || opts.page === "feed-item-collector") &&
+    isCollectorBrowserHostPage(opts.page) &&
     host?.active &&
     Number.isFinite(host.x) &&
     Number.isFinite(host.y) &&

@@ -243,7 +243,10 @@ test("Phase 3 (Step 1 Refactor): Reuses Collector V1 Capture Mode & Browser Live
   assert.match(ficCss, /\.fic-calibration-workspace[\s\S]*overflow:\s*hidden/);
 
   const creatorOverlays = read("src/main/creator-overlays.ts");
-  assert.match(creatorOverlays, /feed-item-collector/);
+  const browserHost = read("src/shared/collector-browser-host.ts");
+  // Host-page membership lives in COLLECTOR_BROWSER_HOST_PAGES (includes feed-item-collector).
+  assert.match(creatorOverlays, /isCollectorBrowserHostPage/);
+  assert.match(browserHost, /"feed-item-collector"/);
 });
 
 test("Phase 4: Step 2 Scroll Sampling (400px, 100px base unit, 1/3, 2/2, 3/1 splits & dedupe)", async () => {

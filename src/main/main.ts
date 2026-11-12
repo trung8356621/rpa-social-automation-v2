@@ -28,6 +28,7 @@ import { ClickMarker } from "./click-marker.js";
 import { CreatorOverlays } from "./creator-overlays.js";
 import { BrowserCore } from "./browser-core.js";
 import { VisualMatchLabRuntime } from "./visual-match-lab.js";
+import { PostDetailRunStorage } from "./post-detail-storage.js";
 import { CollectorScrollCaptureController } from "./collector-scroll-capture.js";
 import { BrowserSessions } from "./browser-sessions.js";
 import { matchEndVisual } from "./end-visual-matcher.js";
@@ -91,6 +92,7 @@ import { createHash } from "node:crypto";
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const project = path.resolve(root, "..");
 const selfTest = process.argv.includes("--self-test");
+const postDetailBrowserCheck = process.argv.includes("--post-detail-browser-check");
 const phase =
   process.argv.find((a) => a.startsWith("--phase="))?.split("=")[1] || "first";
 // All mutable POC data stays inside new/.local; no access to old/.
@@ -111,7 +113,9 @@ const dataPath = path.join(
       ].includes(phase)
       ? `test-${phase}-${process.pid}`
       : "test-session"
-    : "creator",
+    : postDetailBrowserCheck
+      ? `post-detail-check-${process.pid}`
+      : "creator",
 );
 app.setPath("userData", dataPath);
 app.setPath("sessionData", path.join(dataPath, "chromium"));
@@ -223,7 +227,9 @@ async function boot() {
               : phase === "ux"
                 ? 47833
                 : 47832
-      : 47831,
+      : postDetailBrowserCheck
+        ? 47838
+        : 47831,
   );
   const window = new BrowserWindow({
     useContentSize: true,
@@ -308,6 +314,7 @@ async function boot() {
     browser,
     store.setting("appSidebarCollapsed") === "true",
   );
+  const postDetailStorage = new PostDetailRunStorage(project);
   const visualMatchLab = new VisualMatchLabRuntime(browser, async (operation) => {
     const previousPage = overlays.page;
     overlays.setPage("creator");
@@ -1407,7 +1414,7 @@ async function boot() {
       case "appPage":
         isIdle();
         if (uiPlayAllRunId) throw new Error("Đợi Play All kết thúc trước khi chuyển màn hình.");
-        if (event.sender !== window.webContents || !["scenarios", "creator", "browser-sessions", "test-lab", "visual-match-lab", "settings", "test-case", "variations", "widget-registry", "workflows", "builds-releases", "collectors", "collector-test-lab", "feed-item-collector"].includes(command.page))
+        if (event.sender !== window.webContents || !["scenarios", "creator", "browser-sessions", "test-lab", "visual-match-lab", "settings", "test-case", "variations", "widget-registry", "workflows", "builds-releases", "collectors", "collector-test-lab", "feed-item-collector", "post-detail-collector"].includes(command.page))
           throw new Error("Invalid app page");
         overlays.setPage(command.page);
         if (command.page !== "creator") armedTest = undefined;
@@ -1641,7 +1648,7 @@ async function boot() {
       case "capture": {
         isIdle();
         // Collectors use measured Capture host bounds (not Creator's fixed 1024×560).
-        if (overlays.page === "collectors" || overlays.page === "feed-item-collector") {
+        if (overlays.page === "collectors" || overlays.page === "feed-item-collector" || overlays.page === "post-detail-collector") {
           const image = await browser.capture({ requireCanonical: false });
           captures.set(image.id, {
             width: image.width,
@@ -2148,6 +2155,49 @@ async function boot() {
         const match = /^data:image\/[a-z0-9.+-]+;base64,(.+)$/iu.exec(command.dataUrl);
         if (!match) throw new Error("OCR_IMAGE_INVALID: expected an image data URL.");
         return localOcr.recognize(Buffer.from(match[1], "base64"));
+      }
+      case "postDetailSaveRun": {
+        isIdle();
+        return postDetailStorage.saveRun(command.input);
+      }
+      case "postDetailListRuns": {
+        isIdle();
+        return postDetailStorage.listRuns();
+      }
+      case "postDetailLoadRun": {
+        isIdle();
+        return postDetailStorage.loadRun(command.runId);
+      }
+      case "postDetailBrowserProbe": {
+        isIdle();
+        const wc = browser.view.webContents;
+        if (!wc || wc.isDestroyed()) {
+          throw new Error("BROWSER_CORE_UNAVAILABLE: BrowserCore webContents is not ready.");
+        }
+        const url = wc.getURL();
+        const host = (() => {
+          try {
+            return new URL(url).hostname.toLowerCase();
+          } catch {
+            return "";
+          }
+        })();
+        const isSocialPage =
+          host === "facebook.com" ||
+          host.endsWith(".facebook.com") ||
+          host === "fb.com" ||
+          host.endsWith(".fb.com") ||
+          host === "threads.net" ||
+          host.endsWith(".threads.net") ||
+          host === "threads.com" ||
+          host.endsWith(".threads.com");
+        return {
+          available: true,
+          webContentsId: wc.id,
+          url,
+          isSocialPage,
+          sessionId: activeSessionId,
+        };
       }
       case "collectorBrowserHost": {
         isIdle();
@@ -2922,6 +2972,113 @@ async function boot() {
       return;
     } catch (error) {
       console.error("VISUAL_MATCH_LAB_CHECK_FAILED", error);
+      app.exit(1);
+      return;
+    }
+  }
+  if (postDetailBrowserCheck) {
+    try {
+      await new Promise((resolve) => setTimeout(resolve, 1500));
+      const fixtureUrl =
+        "https://www.facebook.com/groups/seovamarketing/posts/29327016206983816/";
+      const wc = browser.view.webContents;
+      const startUrl = wc.getURL();
+      // Ensure we can navigateToTarget from a non-social page when possible.
+      if (!/facebook\.com|fb\.com|threads\.(net|com)/i.test(startUrl)) {
+        // already non-social — good
+      } else {
+        await wc.loadURL("about:blank");
+        await new Promise((resolve) => setTimeout(resolve, 400));
+      }
+      const probeBefore = {
+        available: !wc.isDestroyed(),
+        webContentsId: wc.id,
+        url: wc.getURL(),
+        isSocialPage: false,
+      };
+      overlays.setPage("post-detail-collector");
+      const host = { x: 240, y: 160, width: 900, height: 480, active: true };
+      overlays.setCollectorHost(host);
+      browser.setVisible(true);
+      overlays.layout();
+      const boundsLive = browser.view.getBounds();
+      await browser.navigate(fixtureUrl);
+      await new Promise((resolve) => setTimeout(resolve, 10000));
+      const afterUrl = browser.view.webContents.getURL();
+      const navigatedSocial = /(?:^|\.)(?:facebook\.com|fb\.com|threads\.net|threads\.com)$/i.test(
+        (() => {
+          try {
+            return new URL(afterUrl).hostname;
+          } catch {
+            return "";
+          }
+        })(),
+      );
+      // Menu switch regression: Feed Item → Post Detail must not leave duplicate hosts.
+      overlays.setPage("feed-item-collector");
+      overlays.layout();
+      overlays.setPage("post-detail-collector");
+      overlays.setCollectorHost(host);
+      browser.setVisible(true);
+      overlays.layout();
+      const boundsAfterSwitch = browser.view.getBounds();
+      const shot = await browser.capture({ requireCanonical: false });
+      browser.setVisible(true);
+      overlays.layout();
+      const report = {
+        timestamp: new Date().toISOString(),
+        probeBefore,
+        startUrl,
+        afterUrl,
+        navigatedSocial,
+        sameWebContentsId: browser.view.webContents.id === probeBefore.webContentsId,
+        boundsLive,
+        boundsAfterSwitch,
+        host,
+        boundsMatchHost:
+          boundsLive.x === host.x &&
+          boundsLive.y === host.y &&
+          boundsLive.width === host.width &&
+          boundsLive.height === host.height,
+        capture: {
+          id: shot.id,
+          width: shot.width,
+          height: shot.height,
+        },
+        status:
+          navigatedSocial &&
+          boundsLive.width === host.width &&
+          boundsLive.height === host.height &&
+          browser.view.webContents.id === probeBefore.webContentsId
+            ? "PASS"
+            : "FAIL",
+      };
+      await mkdir(path.join(project, "artifacts"), { recursive: true });
+      await writeFile(
+        path.join(project, "artifacts", "post-detail-browser-check.json"),
+        JSON.stringify(report, null, 2),
+      );
+      console.info("POST_DETAIL_BROWSER_CHECK", report.status, afterUrl);
+      app.exit(report.status === "PASS" ? 0 : 1);
+      return;
+    } catch (error) {
+      console.error("POST_DETAIL_BROWSER_CHECK_FAILED", error);
+      try {
+        await mkdir(path.join(project, "artifacts"), { recursive: true });
+        await writeFile(
+          path.join(project, "artifacts", "post-detail-browser-check.json"),
+          JSON.stringify(
+            {
+              status: "FAIL",
+              error: error instanceof Error ? error.message : String(error),
+            },
+            null,
+            2,
+          ),
+        );
+      } catch {
+        /* ignore */
+      }
       app.exit(1);
       return;
     }
