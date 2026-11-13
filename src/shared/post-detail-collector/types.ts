@@ -176,6 +176,26 @@ export type PostDetailScanFrame = {
 
 export type PostDetailContainerStatus = "FOUND" | "AMBIGUOUS" | "NOT_FOUND";
 
+export type MainActionRowStatus =
+  | "MAIN_ACTION_ROW_CANDIDATE"
+  | "AMBIGUOUS"
+  | "NOT_FOUND";
+
+/** Best Like/Comment/Share action-row cluster retained across Auto Scan frames. */
+export type PostDetailMainActionRow = {
+  status: MainActionRowStatus;
+  frameId: string;
+  frameIndex: number;
+  anchors: PostDetailVisualAnchor[];
+  bbox: Rect;
+  meanScore: number;
+  types: Array<PostDetailAnchorType>;
+  strength: "STRONG" | "WEAK";
+  orderOk: boolean;
+  observedScrollPx: number;
+  notes: string[];
+};
+
 /** Step 2 primary output — Post Detail container from visual scan (not DOM). */
 export type PostDetailContainerResult = {
   status: PostDetailContainerStatus;
@@ -186,6 +206,8 @@ export type PostDetailContainerResult = {
   evidenceRefs: string[];
   runId: string;
   sourceUrl: string;
+  /** Phase A: best main action-row candidate (retained even when container AMBIGUOUS). */
+  mainActionRow: PostDetailMainActionRow | null;
   scrollMetadata: {
     wheelPoint: { x: number; y: number };
     /** Signed wheel delta sent to BrowserCore (negative = content down per self-test). */
@@ -202,12 +224,12 @@ export type PostDetailContainerResult = {
 };
 
 export const POST_DETAIL_AUTO_SCAN_DEFAULTS = Object.freeze({
-  maxFrames: 8,
+  maxFrames: 20,
   /**
    * Signed mouseWheel deltaY. Negative scrolls content down in BrowserCore
-   * (self-test: scroll(-400) increases scrollY). Magnitude matches Feed Item step.
+   * (self-test: scroll(-400) increases scrollY). Fine step so Post Detail does not jump into comments.
    */
-  deltaY: -280,
+  deltaY: -100,
   settleMs: 550,
   matchThreshold: 0.55,
   /** Content-band MAD threshold for VISUAL_SCROLL_CONFIRMED. */

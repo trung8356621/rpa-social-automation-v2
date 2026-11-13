@@ -114,8 +114,8 @@ app.whenReady().then(async () => {
   await writeFile(path.join(outDir, "fixture-before.png"), before.buf);
 
   const point = { x: 512, y: 280 };
-  // Same signed convention as BrowserCore self-test / Auto Scan defaults.
-  browser.scroll(-280, point);
+  // Fine-step Auto Scan default (POST_DETAIL_AUTO_SCAN_DEFAULTS.deltaY).
+  browser.scroll(-100, point);
   await sleep(550);
 
   const afterProbe = await browser.view.webContents.executeJavaScript(`window.__scrollProbe()`);
@@ -134,7 +134,7 @@ app.whenReady().then(async () => {
   report.fixture = {
     ok: fixtureOk,
     wheelPoint: point,
-    requestedDeltaY: -280,
+    requestedDeltaY: -100,
     scrollTopBefore: beforeProbe.scrollTop,
     scrollTopAfter: afterProbe.scrollTop,
     observedScrollTopDelta: scrollDelta,
@@ -158,7 +158,7 @@ app.whenReady().then(async () => {
       const url = browser.view.webContents.getURL();
       const liveBefore = await capturePng(browser);
       await writeFile(path.join(outDir, "live-before.png"), liveBefore.buf);
-      browser.scroll(-280, point);
+      browser.scroll(-100, point);
       await sleep(700);
       const liveAfter = await capturePng(browser);
       await writeFile(path.join(outDir, "live-after.png"), liveAfter.buf);
@@ -171,7 +171,7 @@ app.whenReady().then(async () => {
       report.live = {
         ok: liveMotion >= 6.5,
         url,
-        requestedDeltaY: -280,
+        requestedDeltaY: -100,
         visualMotionScore: Math.round(liveMotion * 1000) / 1000,
         outcome: liveMotion >= 6.5 ? "VISUAL_SCROLL_CONFIRMED" : "SCROLL_NOT_MOVING_OR_LOGIN",
       };

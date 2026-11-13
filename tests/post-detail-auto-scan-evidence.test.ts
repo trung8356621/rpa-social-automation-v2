@@ -30,7 +30,7 @@ function container(runId: string): PostDetailContainerResult {
     sourceUrl: "https://www.facebook.com/groups/x/posts/1/",
     scrollMetadata: {
       wheelPoint: { x: 512, y: 280 },
-      deltaY: -280,
+      deltaY: -100,
       settleMs: 450,
       maxFrames: 5,
       framesCaptured: 1,
@@ -40,6 +40,7 @@ function container(runId: string): PostDetailContainerResult {
       visualScrollConfirmedFrames: 0,
     },
     notes: ["single like"],
+    mainActionRow: null,
   };
 }
 

@@ -1,24 +1,24 @@
 {
   "kind": "post-detail-wheel-runtime",
-  "createdAt": "2026-11-12T09:13:54.782Z",
+  "createdAt": "2026-11-12T09:23:56.990Z",
   "fixture": {
     "ok": true,
     "wheelPoint": {
       "x": 512,
       "y": 280
     },
-    "requestedDeltaY": -280,
+    "requestedDeltaY": -100,
     "scrollTopBefore": 0,
-    "scrollTopAfter": 280,
-    "observedScrollTopDelta": 280,
-    "visualMotionScore": 27.378,
+    "scrollTopAfter": 100,
+    "observedScrollTopDelta": 100,
+    "visualMotionScore": 20.166,
     "outcome": "VISUAL_SCROLL_CONFIRMED"
   },
   "live": {
     "ok": true,
     "url": "https://www.facebook.com/groups/seovamarketing/posts/29327016206983816/",
-    "requestedDeltaY": -280,
-    "visualMotionScore": 40.618,
+    "requestedDeltaY": -100,
+    "visualMotionScore": 40.663,
     "outcome": "VISUAL_SCROLL_CONFIRMED"
   }
 }

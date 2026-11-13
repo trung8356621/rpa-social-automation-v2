@@ -116,9 +116,9 @@ test("single Like icon cannot be FOUND container", () => {
     sourceUrl: "https://www.facebook.com/groups/x/posts/1/",
     frames,
     wheelPoint: { x: 512, y: 280 },
-    deltaY: -280,
+    deltaY: -100,
     settleMs: 450,
-    maxFrames: 8,
+    maxFrames: 20,
     stoppedReason: "max-frames",
     horizontalProfiles: [{ frameId: "f1", columns: cardProfile() }],
   });
@@ -158,8 +158,8 @@ test("LIKE+COMMENT action row + modal edges yields FOUND; width not icon-union",
     {
       frameId: "f2",
       frameIndex: 2,
-      scrollDeltaApplied: 280,
-      observedScrollPx: 280,
+      scrollDeltaApplied: 100,
+      observedScrollPx: 100,
       width: 1024,
       height: 560,
       anchors: [like, comment],
@@ -167,12 +167,12 @@ test("LIKE+COMMENT action row + modal edges yields FOUND; width not icon-union",
       diagnostics: {
         frameIndex: 2,
         wheelTarget: { x: 512, y: 280 },
-        requestedDeltaY: -280,
+        requestedDeltaY: -100,
         wheelOutcome: "WHEEL_SENT",
         visualMotionScore: 18,
         scrollConfirmed: true,
         scrollConfirmLabel: "VISUAL_SCROLL_CONFIRMED",
-        observedScrollPx: 280,
+        observedScrollPx: 100,
         matchLogs: [],
         containerCandidate: null,
       },
@@ -183,11 +183,11 @@ test("LIKE+COMMENT action row + modal edges yields FOUND; width not icon-union",
     sourceUrl: "https://www.facebook.com/groups/x/posts/1/",
     frames,
     wheelPoint: { x: 512, y: 280 },
-    deltaY: -280,
+    deltaY: -100,
     settleMs: 450,
-    maxFrames: 8,
+    maxFrames: 20,
     stoppedReason: "found-container",
-    observedScrollPx: 280,
+    observedScrollPx: 100,
     horizontalProfiles: [
       { frameId: "f1", columns: cardProfile() },
       { frameId: "f2", columns: cardProfile() },
@@ -229,7 +229,7 @@ test("action row without horizontal edges → AMBIGUOUS (not FOUND)", () => {
       },
     ],
     wheelPoint: { x: 512, y: 280 },
-    deltaY: -280,
+    deltaY: -100,
     settleMs: 450,
     maxFrames: 5,
     stoppedReason: "max-frames",
@@ -249,10 +249,49 @@ test("selectPrimaryActionRow prefers upper main-post band over comment likes", (
     anchor({ type: "LIKE", bbox: { x: 420, y: 480, width: 24, height: 16 }, score: 0.95, candidateRank: 1 }),
     anchor({ type: "SHARE", bbox: { x: 470, y: 482, width: 24, height: 16 }, score: 0.92, candidateRank: 1 }),
   ];
-  const row = selectPrimaryActionRow(main, commentRow);
+  const row = selectPrimaryActionRow(main, commentRow, { frameHeight: 560 });
   assert.ok(row);
   const meanY = row!.reduce((s, a) => s + a.bbox.y, 0) / row!.length;
   assert.ok(meanY < 300);
+});
+
+test("comment-zone-only action row after scroll is not selected as main post", () => {
+  const commentOnly = [
+    anchor({ type: "LIKE", bbox: { x: 400, y: 500, width: 30, height: 20 }, score: 0.99 }),
+    anchor({ type: "COMMENT", bbox: { x: 450, y: 502, width: 30, height: 20 }, score: 0.97 }),
+  ];
+  assert.equal(
+    selectPrimaryActionRow(commentOnly, [], { frameHeight: 560, observedScrollPx: 300 }),
+    null,
+  );
+  // Early frame at top: same geometry may still be main row entering viewport — allow.
+  assert.ok(selectPrimaryActionRow(commentOnly, [], { frameHeight: 560, observedScrollPx: 0 }));
+
+  const result = detectPostDetailContainer({
+    runId: "pd_comment_zone",
+    sourceUrl: "https://www.facebook.com/groups/x/posts/1/",
+    frames: [
+      {
+        frameId: "f1",
+        frameIndex: 1,
+        scrollDeltaApplied: 300,
+        observedScrollPx: 300,
+        width: 1024,
+        height: 560,
+        anchors: commentOnly,
+        notes: [],
+      },
+    ],
+    wheelPoint: { x: 512, y: 280 },
+    deltaY: -100,
+    settleMs: 550,
+    maxFrames: 20,
+    stoppedReason: "max-frames",
+    observedScrollPx: 300,
+    horizontalProfiles: [{ frameId: "f1", columns: cardProfile() }],
+  });
+  assert.equal(result.status, "AMBIGUOUS");
+  assert.match(result.notes.join(" "), /comment-zone/i);
 });
 
 test("no anchors → NOT_FOUND", () => {
@@ -272,9 +311,9 @@ test("no anchors → NOT_FOUND", () => {
       },
     ],
     wheelPoint: { x: 512, y: 280 },
-    deltaY: -280,
+    deltaY: -100,
     settleMs: 450,
-    maxFrames: 5,
+    maxFrames: 20,
     stoppedReason: "max-frames",
   });
   assert.equal(result.status, "NOT_FOUND");
@@ -294,7 +333,8 @@ test("wheel dispatch uses mouseMove then mouseWheel; signed delta; visual confir
   assert.doesNotMatch(runner, /scrollApplied \+= deltaY/);
 
   const defaults = read("src/shared/post-detail-collector/types.ts");
-  assert.match(defaults, /deltaY: -280/);
+  assert.match(defaults, /deltaY: -100/);
+  assert.match(defaults, /maxFrames: 20/);
 
   const main = read("src/main/main.ts");
   assert.match(main, /WHEEL_SENT/);

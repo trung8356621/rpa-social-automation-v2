@@ -2,8 +2,11 @@ import {
   detectPostDetailContainer,
   inferAnchorTypeFromLabel,
   selectPrimaryActionRow,
+  shouldStopForActionRow,
+  updateBestActionRow,
   viewportWheelPoint,
 } from "../../shared/post-detail-collector/auto-scan";
+import { clusterActionRows } from "../../shared/post-detail-collector/action-row";
 import { createPostDetailFrameId, createPostDetailRunId } from "../../shared/post-detail-collector/match-status";
 import {
   defaultScrollCompareRoi,
@@ -120,14 +123,19 @@ async function matchFrameAnchors(
 
     const result = await TemplateMatcher.match(tpl, target, "grayscale", threshold);
     if (!result.matches.length) {
+      // Diagnostic-only pass below threshold — never accepted as anchors.
+      const soft = await TemplateMatcher.match(tpl, target, "grayscale", Math.min(0.35, threshold - 0.1));
+      const softBest = soft.matches[0];
       logs.push({
         type,
         templateId: sample.sampleId,
-        score: 0,
+        score: softBest?.score ?? 0,
         threshold,
-        bbox: null,
+        bbox: softBest?.bbox ?? null,
         accepted: false,
-        rejectionReason: `No candidate ≥ threshold ${threshold}`,
+        rejectionReason: softBest
+          ? `Best ${softBest.score.toFixed(3)} < threshold ${threshold}`
+          : `No candidate ≥ threshold ${threshold}`,
         candidateRank: -1,
       });
       continue;
@@ -207,7 +215,7 @@ export async function runPostDetailAutoScan(deps: AutoScanDeps): Promise<{
   frames: PostDetailScanFrame[];
   container: PostDetailContainerResult;
 }> {
-  const maxFrames = Math.max(1, Math.min(20, deps.maxFrames ?? POST_DETAIL_AUTO_SCAN_DEFAULTS.maxFrames));
+  const maxFrames = Math.max(1, Math.min(30, deps.maxFrames ?? POST_DETAIL_AUTO_SCAN_DEFAULTS.maxFrames));
   const deltaY = deps.deltaY ?? POST_DETAIL_AUTO_SCAN_DEFAULTS.deltaY;
   const settleMs = deps.settleMs ?? POST_DETAIL_AUTO_SCAN_DEFAULTS.settleMs;
   const matchThreshold = deps.matchThreshold ?? POST_DETAIL_AUTO_SCAN_DEFAULTS.matchThreshold;
@@ -222,6 +230,7 @@ export async function runPostDetailAutoScan(deps: AutoScanDeps): Promise<{
   let stoppedReason = "completed";
   let staleWheels = 0;
   let prevRgba: { data: Uint8ClampedArray; width: number; height: number } | null = null;
+  let bestActionRow: ReturnType<typeof updateBestActionRow> = null;
 
   if (!deps.visualReferences.length) {
     throw new Error("AUTO_SCAN_NO_REFERENCES: Cần ≥1 visual reference từ Step 1.");
@@ -319,19 +328,24 @@ export async function runPostDetailAutoScan(deps: AutoScanDeps): Promise<{
       deps.visualReferences,
       matchThreshold,
     );
-    const primaryRow = selectPrimaryActionRow(anchors, candidates);
-    const containerCandidate = primaryRow
+    const clusters = clusterActionRows(anchors, candidates);
+    const primaryRow = selectPrimaryActionRow(anchors, candidates, {
+      frameHeight: image.height,
+      observedScrollPx,
+    });
+    const topCluster = clusters[0] || null;
+    const containerCandidate = topCluster?.bbox ?? (primaryRow
       ? {
           x: Math.round(Math.min(...primaryRow.map((a) => a.bbox.x)) - 8),
-          y: Math.max(0, Math.round(Math.min(...primaryRow.map((a) => a.bbox.y)) - image.height * 0.4)),
+          y: Math.round(Math.min(...primaryRow.map((a) => a.bbox.y)) - 8),
           width: Math.round(
             Math.max(...primaryRow.map((a) => a.bbox.x + a.bbox.width)) -
               Math.min(...primaryRow.map((a) => a.bbox.x)) +
               16,
           ),
-          height: Math.round(image.height * 0.45),
+          height: Math.round(Math.max(...primaryRow.map((a) => a.bbox.height)) + 16),
         }
-      : null;
+      : null);
 
     const columns = await columnLumaProfile(image.dataUrl);
     horizontalProfiles.push({ frameId, columns });
@@ -371,14 +385,32 @@ export async function runPostDetailAutoScan(deps: AutoScanDeps): Promise<{
         `motion=${visualMotionScore ?? "n/a"}`,
         `anchors=${anchors.map((a) => `${a.type}:${a.score.toFixed(3)}`).join(",") || "none"}`,
         `candidates=${candidates.length}`,
+        `clusters=${clusters.length}`,
+        topCluster
+          ? `row=${topCluster.types.join("+")}:${topCluster.meanScore.toFixed(3)}:${topCluster.strength}`
+          : "row=none",
       ],
     };
     frames.push(frame);
+    bestActionRow = updateBestActionRow(bestActionRow, frame);
     deps.onFrame(frame, [...frames]);
 
     if (i > 1 && staleWheels >= maxStale) {
       stoppedReason = "SCROLL_NOT_MOVING";
       diagnostics.stopOrRejectReason = `SCROLL_NOT_MOVING after ${staleWheels} consecutive wheels without content-band change (threshold=${motionThreshold}).`;
+      deps.onProgress({
+        phase: "stopped",
+        frameIndex: i,
+        maxFrames,
+        message: diagnostics.stopOrRejectReason,
+      });
+      break;
+    }
+
+    // Phase A early stop: strong main action-row cluster — do not scroll into comments.
+    if (bestActionRow && shouldStopForActionRow(bestActionRow.cluster)) {
+      stoppedReason = "MAIN_ACTION_ROW_CANDIDATE";
+      diagnostics.stopOrRejectReason = `MAIN_ACTION_ROW_CANDIDATE on frame ${bestActionRow.frameId} types=${bestActionRow.cluster.types.join(",")} score=${bestActionRow.cluster.meanScore}`;
       deps.onProgress({
         phase: "stopped",
         frameIndex: i,
@@ -401,8 +433,12 @@ export async function runPostDetailAutoScan(deps: AutoScanDeps): Promise<{
       observedScrollPx,
       horizontalProfiles,
     });
-    if (preview.status === "FOUND" && i >= 2 && observedScrollPx > 0) {
+    if (preview.status === "FOUND") {
       stoppedReason = "found-container";
+      break;
+    }
+    if (preview.mainActionRow?.status === "MAIN_ACTION_ROW_CANDIDATE") {
+      stoppedReason = "MAIN_ACTION_ROW_CANDIDATE";
       break;
     }
   }

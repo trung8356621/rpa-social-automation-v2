@@ -71,9 +71,9 @@ export function VisualRegionStep({
   const [progress, setProgress] = useState<AutoScanProgress>({
     phase: "idle",
     frameIndex: 0,
-    maxFrames: 8,
+    maxFrames: 20,
     message: visualReferences.length
-      ? `Sẵn sàng Auto Scan với ${visualReferences.length} visual reference(s).`
+      ? `Sẵn sàng Auto Scan với ${visualReferences.length} visual reference(s). Cuộn Post Detail về đầu bài trước khi Start (Δy=-100).`
       : "Thiếu visual reference — quay lại Step 1.",
   });
   const [error, setError] = useState("");
@@ -178,10 +178,33 @@ export function VisualRegionStep({
       onRunId(runId);
       onScanFrames(nextFrames);
       onContainerResult(container);
-      setFrameIndex(Math.max(0, nextFrames.length - 1));
 
-      if (container.status === "FOUND" && container.containerBounds) {
-        // Preview bounds only — Step 3 unlocks after Confirm Container.
+      const bestIdx = container.mainActionRow
+        ? Math.max(
+            0,
+            nextFrames.findIndex((f) => f.frameId === container.mainActionRow!.frameId),
+          )
+        : Math.max(0, nextFrames.length - 1);
+      setFrameIndex(bestIdx === -1 ? Math.max(0, nextFrames.length - 1) : bestIdx);
+
+      const row = container.mainActionRow;
+      if (row?.status === "MAIN_ACTION_ROW_CANDIDATE" || (row && row.types.length >= 2)) {
+        onMatch({
+          status: "AMBIGUOUS",
+          score: row.meanScore,
+          templateId: row.anchors[0]?.templateId ?? null,
+          bbox: row.bbox,
+          candidateCount: row.anchors.length,
+          scores: row.anchors.map((a) => a.score),
+          screenshotDataUrl: nextFrames[bestIdx]?.screenshotDataUrl,
+          notes: [
+            ...container.notes,
+            `Main Action Row ${row.status} on frame ${row.frameIndex}: ${row.types.join(",")}`,
+            "Confirm Action Row để giữ candidate (không cuộn tiếp comment).",
+          ],
+        });
+        if (container.containerBounds) onContentRoi(container.containerBounds);
+      } else if (container.status === "FOUND" && container.containerBounds) {
         onContentRoi(container.containerBounds);
         onMatch({
           status: "AMBIGUOUS",
@@ -190,8 +213,8 @@ export function VisualRegionStep({
           bbox: container.containerBounds,
           candidateCount: container.visualAnchors.length,
           scores: container.visualAnchors.map((a) => a.score),
-          screenshotDataUrl: nextFrames[nextFrames.length - 1]?.screenshotDataUrl,
-          notes: [...container.notes, "Review overlay then Confirm Container."],
+          screenshotDataUrl: nextFrames[bestIdx]?.screenshotDataUrl,
+          notes: [...container.notes, "Review overlay then Confirm."],
         });
       } else if (container.status === "AMBIGUOUS") {
         setManualMode(true);
@@ -199,7 +222,7 @@ export function VisualRegionStep({
           status: "AMBIGUOUS",
           score: container.confidence,
           templateId: null,
-          bbox: null,
+          bbox: row?.bbox ?? null,
           candidateCount: container.visualAnchors.length,
           scores: container.visualAnchors.map((a) => a.score),
           notes: [...container.notes, "Manual Confirm fallback available."],
@@ -264,12 +287,42 @@ export function VisualRegionStep({
     setProgress((p) => ({ ...p, phase: "stopped", message: "Đang dừng…" }));
   }
 
-  function confirmContainer() {
-    if (!containerResult?.containerBounds && !contentRoi) {
-      setError("Chưa có container bounds để Confirm.");
+  function confirmActionRow() {
+    const row = containerResult?.mainActionRow;
+    if (!row?.bbox) {
+      setError("Chưa có Main Action Row candidate để Confirm.");
       return;
     }
-    const bounds = containerResult?.containerBounds || contentRoi;
+    onContentRoi(containerResult?.containerBounds || row.bbox);
+    onMatch({
+      status: "MANUALLY_CONFIRMED",
+      score: row.meanScore,
+      templateId: row.anchors[0]?.templateId ?? null,
+      bbox: containerResult?.containerBounds || row.bbox,
+      candidateCount: row.anchors.length,
+      scores: row.anchors.map((a) => a.score),
+      screenshotDataUrl: frames.find((f) => f.frameId === row.frameId)?.screenshotDataUrl || lastScreenshot?.dataUrl,
+      notes: [
+        ...row.notes,
+        "MAIN_ACTION_ROW confirmed for handoff.",
+      ],
+    });
+    if (containerResult) {
+      onContainerResult({
+        ...containerResult,
+        mainActionRow: { ...row, status: "MAIN_ACTION_ROW_CANDIDATE" },
+        status: containerResult.containerBounds ? "FOUND" : containerResult.status,
+      });
+    }
+    setProgress((p) => ({ ...p, message: "Action Row đã Confirm." }));
+  }
+
+  function confirmContainer() {
+    if (!containerResult?.containerBounds && !contentRoi && !containerResult?.mainActionRow?.bbox) {
+      setError("Chưa có container / action-row bounds để Confirm.");
+      return;
+    }
+    const bounds = containerResult?.containerBounds || contentRoi || containerResult?.mainActionRow?.bbox;
     if (!bounds) return;
     onContentRoi(bounds);
     onMatch({
@@ -378,8 +431,13 @@ export function VisualRegionStep({
     Boolean(containerResult?.containerBounds || contentRoi);
 
   const running = progress.phase === "running";
-  const overlayBounds = containerResult?.containerBounds || contentRoi;
-  const overlayAnchors = active?.anchors || containerResult?.visualAnchors.filter((a) => a.frameId === active?.frameId) || [];
+  const mainRow = containerResult?.mainActionRow;
+  const overlayBounds = mainRow?.bbox || containerResult?.containerBounds || contentRoi;
+  const overlayAnchors =
+    (mainRow && active?.frameId === mainRow.frameId ? mainRow.anchors : null) ||
+    active?.anchors ||
+    containerResult?.visualAnchors.filter((a) => a.frameId === active?.frameId) ||
+    [];
 
   if (!electron) {
     return <div className="pdc-alert pdc-alert-warn">{BROWSER_CORE_UNAVAILABLE}</div>;
@@ -391,8 +449,8 @@ export function VisualRegionStep({
         <div>
           <h2>Step 2 — Auto Scroll & Container Detection</h2>
           <p className="pdc-subtitle">
-            Start Auto Scan một lần: capture → match → wheel tại tâm viewport → lặp. Không chọn OCR ROI thủ công
-            trừ khi AMBIGUOUS.
+            Cuộn về đầu bài trước khi Start. Auto Scan: capture → match → wheel Δy=-100 tại tâm viewport → lặp
+            (tối đa 20 frame). Không chọn OCR ROI thủ công trừ khi AMBIGUOUS.
           </p>
         </div>
         <div className="pdc-btn-row">
@@ -531,8 +589,14 @@ export function VisualRegionStep({
             <dd className={`pdc-status-${(containerResult?.status || "not_found").toLowerCase()}`}>
               {containerResult?.status || "—"}
             </dd>
+            <dt>Action Row</dt>
+            <dd>
+              {mainRow
+                ? `${mainRow.status} · f${mainRow.frameIndex} · ${mainRow.types.join("+")} · ${mainRow.meanScore.toFixed(3)}`
+                : "—"}
+            </dd>
             <dt>Confidence</dt>
-            <dd>{containerResult?.confidence != null ? containerResult.confidence.toFixed(3) : "—"}</dd>
+            <dd>{containerResult?.confidence != null ? containerResult.confidence.toFixed(3) : mainRow?.meanScore.toFixed(3) ?? "—"}</dd>
             <dt>Container</dt>
             <dd>
               {overlayBounds
@@ -613,7 +677,15 @@ export function VisualRegionStep({
             <button
               type="button"
               className="pdc-btn pdc-btn-primary"
-              disabled={running || (!containerResult?.containerBounds && !contentRoi)}
+              disabled={running || !mainRow?.bbox}
+              onClick={confirmActionRow}
+            >
+              Confirm Action Row
+            </button>
+            <button
+              type="button"
+              className="pdc-btn pdc-btn-secondary"
+              disabled={running || (!containerResult?.containerBounds && !contentRoi && !mainRow?.bbox)}
               onClick={confirmContainer}
             >
               Confirm Container

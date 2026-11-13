@@ -1,0 +1,137 @@
+{
+  "kind": "post-detail-action-row-offline",
+  "sourceRunId": "pd_20261112T092528Z_42o7d5",
+  "createdAt": "2026-11-12T10:16:24.725Z",
+  "firstMainActionRow": {
+    "frameIndex": 5,
+    "frameId": "frame-005_mwdcf2hj",
+    "cluster": {
+      "types": [
+        "LIKE",
+        "COMMENT",
+        "SHARE"
+      ],
+      "meanScore": 0.967,
+      "strength": "STRONG",
+      "orderOk": true,
+      "bbox": {
+        "x": 138,
+        "y": 265,
+        "width": 161,
+        "height": 31
+      }
+    },
+    "matchLogs": [
+      {
+        "type": "LIKE",
+        "score": 1,
+        "accepted": true,
+        "bbox": {
+          "x": 138,
+          "y": 267,
+          "width": 42,
+          "height": 26
+        }
+      },
+      {
+        "type": "COMMENT",
+        "score": 1,
+        "accepted": true,
+        "bbox": {
+          "x": 199,
+          "y": 265,
+          "width": 41,
+          "height": 31
+        }
+      },
+      {
+        "type": "SHARE",
+        "score": 0.901,
+        "accepted": true,
+        "bbox": {
+          "x": 256,
+          "y": 266,
+          "width": 43,
+          "height": 28
+        }
+      }
+    ]
+  },
+  "mainActionRow": {
+    "status": "MAIN_ACTION_ROW_CANDIDATE",
+    "frameId": "frame-005_mwdcf2hj",
+    "frameIndex": 5,
+    "anchors": [
+      {
+        "type": "LIKE",
+        "frameId": "frame-005_mwdcf2hj",
+        "frameIndex": 5,
+        "bbox": {
+          "x": 138,
+          "y": 267,
+          "width": 42,
+          "height": 26
+        },
+        "score": 1,
+        "templateId": "vr_mwda0xy5",
+        "candidateRank": 0
+      },
+      {
+        "type": "COMMENT",
+        "frameId": "frame-005_mwdcf2hj",
+        "frameIndex": 5,
+        "bbox": {
+          "x": 199,
+          "y": 265,
+          "width": 41,
+          "height": 31
+        },
+        "score": 1,
+        "templateId": "vr_mwda26fu",
+        "candidateRank": 0
+      },
+      {
+        "type": "SHARE",
+        "frameId": "frame-005_mwdcf2hj",
+        "frameIndex": 5,
+        "bbox": {
+          "x": 256,
+          "y": 266,
+          "width": 43,
+          "height": 28
+        },
+        "score": 0.901,
+        "templateId": "vr_mwda2d66",
+        "candidateRank": 0
+      }
+    ],
+    "bbox": {
+      "x": 138,
+      "y": 265,
+      "width": 161,
+      "height": 31
+    },
+    "meanScore": 0.967,
+    "types": [
+      "LIKE",
+      "COMMENT",
+      "SHARE"
+    ],
+    "strength": "STRONG",
+    "orderOk": true,
+    "observedScrollPx": 400,
+    "notes": [
+      "types=LIKE,COMMENT,SHARE",
+      "strength=STRONG",
+      "orderOk=true"
+    ]
+  },
+  "containerStatus": "AMBIGUOUS",
+  "containerBounds": null,
+  "notes": [
+    "Main action row on frame-005_mwdcf2hj (types LIKE,COMMENT,SHARE) retained as candidate.",
+    "Modal horizontal edges not confirmed — container AMBIGUOUS; Confirm Action Row to proceed.",
+    "Phase A: MAIN_ACTION_ROW_CANDIDATE ready for confirm."
+  ],
+  "phaseA": "PASS"
+}
