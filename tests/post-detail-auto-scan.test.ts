@@ -449,7 +449,9 @@ test("Step 2 UI wires Auto Scan pipeline and Step 3 gate needs container", () =>
     "src/renderer/post-detail-collector/PostDetailCollectorPage.tsx",
   );
   assert.match(page, /containerResult/);
-  assert.match(page, /canEnterStep3/);
+  assert.match(step2, /postDetailProbeParents/);
+  assert.match(step2, /postDetailHighlightActionAnchors/);
+  assert.match(step2, /Confirm Parent/);
 });
 
 test("Action Row presentation scales real frame geometry and never leaks across frames", async () => {

@@ -330,3 +330,68 @@ export type PostDetailHtmlExtractionResult = {
   diagnostics: string[];
   evidencePaths?: Record<string, string>;
 };
+
+export type PostDetailParentCandidate = {
+  index: number;
+  parentLevel: number;
+  descendantCount: number;
+  urlMatchCount: number;
+  similarRowCount: number;
+  htmlSize: number;
+  fingerprint: string;
+  rect: Rect;
+  tag: string;
+  role: string | null;
+  status: "CANDIDATE";
+  urlCandidates: Array<{ href: string; reason: string }>;
+};
+
+export type PostDetailParentProbeInput = {
+  sourceUrl: string;
+  expectedWebContentsId: number;
+  frameId: string;
+  runId: string;
+  screenshot: { width: number; height: number };
+  anchors: PostDetailVisualAnchor[];
+  expectedParentLevel?: number | null;
+};
+
+export type PostDetailParentProbeResult = {
+  status: "FOUND" | "AMBIGUOUS" | "STALE_VISUAL_ANCHOR" | "URL_NOT_FOUND" | "WEB_CONTENTS_CHANGED";
+  currentUrl: string;
+  postId: string | null;
+  platform?: string;
+  actionRow: { tag: string; rect: Rect } | null;
+  actionRowHtml: string;
+  actionRowSignature: Record<string, unknown> | null;
+  urlCandidates: Array<{ href: string; reason: string }>;
+  levels: Array<Omit<PostDetailParentCandidate, "index" | "status"> & { status: "SCANNED" | "CANDIDATE" | "BOUNDARY_CROSSED" }>;
+  candidates: PostDetailParentCandidate[];
+  selectedIndex: number | null;
+  stopReason: "SECOND_ACTION_ROW_FOUND" | "NO_SECOND_ACTION_ROW" | "STALE_VISUAL_ANCHOR" | "NO_POST_ID";
+  boundaryLevel: number | null;
+  expectedParentLevel?: number | null;
+  calibrationMode?: "EXACT" | "EXPANDED_PLUS_MINUS_ONE" | "FULL_PROGRESSIVE";
+  diagnostics: string[];
+};
+
+export type PostDetailActionAnchorProbeResult = {
+  status: "FOUND" | "STALE_VISUAL_ANCHOR" | "AMBIGUOUS" | "WEB_CONTENTS_CHANGED";
+  hits: Array<{ type: PostDetailAnchorType; point: { x: number; y: number }; tag: string | null; role: string | null; rect: Rect | null; text: string }>;
+  actionRow: { tag: string; role: string | null; rect: Rect; descendantCount: number } | null;
+  diagnostics: string[];
+};
+
+export type PostDetailParentConfirmation = {
+  runId: string;
+  postId: string;
+  platform: string;
+  confirmedAt: string;
+  parentLevel: number;
+  actionRowSignature: Record<string, unknown>;
+  actionRowHtml: string;
+  stopReason: PostDetailParentProbeResult["stopReason"];
+  boundaryLevel: number | null;
+  levelsInspected: number;
+  candidate: PostDetailParentCandidate;
+};

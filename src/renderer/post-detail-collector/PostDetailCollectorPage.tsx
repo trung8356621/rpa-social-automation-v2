@@ -10,7 +10,6 @@ import {
   releaseCollectorHostOwner,
 } from "../collectors/collector-host-owner";
 import { BrowserCaptureStep } from "./BrowserCaptureStep";
-import { HtmlExtractionStep } from "./HtmlExtractionStep";
 import { VisualRegionStep } from "./VisualRegionStep";
 import { usePostDetailCollectorStore } from "./store";
 import type { BrowserProbe, Invoke, PostDetailStep } from "./types";
@@ -18,13 +17,6 @@ import "./post-detail-collector.css";
 
 function canEnterStep2(refs: number): boolean {
   return refs > 0;
-}
-
-function canEnterStep3(state: {
-  containerResult: { mainActionRow?: { status: string } | null } | null;
-  htmlExtraction?: unknown;
-}): boolean {
-  return state.containerResult?.mainActionRow?.status === "CONFIRMED" || Boolean(state.htmlExtraction);
 }
 
 export function PostDetailCollectorPage({ invoke, state: parentState }: { invoke: Invoke; state?: State | null }) {
@@ -74,7 +66,7 @@ export function PostDetailCollectorPage({ invoke, state: parentState }: { invoke
 
   const goToStep = (step: PostDetailStep) => {
     if (step === 2 && !canEnterStep2(state.visualReferences.length)) return;
-    if (step === 3 && !canEnterStep3(state)) return;
+    if (step === 3) return;
     if (step !== 1 && step !== 2) {
       void collectorReportBrowserHost(invoke, null);
       void collectorSetBrowserVisible(invoke, false);
@@ -84,27 +76,6 @@ export function PostDetailCollectorPage({ invoke, state: parentState }: { invoke
 
   const connected = Boolean(probe?.available) && !probeError;
   const step2Ready = canEnterStep2(state.visualReferences.length);
-  const step3Ready = canEnterStep3(state);
-
-  const extractAbove = async () => {
-    const row = state.containerResult?.mainActionRow;
-    const frame = state.scanFrames.find((item) => item.frameId === row?.frameId);
-    const live = await refreshProbe();
-    if (!row || row.status !== "CONFIRMED" || !frame || !live || !state.runId) return;
-    const htmlExtraction = await invoke<import("../../shared/post-detail-collector/types").PostDetailHtmlExtractionResult>({
-      type: "postDetailExtractAbove",
-      input: {
-        runId: state.runId,
-        expectedUrl: live.url,
-        expectedWebContentsId: live.webContentsId,
-        frameId: frame.frameId,
-        frameIndex: frame.frameIndex,
-        screenshot: { width: frame.width, height: frame.height },
-        anchors: row.anchors,
-      },
-    });
-    updateStore({ htmlExtraction, step: 3 });
-  };
 
   return (
     <section className="app-page post-detail-collector-page" aria-label="Post Detail Collector">
@@ -134,16 +105,7 @@ export function PostDetailCollectorPage({ invoke, state: parentState }: { invoke
             <span className="pdc-step-text">Visual Region</span>
           </button>
           <span className="pdc-step-arrow">→</span>
-          <button
-            type="button"
-            className={`pdc-step-pill ${state.step === 3 ? "active" : ""}`}
-            disabled={!step3Ready && state.step !== 3}
-            title={step3Ready ? undefined : "Cần OCR content ROI + screenshot + match/manual confirm"}
-            onClick={() => goToStep(3)}
-          >
-            <span className="pdc-step-num">3</span>
-            <span className="pdc-step-text">HTML Extraction</span>
-          </button>
+          <span className="pdc-step-pill" aria-disabled="true"><span className="pdc-step-num">3</span><span className="pdc-step-text">Parent Highlight POC</span></span>
         </nav>
       </div>
 
@@ -173,6 +135,7 @@ export function PostDetailCollectorPage({ invoke, state: parentState }: { invoke
             invoke={invoke}
             state={parentState}
             sourceUrl={state.sourceUrl}
+            runId={state.runId}
             visualReferences={state.visualReferences}
             containerResult={state.containerResult}
             scanFrames={state.scanFrames}
@@ -187,11 +150,7 @@ export function PostDetailCollectorPage({ invoke, state: parentState }: { invoke
             onRunId={(runId) => updateStore({ runId })}
             onProbeRefresh={refreshProbe}
             onBack={() => goToStep(1)}
-            onNext={() => void extractAbove()}
           />
-        )}
-        {state.step === 3 && (
-          <HtmlExtractionStep result={state.htmlExtraction} onBack={() => goToStep(2)} />
         )}
       </div>
     </section>

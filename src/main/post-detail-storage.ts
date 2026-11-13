@@ -14,6 +14,7 @@ import {
   POST_DETAIL_SCHEMA_VERSION,
   type PostDetailLoadRunResult,
   type PostDetailHtmlExtractionResult,
+  type PostDetailParentConfirmation,
   type PostDetailOcrFrame,
   type PostDetailRunManifest,
   type PostDetailSaveAutoScanInput,
@@ -71,6 +72,15 @@ export class PostDetailRunStorage {
       diagnostics: result.diagnostics,
     }, null, 2));
     return paths;
+  }
+
+  async saveParentConfirmation(input: PostDetailParentConfirmation): Promise<string> {
+    const dir = path.join(this.getRunDir(input.runId), "parent-probe");
+    await mkdir(dir, { recursive: true });
+    const stamp = input.confirmedAt.replace(/[:.]/g, "-");
+    const target = path.join(dir, `confirmed-${stamp}.json`);
+    await writeFileAtomic(target, JSON.stringify(input, null, 2));
+    return target;
   }
 
   /**

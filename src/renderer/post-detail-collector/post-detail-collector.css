@@ -676,3 +676,7 @@
 }
 .pdc-direction-panel { display: grid; gap: 8px; margin-top: 12px; }
 .pdc-code-preview { max-height: 360px; overflow: auto; white-space: pre-wrap; overflow-wrap: anywhere; background: #07140f; border: 1px solid #23483a; border-radius: 8px; padding: 12px; color: #d7f7e9; font-size: 12px; }
+.pdc-parent-table-wrap { max-height: 240px; overflow: auto; }
+.pdc-parent-table { width: 100%; border-collapse: collapse; font-size: 11px; }
+.pdc-parent-table th, .pdc-parent-table td { border: 1px solid #23483a; padding: 4px 6px; text-align: left; }
+.pdc-parent-table tr.selected { background: rgba(34, 197, 94, .18); }

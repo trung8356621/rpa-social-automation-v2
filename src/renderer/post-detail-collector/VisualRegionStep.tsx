@@ -5,6 +5,8 @@ import { clientToImageCoords } from "../../shared/collectors/roi-preview-interac
 import { assertCaptureFromSocialPage } from "../../shared/post-detail-collector/social-url";
 import type {
   PostDetailContainerResult,
+  PostDetailActionAnchorProbeResult,
+  PostDetailParentProbeResult,
   PostDetailScanFrame,
   VisualReferenceSample,
 } from "../../shared/post-detail-collector/types";
@@ -36,6 +38,7 @@ type Props = {
   invoke: Invoke;
   state?: State | null;
   sourceUrl: string;
+  runId: string | null;
   visualReferences: VisualReferenceSample[];
   containerResult: PostDetailContainerResult | null;
   scanFrames: PostDetailScanFrame[];
@@ -57,7 +60,6 @@ type Props = {
   onRunId: (runId: string) => void;
   onProbeRefresh: () => Promise<BrowserProbe | null>;
   onBack: () => void;
-  onNext: () => void;
 };
 
 type DragState = {
@@ -73,6 +75,7 @@ export function VisualRegionStep({
   invoke,
   state,
   sourceUrl,
+  runId,
   visualReferences,
   containerResult,
   scanFrames,
@@ -87,7 +90,6 @@ export function VisualRegionStep({
   onRunId,
   onProbeRefresh,
   onBack,
-  onNext,
 }: Props) {
   const electron = isElectronBrowserCoreAvailable();
   const [progress, setProgress] = useState<AutoScanProgress>({
@@ -101,6 +103,14 @@ export function VisualRegionStep({
   const [error, setError] = useState("");
   const [frameIndex, setFrameIndex] = useState(0);
   const [manualMode, setManualMode] = useState(false);
+  const [parentProbe, setParentProbe] = useState<PostDetailParentProbeResult | null>(null);
+  const [actionAnchorProbe, setActionAnchorProbe] = useState<PostDetailActionAnchorProbeResult | null>(null);
+  const [parentIndex, setParentIndex] = useState(0);
+  const [parentConfirmed, setParentConfirmed] = useState(false);
+  const [confirmedParentLevel, setConfirmedParentLevel] = useState<number | null>(() => {
+    const raw = typeof localStorage === "undefined" ? null : localStorage.getItem("rpa:pdc:parent-level");
+    return raw !== null && Number.isInteger(Number(raw)) ? Number(raw) : null;
+  });
   const [drag, setDrag] = useState<DragState>();
   const [hostClient, setHostClient] = useState<HostClient | null>(null);
   const cancelRef = useRef(false);
@@ -111,6 +121,10 @@ export function VisualRegionStep({
   const hostRef = useRef<HTMLDivElement>(null);
   const previewScrollRef = useRef<HTMLDivElement>(null);
   const dragRef = useRef<DragState | undefined>(undefined);
+
+  useEffect(() => () => {
+    void invoke({ type: "postDetailClearParentHighlight" });
+  }, [invoke]);
 
   const frames = scanFrames;
   const active = frames[frameIndex] || frames[frames.length - 1];
@@ -511,6 +525,77 @@ export function VisualRegionStep({
       ? containerResult?.containerBounds || contentRoi
       : null;
 
+  async function probeParents() {
+    if (!mainRow || mainRow.status !== "CONFIRMED") return;
+    const frame = frames.find((item) => item.frameId === mainRow.frameId);
+    const probe = await onProbeRefresh();
+    if (!frame || !probe) return;
+    const result = await invoke<PostDetailParentProbeResult>({
+      type: "postDetailProbeParents",
+      input: {
+        sourceUrl,
+        runId: runId || `parent_${Date.now()}`,
+        expectedWebContentsId: probe.webContentsId,
+        frameId: frame.frameId,
+        screenshot: { width: frame.width, height: frame.height },
+        anchors: mainRow.anchors,
+        expectedParentLevel: confirmedParentLevel,
+      },
+    });
+    setParentProbe(result);
+    setParentIndex(result.selectedIndex ?? 0);
+    setParentConfirmed(false);
+  }
+
+  async function highlightActionAnchors() {
+    if (!mainRow || mainRow.status !== "CONFIRMED") return;
+    const frame = frames.find((item) => item.frameId === mainRow.frameId);
+    const probe = await onProbeRefresh();
+    if (!frame || !probe) return;
+    const result = await invoke<PostDetailActionAnchorProbeResult>({
+      type: "postDetailHighlightActionAnchors",
+      input: {
+        sourceUrl,
+        runId: runId || `parent_${Date.now()}`,
+        expectedWebContentsId: probe.webContentsId,
+        frameId: frame.frameId,
+        screenshot: { width: frame.width, height: frame.height },
+        anchors: mainRow.anchors,
+        expectedParentLevel: confirmedParentLevel,
+      },
+    });
+    setActionAnchorProbe(result);
+    setParentProbe(null);
+    setParentConfirmed(false);
+  }
+
+  async function selectParent(index: number, confirm = false) {
+    if (!parentProbe?.candidates.length) return;
+    const next = Math.max(0, Math.min(parentProbe.candidates.length - 1, index));
+    await invoke({ type: "postDetailSelectParent", index: next, confirm });
+    setParentIndex(next);
+    if (confirm) {
+      const candidate = parentProbe.candidates[next];
+      const confirmedAt = new Date().toISOString();
+      await invoke({ type: "postDetailConfirmParent", input: {
+        runId: runId || `parent_${Date.now()}`,
+        postId: parentProbe.postId || "unknown",
+        platform: parentProbe.platform || "unknown",
+        confirmedAt,
+        parentLevel: candidate.parentLevel,
+        actionRowSignature: parentProbe.actionRowSignature || {},
+        actionRowHtml: parentProbe.actionRowHtml,
+        stopReason: parentProbe.stopReason,
+        boundaryLevel: parentProbe.boundaryLevel,
+        levelsInspected: parentProbe.levels.length,
+        candidate,
+      }});
+      localStorage.setItem("rpa:pdc:parent-level", String(candidate.parentLevel));
+      setConfirmedParentLevel(candidate.parentLevel);
+    }
+    setParentConfirmed(confirm);
+  }
+
   if (!electron) {
     return (
       <div className="pdc-alert pdc-alert-warn">{BROWSER_CORE_UNAVAILABLE}</div>
@@ -877,12 +962,24 @@ export function VisualRegionStep({
               "Chưa có diagnostics."}
           </p>
           <div className="pdc-direction-panel">
-            <button type="button" className="pdc-btn pdc-btn-primary" disabled={!canNext || running} title={canNext ? undefined : "Cần Confirm Action Row"} onClick={onNext}>
-              Extract Above — Post Detail →
+            <button type="button" className="pdc-btn pdc-btn-primary" disabled={!canNext || running} title={canNext ? undefined : "Cần Confirm Action Row"} onClick={() => void highlightActionAnchors()}>
+              1. Highlight Like / Comment / Share
             </button>
-            <button type="button" className="pdc-btn pdc-btn-secondary" disabled title="Coming later">
-              Extract Below — Comments (Coming later)
+            {actionAnchorProbe && <div className={`pdc-alert ${actionAnchorProbe.status === "FOUND" ? "pdc-alert-ok" : "pdc-alert-warn"}`}><strong>DOM Anchors: {actionAnchorProbe.status}</strong>{actionAnchorProbe.hits.map(hit => <div key={hit.type}>{hit.type}: {hit.tag || "—"} {hit.role || ""} · rect {JSON.stringify(hit.rect)} · “{hit.text}”</div>)}{actionAnchorProbe.actionRow && <div>Action Row root: {actionAnchorProbe.actionRow.tag} · descendants {actionAnchorProbe.actionRow.descendantCount} · rect {JSON.stringify(actionAnchorProbe.actionRow.rect)}</div>}{actionAnchorProbe.diagnostics.map(x => <div key={x}>{x}</div>)}</div>}
+            <button type="button" className="pdc-btn pdc-btn-primary" disabled={actionAnchorProbe?.status !== "FOUND" || running} title={actionAnchorProbe?.status === "FOUND" ? undefined : "Highlight DOM anchors trước"} onClick={() => void probeParents()}>
+              2. Find & Highlight Parent Containers
             </button>
+            {parentProbe && <div className="pdc-parent-probe-panel">
+              <strong>{parentProbe.status} · URL matches {parentProbe.urlCandidates.length} · levels {parentProbe.levels.length} · stop={parentProbe.stopReason} · boundary={parentProbe.boundaryLevel ?? "none"} · calibration={parentProbe.calibrationMode || "FULL_PROGRESSIVE"}</strong>
+              {parentProbe.candidates.length > 0 && <>
+                <div className="pdc-frame-nav"><button type="button" className="pdc-btn pdc-btn-tiny" disabled={parentIndex === 0} onClick={() => void selectParent(parentIndex - 1)}>← Previous</button><span>Candidate {parentIndex + 1}/{parentProbe.candidates.length}</span><button type="button" className="pdc-btn pdc-btn-tiny" disabled={parentIndex >= parentProbe.candidates.length - 1} onClick={() => void selectParent(parentIndex + 1)}>Next →</button></div>
+                <div className="pdc-parent-table-wrap"><table className="pdc-parent-table"><thead><tr><th>Level</th><th>Descendants</th><th>URL Matches</th><th>Similar Rows</th><th>HTML Size</th><th>Status</th></tr></thead><tbody>{parentProbe.levels.map(level => <tr key={level.parentLevel} className={level.parentLevel === parentProbe.candidates[parentIndex]?.parentLevel ? "selected" : ""}><td>{level.parentLevel}</td><td>{level.descendantCount}</td><td>{level.urlMatchCount}</td><td>{level.similarRowCount}</td><td>{level.htmlSize}</td><td>{level.status}</td></tr>)}</tbody></table></div>
+                <dl className="pdc-kv"><dt>Parent</dt><dd>{parentProbe.candidates[parentIndex]?.tag} · level {parentProbe.candidates[parentIndex]?.parentLevel} · descendants {parentProbe.candidates[parentIndex]?.descendantCount} · HTML {parentProbe.candidates[parentIndex]?.htmlSize} bytes</dd><dt>URLs</dt><dd>{parentProbe.candidates[parentIndex]?.urlCandidates.map(x => `${x.reason}: ${x.href}`).join(" · ")}</dd><dt>Fingerprint</dt><dd>{parentProbe.candidates[parentIndex]?.fingerprint}</dd></dl>
+                <button type="button" className="pdc-btn pdc-btn-primary" disabled={parentConfirmed} onClick={() => void selectParent(parentIndex, true)}>{parentConfirmed ? "Parent Confirmed" : "Confirm Parent"}</button>
+                {confirmedParentLevel !== null && <p className="pdc-panel-desc">Confirmed Level: {confirmedParentLevel} · Next Search Range: {Math.max(0, confirmedParentLevel - 1)} ... {confirmedParentLevel + 1}</p>}
+              </>}
+              {parentProbe.diagnostics.map((item) => <p key={item} className="pdc-panel-desc">{item}</p>)}
+            </div>}
           </div>
         </div>
       </div>

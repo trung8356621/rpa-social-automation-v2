@@ -12,6 +12,8 @@ import type { VisualMatchSaveFrameAttemptInput } from "./visual-match-lab-storag
 import type {
   PostDetailSaveAutoScanInput,
   PostDetailExtractAboveInput,
+  PostDetailParentProbeInput,
+  PostDetailParentConfirmation,
   PostDetailSaveRunInput,
 } from "./post-detail-collector/types.js";
 export type { ScriptReleaseManifest } from "./script-release.js";
@@ -534,6 +536,11 @@ export type Command =
   | { type: "postDetailSaveRun"; input: PostDetailSaveRunInput }
   | { type: "postDetailSaveAutoScan"; input: PostDetailSaveAutoScanInput }
   | { type: "postDetailExtractAbove"; input: PostDetailExtractAboveInput }
+  | { type: "postDetailProbeParents"; input: PostDetailParentProbeInput }
+  | { type: "postDetailHighlightActionAnchors"; input: PostDetailParentProbeInput }
+  | { type: "postDetailSelectParent"; index: number; confirm?: boolean }
+  | { type: "postDetailConfirmParent"; input: PostDetailParentConfirmation }
+  | { type: "postDetailClearParentHighlight" }
   | { type: "postDetailListRuns" }
   | { type: "postDetailLoadRun"; runId: string }
   /** Lightweight BrowserCore probe — no BROWSER_NOT_FACEBOOK guard (navigate may start from any page). */
