@@ -408,12 +408,22 @@ export type PostDetailParentConfig = {
   role?: string | null;
   descendantCount?: number;
   actionRowSignature?: Record<string, unknown>;
+  actionRowLocator?: {
+    version: 1;
+    strategy: "POST_IDENTITY_ANCHOR_RELATIVE_PATH";
+    anchorReason: string;
+    anchorUp: number;
+    rowPath: number[];
+    rowTag: string;
+    rowRole: string | null;
+  };
   updatedAt: string;
 };
 
 export type PostDetailSavedParentResolution = {
-  status: "PARENT_MATCHED" | "REMATCH_REQUIRED" | "NOT_CONFIGURED";
+  status: "PARENT_MATCHED" | "REMATCH_REQUIRED" | "NOT_CONFIGURED" | "BROWSER_NOT_READY";
   innerHTML: string;
   rect: Rect | null;
+  failureCode?: "BROWSER_NOT_READY" | "ACTION_ROW_SELECTOR_NOT_FOUND" | "ACTION_ROW_AMBIGUOUS" | "ACTION_ROW_INVALID" | "PARENT_LEVEL_NOT_FOUND" | "POST_IDENTITY_MISMATCH";
   diagnostics: string[];
 };

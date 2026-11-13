@@ -567,7 +567,7 @@ export function VisualRegionStep({
   async function selectParent(index: number, confirm = false) {
     if (!parentProbe?.candidates.length) return;
     const next = Math.max(0, Math.min(parentProbe.candidates.length - 1, index));
-    await invoke({ type: "postDetailSelectParent", index: next, confirm });
+    const selection = await invoke<{ ok: boolean; actionRowLocator?: PostDetailParentConfig["actionRowLocator"] }>({ type: "postDetailSelectParent", index: next, confirm });
     setParentIndex(next);
     if (confirm) {
       const candidate = parentProbe.candidates[next];
@@ -587,7 +587,8 @@ export function VisualRegionStep({
       }});
       localStorage.setItem(`rpa:pdc:parent-level:${parentProbe.platform || "unknown"}`, String(candidate.parentLevel));
       setConfirmedParentLevel(candidate.parentLevel);
-      await onParentConfigured({ version: 1, platform: parentProbe.platform || "unknown", parentLevel: candidate.parentLevel, locatorStrategy: "POST_IDENTITY_ACTION_ROW_LEVEL", updatedAt: confirmedAt });
+      if (!selection.actionRowLocator) throw new Error("Confirmed Action Row locator could not be created.");
+      await onParentConfigured({ version: 1, platform: parentProbe.platform || "unknown", parentLevel: candidate.parentLevel, locatorStrategy: "POST_IDENTITY_ACTION_ROW_LEVEL", actionRowLocator: selection.actionRowLocator, updatedAt: confirmedAt });
     }
     setParentConfirmed(confirm);
   }

@@ -57,7 +57,7 @@ export function SavedParentHtmlStep({ invoke, result, onRematch }: { invoke: Inv
 
   return <div className="pdc-step">
     <div className="pdc-section-header"><div><h2>Step 3 — Parent DOM Explorer</h2><p className="pdc-subtitle">Tree chỉ chứa element descendants của Parent đã xác thực.</p></div><button type="button" className="pdc-btn pdc-btn-secondary" onClick={rematch}>Rematch Parent</button></div>
-    <div className={`pdc-alert ${status === "PARENT_MATCHED" ? "pdc-alert-ok" : "pdc-alert-warn"}`}>{status === "PARENT_MATCHED" ? "Parent Matched" : status === "REMATCH_REQUIRED" ? "Rematch Required" : "Not Configured"}</div>
+    <div className={`pdc-alert ${status === "PARENT_MATCHED" ? "pdc-alert-ok" : "pdc-alert-warn"}`}>{status === "PARENT_MATCHED" ? "Parent Matched" : status === "REMATCH_REQUIRED" ? "Rematch Required" : status === "BROWSER_NOT_READY" ? "Browser Not Ready" : "Not Configured"}</div>
     {result?.diagnostics.map(item => <p key={item} className="pdc-panel-desc">{item}</p>)}
     {status === "PARENT_MATCHED" && <div className="pdc-dom-workspace"><div ref={hostRef} className="pdc-browser-host pdc-dom-browser" data-browser-core-host="" /><div className="pdc-dom-panel">
       <div className="pdc-btn-row"><button type="button" className={`pdc-btn pdc-btn-tiny ${tab === "explorer" ? "active" : ""}`} onClick={() => setTab("explorer")}>DOM Explorer</button><button type="button" className={`pdc-btn pdc-btn-tiny ${tab === "raw" ? "active" : ""}`} onClick={() => setTab("raw")}>Raw HTML</button></div>

@@ -66,13 +66,19 @@ export function PostDetailCollectorPage({ invoke, state: parentState }: { invoke
       const config = state.parentConfigs[platform];
       if (!config) return;
       let savedParentResolution: import("../../shared/post-detail-collector/types").PostDetailSavedParentResolution | null = null;
-      for (let attempt = 0; attempt < 5; attempt++) {
+      for (let attempt = 0; attempt < 20; attempt++) {
         if (navigationEpoch.current !== startedAtEpoch) return;
         savedParentResolution = await invoke<import("../../shared/post-detail-collector/types").PostDetailSavedParentResolution>({ type: "postDetailResolveSavedParent", config });
         if (savedParentResolution.status === "PARENT_MATCHED") break;
-        if (attempt < 4) await new Promise((resolve) => setTimeout(resolve, 600));
+        if (savedParentResolution.status !== "BROWSER_NOT_READY") break;
+        setConnStatus(`Đang chờ DOM bài viết render · lần ${attempt + 1}/20`);
+        if (attempt < 19) await new Promise((resolve) => setTimeout(resolve, 750));
       }
       if (!savedParentResolution || navigationEpoch.current !== startedAtEpoch) return;
+      if (savedParentResolution.status === "BROWSER_NOT_READY") {
+        setConnStatus(`BrowserCore chưa render đủ DOM · ${savedParentResolution.diagnostics.join(" · ")}`);
+        return;
+      }
       if (savedParentResolution.status !== "PARENT_MATCHED") {
         updateStore({ savedParentResolution });
         setConnStatus(`Rematch Required · ${savedParentResolution.diagnostics.join(" · ")}`);

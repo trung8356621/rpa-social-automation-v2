@@ -55,8 +55,11 @@ test("saved parent resolver uses action row plus confirmed level and supports le
   assert.doesNotThrow(() => new Function(`return ${source}`));
   assert.match(source, /config\.parentLevel/);
   assert.match(source, /__rpaPdcActionProbe/);
-  assert.match(source, /Action Row or saved ancestor level could not be resolved/);
-  assert.match(source, /innerHTML:el\.innerHTML/);
+  assert.match(source, /ACTION_ROW_SELECTOR_NOT_FOUND/);
+  assert.match(source, /ACTION_ROW_AMBIGUOUS/);
+  assert.match(source, /PARENT_LEVEL_NOT_FOUND/);
+  assert.match(source, /POST_IDENTITY_MISMATCH/);
+  assert.match(source, /innerHTML:parent\.innerHTML/);
   assert.doesNotMatch(source, /outerHTML/);
   assert.doesNotMatch(source, /config\.fingerprint|config\.actionRowSignature/);
   const page = readFileSync("src/renderer/post-detail-collector/PostDetailCollectorPage.tsx", "utf8");
@@ -74,4 +77,22 @@ test("saved parent resolver uses action row plus confirmed level and supports le
   assert.match(highlight, /parent\.contains\(node\)/);
   assert.match(highlight, /__rpaPdcExplorerHighlight/);
   assert.match(highlight, /requestAnimationFrame/);
+});
+
+test("saved action row locator is post-relative and remains optional for legacy configs", () => {
+  const located = buildResolveSavedParentJs({
+    version: 1,
+    platform: "facebook",
+    parentLevel: 26,
+    locatorStrategy: "POST_IDENTITY_ACTION_ROW_LEVEL",
+    actionRowLocator: { version: 1, strategy: "POST_IDENTITY_ANCHOR_RELATIVE_PATH", anchorReason: "facebook-permalink-path", anchorUp: 4, rowPath: [1, 2], rowTag: "DIV", rowRole: null },
+    updatedAt: new Date(0).toISOString(),
+  });
+  assert.doesNotThrow(() => new Function(`return ${located}`));
+  assert.match(located, /config\.actionRowLocator/);
+  assert.match(located, /locator\.anchorUp/);
+  assert.match(located, /locator\.rowPath/);
+  assert.match(located, /validRow/);
+  assert.match(located, /common\.querySelectorAll/);
+  assert.match(located, /depth\(common,candidate\)===locator\.rowPath\.length/);
 });
