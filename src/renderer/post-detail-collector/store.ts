@@ -26,6 +26,7 @@ function loadPersisted(): Partial<PostDetailCollectorState> {
       })),
       contentRoi: parsed.contentRoi ?? null,
       selectedFrameIndex: parsed.selectedFrameIndex ?? 0,
+      parentConfigs: parsed.parentConfigs ?? {},
     };
   } catch {
     return {};
@@ -49,6 +50,8 @@ const INITIAL: PostDetailCollectorState = {
   selectedFrameIndex: persisted.selectedFrameIndex ?? 0,
   viewMode: "text",
   htmlExtraction: null,
+  parentConfigs: persisted.parentConfigs ?? {},
+  savedParentResolution: null,
 };
 
 let globalState: PostDetailCollectorState = { ...INITIAL };
@@ -65,6 +68,7 @@ function persistLightweight(state: PostDetailCollectorState) {
         browserUrl: state.browserUrl,
         contentRoi: state.contentRoi,
         selectedFrameIndex: state.selectedFrameIndex,
+        parentConfigs: state.parentConfigs,
         // Persist OCR text + metadata; strip huge screenshots from localStorage.
         frames: state.frames.map((f: PostDetailOcrFrame) => ({
           ...f,

@@ -10,6 +10,7 @@ import {
   releaseCollectorHostOwner,
 } from "../collectors/collector-host-owner";
 import { BrowserCaptureStep } from "./BrowserCaptureStep";
+import { SavedParentHtmlStep } from "./SavedParentHtmlStep";
 import { VisualRegionStep } from "./VisualRegionStep";
 import { usePostDetailCollectorStore } from "./store";
 import type { BrowserProbe, Invoke, PostDetailStep } from "./types";
@@ -24,6 +25,7 @@ export function PostDetailCollectorPage({ invoke, state: parentState }: { invoke
   const [probe, setProbe] = useState<BrowserProbe | null>(null);
   const [probeError, setProbeError] = useState("");
   const [connStatus, setConnStatus] = useState("Đang kiểm tra BrowserCore...");
+  const autoResolveStarted = React.useRef(false);
 
   const refreshProbe = React.useCallback(async () => {
     if (!isElectronBrowserCoreAvailable()) {
@@ -54,7 +56,18 @@ export function PostDetailCollectorPage({ invoke, state: parentState }: { invoke
   // Probe only. Host clear is ownership-gated so Step remounts / sibling collectors are not wiped.
   useEffect(() => {
     const { ownerId } = claimCollectorHostOwner("pdc-page");
-    void refreshProbe();
+    void (async () => {
+      const live = await refreshProbe();
+      if (!live || autoResolveStarted.current) return;
+      autoResolveStarted.current = true;
+      const platform = /threads\.(?:com|net)/i.test(live.url) ? "threads" : "facebook";
+      const config = state.parentConfigs[platform];
+      if (!config) return;
+      const savedParentResolution = await invoke<import("../../shared/post-detail-collector/types").PostDetailSavedParentResolution>({ type: "postDetailResolveSavedParent", config });
+      await collectorReportBrowserHost(invoke, null);
+      await collectorSetBrowserVisible(invoke, false);
+      updateStore({ savedParentResolution, step: 3 });
+    })();
     return () => {
       releaseCollectorHostOwner(ownerId, () => {
         void collectorReportBrowserHost(invoke, null);
@@ -66,7 +79,7 @@ export function PostDetailCollectorPage({ invoke, state: parentState }: { invoke
 
   const goToStep = (step: PostDetailStep) => {
     if (step === 2 && !canEnterStep2(state.visualReferences.length)) return;
-    if (step === 3) return;
+    if (step === 3 && !state.savedParentResolution) return;
     if (step !== 1 && step !== 2) {
       void collectorReportBrowserHost(invoke, null);
       void collectorSetBrowserVisible(invoke, false);
@@ -105,7 +118,7 @@ export function PostDetailCollectorPage({ invoke, state: parentState }: { invoke
             <span className="pdc-step-text">Visual Region</span>
           </button>
           <span className="pdc-step-arrow">→</span>
-          <span className="pdc-step-pill" aria-disabled="true"><span className="pdc-step-num">3</span><span className="pdc-step-text">Parent Highlight POC</span></span>
+          <button type="button" className={`pdc-step-pill ${state.step === 3 ? "active" : ""}`} disabled={!state.savedParentResolution} onClick={() => goToStep(3)}><span className="pdc-step-num">3</span><span className="pdc-step-text">Parent HTML</span></button>
         </nav>
       </div>
 
@@ -150,8 +163,16 @@ export function PostDetailCollectorPage({ invoke, state: parentState }: { invoke
             onRunId={(runId) => updateStore({ runId })}
             onProbeRefresh={refreshProbe}
             onBack={() => goToStep(1)}
+            onParentConfigured={async (config) => {
+              const parentConfigs = { ...state.parentConfigs, [config.platform]: config };
+              const savedParentResolution = await invoke<import("../../shared/post-detail-collector/types").PostDetailSavedParentResolution>({ type: "postDetailResolveSavedParent", config });
+              await collectorReportBrowserHost(invoke, null);
+              await collectorSetBrowserVisible(invoke, false);
+              updateStore({ parentConfigs, savedParentResolution, step: 3 });
+            }}
           />
         )}
+        {state.step === 3 && <SavedParentHtmlStep result={state.savedParentResolution} onRematch={() => updateStore({ step: 2 })} />}
       </div>
     </section>
   );

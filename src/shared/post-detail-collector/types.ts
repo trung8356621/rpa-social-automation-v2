@@ -354,6 +354,7 @@ export type PostDetailParentProbeInput = {
   screenshot: { width: number; height: number };
   anchors: PostDetailVisualAnchor[];
   expectedParentLevel?: number | null;
+  debugAnchors?: boolean;
 };
 
 export type PostDetailParentProbeResult = {
@@ -394,4 +395,24 @@ export type PostDetailParentConfirmation = {
   boundaryLevel: number | null;
   levelsInspected: number;
   candidate: PostDetailParentCandidate;
+};
+
+export type PostDetailParentConfig = {
+  version: 1;
+  platform: string;
+  parentLevel: number;
+  fingerprint: string;
+  tag: string;
+  role: string | null;
+  descendantCount: number;
+  locatorStrategy: "POST_IDENTITY_ASCEND_STRUCTURAL";
+  actionRowSignature: Record<string, unknown>;
+  updatedAt: string;
+};
+
+export type PostDetailSavedParentResolution = {
+  status: "PARENT_MATCHED" | "REMATCH_REQUIRED" | "NOT_CONFIGURED";
+  innerHTML: string;
+  rect: Rect | null;
+  diagnostics: string[];
 };

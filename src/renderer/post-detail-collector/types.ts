@@ -4,6 +4,8 @@ import type {
   PostDetailMatchResult,
   PostDetailOcrFrame,
   PostDetailHtmlExtractionResult,
+  PostDetailParentConfig,
+  PostDetailSavedParentResolution,
   PostDetailScanFrame,
   PostDetailStep,
   VisualReferenceSample,
@@ -37,6 +39,8 @@ export type PostDetailCollectorState = {
   selectedFrameIndex: number;
   viewMode: "original" | "crop" | "text";
   htmlExtraction: PostDetailHtmlExtractionResult | null;
+  parentConfigs: Record<string, PostDetailParentConfig>;
+  savedParentResolution: PostDetailSavedParentResolution | null;
 };
 
 export type {

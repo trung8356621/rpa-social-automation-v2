@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
+import { readFileSync } from "node:fs";
 import test from "node:test";
-import { buildPostDetailActionAnchorProbeJs, buildPostDetailParentProbeJs, CLEAR_POST_DETAIL_PARENT_HIGHLIGHT_JS, orderProgressiveCandidates } from "../src/main/post-detail-parent-probe.js";
+import { buildPostDetailActionAnchorProbeJs, buildPostDetailParentProbeJs, buildResolveSavedParentJs, classifyActionControlDescriptor, CLEAR_POST_DETAIL_PARENT_HIGHLIGHT_JS, dedupeNestedActionRows, orderProgressiveCandidates, structuralActionRowsMatch } from "../src/main/post-detail-parent-probe.js";
 
 test("calibration checks exact level before ±1 and full fallback", () => {
   const rows = [{ parentLevel: 7, descendantCount: 900 }, { parentLevel: 8, descendantCount: 100 }, { parentLevel: 9, descendantCount: 800 }, { parentLevel: 12, descendantCount: 1200 }];
@@ -16,9 +17,47 @@ test("progressive probe includes URL queries, second-row stop, root guard and cl
   assert.match(source, /SECOND_ACTION_ROW_FOUND/);
   assert.match(source, /document\.body/);
   assert.match(source, /pointer-events:none/);
+  assert.match(source, /const overlay=document\.createElement/);
+  assert.doesNotMatch(source, /overlays=valid\.map/);
   assert.match(CLEAR_POST_DETAIL_PARENT_HIGHLIGHT_JS, /dispose/);
   const anchorSource = buildPostDetailActionAnchorProbeJs({ sourceUrl: "https://www.facebook.com/groups/g/permalink/42/", runId: "r", expectedWebContentsId: 1, frameId: "f", screenshot: { width: 100, height: 100 }, anchors: [] });
   assert.doesNotThrow(() => new Function(`return ${anchorSource}`));
   assert.match(anchorSource, /elementsFromPoint/);
   assert.match(anchorSource, /pointer-events:none/);
+  assert.match(anchorSource, /debugVisible=Boolean\(input\.debugAnchors\)/);
+  assert.match(anchorSource, /alwaysVisible\|\|debugVisible/);
+});
+
+test("action controls ignore descendant container text and structural rows dedupe nested nodes", () => {
+  assert.equal(classifyActionControlDescriptor({ ariaLabel: "Like" }), "LIKE");
+  assert.equal(classifyActionControlDescriptor({ directText: "Post container", descendantText: "Like Comment Share" } as never), null);
+  const signature = { tag: "DIV", role: "", childCount: 3, svgCount: 3, buttonCount: 3, anchorCount: 0, directPattern: "DIV:|DIV:|DIV:" };
+  assert.equal(structuralActionRowsMatch(signature, { ...signature }), true);
+  const parent: Record<string, string[]> = { original: ["nested"], nested: [], second: [], third: [] };
+  const rows = dedupeNestedActionRows("original", ["nested", "second", "second", "third"], (a, b) => parent[a]?.includes(b) || false);
+  assert.deepEqual(rows, ["original", "second", "third"]);
+});
+
+test("Confirm Action Row starts one controlled DOM-to-parent pipeline without technical buttons", () => {
+  const ui = readFileSync("src/renderer/post-detail-collector/VisualRegionStep.tsx", "utf8");
+  const confirmBody = /function confirmActionRow\(\)[\s\S]*?\n  }\n\n  function confirmContainer/.exec(ui)?.[0] || "";
+  assert.equal((confirmBody.match(/runParentPipeline\(/g) || []).length, 1);
+  assert.doesNotMatch(ui, /1\. Highlight Like \/ Comment \/ Share|2\. Find & Highlight Parent Containers/);
+  assert.match(ui, /Retry Parent Probe/);
+  assert.match(ui, /Show extra DOM debug/);
+  assert.match(ui, /onMouseEnter/);
+  assert.match(ui, /onMouseLeave/);
+  assert.doesNotMatch(confirmBody, /startAutoScan|runPostDetailAutoScan/);
+});
+
+test("saved parent resolver validates identity and structure before returning parent innerHTML", () => {
+  const source = buildResolveSavedParentJs({ version: 1, platform: "facebook", parentLevel: 8, fingerprint: "DIV::3:3", tag: "DIV", role: null, descendantCount: 120, locatorStrategy: "POST_IDENTITY_ASCEND_STRUCTURAL", actionRowSignature: { tag: "DIV", role: "", childCount: 3, svgCount: 3, buttonCount: 0, anchorCount: 3, directPattern: "DIV:|DIV:|DIV:" }, updatedAt: new Date(0).toISOString() });
+  assert.doesNotThrow(() => new Function(`return ${source}`));
+  assert.match(source, /unique\.length!==1/);
+  assert.match(source, /innerHTML:el\.innerHTML/);
+  assert.doesNotMatch(source, /outerHTML/);
+  const page = readFileSync("src/renderer/post-detail-collector/PostDetailCollectorPage.tsx", "utf8");
+  const step = readFileSync("src/renderer/post-detail-collector/SavedParentHtmlStep.tsx", "utf8");
+  assert.match(page, /postDetailResolveSavedParent/);
+  assert.match(step, /Rematch Parent/);
 });

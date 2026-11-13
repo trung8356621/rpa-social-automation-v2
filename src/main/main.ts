@@ -30,7 +30,7 @@ import { BrowserCore } from "./browser-core.js";
 import { VisualMatchLabRuntime } from "./visual-match-lab.js";
 import { PostDetailRunStorage } from "./post-detail-storage.js";
 import { buildPostDetailExtractAboveJs, normalizeExtractionResult, parsePostDetailHtmlSnapshot, validateExpectedPostUrl } from "./post-detail-html-extractor.js";
-import { buildPostDetailActionAnchorProbeJs, buildPostDetailParentProbeJs, buildPostDetailParentSelectJs, CLEAR_POST_DETAIL_PARENT_HIGHLIGHT_JS } from "./post-detail-parent-probe.js";
+import { buildPostDetailActionAnchorProbeJs, buildPostDetailActionDebugJs, buildPostDetailParentProbeJs, buildPostDetailParentSelectJs, buildResolveSavedParentJs, CLEAR_POST_DETAIL_PARENT_HIGHLIGHT_JS } from "./post-detail-parent-probe.js";
 import { PostDetailScanInputLock } from "./post-detail-scan-lock.js";
 import { CollectorScrollCaptureController } from "./collector-scroll-capture.js";
 import { BrowserSessions } from "./browser-sessions.js";
@@ -2225,9 +2225,17 @@ async function boot() {
         isIdle();
         return browser.view.webContents.executeJavaScript(buildPostDetailParentSelectJs(command.index, Boolean(command.confirm)), true);
       }
+      case "postDetailSetActionDebug": {
+        isIdle();
+        return browser.view.webContents.executeJavaScript(buildPostDetailActionDebugJs(command.visible), true);
+      }
       case "postDetailConfirmParent": {
         isIdle();
         return { ok: true, evidencePath: await postDetailStorage.saveParentConfirmation(command.input) };
+      }
+      case "postDetailResolveSavedParent": {
+        isIdle();
+        return browser.view.webContents.executeJavaScript(buildResolveSavedParentJs(command.config), true);
       }
       case "postDetailClearParentHighlight": {
         isIdle();
@@ -2316,7 +2324,21 @@ async function boot() {
           x: Math.round(Math.max(1, bounds.width) / 2),
           y: Math.round(Math.max(1, bounds.height) / 2),
         };
-        const windowVisible = window.isVisible() && !window.isMinimized();
+        let windowVisible = window.isVisible() && !window.isMinimized();
+        // Electron can briefly report the main window hidden during collector-host/layout churn
+        // even while Auto Scan still owns a visible native BrowserCore. Recover that transient
+        // state once; never restore a user-minimized window.
+        if (!windowVisible && !window.isMinimized()) {
+          try {
+            window.showInactive();
+            browser.view.setVisible(true);
+            postDetailScanLock.syncBounds();
+            await new Promise((resolve) => setTimeout(resolve, 50));
+            windowVisible = window.isVisible() && !window.isMinimized();
+          } catch {
+            /* fall through to the structured visibility failure */
+          }
+        }
         const visible = (browser.visible || browser.isScanHoldVisible) && windowVisible;
         if (!visible) {
           return {

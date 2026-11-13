@@ -14,6 +14,7 @@ import type {
   PostDetailExtractAboveInput,
   PostDetailParentProbeInput,
   PostDetailParentConfirmation,
+  PostDetailParentConfig,
   PostDetailSaveRunInput,
 } from "./post-detail-collector/types.js";
 export type { ScriptReleaseManifest } from "./script-release.js";
@@ -539,7 +540,9 @@ export type Command =
   | { type: "postDetailProbeParents"; input: PostDetailParentProbeInput }
   | { type: "postDetailHighlightActionAnchors"; input: PostDetailParentProbeInput }
   | { type: "postDetailSelectParent"; index: number; confirm?: boolean }
+  | { type: "postDetailSetActionDebug"; visible: boolean }
   | { type: "postDetailConfirmParent"; input: PostDetailParentConfirmation }
+  | { type: "postDetailResolveSavedParent"; config: PostDetailParentConfig }
   | { type: "postDetailClearParentHighlight" }
   | { type: "postDetailListRuns" }
   | { type: "postDetailLoadRun"; runId: string }

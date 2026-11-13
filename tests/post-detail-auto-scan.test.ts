@@ -410,6 +410,9 @@ test("wheel dispatch uses mouseMove then mouseWheel; signed delta; visual confir
   assert.match(main, /WHEEL_SENT_UNFOCUSED/);
   assert.match(main, /WHEEL_BLOCKED_FOCUS/);
   assert.match(main, /WHEEL_BLOCKED_NOT_VISIBLE/);
+  assert.match(main, /window\.showInactive\(\)/);
+  assert.match(main, /!window\.isMinimized\(\)/);
+  assert.doesNotMatch(main, /window\.restore\(\)/);
   assert.match(main, /postDetailScanInputLock/);
   assert.match(main, /Do NOT call overlays\.layout/);
 
