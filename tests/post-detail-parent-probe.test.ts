@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import test from "node:test";
-import { buildPostDetailActionAnchorProbeJs, buildPostDetailParentProbeJs, buildResolveSavedParentJs, classifyActionControlDescriptor, CLEAR_POST_DETAIL_PARENT_HIGHLIGHT_JS, dedupeNestedActionRows, orderProgressiveCandidates, structuralActionRowsMatch } from "../src/main/post-detail-parent-probe.js";
+import { buildHighlightSavedParentNodeJs, buildPostDetailActionAnchorProbeJs, buildPostDetailParentProbeJs, buildResolveSavedParentJs, classifyActionControlDescriptor, CLEAR_POST_DETAIL_PARENT_HIGHLIGHT_JS, dedupeNestedActionRows, orderProgressiveCandidates, structuralActionRowsMatch } from "../src/main/post-detail-parent-probe.js";
 
 test("calibration checks exact level before ±1 and full fallback", () => {
   const rows = [{ parentLevel: 7, descendantCount: 900 }, { parentLevel: 8, descendantCount: 100 }, { parentLevel: 9, descendantCount: 800 }, { parentLevel: 12, descendantCount: 1200 }];
@@ -65,4 +65,13 @@ test("saved parent resolver uses action row plus confirmed level and supports le
   assert.match(page, /navigationEpoch\.current !== startedAtEpoch/);
   assert.match(page, /savedParentResolution\.status !== "PARENT_MATCHED"/);
   assert.match(step, /Rematch Parent/);
+  assert.match(step, /DOMParser/);
+  assert.match(step, /DOM Explorer/);
+  assert.match(step, /Raw HTML/);
+  assert.match(step, /postDetailHighlightParentNode/);
+  const highlight = buildHighlightSavedParentNodeJs([0, 2, 1]);
+  assert.doesNotThrow(() => new Function(`return ${highlight}`));
+  assert.match(highlight, /parent\.contains\(node\)/);
+  assert.match(highlight, /__rpaPdcExplorerHighlight/);
+  assert.match(highlight, /requestAnimationFrame/);
 });

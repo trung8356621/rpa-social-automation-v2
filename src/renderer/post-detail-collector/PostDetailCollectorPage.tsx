@@ -187,7 +187,7 @@ export function PostDetailCollectorPage({ invoke, state: parentState }: { invoke
             }}
           />
         )}
-        {state.step === 3 && <SavedParentHtmlStep result={state.savedParentResolution} onRematch={() => updateStore({ step: 2 })} />}
+        {state.step === 3 && <SavedParentHtmlStep invoke={invoke} result={state.savedParentResolution} onRematch={() => updateStore({ step: 2 })} />}
       </div>
     </section>
   );

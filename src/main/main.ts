@@ -30,7 +30,7 @@ import { BrowserCore } from "./browser-core.js";
 import { VisualMatchLabRuntime } from "./visual-match-lab.js";
 import { PostDetailRunStorage } from "./post-detail-storage.js";
 import { buildPostDetailExtractAboveJs, normalizeExtractionResult, parsePostDetailHtmlSnapshot, validateExpectedPostUrl } from "./post-detail-html-extractor.js";
-import { buildPostDetailActionAnchorProbeJs, buildPostDetailActionDebugJs, buildPostDetailParentProbeJs, buildPostDetailParentSelectJs, buildResolveSavedParentJs, CLEAR_POST_DETAIL_PARENT_HIGHLIGHT_JS } from "./post-detail-parent-probe.js";
+import { buildHighlightSavedParentNodeJs, buildPostDetailActionAnchorProbeJs, buildPostDetailActionDebugJs, buildPostDetailParentProbeJs, buildPostDetailParentSelectJs, buildResolveSavedParentJs, CLEAR_POST_DETAIL_PARENT_HIGHLIGHT_JS, CLEAR_SAVED_PARENT_NODE_HIGHLIGHT_JS } from "./post-detail-parent-probe.js";
 import { PostDetailScanInputLock } from "./post-detail-scan-lock.js";
 import { CollectorScrollCaptureController } from "./collector-scroll-capture.js";
 import { BrowserSessions } from "./browser-sessions.js";
@@ -2236,6 +2236,14 @@ async function boot() {
       case "postDetailResolveSavedParent": {
         isIdle();
         return browser.view.webContents.executeJavaScript(buildResolveSavedParentJs(command.config), true);
+      }
+      case "postDetailHighlightParentNode": {
+        isIdle();
+        return browser.view.webContents.executeJavaScript(buildHighlightSavedParentNodeJs(command.path), true);
+      }
+      case "postDetailClearParentNodeHighlight": {
+        isIdle();
+        return browser.view.webContents.executeJavaScript(CLEAR_SAVED_PARENT_NODE_HIGHLIGHT_JS, true);
       }
       case "postDetailClearParentHighlight": {
         isIdle();
