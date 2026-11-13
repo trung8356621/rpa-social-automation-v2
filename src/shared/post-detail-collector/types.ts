@@ -421,9 +421,10 @@ export type PostDetailParentConfig = {
 };
 
 export type PostDetailSavedParentResolution = {
-  status: "PARENT_MATCHED" | "REMATCH_REQUIRED" | "NOT_CONFIGURED" | "BROWSER_NOT_READY";
+  status: "PARENT_MATCHED" | "REMATCH_REQUIRED" | "NOT_CONFIGURED" | "BROWSER_NOT_READY" | "RESOLVING";
   innerHTML: string;
   rect: Rect | null;
   failureCode?: "BROWSER_NOT_READY" | "ACTION_ROW_SELECTOR_NOT_FOUND" | "ACTION_ROW_AMBIGUOUS" | "ACTION_ROW_INVALID" | "PARENT_LEVEL_NOT_FOUND" | "POST_IDENTITY_MISMATCH";
+  diagnosticMeta?: Record<string, unknown>;
   diagnostics: string[];
 };

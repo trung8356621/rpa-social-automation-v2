@@ -1,40 +1,114 @@
-import type { PostDetailParentConfig, PostDetailParentProbeInput } from "../shared/post-detail-collector/types.js";
+import type {
+  PostDetailParentConfig,
+  PostDetailParentProbeInput,
+} from "../shared/post-detail-collector/types.js";
 
-export type ActionControlDescriptor = { ariaLabel?: string; title?: string; alt?: string; directText?: string };
-export function classifyActionControlDescriptor(value: ActionControlDescriptor): "LIKE" | "COMMENT" | "SHARE" | null {
-  const own = [value.ariaLabel, value.title, value.alt, value.directText].filter(Boolean).join(" ");
+export type ActionControlDescriptor = {
+  ariaLabel?: string;
+  title?: string;
+  alt?: string;
+  directText?: string;
+};
+export function classifyActionControlDescriptor(
+  value: ActionControlDescriptor,
+): "LIKE" | "COMMENT" | "SHARE" | null {
+  const own = [value.ariaLabel, value.title, value.alt, value.directText]
+    .filter(Boolean)
+    .join(" ");
   if (/\b(?:like|thích|bày tỏ)\b/i.test(own)) return "LIKE";
   if (/\b(?:comment|bình luận)\b/i.test(own)) return "COMMENT";
   if (/\b(?:share|chia sẻ)\b/i.test(own)) return "SHARE";
   return null;
 }
 
-export type ActionRowStructuralSignature = { tag: string; role: string; childCount: number; svgCount: number; buttonCount: number; anchorCount: number; directPattern: string; controlOrder?: string };
-export function structuralActionRowsMatch(a: ActionRowStructuralSignature, b: ActionRowStructuralSignature): boolean {
-  return a.tag === b.tag && a.role === b.role && Math.abs(a.childCount - b.childCount) <= 1 && Math.abs(a.svgCount - b.svgCount) <= 1 && Math.abs(a.buttonCount - b.buttonCount) <= 1 && Math.abs(a.anchorCount - b.anchorCount) <= 1 && a.directPattern === b.directPattern;
+export type ActionRowStructuralSignature = {
+  tag: string;
+  role: string;
+  childCount: number;
+  svgCount: number;
+  buttonCount: number;
+  anchorCount: number;
+  directPattern: string;
+  controlOrder?: string;
+};
+export function structuralActionRowsMatch(
+  a: ActionRowStructuralSignature,
+  b: ActionRowStructuralSignature,
+): boolean {
+  return (
+    a.tag === b.tag &&
+    a.role === b.role &&
+    Math.abs(a.childCount - b.childCount) <= 1 &&
+    Math.abs(a.svgCount - b.svgCount) <= 1 &&
+    Math.abs(a.buttonCount - b.buttonCount) <= 1 &&
+    Math.abs(a.anchorCount - b.anchorCount) <= 1 &&
+    a.directPattern === b.directPattern
+  );
 }
 
-export function dedupeNestedActionRows<T>(original: T, candidates: T[], contains: (outer: T, inner: T) => boolean): T[] {
-  const independent = candidates.filter((item) => item !== original && !contains(original, item) && !contains(item, original));
-  const unique = independent.filter((item, index) => independent.indexOf(item) === index);
-  return [original, ...unique.filter((item, index) => !unique.some((other, otherIndex) => otherIndex !== index && contains(item, other)))];
+export function dedupeNestedActionRows<T>(
+  original: T,
+  candidates: T[],
+  contains: (outer: T, inner: T) => boolean,
+): T[] {
+  const independent = candidates.filter(
+    (item) =>
+      item !== original &&
+      !contains(original, item) &&
+      !contains(item, original),
+  );
+  const unique = independent.filter(
+    (item, index) => independent.indexOf(item) === index,
+  );
+  return [
+    original,
+    ...unique.filter(
+      (item, index) =>
+        !unique.some(
+          (other, otherIndex) => otherIndex !== index && contains(item, other),
+        ),
+    ),
+  ];
 }
 
-export function orderProgressiveCandidates<T extends { parentLevel: number; descendantCount: number }>(items: T[], expected: number | null): { items: T[]; mode: "EXACT" | "EXPANDED_PLUS_MINUS_ONE" | "FULL_PROGRESSIVE" } {
+export function orderProgressiveCandidates<
+  T extends { parentLevel: number; descendantCount: number },
+>(
+  items: T[],
+  expected: number | null,
+): {
+  items: T[];
+  mode: "EXACT" | "EXPANDED_PLUS_MINUS_ONE" | "FULL_PROGRESSIVE";
+} {
   const out = [...items];
   if (expected !== null && out.some((x) => x.parentLevel === expected)) {
-    out.sort((a, b) => Number(b.parentLevel === expected) - Number(a.parentLevel === expected) || b.descendantCount - a.descendantCount);
+    out.sort(
+      (a, b) =>
+        Number(b.parentLevel === expected) -
+          Number(a.parentLevel === expected) ||
+        b.descendantCount - a.descendantCount,
+    );
     return { items: out, mode: "EXACT" };
   }
-  if (expected !== null && out.some((x) => Math.abs(x.parentLevel - expected) === 1)) {
-    out.sort((a, b) => Number(Math.abs(b.parentLevel - expected) === 1) - Number(Math.abs(a.parentLevel - expected) === 1) || b.descendantCount - a.descendantCount);
+  if (
+    expected !== null &&
+    out.some((x) => Math.abs(x.parentLevel - expected) === 1)
+  ) {
+    out.sort(
+      (a, b) =>
+        Number(Math.abs(b.parentLevel - expected) === 1) -
+          Number(Math.abs(a.parentLevel - expected) === 1) ||
+        b.descendantCount - a.descendantCount,
+    );
     return { items: out, mode: "EXPANDED_PLUS_MINUS_ONE" };
   }
   out.sort((a, b) => b.descendantCount - a.descendantCount);
   return { items: out, mode: "FULL_PROGRESSIVE" };
 }
 
-export function buildPostDetailActionAnchorProbeJs(input: PostDetailParentProbeInput): string {
+export function buildPostDetailActionAnchorProbeJs(
+  input: PostDetailParentProbeInput,
+): string {
   const data = JSON.stringify(input).replace(/</g, "\\u003c");
   return `(() => {
     const input=${data}, sx=innerWidth/input.screenshot.width, sy=innerHeight/input.screenshot.height;
@@ -51,7 +125,9 @@ export function buildPostDetailActionAnchorProbeJs(input: PostDetailParentProbeI
   })()`;
 }
 
-export function buildPostDetailParentProbeJs(input: PostDetailParentProbeInput): string {
+export function buildPostDetailParentProbeJs(
+  input: PostDetailParentProbeInput,
+): string {
   const data = JSON.stringify(input).replace(/</g, "\\u003c");
   return `(() => {
     const input=${data}, clean=v=>String(v||'').replace(/\\s+/g,' ').trim();
@@ -88,21 +164,34 @@ export function buildPostDetailParentProbeJs(input: PostDetailParentProbeInput):
   })()`;
 }
 
-export function buildPostDetailParentSelectJs(index: number, confirm: boolean): string { const i=Math.max(0,Math.floor(index)); return `(()=>{const p=window.__rpaPdcParentProbe;if(!p)return{ok:false,reason:'NO_ACTIVE_PARENT_PROBE'};const selectedIndex=p.${confirm?"confirm":"select"}(${i});return{ok:true,selectedIndex,confirmed:${confirm},actionRowLocator:${confirm?"p.locator()":"undefined"}}})()`; }
-export function buildPostDetailActionDebugJs(visible: boolean): string { return `(()=>{const p=window.__rpaPdcActionProbe;if(!p)return{ok:false,reason:'NO_ACTIVE_ACTION_PROBE'};p.setVisible(${Boolean(visible)});return{ok:true,visible:${Boolean(visible)}}})()`; }
-export const CLEAR_POST_DETAIL_PARENT_HIGHLIGHT_JS=`(()=>{window.__rpaPdcParentProbe?.dispose?.();window.__rpaPdcActionProbe?.dispose?.();return{ok:true}})()`;
+export function buildPostDetailParentSelectJs(
+  index: number,
+  confirm: boolean,
+): string {
+  const i = Math.max(0, Math.floor(index));
+  return `(()=>{const p=window.__rpaPdcParentProbe;if(!p)return{ok:false,reason:'NO_ACTIVE_PARENT_PROBE'};const selectedIndex=p.${confirm ? "confirm" : "select"}(${i});return{ok:true,selectedIndex,confirmed:${confirm},actionRowLocator:${confirm ? "p.locator()" : "undefined"}}})()`;
+}
+export function buildPostDetailActionDebugJs(visible: boolean): string {
+  return `(()=>{const p=window.__rpaPdcActionProbe;if(!p)return{ok:false,reason:'NO_ACTIVE_ACTION_PROBE'};p.setVisible(${Boolean(visible)});return{ok:true,visible:${Boolean(visible)}}})()`;
+}
+export const CLEAR_POST_DETAIL_PARENT_HIGHLIGHT_JS = `(()=>{window.__rpaPdcParentProbe?.dispose?.();window.__rpaPdcActionProbe?.dispose?.();return{ok:true}})()`;
 
-export function buildResolveSavedParentJs(config: PostDetailParentConfig): string {
+export function buildResolveSavedParentJs(
+  config: PostDetailParentConfig,
+): string {
   const data = JSON.stringify(config).replace(/</g, "\\u003c");
-  return `(()=>{const config=${data},fail=(code,message,status='REMATCH_REQUIRED')=>{delete window.__rpaPdcSavedParent;return{status,innerHTML:'',rect:null,failureCode:code,diagnostics:[message]}},clean=v=>String(v||'').replace(/\\s+/g,' ').trim(),identity=raw=>{try{const u=new URL(raw,location.href),p=u.pathname;let m=/(?:\\/posts\\/|\\/permalink\\/)([0-9A-Za-z_-]+)/i.exec(p)||/^\\/@[^/]+\\/post\\/([^/?#]+)/i.exec(p);if(m)return{id:m[1],reason:/permalink/i.test(m[0])?'facebook-permalink-path':/posts/i.test(m[0])?'facebook-posts-path':'threads-post-path'};for(const k of ['multi_permalinks','story_fbid']){const v=u.searchParams.get(k);if(v)return{id:v,reason:'query-'+k}}const set=u.searchParams.get('set'),sm=set&&/^(?:gm|pcb)\\.([0-9A-Za-z_-]+)/i.exec(set);return sm?{id:sm[1],reason:'facebook-media-set'}:null}catch{return null}},target=identity(location.href);if(document.readyState==='loading'||!document.body)return fail('BROWSER_NOT_READY','Browser DOM is still loading.','BROWSER_NOT_READY');if(!target)return fail('BROWSER_NOT_READY','Live post identity is not available yet.','BROWSER_NOT_READY');const postId=target.id;
-    const directText=el=>Array.from(el.childNodes).filter(n=>n.nodeType===Node.TEXT_NODE).map(n=>n.textContent||'').join(' '),classify=el=>{const icon=el.querySelector(':scope > svg title,:scope > img[alt]'),t=[el.getAttribute('aria-label'),el.getAttribute('title'),el.getAttribute('alt'),icon?.textContent,icon?.getAttribute?.('alt'),directText(el)].map(clean).join(' ');return /\\b(?:like|thích|bày tỏ)\\b/i.test(t)?'LIKE':/\\b(?:comment|bình luận)\\b/i.test(t)?'COMMENT':/\\b(?:share|chia sẻ)\\b/i.test(t)?'SHARE':null};
+  return `(()=>{const config=${data},meta={configLoaded:true,hasActionRowLocator:Boolean(config.actionRowLocator),locator:config.actionRowLocator?{anchorReason:config.actionRowLocator.anchorReason,anchorUp:config.actionRowLocator.anchorUp,rowPath:config.actionRowLocator.rowPath,rowTag:config.actionRowLocator.rowTag,rowRole:config.actionRowLocator.rowRole}:null,parentLevel:config.parentLevel,postIdentityAnchorCount:0,reasonMatchedAnchorCount:0,exactPathMatchCount:0,fallbackMatchCount:0,recoveryMatchCount:0,validActionRowCount:0,parentLevelResolved:false,parentContainsPostIdentity:false,innerHTMLLength:0},fail=(code,message,status='REMATCH_REQUIRED')=>{delete window.__rpaPdcSavedParent;return{status,innerHTML:'',rect:null,failureCode:code,diagnosticMeta:meta,diagnostics:[message]}},clean=v=>String(v||'').replace(/\\s+/g,' ').trim(),identity=raw=>{try{const u=new URL(raw,location.href),p=u.pathname;let m=/(?:\\/posts\\/|\\/permalink\\/)([0-9A-Za-z_-]+)/i.exec(p)||/^\\/@[^/]+\\/post\\/([^/?#]+)/i.exec(p);if(m)return{id:m[1],reason:/permalink/i.test(m[0])?'facebook-permalink-path':/posts/i.test(m[0])?'facebook-posts-path':'threads-post-path'};for(const k of ['multi_permalinks','story_fbid']){const v=u.searchParams.get(k);if(v)return{id:v,reason:'query-'+k}}const set=u.searchParams.get('set'),sm=set&&/^(?:gm|pcb)\\.([0-9A-Za-z_-]+)/i.exec(set);return sm?{id:sm[1],reason:'facebook-media-set'}:null}catch{return null}},sameReason=(a,b)=>a===b||(/^facebook-(?:permalink|posts)-path$/.test(a)&&/^facebook-(?:permalink|posts)-path$/.test(b)),target=identity(location.href);if(document.readyState==='loading'||!document.body)return fail('BROWSER_NOT_READY','Browser DOM is still loading.','BROWSER_NOT_READY');if(!target)return fail('BROWSER_NOT_READY','Live post identity is not available yet.','BROWSER_NOT_READY');const postId=target.id;
+    const directText=el=>Array.from(el.childNodes).filter(n=>n.nodeType===Node.TEXT_NODE).map(n=>n.textContent||'').join(' '),classify=el=>{const icon=el.querySelector(':scope > svg title,:scope > img[alt]'),t=[el.getAttribute('aria-label'),el.getAttribute('title'),el.getAttribute('alt'),icon?.textContent,icon?.getAttribute?.('alt'),directText(el)].map(clean).join(' ');return /(?:like|thích|bày tỏ)/i.test(t)?'LIKE':/(?:comment|bình luận)/i.test(t)?'COMMENT':/(?:share|chia sẻ)/i.test(t)?'SHARE':null};
     const validRow=row=>{const types=new Set(Array.from(row.querySelectorAll('button,[role=button],a')).map(classify).filter(Boolean));return types.has('LIKE')&&types.has('COMMENT')&&types.has('SHARE')};let uniqueRows=[];
-    if(config.actionRowLocator){const locator=config.actionRowLocator,anchors=Array.from(document.querySelectorAll('a[href]')).map(a=>({a,id:identity(a.href)})).filter(x=>x.id?.id===postId&&x.id.reason===locator.anchorReason),located=[],depth=(root,node)=>{let value=0,current=node;while(current&&current!==root){current=current.parentElement;value++}return current===root?value:-1};for(const {a} of anchors){let common=a;for(let i=0;i<locator.anchorUp;i++)common=common?.parentElement;if(!common)continue;let exact=common;for(const index of locator.rowPath)exact=exact?.children?.[index];if(exact?.tagName===locator.rowTag&&exact.getAttribute('role')===locator.rowRole&&validRow(exact)){located.push(exact);continue}for(const candidate of common.querySelectorAll(locator.rowTag.toLowerCase())){if(candidate.getAttribute('role')===locator.rowRole&&depth(common,candidate)===locator.rowPath.length&&validRow(candidate))located.push(candidate)}}uniqueRows=Array.from(new Set(located));if(!anchors.length)return fail('ACTION_ROW_SELECTOR_NOT_FOUND','Saved post-relative Action Row anchor was not found.');if(!uniqueRows.length)return fail('ACTION_ROW_INVALID','No valid Like, Comment and Share container exists in the saved post-relative scope.');if(uniqueRows.length>1)return fail('ACTION_ROW_AMBIGUOUS','Saved Action Row locator matched multiple valid containers.')}else{const rows=[],cached=window.__rpaPdcActionProbe?.row;if(cached?.isConnected)rows.push(cached);const controls=Array.from(document.querySelectorAll('button,[role=button],a')).filter(classify);for(const like of controls.filter(x=>classify(x)==='LIKE')){let node=like;for(let i=0;i<8&&node&&node!==document.body;i++,node=node.parentElement){const r=node.getBoundingClientRect();if(validRow(node)&&r.width>=120&&r.height>=18&&r.height<=180){rows.push(node);break}}}uniqueRows=Array.from(new Set(rows)).filter((row,i,all)=>!all.some((other,j)=>j!==i&&row.contains(other)));if(!uniqueRows.length)return fail('ACTION_ROW_SELECTOR_NOT_FOUND','Legacy Action Row scan found no valid container.');if(uniqueRows.length>1)return fail('ACTION_ROW_AMBIGUOUS','Legacy Action Row scan found multiple valid containers.')}
-    const row=uniqueRows[0];let parent=row;for(let level=0;level<config.parentLevel;level++){parent=parent?.parentElement;if(!parent)return fail('PARENT_LEVEL_NOT_FOUND','Saved Parent level does not exist in the live DOM.')}if(parent===document.body||parent===document.documentElement||!parent.contains(row))return fail('PARENT_LEVEL_NOT_FOUND','Saved Parent level crossed the page boundary.');const ownsPost=Array.from(parent.querySelectorAll('a[href]')).some(a=>identity(a.href)?.id===postId);if(!ownsPost)return fail('POST_IDENTITY_MISMATCH','Resolved Parent does not contain the current post identity.');const r=parent.getBoundingClientRect();window.__rpaPdcSavedParent=parent;return{status:'PARENT_MATCHED',innerHTML:parent.innerHTML,rect:{x:r.x,y:r.y,width:r.width,height:r.height},diagnostics:[]}})()`;
+    if(config.actionRowLocator){const locator=config.actionRowLocator,identityAnchors=Array.from(document.querySelectorAll('a[href]')).map(a=>({a,id:identity(a.href)})).filter(x=>x.id?.id===postId),anchors=identityAnchors.filter(x=>sameReason(x.id.reason,locator.anchorReason)),located=[],levels=[locator.anchorUp,...Array.from({length:21},(_,i)=>i).filter(i=>i!==locator.anchorUp).sort((a,b)=>Math.abs(a-locator.anchorUp)-Math.abs(b-locator.anchorUp))];meta.postIdentityAnchorCount=identityAnchors.length;meta.reasonMatchedAnchorCount=anchors.length;for(const {a} of anchors){for(const level of levels){let common=a;for(let i=0;i<level;i++)common=common?.parentElement;if(!common||common===document.body||common===document.documentElement)continue;if(level===locator.anchorUp){let exact=common;for(const index of locator.rowPath)exact=exact?.children?.[index];if(exact?.tagName===locator.rowTag&&exact.getAttribute('role')===locator.rowRole&&validRow(exact)){located.push(exact);meta.exactPathMatchCount++;break}}const likes=Array.from(common.querySelectorAll('button,[role=button],a')).filter(control=>classify(control)==='LIKE');let found=false;for(const like of likes){let candidate=like;while(candidate&&candidate!==common){if(candidate.tagName===locator.rowTag&&candidate.getAttribute('role')===locator.rowRole&&validRow(candidate)){located.push(candidate);meta.fallbackMatchCount++;found=true;break}candidate=candidate.parentElement}if(found)break}if(found)break}}uniqueRows=Array.from(new Set(located));if(!uniqueRows.length){const recovered=[];for(const like of Array.from(document.querySelectorAll('button,[role=button],a')).filter(control=>classify(control)==='LIKE')){let candidate=like;for(let i=0;i<14&&candidate&&candidate!==document.body;i++,candidate=candidate.parentElement){if(candidate.tagName!==locator.rowTag||candidate.getAttribute('role')!==locator.rowRole||!validRow(candidate))continue;let parent=candidate;for(let level=0;level<config.parentLevel&&parent;level++)parent=parent.parentElement;if(parent&&Array.from(parent.querySelectorAll('a[href]')).some(link=>identity(link.href)?.id===postId)){recovered.push(candidate);break}}}uniqueRows=Array.from(new Set(recovered));meta.recoveryMatchCount=uniqueRows.length}meta.validActionRowCount=uniqueRows.length;if(!anchors.length)return fail('ACTION_ROW_SELECTOR_NOT_FOUND','Saved post-relative Action Row anchor was not found.');if(!uniqueRows.length)return fail('ACTION_ROW_INVALID','No valid Like, Comment and Share container exists for the current post.')}else{const rows=[],cached=window.__rpaPdcActionProbe?.row;if(cached?.isConnected)rows.push(cached);const controls=Array.from(document.querySelectorAll('button,[role=button],a')).filter(classify);for(const like of controls.filter(x=>classify(x)==='LIKE')){let node=like;for(let i=0;i<8&&node&&node!==document.body;i++,node=node.parentElement){const r=node.getBoundingClientRect();if(validRow(node)&&r.width>=120&&r.height>=18&&r.height<=180){rows.push(node);break}}}uniqueRows=Array.from(new Set(rows)).filter((row,i,all)=>!all.some((other,j)=>j!==i&&row.contains(other)));meta.validActionRowCount=uniqueRows.length;if(!uniqueRows.length)return fail('ACTION_ROW_SELECTOR_NOT_FOUND','Legacy Action Row scan found no valid container.')}
+    if(config.actionRowLocator&&meta.exactPathMatchCount){const locator=config.actionRowLocator,exactRows=[];for(const a of Array.from(document.querySelectorAll('a[href]')).filter(a=>{const value=identity(a.href);return value?.id===postId&&sameReason(value.reason,locator.anchorReason)})){let common=a;for(let level=0;level<locator.anchorUp&&common;level++)common=common.parentElement;if(!common)continue;let exact=common;for(const index of locator.rowPath)exact=exact?.children?.[index];if(exact?.tagName===locator.rowTag&&exact.getAttribute('role')===locator.rowRole&&validRow(exact))exactRows.push(exact)}uniqueRows=Array.from(new Set(exactRows));meta.preferredExactRowCount=uniqueRows.length}
+    const parents=[];for(const row of uniqueRows){let candidate=row;for(let level=0;level<config.parentLevel&&candidate;level++)candidate=candidate.parentElement;if(!candidate||candidate===document.body||candidate===document.documentElement||!candidate.contains(row))continue;if(Array.from(candidate.querySelectorAll('a[href]')).some(a=>identity(a.href)?.id===postId))parents.push(candidate)}const uniqueParents=Array.from(new Set(parents));meta.validParentCandidateCount=uniqueParents.length;if(!uniqueParents.length)return fail('PARENT_LEVEL_NOT_FOUND','Saved Parent level does not resolve to a container for the current post.');const rankedParents=uniqueParents.map(node=>({node,identityCount:Array.from(node.querySelectorAll('a[href]')).filter(a=>identity(a.href)?.id===postId).length,descendantCount:node.querySelectorAll('*').length})).sort((a,b)=>b.identityCount-a.identityCount||b.descendantCount-a.descendantCount);meta.parentCandidateScores=rankedParents.map(({identityCount,descendantCount})=>({identityCount,descendantCount}));if(rankedParents[1]&&rankedParents[0].identityCount===rankedParents[1].identityCount&&rankedParents[0].descendantCount===rankedParents[1].descendantCount)return fail('ACTION_ROW_AMBIGUOUS','Saved Action Row locator resolves to indistinguishable post containers.');const parent=rankedParents[0].node;meta.parentLevelResolved=true;meta.parentContainsPostIdentity=true;meta.innerHTMLLength=parent.innerHTML.length;const r=parent.getBoundingClientRect();window.__rpaPdcSavedParent=parent;return{status:'PARENT_MATCHED',innerHTML:parent.innerHTML,rect:{x:r.x,y:r.y,width:r.width,height:r.height},diagnosticMeta:meta,diagnostics:[]}})()`;
 }
 
 export function buildHighlightSavedParentNodeJs(path: number[]): string {
-  const safePath = JSON.stringify(path.map((value) => Math.max(0, Math.floor(value))));
+  const safePath = JSON.stringify(
+    path.map((value) => Math.max(0, Math.floor(value))),
+  );
   return `(()=>{const parent=window.__rpaPdcSavedParent;if(!parent?.isConnected)return{ok:false,reason:'PARENT_NOT_RESOLVED'};let node=parent;for(const index of ${safePath}){node=node?.children?.[index];if(!node)return{ok:false,reason:'NODE_PATH_NOT_FOUND'}}if(node!==parent&&!parent.contains(node))return{ok:false,reason:'NODE_OUTSIDE_PARENT'};let state=window.__rpaPdcExplorerHighlight;if(!state){const overlay=document.createElement('div');overlay.dataset.rpaPdcDebug='explorer-node';overlay.style.cssText='position:fixed;pointer-events:none;z-index:2147483647;border:3px solid #22c55e;border-radius:4px;box-sizing:border-box;background:rgba(34,197,94,.06)';document.documentElement.appendChild(overlay);state={overlay,node:null,raf:0};window.__rpaPdcExplorerHighlight=state;const paint=()=>{const current=state.node;if(!current?.isConnected||!parent.contains(current)){overlay.style.display='none'}else{const r=current.getBoundingClientRect();Object.assign(overlay.style,{left:r.left+'px',top:r.top+'px',width:Math.max(0,r.width)+'px',height:Math.max(0,r.height)+'px',display:r.width&&r.height?'block':'none'})}state.raf=requestAnimationFrame(paint)};paint()}state.node=node;return{ok:true,tagName:node.tagName}})()`;
 }
 

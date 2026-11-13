@@ -10,6 +10,7 @@ import {
   releaseCollectorHostOwner,
 } from "../collectors/collector-host-owner";
 import { BrowserCaptureStep } from "./BrowserCaptureStep";
+import { shouldRetrySavedParentResolution } from "./auto-resume";
 import { SavedParentHtmlStep } from "./SavedParentHtmlStep";
 import { VisualRegionStep } from "./VisualRegionStep";
 import { usePostDetailCollectorStore } from "./store";
@@ -57,45 +58,47 @@ export function PostDetailCollectorPage({ invoke, state: parentState }: { invoke
   // Probe only. Host clear is ownership-gated so Step remounts / sibling collectors are not wiped.
   useEffect(() => {
     const { ownerId } = claimCollectorHostOwner("pdc-page");
+    let cancelled = false;
     void (async () => {
       const live = await refreshProbe();
-      if (!live || autoResolveStarted.current || state.step !== 1) return;
+      if (cancelled || !live || autoResolveStarted.current || state.step !== 1) return;
       autoResolveStarted.current = true;
       const startedAtEpoch = navigationEpoch.current;
       const platform = /threads\.(?:com|net)/i.test(live.url) ? "threads" : "facebook";
       const config = state.parentConfigs[platform];
-      if (!config) return;
+      if (!config) { setConnStatus(`Not Configured · ${platform}`); return; }
+      updateStore({ savedParentResolution: { status: "RESOLVING", innerHTML: "", rect: null, diagnostics: ["Resolving saved Parent against the live DOM..."], diagnosticMeta: { configLoaded: true, hasActionRowLocator: Boolean(config.actionRowLocator), parentLevel: config.parentLevel } }, step: 3 });
       let savedParentResolution: import("../../shared/post-detail-collector/types").PostDetailSavedParentResolution | null = null;
       for (let attempt = 0; attempt < 20; attempt++) {
-        if (navigationEpoch.current !== startedAtEpoch) return;
+        if (cancelled || navigationEpoch.current !== startedAtEpoch) return;
         savedParentResolution = await invoke<import("../../shared/post-detail-collector/types").PostDetailSavedParentResolution>({ type: "postDetailResolveSavedParent", config });
         if (savedParentResolution.status === "PARENT_MATCHED") break;
-        if (savedParentResolution.status !== "BROWSER_NOT_READY") break;
-        setConnStatus(`Đang chờ DOM bài viết render · lần ${attempt + 1}/20`);
+        if (!shouldRetrySavedParentResolution(savedParentResolution)) break;
+        setConnStatus(`Đang chờ DOM bài viết render · ${savedParentResolution.failureCode} · lần ${attempt + 1}/20`);
         if (attempt < 19) await new Promise((resolve) => setTimeout(resolve, 750));
       }
-      if (!savedParentResolution || navigationEpoch.current !== startedAtEpoch) return;
-      if (savedParentResolution.status === "BROWSER_NOT_READY") {
-        setConnStatus(`BrowserCore chưa render đủ DOM · ${savedParentResolution.diagnostics.join(" · ")}`);
-        return;
-      }
+      if (cancelled || !savedParentResolution || navigationEpoch.current !== startedAtEpoch) return;
       if (savedParentResolution.status !== "PARENT_MATCHED") {
         updateStore({ savedParentResolution });
-        setConnStatus(`Rematch Required · ${savedParentResolution.diagnostics.join(" · ")}`);
+        setConnStatus(`Rematch Required · ${savedParentResolution.failureCode || savedParentResolution.status} · ${savedParentResolution.diagnostics.join(" · ")} · ${JSON.stringify(savedParentResolution.diagnosticMeta || {})}`);
         return;
       }
-      await collectorReportBrowserHost(invoke, null);
-      await collectorSetBrowserVisible(invoke, false);
+      if (cancelled || navigationEpoch.current !== startedAtEpoch) return;
       updateStore({ savedParentResolution, step: 3 });
     })();
     return () => {
+      cancelled = true;
+      autoResolveStarted.current = false;
       releaseCollectorHostOwner(ownerId, () => {
         void collectorReportBrowserHost(invoke, null);
         void collectorSetBrowserVisible(invoke, false);
       });
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps -- probe refresh must not tear down host
-  }, [invoke]);
+    // Auto-resume belongs to this Collector mount. Depending on the invoke wrapper
+    // cancels the retry loop when a parent render recreates that function.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   const goToStep = (step: PostDetailStep) => {
     if (step === 2 && !canEnterStep2(state.visualReferences.length)) return;
@@ -157,7 +160,7 @@ export function PostDetailCollectorPage({ invoke, state: parentState }: { invoke
             browserUrl={state.browserUrl}
             visualReferences={state.visualReferences}
             onSourceUrl={(sourceUrl) => updateStore({ sourceUrl })}
-            onBrowserUrl={(browserUrl) => updateStore({ browserUrl })}
+            onBrowserUrl={(browserUrl) => { navigationEpoch.current += 1; autoResolveStarted.current = false; updateStore({ browserUrl }); }}
             onUpdateReferences={(visualReferences) => updateStore({ visualReferences })}
             onScreenshot={(lastScreenshot) => updateStore({ lastScreenshot })}
             onProbeRefresh={refreshProbe}
@@ -193,7 +196,7 @@ export function PostDetailCollectorPage({ invoke, state: parentState }: { invoke
             }}
           />
         )}
-        {state.step === 3 && <SavedParentHtmlStep invoke={invoke} result={state.savedParentResolution} onRematch={() => updateStore({ step: 2 })} />}
+        {state.step === 3 && <SavedParentHtmlStep invoke={invoke} result={state.savedParentResolution} onRematch={() => { navigationEpoch.current += 1; autoResolveStarted.current = false; updateStore({ step: 2 }); }} />}
       </div>
     </section>
   );

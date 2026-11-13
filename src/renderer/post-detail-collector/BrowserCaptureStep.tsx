@@ -70,9 +70,7 @@ export function BrowserCaptureStep({
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
   const [warning, setWarning] = useState("");
-  const [message, setMessage] = useState(
-    "Source URL ≠ Browser URL. Bấm Open URL để điều hướng BrowserCore Default tới bài cần capture.",
-  );
+  const [message, setMessage] = useState("");
   const [shot, setShot] = useState<{ id: string; dataUrl: string; width: number; height: number }>();
   /** Step 1 ROI = visual reference / action-row anchor — NOT OCR content ROI. */
   const [anchorRoi, setAnchorRoi] = useState<Rect | undefined>();
@@ -423,8 +421,7 @@ export function BrowserCaptureStep({
         <div>
           <h2>Step 1 — Browser & Detail Capture</h2>
           <p className="pdc-subtitle">
-            Source URL là URL muốn xử lý · Browser URL là trang thực tế. Confirm tự lưu visual reference (action
-            row), không phải OCR content ROI.
+            Confirm tự lưu visual reference (action row), không phải OCR content ROI.
           </p>
         </div>
         <button
@@ -445,9 +442,8 @@ export function BrowserCaptureStep({
           Source URL
           <input
             className="pdc-url-input"
-            disabled={busy || frozen}
+            readOnly
             value={sourceDraft}
-            onChange={(e) => setSourceDraft(e.target.value)}
             placeholder={DEFAULT_POST_DETAIL_FIXTURE_URL}
             aria-label="Source URL"
           />
@@ -459,10 +455,6 @@ export function BrowserCaptureStep({
           {frozen ? "CAPTURE MODE" : "BROWSER LIVE"}
         </span>
       </div>
-      <p className="pdc-browser-url" title={browserUrl || "(chưa có)"}>
-        Browser URL: <code>{browserUrl || "(chưa điều hướng — bấm Open URL)"}</code>
-      </p>
-
       {error && <div className="pdc-alert pdc-alert-error">{error}</div>}
       {warning && <div className="pdc-alert pdc-alert-warn">{warning}</div>}
       {message && <div className="pdc-alert pdc-alert-info">{message}</div>}
