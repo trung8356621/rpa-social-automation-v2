@@ -526,6 +526,8 @@ export type Command =
   | { type: "postDetailNavigate"; url: string }
   /** Wheel at BrowserCore viewport center (Post Detail Auto Scan). */
   | { type: "postDetailWheel"; deltaY: number }
+  /** Lock/unlock OS input to BrowserCore during Auto Scan (no visual overlay). */
+  | { type: "postDetailScanInputLock"; locked: boolean }
   | { type: "feedItemPermalinkDiagnostic"; hover?: boolean; runId?: string; candidateId?: string }
   | { type: "visualMatchLabOcr"; dataUrl: string }
   | { type: "postDetailSaveRun"; input: PostDetailSaveRunInput }

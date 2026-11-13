@@ -50,6 +50,7 @@ export type AutoScanDeps = {
   motionThreshold?: number;
   isCancelled: () => boolean;
   onProgress: (p: AutoScanProgress) => void;
+  /** Lightweight per-frame UI update (avoid pushing full history every frame). */
   onFrame: (frame: PostDetailScanFrame, frames: PostDetailScanFrame[]) => void;
 };
 
@@ -61,52 +62,42 @@ type MatchBundle = {
   anchors: PostDetailVisualAnchor[];
   candidates: PostDetailVisualAnchor[];
   logs: PostDetailFrameDiagnostics["matchLogs"];
+  matchMs: number;
 };
 
+type PreparedRef = {
+  sample: VisualReferenceSample;
+  type: PostDetailAnchorType;
+  canvas: HTMLCanvasElement;
+};
+
+async function prepareRefs(refs: VisualReferenceSample[]): Promise<PreparedRef[]> {
+  const out: PreparedRef[] = [];
+  for (const sample of refs) {
+    if (!sample.dataUrl) continue;
+    const type = inferAnchorTypeFromLabel(sample.label);
+    if (!type) continue;
+    const canvas = await imageToCanvas(sample.dataUrl);
+    if (canvas.width < 4 || canvas.height < 4) continue;
+    out.push({ sample, type, canvas });
+  }
+  return out;
+}
+
+/** One TemplateMatcher pass per template — diagnostics use `best` when below threshold. */
 async function matchFrameAnchors(
-  image: { dataUrl: string; width: number; height: number },
+  target: HTMLCanvasElement,
   frameId: string,
   frameIndex: number,
-  refs: VisualReferenceSample[],
+  refs: PreparedRef[],
   threshold: number,
 ): Promise<MatchBundle> {
-  const target = await imageToCanvas(image.dataUrl);
   const logs: PostDetailFrameDiagnostics["matchLogs"] = [];
   const candidates: PostDetailVisualAnchor[] = [];
   const bestByType = new Map<PostDetailAnchorType, PostDetailVisualAnchor>();
+  let matchMs = 0;
 
-  for (const sample of refs) {
-    if (!sample.dataUrl) {
-      continue;
-    }
-    const type = inferAnchorTypeFromLabel(sample.label);
-    if (!type) {
-      logs.push({
-        type: "LIKE",
-        templateId: sample.sampleId,
-        score: 0,
-        threshold,
-        bbox: null,
-        accepted: false,
-        rejectionReason: `Label "${sample.label}" is not LIKE/COMMENT/SHARE`,
-        candidateRank: -1,
-      });
-      continue;
-    }
-    const tpl = await imageToCanvas(sample.dataUrl);
-    if (tpl.width < 4 || tpl.height < 4) {
-      logs.push({
-        type,
-        templateId: sample.sampleId,
-        score: 0,
-        threshold,
-        bbox: null,
-        accepted: false,
-        rejectionReason: `Template too small ${tpl.width}×${tpl.height}`,
-        candidateRank: -1,
-      });
-      continue;
-    }
+  for (const { sample, type, canvas: tpl } of refs) {
     if (tpl.width > target.width || tpl.height > target.height) {
       logs.push({
         type,
@@ -122,26 +113,27 @@ async function matchFrameAnchors(
     }
 
     const result = await TemplateMatcher.match(tpl, target, "grayscale", threshold);
+    matchMs += result.timeMs;
+
     if (!result.matches.length) {
-      // Diagnostic-only pass below threshold — never accepted as anchors.
-      const soft = await TemplateMatcher.match(tpl, target, "grayscale", Math.min(0.35, threshold - 0.1));
-      const softBest = soft.matches[0];
+      const soft = result.best;
       logs.push({
         type,
         templateId: sample.sampleId,
-        score: softBest?.score ?? 0,
+        score: soft?.score ?? 0,
         threshold,
-        bbox: softBest?.bbox ?? null,
+        bbox: soft
+          ? { x: soft.x, y: soft.y, width: tpl.width, height: tpl.height }
+          : null,
         accepted: false,
-        rejectionReason: softBest
-          ? `Best ${softBest.score.toFixed(3)} < threshold ${threshold}`
+        rejectionReason: soft
+          ? `Best ${soft.score.toFixed(3)} < threshold ${threshold} (single-pass)`
           : `No candidate ≥ threshold ${threshold}`,
         candidateRank: -1,
       });
       continue;
     }
 
-    // Keep top candidates (not only best) for main vs comment action-row disambiguation.
     result.matches.slice(0, 5).forEach((m, rank) => {
       const entry: PostDetailVisualAnchor = {
         type,
@@ -171,24 +163,14 @@ async function matchFrameAnchors(
     });
   }
 
-  return { anchors: [...bestByType.values()], candidates, logs };
+  return { anchors: [...bestByType.values()], candidates, logs, matchMs };
 }
 
-async function rgbaFromDataUrl(dataUrl: string): Promise<{
-  data: Uint8ClampedArray;
-  width: number;
-  height: number;
-}> {
-  const canvas = await imageToCanvas(dataUrl);
-  const ctx = canvas.getContext("2d", { willReadFrequently: true });
-  if (!ctx) throw new Error("Canvas context unavailable for scroll motion.");
-  const img = ctx.getImageData(0, 0, canvas.width, canvas.height);
-  return { data: img.data, width: canvas.width, height: canvas.height };
-}
-
-/** Column mean luma for horizontal card-edge inference. */
-async function columnLumaProfile(dataUrl: string): Promise<Float64Array> {
-  const { data, width, height } = await rgbaFromDataUrl(dataUrl);
+function columnLumaFromRgba(
+  data: Uint8ClampedArray,
+  width: number,
+  height: number,
+): Float64Array {
   const cols = new Float64Array(width);
   const y0 = Math.round(height * 0.15);
   const y1 = Math.round(height * 0.75);
@@ -204,11 +186,17 @@ async function columnLumaProfile(dataUrl: string): Promise<Float64Array> {
   return cols;
 }
 
+function isFocusWheelBlock(outcome: string | undefined): boolean {
+  return outcome === "WHEEL_BLOCKED" || outcome === "WHEEL_BLOCKED_FOCUS";
+}
+
+function isWheelDispatched(outcome: string | undefined): boolean {
+  return outcome === "WHEEL_SENT" || outcome === "WHEEL_SENT_UNFOCUSED";
+}
+
 /**
- * Auto Scan: capture frame 1 first (before any wheel), then
- * wheel → settle → capture → visual confirm → match.
- * Does not navigate; uses current BrowserCore page.
- * Observed scroll increments only on VISUAL_SCROLL_CONFIRMED.
+ * Auto Scan: Frame 1: capture before any wheel, then
+ * wheel → adaptive settle → capture → visual confirm → match.
  */
 export async function runPostDetailAutoScan(deps: AutoScanDeps): Promise<{
   runId: string;
@@ -217,10 +205,16 @@ export async function runPostDetailAutoScan(deps: AutoScanDeps): Promise<{
 }> {
   const maxFrames = Math.max(1, Math.min(30, deps.maxFrames ?? POST_DETAIL_AUTO_SCAN_DEFAULTS.maxFrames));
   const deltaY = deps.deltaY ?? POST_DETAIL_AUTO_SCAN_DEFAULTS.deltaY;
-  const settleMs = deps.settleMs ?? POST_DETAIL_AUTO_SCAN_DEFAULTS.settleMs;
+  const settleCap = deps.settleMs ?? POST_DETAIL_AUTO_SCAN_DEFAULTS.settleMs;
+  const settleInitial = Math.min(settleCap, POST_DETAIL_AUTO_SCAN_DEFAULTS.settleMsInitial);
+  const settleRetry = Math.min(
+    settleCap - settleInitial,
+    POST_DETAIL_AUTO_SCAN_DEFAULTS.settleMsRetry,
+  );
   const matchThreshold = deps.matchThreshold ?? POST_DETAIL_AUTO_SCAN_DEFAULTS.matchThreshold;
   const motionThreshold = deps.motionThreshold ?? POST_DETAIL_AUTO_SCAN_DEFAULTS.motionThreshold;
   const maxStale = POST_DETAIL_AUTO_SCAN_DEFAULTS.maxStaleWheels;
+  const maxFocusRetries = POST_DETAIL_AUTO_SCAN_DEFAULTS.maxFocusWheelRetries;
   const runId = createPostDetailRunId();
   const frames: PostDetailScanFrame[] = [];
   const horizontalProfiles: Array<{ frameId: string; columns: Float64Array }> = [];
@@ -236,15 +230,23 @@ export async function runPostDetailAutoScan(deps: AutoScanDeps): Promise<{
     throw new Error("AUTO_SCAN_NO_REFERENCES: Cần ≥1 visual reference từ Step 1.");
   }
 
+  const preparedRefs = await prepareRefs(deps.visualReferences);
+  if (!preparedRefs.length) {
+    throw new Error("AUTO_SCAN_NO_REFERENCES: Không load được template Like/Comment/Share.");
+  }
+
   deps.onProgress({
     phase: "running",
     frameIndex: 0,
     maxFrames,
-    message: `Bắt đầu Auto Scan · Δy=${deltaY} (signed wheel) · refs=${deps.visualReferences.length}`,
+    message: `Bắt đầu Auto Scan · Δy=${deltaY} · refs=${preparedRefs.length} · settle≤${settleCap}ms`,
   });
   await collectorSetBrowserVisible(deps.invoke, true);
 
   for (let i = 1; i <= maxFrames; i++) {
+    const frameT0 = performance.now();
+    const timings: NonNullable<PostDetailFrameDiagnostics["timingsMs"]> = {};
+
     if (deps.isCancelled()) {
       stoppedReason = "cancelled";
       deps.onProgress({ phase: "stopped", frameIndex: i - 1, maxFrames, message: "Đã Stop Auto Scan." });
@@ -259,33 +261,63 @@ export async function runPostDetailAutoScan(deps: AutoScanDeps): Promise<{
     let screenshotBeforeRef: string | undefined;
     const requestedThisWheel = i > 1 ? deltaY : null;
 
-    // Frame 1: capture before any wheel. Later frames: wheel then settle then capture.
     if (i > 1) {
       screenshotBeforeRef = frames[frames.length - 1]?.frameId;
       deps.onProgress({
         phase: "running",
         frameIndex: i - 1,
         maxFrames,
-        message: `Wheel Δy=${deltaY} tại tâm viewport (mouseMove+wheel)…`,
+        message: `Wheel Δy=${deltaY} tại tâm viewport…`,
       });
-      const wheel = await collectorPostDetailWheel(deps.invoke, deltaY);
-      wheelPoint = wheel.wheelPoint;
-      wheelOutcome = wheel.outcome;
-      wheelReason = wheel.reason;
+
+      let wheelOk = false;
+      for (let attempt = 0; attempt <= maxFocusRetries; attempt++) {
+        const tw0 = performance.now();
+        const wheel = await collectorPostDetailWheel(deps.invoke, deltaY);
+        timings.wheelIpc = (timings.wheelIpc || 0) + (performance.now() - tw0);
+        wheelPoint = wheel.wheelPoint;
+        wheelOutcome = wheel.outcome as PostDetailFrameDiagnostics["wheelOutcome"];
+        wheelReason = [
+          wheel.reason,
+          wheel.focusAttempts != null ? `focusAttempts=${wheel.focusAttempts}` : null,
+          attempt > 0 ? `retry=${attempt}` : null,
+        ]
+          .filter(Boolean)
+          .join(" · ");
+
+        if (isWheelDispatched(wheel.outcome)) {
+          wheelOk = true;
+          break;
+        }
+        // Visibility / focus flaps mid-scan are recoverable — do not abort on first failure.
+        if (
+          (wheel.outcome === "WHEEL_BLOCKED_NOT_VISIBLE" || isFocusWheelBlock(wheel.outcome)) &&
+          attempt < maxFocusRetries
+        ) {
+          await collectorSetBrowserVisible(deps.invoke, true);
+          await sleep(100);
+          continue;
+        }
+        break;
+      }
+
       requestedScrollPx += Math.abs(deltaY);
 
-      if (!wheel.ok || wheel.outcome !== "WHEEL_SENT") {
-        stoppedReason = "WHEEL_BLOCKED";
+      if (!wheelOk) {
+        stoppedReason = String(wheelOutcome || "WHEEL_BLOCKED");
         deps.onProgress({
           phase: "error",
           frameIndex: i - 1,
           maxFrames,
-          message: `Wheel blocked: ${wheel.reason || wheel.outcome}`,
+          message: `Wheel failed: ${wheelReason || wheelOutcome}`,
         });
         break;
       }
 
-      await sleep(settleMs);
+      // Adaptive settle: short wait, then motion check after capture; optional extra wait if still.
+      const ts0 = performance.now();
+      await sleep(settleInitial);
+      timings.settle = performance.now() - ts0;
     }
 
     if (deps.isCancelled()) {
@@ -300,16 +332,44 @@ export async function runPostDetailAutoScan(deps: AutoScanDeps): Promise<{
       message: `Capture & Match frame ${i}/${maxFrames}…`,
     });
 
-    // Keep BrowserCore visible during Auto Scan so subsequent wheels keep focus.
-    const image = await collectorCaptureKeepVisible(deps.invoke);
     const frameId = createPostDetailFrameId(i);
-    const rgba = await rgbaFromDataUrl(image.dataUrl);
+
+    async function captureDecode() {
+      const tsShot = performance.now();
+      const shot = await collectorCaptureKeepVisible(deps.invoke);
+      const shotMs = performance.now() - tsShot;
+      const td0 = performance.now();
+      const canvas = await imageToCanvas(shot.dataUrl);
+      const c = canvas.getContext("2d", { willReadFrequently: true });
+      if (!c) throw new Error("Canvas context unavailable for scroll motion.");
+      const img = c.getImageData(0, 0, canvas.width, canvas.height);
+      const decoded = { data: img.data, width: canvas.width, height: canvas.height };
+      return { shot, canvas, rgba: decoded, shotMs, decodeMs: performance.now() - td0 };
+    }
+
+    let captured = await captureDecode();
+    timings.screenshot = captured.shotMs;
+    timings.decode = captured.decodeMs;
 
     if (i > 1 && prevRgba) {
-      const roi = defaultScrollCompareRoi(image.width, image.height);
-      const motion = measureVisualMotionScore(prevRgba, rgba, roi);
+      const roi = defaultScrollCompareRoi(captured.shot.width, captured.shot.height);
+      let motion = measureVisualMotionScore(prevRgba, captured.rgba, roi);
       visualMotionScore = motion.score;
       scrollConfirmed = isVisualScrollConfirmed(motion.score, motionThreshold);
+
+      // If wheel was sent but content not yet painted, wait once more and re-capture.
+      if (!scrollConfirmed && settleRetry > 0) {
+        const ts1 = performance.now();
+        await sleep(settleRetry);
+        timings.settle = (timings.settle || 0) + (performance.now() - ts1);
+        captured = await captureDecode();
+        timings.screenshot = (timings.screenshot || 0) + captured.shotMs;
+        timings.decode = (timings.decode || 0) + captured.decodeMs;
+        motion = measureVisualMotionScore(prevRgba, captured.rgba, roi);
+        visualMotionScore = motion.score;
+        scrollConfirmed = isVisualScrollConfirmed(motion.score, motionThreshold);
+      }
+
       scrollConfirmLabel = scrollConfirmed ? "VISUAL_SCROLL_CONFIRMED" : "SCROLL_NOT_MOVING";
       if (scrollConfirmed) {
         observedScrollPx += Math.abs(deltaY);
@@ -319,15 +379,20 @@ export async function runPostDetailAutoScan(deps: AutoScanDeps): Promise<{
       }
     }
 
-    prevRgba = rgba;
+    const image = captured.shot;
+    const rgba = captured.rgba;
+    prevRgba = { data: new Uint8ClampedArray(rgba.data), width: rgba.width, height: rgba.height };
 
-    const { anchors, candidates, logs } = await matchFrameAnchors(
-      image,
+    const tm0 = performance.now();
+    const { anchors, candidates, logs, matchMs } = await matchFrameAnchors(
+      captured.canvas,
       frameId,
       i,
-      deps.visualReferences,
+      preparedRefs,
       matchThreshold,
     );
+    timings.match = matchMs || performance.now() - tm0;
+
     const clusters = clusterActionRows(anchors, candidates);
     const primaryRow = selectPrimaryActionRow(anchors, candidates, {
       frameHeight: image.height,
@@ -347,7 +412,9 @@ export async function runPostDetailAutoScan(deps: AutoScanDeps): Promise<{
         }
       : null);
 
-    const columns = await columnLumaProfile(image.dataUrl);
+    const tc0 = performance.now();
+    const columns = columnLumaFromRgba(rgba.data, rgba.width, rgba.height);
+    timings.columnProfile = performance.now() - tc0;
     horizontalProfiles.push({ frameId, columns });
 
     const diagnostics: PostDetailFrameDiagnostics = {
@@ -365,6 +432,7 @@ export async function runPostDetailAutoScan(deps: AutoScanDeps): Promise<{
       matchLogs: logs,
       containerCandidate,
       stopOrRejectReason: undefined,
+      timingsMs: timings,
     };
 
     const frame: PostDetailScanFrame = {
@@ -389,11 +457,16 @@ export async function runPostDetailAutoScan(deps: AutoScanDeps): Promise<{
         topCluster
           ? `row=${topCluster.types.join("+")}:${topCluster.meanScore.toFixed(3)}:${topCluster.strength}`
           : "row=none",
+        `t_match=${Math.round(timings.match || 0)}ms`,
       ],
     };
     frames.push(frame);
     bestActionRow = updateBestActionRow(bestActionRow, frame);
-    deps.onFrame(frame, [...frames]);
+    const tf0 = performance.now();
+    deps.onFrame(frame, frames);
+    timings.onFrame = performance.now() - tf0;
+    timings.total = performance.now() - frameT0;
+    diagnostics.timingsMs = timings;
 
     if (i > 1 && staleWheels >= maxStale) {
       stoppedReason = "SCROLL_NOT_MOVING";
@@ -407,7 +480,6 @@ export async function runPostDetailAutoScan(deps: AutoScanDeps): Promise<{
       break;
     }
 
-    // Phase A early stop: strong main action-row cluster — do not scroll into comments.
     if (bestActionRow && shouldStopForActionRow(bestActionRow.cluster)) {
       stoppedReason = "MAIN_ACTION_ROW_CANDIDATE";
       diagnostics.stopOrRejectReason = `MAIN_ACTION_ROW_CANDIDATE on frame ${bestActionRow.frameId} types=${bestActionRow.cluster.types.join(",")} score=${bestActionRow.cluster.meanScore}`;
@@ -426,7 +498,7 @@ export async function runPostDetailAutoScan(deps: AutoScanDeps): Promise<{
       frames,
       wheelPoint,
       deltaY,
-      settleMs,
+      settleMs: settleCap,
       maxFrames,
       stoppedReason: "early-found",
       requestedScrollPx,
@@ -453,7 +525,7 @@ export async function runPostDetailAutoScan(deps: AutoScanDeps): Promise<{
     frames,
     wheelPoint,
     deltaY,
-    settleMs,
+    settleMs: settleCap,
     maxFrames,
     stoppedReason,
     requestedScrollPx,
@@ -462,7 +534,11 @@ export async function runPostDetailAutoScan(deps: AutoScanDeps): Promise<{
   });
 
   deps.onProgress({
-    phase: deps.isCancelled() ? "stopped" : stoppedReason === "SCROLL_NOT_MOVING" ? "stopped" : "done",
+    phase: deps.isCancelled()
+      ? "stopped"
+      : stoppedReason === "SCROLL_NOT_MOVING" || String(stoppedReason).startsWith("WHEEL_BLOCKED")
+        ? "stopped"
+        : "done",
     frameIndex: frames.length,
     maxFrames,
     message: `Auto Scan xong · status=${container.status} · frames=${frames.length} · requested=${requestedScrollPx} · observed=${observedScrollPx} · stop=${stoppedReason}`,

@@ -50,7 +50,12 @@ export async function collectorPostDetailWheel(
   deltaY: number,
 ): Promise<{
   ok: boolean;
-  outcome: "WHEEL_SENT" | "WHEEL_BLOCKED";
+  outcome:
+    | "WHEEL_SENT"
+    | "WHEEL_SENT_UNFOCUSED"
+    | "WHEEL_BLOCKED"
+    | "WHEEL_BLOCKED_FOCUS"
+    | "WHEEL_BLOCKED_NOT_VISIBLE";
   deltaY: number;
   wheelPoint: { x: number; y: number };
   viewport: { width: number; height: number };
@@ -58,9 +63,18 @@ export async function collectorPostDetailWheel(
   visible?: boolean;
   webContentsId?: number;
   reason?: string;
+  focusAttempts?: number;
 }> {
   if (!isElectronBrowserCoreAvailable()) throw new Error(BROWSER_CORE_UNAVAILABLE);
   return invoke({ type: "postDetailWheel", deltaY });
+}
+
+export async function collectorPostDetailScanInputLock(
+  invoke: CollectorInvoke,
+  locked: boolean,
+): Promise<{ ok: boolean; locked: boolean; mechanism?: string; userInputLocked?: boolean }> {
+  if (!isElectronBrowserCoreAvailable()) return { ok: false, locked: false };
+  return invoke({ type: "postDetailScanInputLock", locked });
 }
 
 /** Capture while keeping BrowserCore visible (Auto Scan continuous scroll). */

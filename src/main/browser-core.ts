@@ -59,7 +59,37 @@ export class BrowserCore {
   private captureGate: Promise<void> = Promise.resolve();
   zoom = 1;
   visible = true;
+  /**
+   * When true, OS mouse/wheel/keyboard to BrowserCore are preventDefault'd.
+   * Does not affect programmatic sendInputEvent (Auto Scan wheel).
+   */
+  private userInputLocked = false;
+  /**
+   * Auto Scan hold: overlays.layout must keep the native view visible even if
+   * collector host briefly goes inactive (root cause of false WHEEL_BLOCKED_NOT_VISIBLE).
+   */
+  private scanHoldVisible = false;
   private inputRoute: "browser" | "editor" | "unknown" = "unknown";
+
+  setUserInputLocked(locked: boolean) {
+    this.userInputLocked = Boolean(locked);
+  }
+
+  get isUserInputLocked() {
+    return this.userInputLocked;
+  }
+
+  setScanHoldVisible(hold: boolean) {
+    this.scanHoldVisible = Boolean(hold);
+    if (this.scanHoldVisible) {
+      this.visible = true;
+      this.view.setVisible(true);
+    }
+  }
+
+  get isScanHoldVisible() {
+    return this.scanHoldVisible;
+  }
   constructor(
     readonly window: BrowserWindow,
     readonly evidenceDir: string,
@@ -86,11 +116,23 @@ export class BrowserCore {
     });
     view.setVisible(false);
     const wc = view.webContents;
-    wc.on("before-mouse-event", () => {
+    wc.on("before-mouse-event", (event) => {
       this.inputRoute = "browser";
+      // Block user click/drag/wheel while Auto Scan owns the view.
+      // sendInputEvent used by scroll() does not go through this hook.
+      if (this.userInputLocked) event.preventDefault();
     });
-    wc.on("before-input-event", () => {
+    wc.on("before-input-event", (event, input) => {
       this.inputRoute = "browser";
+      if (this.userInputLocked) {
+        event.preventDefault();
+        return;
+      }
+      if (
+        (input.control || input.meta) &&
+        ["+", "=", "-", "0"].includes(input.key)
+      )
+        event.preventDefault();
     });
     wc.setWindowOpenHandler(({ url }) => {
       if (/^https?:\/\//.test(url)) void this.navigate(url).catch(() => {});
@@ -100,13 +142,6 @@ export class BrowserCore {
       if (!/^https?:\/\//.test(url)) event.preventDefault();
     });
     wc.on("did-finish-load", () => wc.setZoomFactor(this.zoom));
-    wc.on("before-input-event", (event, input) => {
-      if (
-        (input.control || input.meta) &&
-        ["+", "=", "-", "0"].includes(input.key)
-      )
-        event.preventDefault();
-    });
     void wc.setVisualZoomLevelLimits(1, 1);
     wc.session.setPermissionRequestHandler((_wc, _permission, callback) =>
       callback(false),
@@ -467,14 +502,13 @@ export class BrowserCore {
    * (required for Facebook nested scroll containers / post-detail modals).
    * Sign convention (verified by self-test): negative deltaY increases page scrollY (content moves up).
    */
-  scroll(deltaY: number, point?: { x: number; y: number }) {
+  scroll(deltaY: number, point?: { x: number; y: number }, opts?: { requireFocus?: boolean }) {
     if (!Number.isFinite(deltaY) || Math.abs(deltaY) > 3000)
       throw new Error("Scroll cần trong khoảng -3000 đến 3000 DIP.");
-    if (
-      !this.visible ||
-      !this.window.isVisible() ||
-      !this.view.webContents.isFocused()
-    )
+    const requireFocus = opts?.requireFocus !== false;
+    if (!this.visible || !this.window.isVisible())
+      throw new Error("SCROLL: browser cần đang hiển thị.");
+    if (requireFocus && !this.view.webContents.isFocused())
       throw new Error("SCROLL: browser cần đang hiển thị và có focus.");
     const bounds = this.view.getBounds();
     const x = point && Number.isFinite(point.x) ? Math.round(point.x) : Math.round(bounds.width / 2);

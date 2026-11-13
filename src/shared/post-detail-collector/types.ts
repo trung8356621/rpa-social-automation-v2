@@ -125,7 +125,14 @@ export type PostDetailVisualAnchor = {
   rejectionReason?: string | null;
 };
 
-export type PostDetailWheelOutcome = "WHEEL_SENT" | "WHEEL_BLOCKED" | "WHEEL_SKIPPED" | "NONE";
+export type PostDetailWheelOutcome =
+  | "WHEEL_SENT"
+  | "WHEEL_SENT_UNFOCUSED"
+  | "WHEEL_BLOCKED"
+  | "WHEEL_BLOCKED_FOCUS"
+  | "WHEEL_BLOCKED_NOT_VISIBLE"
+  | "WHEEL_SKIPPED"
+  | "NONE";
 
 export type PostDetailScrollConfirm = "VISUAL_SCROLL_CONFIRMED" | "SCROLL_NOT_MOVING" | "PENDING" | "N/A";
 
@@ -155,6 +162,16 @@ export type PostDetailFrameDiagnostics = {
   }>;
   containerCandidate: Rect | null;
   stopOrRejectReason?: string;
+  timingsMs?: {
+    wheelIpc?: number;
+    settle?: number;
+    screenshot?: number;
+    decode?: number;
+    match?: number;
+    columnProfile?: number;
+    onFrame?: number;
+    total?: number;
+  };
 };
 
 export type PostDetailScanFrame = {
@@ -230,12 +247,17 @@ export const POST_DETAIL_AUTO_SCAN_DEFAULTS = Object.freeze({
    * (self-test: scroll(-400) increases scrollY). Fine step so Post Detail does not jump into comments.
    */
   deltaY: -100,
+  /** Cap for adaptive settle (initial settle is shorter; extends only if motion unconfirmed). */
   settleMs: 550,
+  settleMsInitial: 180,
+  settleMsRetry: 220,
   matchThreshold: 0.55,
   /** Content-band MAD threshold for VISUAL_SCROLL_CONFIRMED. */
   motionThreshold: 6.5,
   /** Stop after this many consecutive wheels with no visual movement. */
   maxStaleWheels: 2,
+  /** Retry focus-related wheel blocks before aborting scan. */
+  maxFocusWheelRetries: 2,
 });
 
 /** Step 2 Auto Scan evidence — does not write final OCR manifest.json (Step 3 owns that). */

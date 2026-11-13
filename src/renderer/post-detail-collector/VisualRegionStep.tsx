@@ -10,6 +10,7 @@ import type {
 } from "../../shared/post-detail-collector/types";
 import {
   BROWSER_CORE_UNAVAILABLE,
+  collectorPostDetailScanInputLock,
   collectorReportBrowserHost,
   collectorSetBrowserVisible,
   isElectronBrowserCoreAvailable,
@@ -83,6 +84,8 @@ export function VisualRegionStep({
   const [hostClient, setHostClient] = useState<HostClient | null>(null);
   const cancelRef = useRef(false);
   const scanningRef = useRef(false);
+  /** Frames buffered during scan to avoid pushing every dataUrl into React each loop. */
+  const liveFramesRef = useRef<PostDetailScanFrame[]>([]);
 
   const hostRef = useRef<HTMLDivElement>(null);
   const previewScrollRef = useRef<HTMLDivElement>(null);
@@ -113,6 +116,7 @@ export function VisualRegionStep({
     const { ownerId } = claimCollectorHostOwner("pdc-step2");
     const safePublish = () => {
       if (!isCollectorHostOwner(ownerId)) return;
+      // Keep host active during scan (skipping publish caused WHEEL_BLOCKED_NOT_VISIBLE).
       publishHost();
     };
     safePublish();
@@ -131,6 +135,9 @@ export function VisualRegionStep({
       ro?.disconnect();
       window.removeEventListener("resize", safePublish);
       window.removeEventListener("scroll", safePublish, true);
+      cancelRef.current = true;
+      scanningRef.current = false;
+      void collectorPostDetailScanInputLock(invoke, false).catch(() => undefined);
       releaseCollectorHostOwner(ownerId, () => {
         void collectorReportBrowserHost(invoke, null);
         void collectorSetBrowserVisible(invoke, false);
@@ -147,6 +154,7 @@ export function VisualRegionStep({
     setError("");
     cancelRef.current = false;
     scanningRef.current = true;
+    liveFramesRef.current = [];
     onScanFrames([]);
     onContainerResult(null);
     onContentRoi(null);
@@ -156,6 +164,7 @@ export function VisualRegionStep({
       const probe = await onProbeRefresh();
       assertCaptureFromSocialPage(probe?.url || state?.url || sourceUrl || "");
       publishHost();
+      await collectorPostDetailScanInputLock(invoke, true);
       const { runId, frames: nextFrames, container } = await runPostDetailAutoScan({
         invoke,
         sourceUrl,
@@ -163,8 +172,9 @@ export function VisualRegionStep({
         isCancelled: () => cancelRef.current,
         onProgress: setProgress,
         onFrame: (frame, all) => {
-          onScanFrames(all);
-          setFrameIndex(all.length - 1);
+          liveFramesRef.current = all;
+          // Lightweight UI: latest preview only — flush full frame list at end.
+          setFrameIndex(Math.max(0, all.length - 1));
           if (frame.screenshotDataUrl) {
             onScreenshot({
               id: frame.frameId,
@@ -172,6 +182,7 @@ export function VisualRegionStep({
               width: frame.width,
               height: frame.height,
             });
+            onScanFrames([{ ...frame, anchorCandidates: undefined }]);
           }
         },
       });
@@ -271,8 +282,14 @@ export function VisualRegionStep({
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e));
       setProgress((p) => ({ ...p, phase: "error", message: String(e) }));
+      if (liveFramesRef.current.length) onScanFrames(liveFramesRef.current);
     } finally {
       scanningRef.current = false;
+      try {
+        await collectorPostDetailScanInputLock(invoke, false);
+      } catch {
+        /* ignore */
+      }
       try {
         await collectorSetBrowserVisible(invoke, true);
         publishHost();
@@ -285,6 +302,8 @@ export function VisualRegionStep({
   function stopScan() {
     cancelRef.current = true;
     setProgress((p) => ({ ...p, phase: "stopped", message: "Đang dừng…" }));
+    // Unlock ASAP so user can regain BrowserCore; runner still exits via isCancelled.
+    void collectorPostDetailScanInputLock(invoke, false).catch(() => undefined);
   }
 
   function confirmActionRow() {
@@ -449,8 +468,8 @@ export function VisualRegionStep({
         <div>
           <h2>Step 2 — Auto Scroll & Container Detection</h2>
           <p className="pdc-subtitle">
-            Cuộn về đầu bài trước khi Start. Auto Scan: capture → match → wheel Δy=-100 tại tâm viewport → lặp
-            (tối đa 20 frame). Không chọn OCR ROI thủ công trừ khi AMBIGUOUS.
+            Cuộn về đầu bài trước khi Start. Auto Scan khóa input (Facebook vẫn hiện), wheel Δy=-100,
+            settle thích ứng, tối đa 20 frame. Stop luôn mở khóa.
           </p>
         </div>
         <div className="pdc-btn-row">
@@ -468,13 +487,18 @@ export function VisualRegionStep({
           <button type="button" className="pdc-btn pdc-btn-warn" disabled={!running} onClick={stopScan}>
             Stop
           </button>
+          {running && (
+            <span className="pdc-input-lock-badge" title="OS input tới BrowserCore bị chặn; engine wheel vẫn chạy">
+              Auto Scan · Input Locked
+            </span>
+          )}
         </div>
       </div>
 
       <div className="pdc-scan-status" role="status">
         <span className={`pdc-mode ${running ? "frozen" : "live"}`}>{progress.phase.toUpperCase()}</span>
         <span>
-          Frames: {frames.length}/{progress.maxFrames}
+          Frames: {running ? progress.frameIndex : frames.length}/{progress.maxFrames}
         </span>
         <span>{progress.message}</span>
       </div>
@@ -488,10 +512,18 @@ export function VisualRegionStep({
 
       <div className="pdc-calibration-workspace">
         <div className="pdc-crop-container">
-          <div className="collector-capture-workspace collector-browser-workspace">
+          <div className="collector-capture-workspace collector-browser-workspace" style={{ position: "relative" }}>
             <div ref={hostRef} className="collector-browser-host" data-browser-core-host="" aria-label="Browser Core host" />
+            {running && (
+              <div
+                className="pdc-scan-input-shield"
+                aria-hidden
+                title="Auto Scan · Input Locked"
+              />
+            )}
           </div>
-          {shotUrl && hostClient && imageBox && (
+          {/* Live BrowserCore during scan — freeze screenshot only after Stop / for manual ROI. */}
+          {!running && shotUrl && hostClient && imageBox && (
             <div
               className="collector-capture-freeze snapshot pdc-scan-overlay"
               style={{
@@ -500,10 +532,10 @@ export function VisualRegionStep({
                 top: hostClient.top,
                 width: hostClient.width,
                 height: hostClient.height,
-                zIndex: running ? 10 : 40,
+                zIndex: 40,
                 margin: 0,
                 boxSizing: "border-box",
-                pointerEvents: manualMode && !running ? "auto" : "none",
+                pointerEvents: manualMode ? "auto" : "none",
               }}
               onPointerDown={onPointerDown}
               onPointerMove={onPointerMove}

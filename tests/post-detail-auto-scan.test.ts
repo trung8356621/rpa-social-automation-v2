@@ -323,6 +323,7 @@ test("wheel dispatch uses mouseMove then mouseWheel; signed delta; visual confir
   const browser = read("src/main/browser-core.ts");
   assert.match(browser, /type: "mouseMove"/);
   assert.match(browser, /type: "mouseWheel"/);
+  assert.match(browser, /requireFocus/);
 
   const runner = read("src/renderer/post-detail-collector/auto-scan-runner.ts");
   assert.match(runner, /Frame 1: capture before any wheel/);
@@ -330,15 +331,39 @@ test("wheel dispatch uses mouseMove then mouseWheel; signed delta; visual confir
   assert.match(runner, /SCROLL_NOT_MOVING/);
   assert.match(runner, /collectorCaptureKeepVisible/);
   assert.match(runner, /observedScrollPx/);
+  assert.match(runner, /WHEEL_SENT_UNFOCUSED/);
+  assert.match(runner, /result\.best/);
+  assert.match(runner, /timingsMs/);
   assert.doesNotMatch(runner, /scrollApplied \+= deltaY/);
 
   const defaults = read("src/shared/post-detail-collector/types.ts");
   assert.match(defaults, /deltaY: -100/);
   assert.match(defaults, /maxFrames: 20/);
+  assert.match(defaults, /settleMsInitial/);
+  assert.match(defaults, /maxFocusWheelRetries/);
 
   const main = read("src/main/main.ts");
   assert.match(main, /WHEEL_SENT/);
-  assert.match(main, /WHEEL_BLOCKED/);
+  assert.match(main, /WHEEL_SENT_UNFOCUSED/);
+  assert.match(main, /WHEEL_BLOCKED_FOCUS/);
+  assert.match(main, /WHEEL_BLOCKED_NOT_VISIBLE/);
+  assert.match(main, /postDetailScanInputLock/);
+  assert.match(main, /Do NOT call overlays\.layout/);
+
+  const lock = read("src/main/post-detail-scan-lock.ts");
+  assert.match(lock, /setUserInputLocked/);
+  assert.match(lock, /setScanHoldVisible/);
+  assert.match(lock, /WebContentsView/);
+  assert.match(lock, /transparent-shield/);
+  assert.doesNotMatch(lock, /rgba\(15,23,42/);
+
+  assert.match(browser, /userInputLocked/);
+  assert.match(browser, /scanHoldVisible/);
+  assert.match(browser, /before-mouse-event/);
+  assert.match(browser, /if \(this\.userInputLocked\) event\.preventDefault/);
+
+  const overlays = read("src/main/creator-overlays.ts");
+  assert.match(overlays, /isScanHoldVisible/);
 });
 
 test("Step 2 UI wires Auto Scan pipeline and Step 3 gate needs container", () => {
@@ -346,6 +371,8 @@ test("Step 2 UI wires Auto Scan pipeline and Step 3 gate needs container", () =>
   assert.match(step2, /Start Auto Scan/);
   assert.match(step2, /runPostDetailAutoScan/);
   assert.match(step2, /Confirm Container/);
+  assert.match(step2, /collectorPostDetailScanInputLock/);
+  assert.match(step2, /Auto Scan · Input Locked/);
   assert.doesNotMatch(step2, /Capture & Match/);
 
   const page = read("src/renderer/post-detail-collector/PostDetailCollectorPage.tsx");

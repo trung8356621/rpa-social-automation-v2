@@ -74,11 +74,13 @@ export class CreatorOverlays {
     });
     Object.assign(this.browser.bounds, browserBounds);
     this.browser.view.setBounds(browserBounds);
-    const show = shouldShowBrowserForPage({
-      page: this.page,
-      browserVisible: this.browser.visible,
-      collectorHostActive: Boolean(this.collectorHost?.active),
-    });
+    const show =
+      this.browser.isScanHoldVisible ||
+      shouldShowBrowserForPage({
+        page: this.page,
+        browserVisible: this.browser.visible,
+        collectorHostActive: Boolean(this.collectorHost?.active),
+      });
     this.browser.view.setVisible(show);
     // Legacy diagnostics can inspect bounds, but no Debug surface is attached.
     this.debug.setBounds(bounds.debug);

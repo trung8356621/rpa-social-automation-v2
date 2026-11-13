@@ -29,6 +29,7 @@ import { CreatorOverlays } from "./creator-overlays.js";
 import { BrowserCore } from "./browser-core.js";
 import { VisualMatchLabRuntime } from "./visual-match-lab.js";
 import { PostDetailRunStorage } from "./post-detail-storage.js";
+import { PostDetailScanInputLock } from "./post-detail-scan-lock.js";
 import { CollectorScrollCaptureController } from "./collector-scroll-capture.js";
 import { BrowserSessions } from "./browser-sessions.js";
 import { matchEndVisual } from "./end-visual-matcher.js";
@@ -322,7 +323,12 @@ async function boot() {
     browser,
     store.setting("appSidebarCollapsed") === "true",
   );
+  const postDetailScanLock = new PostDetailScanInputLock(window, browser);
   const postDetailStorage = new PostDetailRunStorage(project);
+  const layoutAndSyncScanLock = () => {
+    overlays.layout();
+    postDetailScanLock.syncBounds();
+  };
   const visualMatchLab = new VisualMatchLabRuntime(browser, async (operation) => {
     const previousPage = overlays.page;
     overlays.setPage("creator");
@@ -450,7 +456,7 @@ async function boot() {
   for (const view of overlays.views) browser.trackEditor(view.webContents);
   // Window and panel changes reposition the fixed viewport without reflowing it.
   window.on("resize", () => {
-    overlays.layout();
+    layoutAndSyncScanLock();
     publishLayout();
   });
   const creatorDevtools = process.env.CREATOR_DEVTOOLS === "1" &&
@@ -611,7 +617,7 @@ async function boot() {
       captures.clear();
       scrollCapture.cancelAll();
       browser.setZoom(browser.zoom);
-      overlays.layout();
+      layoutAndSyncScanLock();
       publishLayout();
       publishUrl();
       publishSessions();
@@ -1495,7 +1501,7 @@ async function boot() {
           left: Math.round(command.left),
           top: Math.round(command.top),
         };
-        overlays.layout();
+        layoutAndSyncScanLock();
         publishLayout();
         return;
       case "state":
@@ -1837,7 +1843,7 @@ async function boot() {
         isIdle();
         browser.setVisible(command.visible);
         // Overlays own page-specific show/hide (Creator vs Collector Capture host).
-        overlays.layout();
+        layoutAndSyncScanLock();
         publishLayout();
         if (pointerTrace.enabled)
           pointerTrace.record({
@@ -1945,7 +1951,7 @@ async function boot() {
         };
 
         browser.setVisible(true);
-        overlays.layout();
+        layoutAndSyncScanLock();
         publishLayout();
 
         const NAV_TIMEOUT_MS = 15_000;
@@ -2212,62 +2218,117 @@ async function boot() {
           sessionId: activeSessionId,
         };
       }
+      case "postDetailScanInputLock": {
+        isIdle();
+        const result = postDetailScanLock.setLocked(Boolean(command.locked));
+        // Keep BrowserCore visible + focused for sendInputEvent wheels; no visual overlay.
+        if (result.locked) {
+          browser.setVisible(true);
+          try {
+            window.focus();
+            browser.view.webContents.focus();
+          } catch {
+            /* ignore */
+          }
+        }
+        return {
+          ...result,
+          userInputLocked: browser.isUserInputLocked,
+        };
+      }
       case "postDetailWheel": {
         isIdle();
         const deltaY = Number(command.deltaY);
         if (!Number.isFinite(deltaY) || Math.abs(deltaY) > 3000) {
           throw new Error("postDetailWheel deltaY must be finite and within ±3000.");
         }
+        // Do NOT call overlays.layout()/publishLayout here — reflow steals focus mid-scan
+        // and was a primary source of false WHEEL_BLOCKED after several frames.
         browser.setVisible(true);
-        overlays.layout();
-        publishLayout();
+        if (postDetailScanLock.isLocked) browser.setScanHoldVisible(true);
+        // Force native view on — overlays.layout can leave view hidden while flag stays true.
+        try {
+          browser.view.setVisible(true);
+        } catch {
+          /* ignore */
+        }
+        postDetailScanLock.syncBounds();
         const wc = browser.view.webContents;
         if (!wc || wc.isDestroyed()) {
           throw new Error("BROWSER_CORE_UNAVAILABLE: BrowserCore webContents is not ready.");
-        }
-        try {
-          window.focus();
-        } catch {
-          /* ignore */
-        }
-        try {
-          wc.focus();
-        } catch {
-          /* ignore */
-        }
-        // Focus + layout settle before dispatch (focus is async on Windows).
-        await new Promise((r) => setTimeout(r, 50));
-        if (!wc.isFocused()) {
-          try {
-            wc.focus();
-          } catch {
-            /* ignore */
-          }
-          await new Promise((r) => setTimeout(r, 30));
         }
         const bounds = browser.view.getBounds();
         const point = {
           x: Math.round(Math.max(1, bounds.width) / 2),
           y: Math.round(Math.max(1, bounds.height) / 2),
         };
-        const focused = wc.isFocused();
-        const visible = browser.visible && window.isVisible();
-        if (!visible || !focused) {
+        const windowVisible = window.isVisible() && !window.isMinimized();
+        const visible = (browser.visible || browser.isScanHoldVisible) && windowVisible;
+        if (!visible) {
           return {
             ok: false,
-            outcome: "WHEEL_BLOCKED",
+            outcome: "WHEEL_BLOCKED_NOT_VISIBLE",
             deltaY,
             wheelPoint: point,
             viewport: { width: bounds.width, height: bounds.height },
-            focused,
-            visible,
+            focused: false,
+            visible: false,
             webContentsId: wc.id,
-            reason: !visible
-              ? "BrowserCore not visible"
-              : "BrowserCore webContents not focused",
+            reason: `BrowserCore not visible (flag=${browser.visible} hold=${browser.isScanHoldVisible} win=${windowVisible})`,
+            focusAttempts: 0,
           };
         }
-        browser.scroll(deltaY, point);
+
+        let focused = false;
+        let focusAttempts = 0;
+        for (let attempt = 1; attempt <= 5; attempt++) {
+          focusAttempts = attempt;
+          try {
+            window.focus();
+            wc.focus();
+          } catch {
+            /* ignore */
+          }
+          await new Promise((r) => setTimeout(r, 40));
+          focused = wc.isFocused();
+          if (focused) break;
+        }
+
+        if (!focused) {
+          // Last resort for Auto Scan: dispatch without isFocused() gate.
+          // sendInputEvent still targets this webContents; OS focus can lag on Windows
+          // after long matching / React updates.
+          try {
+            browser.scroll(deltaY, point, { requireFocus: false });
+            return {
+              ok: true,
+              outcome: "WHEEL_SENT_UNFOCUSED",
+              deltaY,
+              wheelPoint: point,
+              viewport: { width: bounds.width, height: bounds.height },
+              focused: false,
+              visible: true,
+              webContentsId: wc.id,
+              focusAttempts,
+              reason: "Dispatched after focus reclaim failed; verify with visual motion",
+            };
+          } catch (error) {
+            return {
+              ok: false,
+              outcome: "WHEEL_BLOCKED_FOCUS",
+              deltaY,
+              wheelPoint: point,
+              viewport: { width: bounds.width, height: bounds.height },
+              focused: false,
+              visible: true,
+              webContentsId: wc.id,
+              focusAttempts,
+              reason: error instanceof Error ? error.message : String(error),
+            };
+          }
+        }
+
+        browser.scroll(deltaY, point, { requireFocus: true });
         return {
           ok: true,
           outcome: "WHEEL_SENT",
@@ -2277,6 +2338,7 @@ async function boot() {
           focused: true,
           visible: true,
           webContentsId: wc.id,
+          focusAttempts,
         };
       }
       case "postDetailGeometryDiagnostic": {
@@ -2411,6 +2473,7 @@ async function boot() {
           });
         }
         publishLayout();
+        postDetailScanLock.syncBounds();
         return state();
       }
       case "collectorScrollCaptureBegin": {
@@ -3061,6 +3124,13 @@ async function boot() {
   });
   let closing = false;
   let closeApproved = selfTest;
+  window.on("closed", () => {
+    try {
+      postDetailScanLock.dispose();
+    } catch {
+      /* ignore */
+    }
+  });
   window.on("close", (event) => {
     if (closing) return;
     event.preventDefault();
@@ -3071,6 +3141,11 @@ async function boot() {
     }
     closing = true;
     for (const name of [...uiLayers.keys()]) closeUiLayer(name);
+    try {
+      postDetailScanLock.dispose();
+    } catch {
+      /* ignore */
+    }
     void browser
       .flush()
       .catch(console.error)
@@ -3348,7 +3423,7 @@ async function boot() {
           document.body.appendChild(mark);
           return true;
         })())`);
-        overlays.layout();
+        layoutAndSyncScanLock();
         await new Promise((r) => setTimeout(r, 100));
         const boundsAtCapture = browser.view.getBounds();
         const screenshot = await captureWindow(label);
@@ -3444,7 +3519,7 @@ async function boot() {
         await clickNav("Post Detail Collector");
         await waitForHost();
         window.setContentSize(1600, 900);
-        overlays.layout();
+        layoutAndSyncScanLock();
         publishLayout();
         await shellEval(`window.dispatchEvent(new Event('resize'))`);
         await new Promise((r) => setTimeout(r, 500));
