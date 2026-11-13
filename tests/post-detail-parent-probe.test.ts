@@ -33,7 +33,6 @@ test("calibration checks exact level before ±1 and full fallback", () => {
   );
   assert.equal(orderProgressiveCandidates(rows, 4).mode, "FULL_PROGRESSIVE");
 });
-
 test("progressive probe includes URL queries, second-row stop, root guard and cleanup", () => {
   const source = buildPostDetailParentProbeJs({
     sourceUrl: "https://www.facebook.com/groups/g/permalink/42/",
@@ -121,7 +120,7 @@ test("Confirm Action Row starts one controlled DOM-to-parent pipeline without te
   assert.doesNotMatch(confirmBody, /startAutoScan|runPostDetailAutoScan/);
 });
 
-test("saved parent resolver uses action row plus confirmed level and supports legacy config", () => {
+test("saved parent resolver rejects legacy config without an exact Action Row locator", () => {
   const source = buildResolveSavedParentJs({
     version: 1,
     platform: "facebook",
@@ -144,11 +143,10 @@ test("saved parent resolver uses action row plus confirmed level and supports le
   });
   assert.doesNotThrow(() => new Function(`return ${source}`));
   assert.match(source, /config\.parentLevel/);
-  assert.match(source, /__rpaPdcActionProbe/);
   assert.match(source, /ACTION_ROW_SELECTOR_NOT_FOUND/);
   assert.match(source, /ACTION_ROW_AMBIGUOUS/);
   assert.match(source, /PARENT_LEVEL_NOT_FOUND/);
-  assert.match(source, /validParentCandidateCount/);
+  assert.match(source, /SAVED_LOCATOR_STRICT/);
   assert.match(source, /innerHTML:parent\.innerHTML/);
   assert.doesNotMatch(source, /outerHTML/);
   assert.doesNotMatch(source, /config\.fingerprint|config\.actionRowSignature/);
@@ -175,7 +173,7 @@ test("saved parent resolver uses action row plus confirmed level and supports le
   assert.match(highlight, /requestAnimationFrame/);
 });
 
-test("saved action row locator is post-relative and remains optional for legacy configs", () => {
+test("saved action row locator is exact, post-relative and never ranks Parent candidates", () => {
   const located = buildResolveSavedParentJs({
     version: 1,
     platform: "facebook",
@@ -196,21 +194,12 @@ test("saved action row locator is post-relative and remains optional for legacy 
   assert.match(located, /config\.actionRowLocator/);
   assert.match(located, /locator\.anchorUp/);
   assert.match(located, /locator\.rowPath/);
-  assert.match(located, /validRow/);
-  assert.match(
-    located,
-    /common\.querySelectorAll\('button,\[role=button\],a'\)/,
-  );
-  assert.match(located, /while\(candidate&&candidate!==common\)/);
+  assert.match(located, /uniqueRows\.length!==1/);
   assert.match(located, /sameReason/);
   assert.match(located, /facebook-\(\?:permalink\|posts\)-path/);
   assert.match(located, /diagnosticMeta:meta/);
-  assert.match(located, /validParentCandidateCount/);
-  assert.match(located, /preferredExactRowCount/);
-  assert.match(located, /parentCandidateScores/);
-  assert.match(
-    located,
-    /const uniqueParents=Array\.from\(new Set\(parents\)\)/,
-  );
+  assert.match(located, /foreignPrimaryPostIds/);
+  assert.doesNotMatch(located, /identityCount|descendantCount|rankedParents/);
+  assert.doesNotMatch(located, /querySelectorAll\('button,\[role=button\],a'\)/);
   assert.match(located, /innerHTMLLength/);
 });

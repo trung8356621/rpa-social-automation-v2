@@ -27,6 +27,8 @@ test("auto resume guards unmount and navigation before entering Step 3", () => {
   assert.match(source, /step: 3/);
   assert.match(source, /Auto-resume belongs to this Collector mount/);
   assert.match(source, /autoResolveStarted\.current = false/);
+  assert.doesNotMatch(source, /runPostDetailAutoScan/);
+  assert.doesNotMatch(source, /postDetailResolveVisualActionRowParent/);
   assert.match(source, /\}, \[\]\);/);
 });
 
