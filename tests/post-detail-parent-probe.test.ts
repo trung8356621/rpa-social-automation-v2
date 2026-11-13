@@ -50,14 +50,19 @@ test("Confirm Action Row starts one controlled DOM-to-parent pipeline without te
   assert.doesNotMatch(confirmBody, /startAutoScan|runPostDetailAutoScan/);
 });
 
-test("saved parent resolver validates identity and structure before returning parent innerHTML", () => {
+test("saved parent resolver uses action row plus confirmed level and supports legacy config", () => {
   const source = buildResolveSavedParentJs({ version: 1, platform: "facebook", parentLevel: 8, fingerprint: "DIV::3:3", tag: "DIV", role: null, descendantCount: 120, locatorStrategy: "POST_IDENTITY_ASCEND_STRUCTURAL", actionRowSignature: { tag: "DIV", role: "", childCount: 3, svgCount: 3, buttonCount: 0, anchorCount: 3, directPattern: "DIV:|DIV:|DIV:" }, updatedAt: new Date(0).toISOString() });
   assert.doesNotThrow(() => new Function(`return ${source}`));
-  assert.match(source, /unique\.length!==1/);
+  assert.match(source, /config\.parentLevel/);
+  assert.match(source, /__rpaPdcActionProbe/);
+  assert.match(source, /Action Row or saved ancestor level could not be resolved/);
   assert.match(source, /innerHTML:el\.innerHTML/);
   assert.doesNotMatch(source, /outerHTML/);
+  assert.doesNotMatch(source, /config\.fingerprint|config\.actionRowSignature/);
   const page = readFileSync("src/renderer/post-detail-collector/PostDetailCollectorPage.tsx", "utf8");
   const step = readFileSync("src/renderer/post-detail-collector/SavedParentHtmlStep.tsx", "utf8");
   assert.match(page, /postDetailResolveSavedParent/);
+  assert.match(page, /navigationEpoch\.current !== startedAtEpoch/);
+  assert.match(page, /savedParentResolution\.status !== "PARENT_MATCHED"/);
   assert.match(step, /Rematch Parent/);
 });

@@ -26,6 +26,7 @@ export function PostDetailCollectorPage({ invoke, state: parentState }: { invoke
   const [probeError, setProbeError] = useState("");
   const [connStatus, setConnStatus] = useState("Đang kiểm tra BrowserCore...");
   const autoResolveStarted = React.useRef(false);
+  const navigationEpoch = React.useRef(0);
 
   const refreshProbe = React.useCallback(async () => {
     if (!isElectronBrowserCoreAvailable()) {
@@ -58,12 +59,25 @@ export function PostDetailCollectorPage({ invoke, state: parentState }: { invoke
     const { ownerId } = claimCollectorHostOwner("pdc-page");
     void (async () => {
       const live = await refreshProbe();
-      if (!live || autoResolveStarted.current) return;
+      if (!live || autoResolveStarted.current || state.step !== 1) return;
       autoResolveStarted.current = true;
+      const startedAtEpoch = navigationEpoch.current;
       const platform = /threads\.(?:com|net)/i.test(live.url) ? "threads" : "facebook";
       const config = state.parentConfigs[platform];
       if (!config) return;
-      const savedParentResolution = await invoke<import("../../shared/post-detail-collector/types").PostDetailSavedParentResolution>({ type: "postDetailResolveSavedParent", config });
+      let savedParentResolution: import("../../shared/post-detail-collector/types").PostDetailSavedParentResolution | null = null;
+      for (let attempt = 0; attempt < 5; attempt++) {
+        if (navigationEpoch.current !== startedAtEpoch) return;
+        savedParentResolution = await invoke<import("../../shared/post-detail-collector/types").PostDetailSavedParentResolution>({ type: "postDetailResolveSavedParent", config });
+        if (savedParentResolution.status === "PARENT_MATCHED") break;
+        if (attempt < 4) await new Promise((resolve) => setTimeout(resolve, 600));
+      }
+      if (!savedParentResolution || navigationEpoch.current !== startedAtEpoch) return;
+      if (savedParentResolution.status !== "PARENT_MATCHED") {
+        updateStore({ savedParentResolution });
+        setConnStatus(`Rematch Required · ${savedParentResolution.diagnostics.join(" · ")}`);
+        return;
+      }
       await collectorReportBrowserHost(invoke, null);
       await collectorSetBrowserVisible(invoke, false);
       updateStore({ savedParentResolution, step: 3 });
@@ -80,6 +94,7 @@ export function PostDetailCollectorPage({ invoke, state: parentState }: { invoke
   const goToStep = (step: PostDetailStep) => {
     if (step === 2 && !canEnterStep2(state.visualReferences.length)) return;
     if (step === 3 && !state.savedParentResolution) return;
+    navigationEpoch.current += 1;
     if (step !== 1 && step !== 2) {
       void collectorReportBrowserHost(invoke, null);
       void collectorSetBrowserVisible(invoke, false);

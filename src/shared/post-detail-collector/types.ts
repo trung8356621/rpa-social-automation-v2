@@ -401,12 +401,13 @@ export type PostDetailParentConfig = {
   version: 1;
   platform: string;
   parentLevel: number;
-  fingerprint: string;
-  tag: string;
-  role: string | null;
-  descendantCount: number;
-  locatorStrategy: "POST_IDENTITY_ASCEND_STRUCTURAL";
-  actionRowSignature: Record<string, unknown>;
+  locatorStrategy: "POST_IDENTITY_ACTION_ROW_LEVEL" | "POST_IDENTITY_ASCEND_STRUCTURAL";
+  /** Legacy diagnostics retained for backward-compatible reads; never required by resolver. */
+  fingerprint?: string;
+  tag?: string;
+  role?: string | null;
+  descendantCount?: number;
+  actionRowSignature?: Record<string, unknown>;
   updatedAt: string;
 };
 

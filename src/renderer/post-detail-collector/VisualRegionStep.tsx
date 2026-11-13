@@ -587,7 +587,7 @@ export function VisualRegionStep({
       }});
       localStorage.setItem(`rpa:pdc:parent-level:${parentProbe.platform || "unknown"}`, String(candidate.parentLevel));
       setConfirmedParentLevel(candidate.parentLevel);
-      await onParentConfigured({ version: 1, platform: parentProbe.platform || "unknown", parentLevel: candidate.parentLevel, fingerprint: candidate.fingerprint, tag: candidate.tag, role: candidate.role, descendantCount: candidate.descendantCount, locatorStrategy: "POST_IDENTITY_ASCEND_STRUCTURAL", actionRowSignature: parentProbe.actionRowSignature || {}, updatedAt: confirmedAt });
+      await onParentConfigured({ version: 1, platform: parentProbe.platform || "unknown", parentLevel: candidate.parentLevel, locatorStrategy: "POST_IDENTITY_ACTION_ROW_LEVEL", updatedAt: confirmedAt });
     }
     setParentConfirmed(confirm);
   }
