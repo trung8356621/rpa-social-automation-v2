@@ -20,7 +20,15 @@ import {
   isCollectorHostOwner,
   releaseCollectorHostOwner,
 } from "../collectors/collector-host-owner";
-import { runPostDetailAutoScan, type AutoScanProgress } from "./auto-scan-runner";
+import {
+  runPostDetailAutoScan,
+  type AutoScanProgress,
+} from "./auto-scan-runner";
+import {
+  actionRowDisplayStatus,
+  actionRowOverlayForFrame,
+  scaleImageRect,
+} from "./action-row-presentation";
 import { publishPostDetailBrowserHost } from "./publish-browser-host";
 import type { BrowserProbe, Invoke, PostDetailMatchResult } from "./types";
 
@@ -33,19 +41,32 @@ type Props = {
   scanFrames: PostDetailScanFrame[];
   contentRoi: Rect | null;
   lastMatch: PostDetailMatchResult | null;
-  lastScreenshot: { id: string; dataUrl: string; width: number; height: number } | null;
+  lastScreenshot: {
+    id: string;
+    dataUrl: string;
+    width: number;
+    height: number;
+  } | null;
   onContainerResult: (result: PostDetailContainerResult | null) => void;
   onScanFrames: (frames: PostDetailScanFrame[]) => void;
   onContentRoi: (roi: Rect | null) => void;
   onMatch: (match: PostDetailMatchResult | null) => void;
-  onScreenshot: (shot: { id: string; dataUrl: string; width: number; height: number } | null) => void;
+  onScreenshot: (
+    shot: { id: string; dataUrl: string; width: number; height: number } | null,
+  ) => void;
   onRunId: (runId: string) => void;
   onProbeRefresh: () => Promise<BrowserProbe | null>;
   onBack: () => void;
   onNext: () => void;
 };
 
-type DragState = { kind: "select"; startX: number; startY: number; currentX: number; currentY: number };
+type DragState = {
+  kind: "select";
+  startX: number;
+  startY: number;
+  currentX: number;
+  currentY: number;
+};
 type HostClient = { left: number; top: number; width: number; height: number };
 
 export function VisualRegionStep({
@@ -125,11 +146,16 @@ export function VisualRegionStep({
       requestAnimationFrame(() => requestAnimationFrame(safePublish)),
     ];
     const el = hostRef.current;
-    const ro = typeof ResizeObserver !== "undefined" ? new ResizeObserver(() => safePublish()) : null;
+    const ro =
+      typeof ResizeObserver !== "undefined"
+        ? new ResizeObserver(() => safePublish())
+        : null;
     if (el && ro) ro.observe(el);
     window.addEventListener("resize", safePublish);
     window.addEventListener("scroll", safePublish, true);
-    void collectorSetBrowserVisible(invoke, true).then(() => requestAnimationFrame(safePublish));
+    void collectorSetBrowserVisible(invoke, true).then(() =>
+      requestAnimationFrame(safePublish),
+    );
     return () => {
       for (const id of rafIds) cancelAnimationFrame(id);
       ro?.disconnect();
@@ -137,7 +163,9 @@ export function VisualRegionStep({
       window.removeEventListener("scroll", safePublish, true);
       cancelRef.current = true;
       scanningRef.current = false;
-      void collectorPostDetailScanInputLock(invoke, false).catch(() => undefined);
+      void collectorPostDetailScanInputLock(invoke, false).catch(
+        () => undefined,
+      );
       releaseCollectorHostOwner(ownerId, () => {
         void collectorReportBrowserHost(invoke, null);
         void collectorSetBrowserVisible(invoke, false);
@@ -165,7 +193,11 @@ export function VisualRegionStep({
       assertCaptureFromSocialPage(probe?.url || state?.url || sourceUrl || "");
       publishHost();
       await collectorPostDetailScanInputLock(invoke, true);
-      const { runId, frames: nextFrames, container } = await runPostDetailAutoScan({
+      const {
+        runId,
+        frames: nextFrames,
+        container,
+      } = await runPostDetailAutoScan({
         invoke,
         sourceUrl,
         visualReferences,
@@ -193,13 +225,20 @@ export function VisualRegionStep({
       const bestIdx = container.mainActionRow
         ? Math.max(
             0,
-            nextFrames.findIndex((f) => f.frameId === container.mainActionRow!.frameId),
+            nextFrames.findIndex(
+              (f) => f.frameId === container.mainActionRow!.frameId,
+            ),
           )
         : Math.max(0, nextFrames.length - 1);
-      setFrameIndex(bestIdx === -1 ? Math.max(0, nextFrames.length - 1) : bestIdx);
+      setFrameIndex(
+        bestIdx === -1 ? Math.max(0, nextFrames.length - 1) : bestIdx,
+      );
 
       const row = container.mainActionRow;
-      if (row?.status === "MAIN_ACTION_ROW_CANDIDATE" || (row && row.types.length >= 2)) {
+      if (
+        row?.status === "MAIN_ACTION_ROW_CANDIDATE" ||
+        (row && row.types.length >= 2)
+      ) {
         onMatch({
           status: "AMBIGUOUS",
           score: row.meanScore,
@@ -312,45 +351,47 @@ export function VisualRegionStep({
       setError("Chưa có Main Action Row candidate để Confirm.");
       return;
     }
-    onContentRoi(containerResult?.containerBounds || row.bbox);
     onMatch({
-      status: "MANUALLY_CONFIRMED",
+      status: "AMBIGUOUS",
       score: row.meanScore,
       templateId: row.anchors[0]?.templateId ?? null,
-      bbox: containerResult?.containerBounds || row.bbox,
+      bbox: row.bbox,
       candidateCount: row.anchors.length,
       scores: row.anchors.map((a) => a.score),
-      screenshotDataUrl: frames.find((f) => f.frameId === row.frameId)?.screenshotDataUrl || lastScreenshot?.dataUrl,
-      notes: [
-        ...row.notes,
-        "MAIN_ACTION_ROW confirmed for handoff.",
-      ],
+      screenshotDataUrl:
+        frames.find((f) => f.frameId === row.frameId)?.screenshotDataUrl ||
+        lastScreenshot?.dataUrl,
+      notes: [...row.notes, "MAIN_ACTION_ROW confirmed for handoff."],
     });
     if (containerResult) {
       onContainerResult({
         ...containerResult,
-        mainActionRow: { ...row, status: "MAIN_ACTION_ROW_CANDIDATE" },
-        status: containerResult.containerBounds ? "FOUND" : containerResult.status,
+        mainActionRow: { ...row, status: "CONFIRMED" },
       });
     }
     setProgress((p) => ({ ...p, message: "Action Row đã Confirm." }));
   }
 
   function confirmContainer() {
-    if (!containerResult?.containerBounds && !contentRoi && !containerResult?.mainActionRow?.bbox) {
-      setError("Chưa có container / action-row bounds để Confirm.");
+    if (!containerResult?.containerBounds && !contentRoi) {
+      setError("Chưa có Post Detail container bounds để Confirm.");
       return;
     }
-    const bounds = containerResult?.containerBounds || contentRoi || containerResult?.mainActionRow?.bbox;
+    const bounds = containerResult?.containerBounds || contentRoi;
     if (!bounds) return;
     onContentRoi(bounds);
     onMatch({
-      status: containerResult?.status === "FOUND" ? "MATCHED" : "MANUALLY_CONFIRMED",
+      status:
+        containerResult?.status === "FOUND" ? "MATCHED" : "MANUALLY_CONFIRMED",
       score: containerResult?.confidence ?? lastMatch?.score ?? null,
       templateId: lastMatch?.templateId ?? null,
       bbox: bounds,
-      candidateCount: containerResult?.visualAnchors.length ?? lastMatch?.candidateCount ?? 0,
-      scores: containerResult?.visualAnchors.map((a) => a.score) ?? lastMatch?.scores ?? [],
+      candidateCount:
+        containerResult?.visualAnchors.length ?? lastMatch?.candidateCount ?? 0,
+      scores:
+        containerResult?.visualAnchors.map((a) => a.score) ??
+        lastMatch?.scores ??
+        [],
       screenshotDataUrl: active?.screenshotDataUrl || lastScreenshot?.dataUrl,
       notes: [
         ...(containerResult?.notes ?? lastMatch?.notes ?? []),
@@ -358,13 +399,21 @@ export function VisualRegionStep({
       ],
     });
     if (containerResult) {
-      onContainerResult({ ...containerResult, status: "FOUND", containerBounds: bounds });
+      onContainerResult({
+        ...containerResult,
+        status: "FOUND",
+        containerBounds: bounds,
+      });
     }
-    setProgress((p) => ({ ...p, message: "Container đã Confirm · có thể sang Step 3." }));
+    setProgress((p) => ({
+      ...p,
+      message: "Container đã Confirm · có thể sang Step 3.",
+    }));
   }
 
   function pointerPos(e: { clientX: number; clientY: number }) {
-    if (!imageBox || !imageWidth || !imageHeight || !previewScrollRef.current) return { x: 0, y: 0 };
+    if (!imageBox || !imageWidth || !imageHeight || !previewScrollRef.current)
+      return { x: 0, y: 0 };
     const rect = previewScrollRef.current.getBoundingClientRect();
     return clientToImageCoords(
       e.clientX,
@@ -385,7 +434,13 @@ export function VisualRegionStep({
     if (!manualMode || !shotUrl) return;
     e.currentTarget.setPointerCapture(e.pointerId);
     const p = pointerPos(e);
-    const next: DragState = { kind: "select", startX: p.x, startY: p.y, currentX: p.x, currentY: p.y };
+    const next: DragState = {
+      kind: "select",
+      startX: p.x,
+      startY: p.y,
+      currentX: p.x,
+      currentY: p.y,
+    };
     setDrag(next);
     dragRef.current = next;
   }
@@ -407,7 +462,12 @@ export function VisualRegionStep({
     if (!d) return;
     setDrag(undefined);
     dragRef.current = undefined;
-    const nextRoi = dragToCaptureRoi(d.startX, d.startY, d.currentX, d.currentY);
+    const nextRoi = dragToCaptureRoi(
+      d.startX,
+      d.startY,
+      d.currentX,
+      d.currentY,
+    );
     if (nextRoi && nextRoi.width >= 4 && nextRoi.height >= 4) {
       onContentRoi(nextRoi);
       onMatch({
@@ -440,26 +500,21 @@ export function VisualRegionStep({
       }
     : null;
 
-  const canNext =
-    Boolean(contentRoi && contentRoi.width >= 4 && (lastScreenshot || shotUrl)) &&
-    Boolean(
-      lastMatch &&
-        (lastMatch.status === "MATCHED" || lastMatch.status === "MANUALLY_CONFIRMED") &&
-        lastMatch.bbox,
-    ) &&
-    Boolean(containerResult?.containerBounds || contentRoi);
+  const canNext = containerResult?.mainActionRow?.status === "CONFIRMED";
 
   const running = progress.phase === "running";
   const mainRow = containerResult?.mainActionRow;
-  const overlayBounds = mainRow?.bbox || containerResult?.containerBounds || contentRoi;
-  const overlayAnchors =
-    (mainRow && active?.frameId === mainRow.frameId ? mainRow.anchors : null) ||
-    active?.anchors ||
-    containerResult?.visualAnchors.filter((a) => a.frameId === active?.frameId) ||
-    [];
+  const actionRowOverlay = actionRowOverlayForFrame(mainRow, active?.frameId);
+  const actionRowStatus = actionRowDisplayStatus(mainRow);
+  const containerOverlay =
+    active?.frameId === mainRow?.frameId
+      ? containerResult?.containerBounds || contentRoi
+      : null;
 
   if (!electron) {
-    return <div className="pdc-alert pdc-alert-warn">{BROWSER_CORE_UNAVAILABLE}</div>;
+    return (
+      <div className="pdc-alert pdc-alert-warn">{BROWSER_CORE_UNAVAILABLE}</div>
+    );
   }
 
   return (
@@ -468,12 +523,18 @@ export function VisualRegionStep({
         <div>
           <h2>Step 2 — Auto Scroll & Container Detection</h2>
           <p className="pdc-subtitle">
-            Cuộn về đầu bài trước khi Start. Auto Scan khóa input (Facebook vẫn hiện), wheel Δy=-100,
-            settle thích ứng, tối đa 20 frame. Stop luôn mở khóa.
+            Cuộn về đầu bài trước khi Start. Auto Scan khóa input (Facebook vẫn
+            hiện), wheel Δy=-100, settle thích ứng, tối đa 20 frame. Stop luôn
+            mở khóa.
           </p>
         </div>
         <div className="pdc-btn-row">
-          <button type="button" className="pdc-btn pdc-btn-secondary" disabled={running} onClick={onBack}>
+          <button
+            type="button"
+            className="pdc-btn pdc-btn-secondary"
+            disabled={running}
+            onClick={onBack}
+          >
             ← Back
           </button>
           <button
@@ -484,11 +545,19 @@ export function VisualRegionStep({
           >
             Start Auto Scan
           </button>
-          <button type="button" className="pdc-btn pdc-btn-warn" disabled={!running} onClick={stopScan}>
+          <button
+            type="button"
+            className="pdc-btn pdc-btn-warn"
+            disabled={!running}
+            onClick={stopScan}
+          >
             Stop
           </button>
           {running && (
-            <span className="pdc-input-lock-badge" title="OS input tới BrowserCore bị chặn; engine wheel vẫn chạy">
+            <span
+              className="pdc-input-lock-badge"
+              title="OS input tới BrowserCore bị chặn; engine wheel vẫn chạy"
+            >
               Auto Scan · Input Locked
             </span>
           )}
@@ -496,9 +565,12 @@ export function VisualRegionStep({
       </div>
 
       <div className="pdc-scan-status" role="status">
-        <span className={`pdc-mode ${running ? "frozen" : "live"}`}>{progress.phase.toUpperCase()}</span>
+        <span className={`pdc-mode ${running ? "frozen" : "live"}`}>
+          {progress.phase.toUpperCase()}
+        </span>
         <span>
-          Frames: {running ? progress.frameIndex : frames.length}/{progress.maxFrames}
+          Frames: {running ? progress.frameIndex : frames.length}/
+          {progress.maxFrames}
         </span>
         <span>{progress.message}</span>
       </div>
@@ -506,14 +578,23 @@ export function VisualRegionStep({
       {error && <div className="pdc-alert pdc-alert-error">{error}</div>}
       {manualMode && (
         <div className="pdc-alert pdc-alert-warn">
-          Kết quả AMBIGUOUS — kéo vùng container thủ công trên frame rồi Confirm Container.
+          Kết quả AMBIGUOUS — kéo vùng container thủ công trên frame rồi Confirm
+          Container.
         </div>
       )}
 
       <div className="pdc-calibration-workspace">
         <div className="pdc-crop-container">
-          <div className="collector-capture-workspace collector-browser-workspace" style={{ position: "relative" }}>
-            <div ref={hostRef} className="collector-browser-host" data-browser-core-host="" aria-label="Browser Core host" />
+          <div
+            className="collector-capture-workspace collector-browser-workspace"
+            style={{ position: "relative" }}
+          >
+            <div
+              ref={hostRef}
+              className="collector-browser-host"
+              data-browser-core-host=""
+              aria-label="Browser Core host"
+            />
             {running && (
               <div
                 className="pdc-scan-input-shield"
@@ -547,7 +628,13 @@ export function VisualRegionStep({
                 className="collector-capture-preview-scroll"
                 style={{ width: "100%", height: "100%", overflow: "hidden" }}
               >
-                <div style={{ width: imageBox.width, height: imageBox.height, position: "relative" }}>
+                <div
+                  style={{
+                    width: imageBox.width,
+                    height: imageBox.height,
+                    position: "relative",
+                  }}
+                >
                   <img
                     src={shotUrl}
                     alt={`Scan frame ${active?.frameIndex ?? ""}`}
@@ -561,33 +648,61 @@ export function VisualRegionStep({
                       pointerEvents: "none",
                     }}
                   />
-                  {overlayAnchors.map((a) => (
+                  {actionRowOverlay?.anchors.map((a) => {
+                    const box = scaleImageRect(
+                      a.bbox,
+                      { width: imageWidth, height: imageHeight },
+                      imageBox,
+                    );
+                    return (
+                      <div
+                        key={`${a.type}-${a.templateId}-${a.frameId}`}
+                        className={`pdc-anchor-highlight pdc-anchor-${a.type.toLowerCase()}`}
+                        style={{
+                          left: box.x,
+                          top: box.y,
+                          width: box.width,
+                          height: box.height,
+                        }}
+                        title={`${a.type} ${(a.score * 100).toFixed(1)}%`}
+                      >
+                        <span>
+                          {a.type} {(a.score * 100).toFixed(1)}%
+                        </span>
+                      </div>
+                    );
+                  })}
+                  {actionRowOverlay &&
+                    (() => {
+                      const box = scaleImageRect(
+                        actionRowOverlay.bbox,
+                        { width: imageWidth, height: imageHeight },
+                        imageBox,
+                      );
+                      return (
+                        <div
+                          className="pdc-action-row-highlight"
+                          style={{
+                            left: box.x,
+                            top: box.y,
+                            width: box.width,
+                            height: box.height,
+                          }}
+                          title={`Main Action Row ${(mainRow!.meanScore * 100).toFixed(1)}%`}
+                        />
+                      );
+                    })()}
+                  {containerOverlay && (
                     <div
-                      key={`${a.type}-${a.templateId}-${a.frameId}`}
                       className="collector-roi-highlight"
                       style={{
-                        left: (a.bbox.x / imageWidth) * imageBox.width,
-                        top: (a.bbox.y / imageHeight) * imageBox.height,
-                        width: (a.bbox.width / imageWidth) * imageBox.width,
-                        height: (a.bbox.height / imageHeight) * imageBox.height,
-                        border: "2px solid #fbbf24",
-                        background: "rgba(251, 191, 36, 0.15)",
-                        position: "absolute",
-                        pointerEvents: "none",
-                      }}
-                      title={`${a.type} ${a.score.toFixed(3)}`}
-                    />
-                  ))}
-                  {overlayBounds && (
-                    <div
-                      className="collector-roi-highlight"
-                      style={{
-                        left: (overlayBounds.x / imageWidth) * imageBox.width,
-                        top: (overlayBounds.y / imageHeight) * imageBox.height,
-                        width: (overlayBounds.width / imageWidth) * imageBox.width,
-                        height: (overlayBounds.height / imageHeight) * imageBox.height,
+                        ...scaleImageRect(
+                          containerOverlay,
+                          { width: imageWidth, height: imageHeight },
+                          imageBox,
+                        ),
                         border: "2px solid #34d399",
-                        background: "rgba(52, 211, 153, 0.12)",
+                        background: "transparent",
                         position: "absolute",
                         pointerEvents: "none",
                       }}
@@ -600,7 +715,8 @@ export function VisualRegionStep({
                         left: (liveDrag.x / imageWidth) * imageBox.width,
                         top: (liveDrag.y / imageHeight) * imageBox.height,
                         width: (liveDrag.width / imageWidth) * imageBox.width,
-                        height: (liveDrag.height / imageHeight) * imageBox.height,
+                        height:
+                          (liveDrag.height / imageHeight) * imageBox.height,
                         border: "2px dashed #7dd3fc",
                         background: "rgba(125, 211, 252, 0.15)",
                         position: "absolute",
@@ -616,23 +732,41 @@ export function VisualRegionStep({
 
         <div className="pdc-side-panel">
           <h3>Detection</h3>
+          <div
+            className={`pdc-action-result pdc-action-result-${actionRowStatus.toLowerCase()}`}
+          >
+            <strong>
+              ACTION ROW{" "}
+              {actionRowStatus.replace("_FOUND", "").replace("_", " ")}
+              {mainRow ? ` — ${(mainRow.meanScore * 100).toFixed(1)}%` : ""}
+            </strong>
+            {mainRow && (
+              <span>
+                {mainRow.anchors
+                  .map((a) => `${a.type} ${(a.score * 100).toFixed(1)}%`)
+                  .join(" · ")}
+              </span>
+            )}
+          </div>
+          <div
+            className={`pdc-container-result pdc-status-${(containerResult?.status || "not_found").toLowerCase()}`}
+          >
+            Container: {containerResult?.status || "NOT_FOUND"}
+            {containerResult?.status === "AMBIGUOUS"
+              ? " (chưa xác định HTML boundary)"
+              : ""}
+          </div>
           <dl className="pdc-dl">
-            <dt>Status</dt>
-            <dd className={`pdc-status-${(containerResult?.status || "not_found").toLowerCase()}`}>
-              {containerResult?.status || "—"}
-            </dd>
             <dt>Action Row</dt>
             <dd>
               {mainRow
-                ? `${mainRow.status} · f${mainRow.frameIndex} · ${mainRow.types.join("+")} · ${mainRow.meanScore.toFixed(3)}`
-                : "—"}
+                ? `${actionRowStatus} · frame ${mainRow.frameIndex} · ${mainRow.types.join("+")}`
+                : "NOT_FOUND"}
             </dd>
-            <dt>Confidence</dt>
-            <dd>{containerResult?.confidence != null ? containerResult.confidence.toFixed(3) : mainRow?.meanScore.toFixed(3) ?? "—"}</dd>
             <dt>Container</dt>
             <dd>
-              {overlayBounds
-                ? `${Math.round(overlayBounds.width)}×${Math.round(overlayBounds.height)} @ (${Math.round(overlayBounds.x)},${Math.round(overlayBounds.y)})`
+              {containerResult?.containerBounds
+                ? `${Math.round(containerResult.containerBounds.width)}×${Math.round(containerResult.containerBounds.height)} @ (${Math.round(containerResult.containerBounds.x)},${Math.round(containerResult.containerBounds.y)})`
                 : "—"}
             </dd>
             <dt>Wheel</dt>
@@ -656,7 +790,11 @@ export function VisualRegionStep({
                 : "—"}
             </dd>
             <dt>Stop</dt>
-            <dd>{containerResult?.scrollMetadata.stoppedReason || active?.diagnostics?.stopOrRejectReason || "—"}</dd>
+            <dd>
+              {containerResult?.scrollMetadata.stoppedReason ||
+                active?.diagnostics?.stopOrRejectReason ||
+                "—"}
+            </dd>
           </dl>
 
           <h3>References ({visualReferences.length})</h3>
@@ -676,11 +814,14 @@ export function VisualRegionStep({
             {(active?.anchors || []).map((a) => (
               <li key={`${a.type}-${a.score}`}>
                 <span>
-                  {a.type} · {a.score.toFixed(3)} · {Math.round(a.bbox.width)}×{Math.round(a.bbox.height)}
+                  {a.type} · {a.score.toFixed(3)} · {Math.round(a.bbox.width)}×
+                  {Math.round(a.bbox.height)}
                 </span>
               </li>
             ))}
-            {!active?.anchors?.length && <li className="pdc-muted">Chưa có anchor trên frame này.</li>}
+            {!active?.anchors?.length && (
+              <li className="pdc-muted">Chưa có anchor trên frame này.</li>
+            )}
           </ul>
 
           <div className="pdc-frame-nav">
@@ -699,7 +840,9 @@ export function VisualRegionStep({
               type="button"
               className="pdc-btn pdc-btn-tiny"
               disabled={frameIndex >= frames.length - 1 || running}
-              onClick={() => setFrameIndex((i) => Math.min(frames.length - 1, i + 1))}
+              onClick={() =>
+                setFrameIndex((i) => Math.min(frames.length - 1, i + 1))
+              }
             >
               Next →
             </button>
@@ -709,30 +852,38 @@ export function VisualRegionStep({
             <button
               type="button"
               className="pdc-btn pdc-btn-primary"
-              disabled={running || !mainRow?.bbox}
+              disabled={
+                running || !mainRow?.bbox || mainRow.status === "CONFIRMED"
+              }
               onClick={confirmActionRow}
             >
-              Confirm Action Row
+              {mainRow?.status === "CONFIRMED"
+                ? "Action Row Confirmed"
+                : "Confirm Action Row"}
             </button>
             <button
               type="button"
               className="pdc-btn pdc-btn-secondary"
-              disabled={running || (!containerResult?.containerBounds && !contentRoi && !mainRow?.bbox)}
+              disabled={
+                running || (!containerResult?.containerBounds && !contentRoi)
+              }
               onClick={confirmContainer}
             >
               Confirm Container
             </button>
           </div>
-          <p className="pdc-panel-desc">{(containerResult?.notes || []).join(" · ") || "Chưa có diagnostics."}</p>
-          <button
-            type="button"
-            className="pdc-btn pdc-btn-primary"
-            disabled={!canNext || running}
-            title={canNext ? undefined : "Cần Confirm Container (FOUND hoặc manual) + evidence"}
-            onClick={onNext}
-          >
-            Next: OCR Preview →
-          </button>
+          <p className="pdc-panel-desc">
+            {(containerResult?.notes || []).join(" · ") ||
+              "Chưa có diagnostics."}
+          </p>
+          <div className="pdc-direction-panel">
+            <button type="button" className="pdc-btn pdc-btn-primary" disabled={!canNext || running} title={canNext ? undefined : "Cần Confirm Action Row"} onClick={onNext}>
+              Extract Above — Post Detail →
+            </button>
+            <button type="button" className="pdc-btn pdc-btn-secondary" disabled title="Coming later">
+              Extract Below — Comments (Coming later)
+            </button>
+          </div>
         </div>
       </div>
     </div>

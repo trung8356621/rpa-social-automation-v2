@@ -3,6 +3,7 @@ import type {
   PostDetailContainerResult,
   PostDetailMatchResult,
   PostDetailOcrFrame,
+  PostDetailHtmlExtractionResult,
   PostDetailScanFrame,
   PostDetailStep,
   VisualReferenceSample,
@@ -35,6 +36,7 @@ export type PostDetailCollectorState = {
   frames: PostDetailOcrFrame[];
   selectedFrameIndex: number;
   viewMode: "original" | "crop" | "text";
+  htmlExtraction: PostDetailHtmlExtractionResult | null;
 };
 
 export type {

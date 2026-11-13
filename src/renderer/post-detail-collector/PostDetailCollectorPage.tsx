@@ -10,7 +10,7 @@ import {
   releaseCollectorHostOwner,
 } from "../collectors/collector-host-owner";
 import { BrowserCaptureStep } from "./BrowserCaptureStep";
-import { OcrPreviewStep } from "./OcrPreviewStep";
+import { HtmlExtractionStep } from "./HtmlExtractionStep";
 import { VisualRegionStep } from "./VisualRegionStep";
 import { usePostDetailCollectorStore } from "./store";
 import type { BrowserProbe, Invoke, PostDetailStep } from "./types";
@@ -21,17 +21,10 @@ function canEnterStep2(refs: number): boolean {
 }
 
 function canEnterStep3(state: {
-  contentRoi: { width: number; height: number } | null;
-  containerResult: { containerBounds: unknown } | null;
-  lastMatch: { status: string; bbox: unknown } | null;
-  lastScreenshot: unknown;
+  containerResult: { mainActionRow?: { status: string } | null } | null;
+  htmlExtraction?: unknown;
 }): boolean {
-  // Step 3 only after confirmed container (contentRoi from Confirm / FOUND) — never action-row template ROI alone.
-  if (!state.contentRoi || state.contentRoi.width < 4 || state.contentRoi.height < 4) return false;
-  if (!state.lastScreenshot) return false;
-  if (!state.containerResult?.containerBounds) return false;
-  if (!state.lastMatch?.bbox) return false;
-  return state.lastMatch.status === "MATCHED" || state.lastMatch.status === "MANUALLY_CONFIRMED";
+  return state.containerResult?.mainActionRow?.status === "CONFIRMED" || Boolean(state.htmlExtraction);
 }
 
 export function PostDetailCollectorPage({ invoke, state: parentState }: { invoke: Invoke; state?: State | null }) {
@@ -93,6 +86,26 @@ export function PostDetailCollectorPage({ invoke, state: parentState }: { invoke
   const step2Ready = canEnterStep2(state.visualReferences.length);
   const step3Ready = canEnterStep3(state);
 
+  const extractAbove = async () => {
+    const row = state.containerResult?.mainActionRow;
+    const frame = state.scanFrames.find((item) => item.frameId === row?.frameId);
+    const live = await refreshProbe();
+    if (!row || row.status !== "CONFIRMED" || !frame || !live || !state.runId) return;
+    const htmlExtraction = await invoke<import("../../shared/post-detail-collector/types").PostDetailHtmlExtractionResult>({
+      type: "postDetailExtractAbove",
+      input: {
+        runId: state.runId,
+        expectedUrl: live.url,
+        expectedWebContentsId: live.webContentsId,
+        frameId: frame.frameId,
+        frameIndex: frame.frameIndex,
+        screenshot: { width: frame.width, height: frame.height },
+        anchors: row.anchors,
+      },
+    });
+    updateStore({ htmlExtraction, step: 3 });
+  };
+
   return (
     <section className="app-page post-detail-collector-page" aria-label="Post Detail Collector">
       <div className="pdc-page-header">
@@ -129,7 +142,7 @@ export function PostDetailCollectorPage({ invoke, state: parentState }: { invoke
             onClick={() => goToStep(3)}
           >
             <span className="pdc-step-num">3</span>
-            <span className="pdc-step-text">OCR Preview</span>
+            <span className="pdc-step-text">HTML Extraction</span>
           </button>
         </nav>
       </div>
@@ -174,29 +187,11 @@ export function PostDetailCollectorPage({ invoke, state: parentState }: { invoke
             onRunId={(runId) => updateStore({ runId })}
             onProbeRefresh={refreshProbe}
             onBack={() => goToStep(1)}
-            onNext={() => goToStep(3)}
+            onNext={() => void extractAbove()}
           />
         )}
         {state.step === 3 && (
-          <OcrPreviewStep
-            invoke={invoke}
-            sourceUrl={state.sourceUrl}
-            runId={state.runId}
-            contentRoi={state.contentRoi}
-            lastMatch={state.lastMatch}
-            lastScreenshot={state.lastScreenshot}
-            visualReferences={state.visualReferences}
-            frames={state.frames}
-            selectedFrameIndex={state.selectedFrameIndex}
-            viewMode={state.viewMode}
-            onRunId={(runId) => updateStore({ runId })}
-            onFrames={(frames) => updateStore({ frames })}
-            onSelectFrame={(selectedFrameIndex) => updateStore({ selectedFrameIndex })}
-            onViewMode={(viewMode) => updateStore({ viewMode })}
-            onScreenshot={(lastScreenshot) => updateStore({ lastScreenshot })}
-            onProbeRefresh={refreshProbe}
-            onBack={() => goToStep(2)}
-          />
+          <HtmlExtractionStep result={state.htmlExtraction} onBack={() => goToStep(2)} />
         )}
       </div>
     </section>

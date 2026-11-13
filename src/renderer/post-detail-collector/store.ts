@@ -48,6 +48,7 @@ const INITIAL: PostDetailCollectorState = {
   frames: persisted.frames ?? [],
   selectedFrameIndex: persisted.selectedFrameIndex ?? 0,
   viewMode: "text",
+  htmlExtraction: null,
 };
 
 let globalState: PostDetailCollectorState = { ...INITIAL };

@@ -29,6 +29,7 @@ import { CreatorOverlays } from "./creator-overlays.js";
 import { BrowserCore } from "./browser-core.js";
 import { VisualMatchLabRuntime } from "./visual-match-lab.js";
 import { PostDetailRunStorage } from "./post-detail-storage.js";
+import { buildPostDetailExtractAboveJs, normalizeExtractionResult, parsePostDetailHtmlSnapshot, validateExpectedPostUrl } from "./post-detail-html-extractor.js";
 import { PostDetailScanInputLock } from "./post-detail-scan-lock.js";
 import { CollectorScrollCaptureController } from "./collector-scroll-capture.js";
 import { BrowserSessions } from "./browser-sessions.js";
@@ -2179,6 +2180,30 @@ async function boot() {
         isIdle();
         return postDetailStorage.saveAutoScan(command.input);
       }
+      case "postDetailExtractAbove": {
+        isIdle();
+        const wc = browser.view.webContents;
+        if (!wc || wc.isDestroyed()) throw new Error("BROWSER_CORE_UNAVAILABLE");
+        if (wc.id !== command.input.expectedWebContentsId) {
+          return normalizeExtractionResult(command.input.runId, {
+            status: "WEB_CONTENTS_CHANGED",
+            diagnostics: [`Expected webContents.id=${command.input.expectedWebContentsId}, live=${wc.id}.`],
+          });
+        }
+        if (!validateExpectedPostUrl(command.input.expectedUrl)) {
+          return normalizeExtractionResult(command.input.runId, {
+            status: "URL_MISMATCH",
+            diagnostics: ["Expected URL is not a supported Facebook post permalink."],
+          });
+        }
+        const result = normalizeExtractionResult(
+          command.input.runId,
+          await wc.executeJavaScript(buildPostDetailExtractAboveJs(command.input), true),
+        );
+        if (result.status === "FOUND") result.parsed = parsePostDetailHtmlSnapshot(result.extractedHtml);
+        result.evidencePaths = await postDetailStorage.saveHtmlExtraction(result);
+        return result;
+      }
       case "postDetailListRuns": {
         isIdle();
         return postDetailStorage.listRuns();
@@ -2274,7 +2299,7 @@ async function boot() {
             focused: false,
             visible: false,
             webContentsId: wc.id,
-            reason: `BrowserCore not visible (flag=${browser.visible} hold=${browser.isScanHoldVisible} win=${windowVisible})`,
+            reason: `BrowserCore not visible (flag=${browser.visible} hold=${browser.isScanHoldVisible} winVisible=${window.isVisible()} minimized=${window.isMinimized()} focused=${wc.isFocused()} locked=${postDetailScanLock.isLocked} bounds=${bounds.x},${bounds.y},${bounds.width},${bounds.height})`,
             focusAttempts: 0,
           };
         }

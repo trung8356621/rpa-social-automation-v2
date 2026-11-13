@@ -11,6 +11,7 @@ import type { UserPermalinkRule } from "./permalink-rules.js";
 import type { VisualMatchSaveFrameAttemptInput } from "./visual-match-lab-storage.js";
 import type {
   PostDetailSaveAutoScanInput,
+  PostDetailExtractAboveInput,
   PostDetailSaveRunInput,
 } from "./post-detail-collector/types.js";
 export type { ScriptReleaseManifest } from "./script-release.js";
@@ -532,6 +533,7 @@ export type Command =
   | { type: "visualMatchLabOcr"; dataUrl: string }
   | { type: "postDetailSaveRun"; input: PostDetailSaveRunInput }
   | { type: "postDetailSaveAutoScan"; input: PostDetailSaveAutoScanInput }
+  | { type: "postDetailExtractAbove"; input: PostDetailExtractAboveInput }
   | { type: "postDetailListRuns" }
   | { type: "postDetailLoadRun"; runId: string }
   /** Lightweight BrowserCore probe — no BROWSER_NOT_FACEBOOK guard (navigate may start from any page). */

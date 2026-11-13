@@ -223,6 +223,9 @@ export class BrowserCore {
     this.view.webContents.setZoomFactor(this.zoom);
   }
   setVisible(visible: boolean) {
+    // Auto Scan owns BrowserCore visibility until its input lock is released.
+    // A delayed collector-host cleanup must not hide the native view mid-run.
+    if (!visible && this.scanHoldVisible) return;
     this.visible = visible;
     this.view.setVisible(visible);
   }

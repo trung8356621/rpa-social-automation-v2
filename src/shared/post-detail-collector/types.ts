@@ -2,9 +2,11 @@ import type { OcrResult, Rect } from "../contracts.js";
 
 export type PostDetailStep = 1 | 2 | 3;
 
-export type VisualMatchStatus = "MATCHED" | "AMBIGUOUS" | "NOT_FOUND" | "MANUALLY_CONFIRMED";
+export type VisualMatchStatus =
+  "MATCHED" | "AMBIGUOUS" | "NOT_FOUND" | "MANUALLY_CONFIRMED";
 
-export type OcrFrameStatus = "PENDING" | "OCR_DONE" | "OCR_FAILED" | "NEEDS_REVIEW";
+export type OcrFrameStatus =
+  "PENDING" | "OCR_DONE" | "OCR_FAILED" | "NEEDS_REVIEW";
 
 /** Visual reference sample — UI variant template, not an OCR content frame. */
 export type VisualReferenceSample = {
@@ -82,7 +84,9 @@ export type PostDetailSaveRunInput = {
   platform?: string;
   createdAt?: string;
   viewport?: { width: number; height: number };
-  visualReferences: Array<Omit<VisualReferenceSample, "dataUrl"> & { dataUrl?: string }>;
+  visualReferences: Array<
+    Omit<VisualReferenceSample, "dataUrl"> & { dataUrl?: string }
+  >;
   frames: Array<
     Omit<PostDetailOcrFrame, "screenshotDataUrl" | "cropDataUrl"> & {
       screenshotDataUrl?: string;
@@ -134,7 +138,8 @@ export type PostDetailWheelOutcome =
   | "WHEEL_SKIPPED"
   | "NONE";
 
-export type PostDetailScrollConfirm = "VISUAL_SCROLL_CONFIRMED" | "SCROLL_NOT_MOVING" | "PENDING" | "N/A";
+export type PostDetailScrollConfirm =
+  "VISUAL_SCROLL_CONFIRMED" | "SCROLL_NOT_MOVING" | "PENDING" | "N/A";
 
 /** Per-frame Auto Scan diagnostics (no secrets). */
 export type PostDetailFrameDiagnostics = {
@@ -194,9 +199,7 @@ export type PostDetailScanFrame = {
 export type PostDetailContainerStatus = "FOUND" | "AMBIGUOUS" | "NOT_FOUND";
 
 export type MainActionRowStatus =
-  | "MAIN_ACTION_ROW_CANDIDATE"
-  | "AMBIGUOUS"
-  | "NOT_FOUND";
+  "MAIN_ACTION_ROW_CANDIDATE" | "CONFIRMED" | "AMBIGUOUS" | "NOT_FOUND";
 
 /** Best Like/Comment/Share action-row cluster retained across Auto Scan frames. */
 export type PostDetailMainActionRow = {
@@ -264,7 +267,9 @@ export const POST_DETAIL_AUTO_SCAN_DEFAULTS = Object.freeze({
 export type PostDetailSaveAutoScanInput = {
   runId: string;
   sourceUrl: string;
-  visualReferences: Array<Omit<VisualReferenceSample, "dataUrl"> & { dataUrl?: string }>;
+  visualReferences: Array<
+    Omit<VisualReferenceSample, "dataUrl"> & { dataUrl?: string }
+  >;
   frames: Array<
     Omit<PostDetailScanFrame, "screenshotDataUrl"> & {
       screenshotDataUrl?: string;
@@ -279,4 +284,49 @@ export type PostDetailSaveAutoScanResult = {
   runDir: string;
   autoScanManifestPath: string;
   frameCount: number;
+};
+
+export type PostDetailParsedJson = {
+  post_id: string | null;
+  post_url: string | null;
+  author_name: string | null;
+  author_url: string | null;
+  post_time: string | null;
+  content: string | null;
+  images: string[];
+  links: string[];
+  reaction_count: number | null;
+  comment_count: number | null;
+  share_count: number | null;
+};
+
+export type PostDetailHtmlExtractionStatus =
+  | "FOUND"
+  | "AMBIGUOUS"
+  | "STALE_VISUAL_ANCHOR"
+  | "URL_MISMATCH"
+  | "WEB_CONTENTS_CHANGED"
+  | "NOT_FOUND";
+
+export type PostDetailExtractAboveInput = {
+  runId: string;
+  expectedUrl: string;
+  expectedWebContentsId: number;
+  frameId: string;
+  frameIndex: number;
+  screenshot: { width: number; height: number };
+  anchors: PostDetailVisualAnchor[];
+};
+
+export type PostDetailHtmlExtractionResult = {
+  ok: boolean;
+  status: PostDetailHtmlExtractionStatus;
+  runId: string;
+  rawHtml: string;
+  extractedHtml: string;
+  textPreview: string;
+  parsed: PostDetailParsedJson;
+  boundary: Record<string, unknown>;
+  diagnostics: string[];
+  evidencePaths?: Record<string, string>;
 };

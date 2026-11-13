@@ -522,6 +522,98 @@
   font-weight: 700;
 }
 
+.pdc-action-result,
+.pdc-container-result {
+  display: grid;
+  gap: 3px;
+  padding: 8px 10px;
+  border-radius: 6px;
+  font-size: 11px;
+}
+
+.pdc-action-result strong {
+  font-size: 12px;
+  letter-spacing: 0.02em;
+}
+
+.pdc-action-result-candidate_found {
+  color: #fef08a;
+  background: rgba(234, 179, 8, 0.12);
+  border: 1px solid #a16207;
+}
+
+.pdc-action-result-confirmed {
+  color: #a7f3d0;
+  background: rgba(16, 185, 129, 0.14);
+  border: 1px solid #047857;
+}
+
+.pdc-action-result-ambiguous,
+.pdc-action-result-not_found {
+  color: #fca5a5;
+  background: rgba(248, 113, 113, 0.1);
+  border: 1px solid #7f1d1d;
+}
+
+.pdc-container-result {
+  background: #07140f;
+  border: 1px solid #1f3d30;
+}
+
+.pdc-anchor-highlight,
+.pdc-action-row-highlight {
+  position: absolute;
+  box-sizing: border-box;
+  pointer-events: none;
+}
+
+.pdc-anchor-highlight {
+  border: 2px solid #fbbf24;
+  box-shadow:
+    0 0 0 1px rgba(0, 0, 0, 0.85),
+    0 0 8px rgba(251, 191, 36, 0.8);
+  background: transparent;
+  z-index: 3;
+}
+
+.pdc-anchor-highlight > span {
+  position: absolute;
+  left: -2px;
+  bottom: calc(100% + 3px);
+  padding: 2px 4px;
+  border-radius: 3px;
+  background: rgba(7, 20, 15, 0.94);
+  color: #fff;
+  border: 1px solid currentColor;
+  font:
+    700 10px/1.1 ui-monospace,
+    SFMono-Regular,
+    Menlo,
+    Consolas,
+    monospace;
+  white-space: nowrap;
+}
+
+.pdc-anchor-like {
+  color: #60a5fa;
+  border-color: #60a5fa;
+}
+.pdc-anchor-comment {
+  color: #fbbf24;
+  border-color: #fbbf24;
+}
+.pdc-anchor-share {
+  color: #c084fc;
+  border-color: #c084fc;
+}
+
+.pdc-action-row-highlight {
+  border: 1px dashed #34d399;
+  outline: 1px solid rgba(0, 0, 0, 0.75);
+  outline-offset: 2px;
+  z-index: 2;
+}
+
 .pdc-ocr-preview {
   display: flex;
   flex-direction: column;
@@ -582,3 +674,5 @@
   line-height: 1.45;
   color: #d1fae5;
 }
+.pdc-direction-panel { display: grid; gap: 8px; margin-top: 12px; }
+.pdc-code-preview { max-height: 360px; overflow: auto; white-space: pre-wrap; overflow-wrap: anywhere; background: #07140f; border: 1px solid #23483a; border-radius: 8px; padding: 12px; color: #d7f7e9; font-size: 12px; }

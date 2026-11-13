@@ -16,14 +16,19 @@ import {
   isVisualScrollConfirmed,
   measureVisualMotionScore,
 } from "../src/shared/post-detail-collector/scroll-motion.js";
-import type { PostDetailScanFrame, PostDetailVisualAnchor } from "../src/shared/post-detail-collector/types.js";
+import type {
+  PostDetailMainActionRow,
+  PostDetailScanFrame,
+  PostDetailVisualAnchor,
+} from "../src/shared/post-detail-collector/types.js";
 
 function read(rel: string): string {
   return readFileSync(resolve(rel), "utf8");
 }
 
 function anchor(
-  partial: Partial<PostDetailVisualAnchor> & Pick<PostDetailVisualAnchor, "type" | "bbox" | "score">,
+  partial: Partial<PostDetailVisualAnchor> &
+    Pick<PostDetailVisualAnchor, "type" | "bbox" | "score">,
 ): PostDetailVisualAnchor {
   return {
     frameId: partial.frameId || "frame-001",
@@ -45,8 +50,14 @@ function cardProfile(width = 1024): Float64Array {
 }
 
 test("viewport wheel point is viewport center (1024×560 → 512,280)", () => {
-  assert.deepEqual(viewportWheelPoint({ width: 1024, height: 560 }), { x: 512, y: 280 });
-  assert.deepEqual(viewportWheelPoint({ width: 800, height: 600 }), { x: 400, y: 300 });
+  assert.deepEqual(viewportWheelPoint({ width: 1024, height: 560 }), {
+    x: 512,
+    y: 280,
+  });
+  assert.deepEqual(viewportWheelPoint({ width: 800, height: 600 }), {
+    x: 400,
+    y: 300,
+  });
 });
 
 test("inferAnchorTypeFromLabel maps Step 1 labels", () => {
@@ -71,7 +82,11 @@ test("content-band motion score distinguishes still vs moved frames", () => {
     next.data[i + 2] = 40;
     next.data[i + 3] = 255;
   }
-  const still = measureVisualMotionScore(prev, next, defaultScrollCompareRoi(w, h));
+  const still = measureVisualMotionScore(
+    prev,
+    next,
+    defaultScrollCompareRoi(w, h),
+  );
   assert.ok(still.score < 1);
   assert.equal(isVisualScrollConfirmed(still.score), false);
 
@@ -107,7 +122,13 @@ test("single Like icon cannot be FOUND container", () => {
       observedScrollPx: 0,
       width: 1024,
       height: 560,
-      anchors: [anchor({ type: "LIKE", bbox: { x: 100, y: 400, width: 40, height: 20 }, score: 1 })],
+      anchors: [
+        anchor({
+          type: "LIKE",
+          bbox: { x: 100, y: 400, width: 40, height: 20 },
+          score: 1,
+        }),
+      ],
       notes: [],
     },
   ];
@@ -142,7 +163,10 @@ test("LIKE+COMMENT action row + modal edges yields FOUND; width not icon-union",
     score: 0.95,
   });
   assert.equal(anchorsFormActionRow([like, comment]), true);
-  assert.deepEqual(uniqueAnchorTypes([like, comment]).sort(), ["COMMENT", "LIKE"]);
+  assert.deepEqual(uniqueAnchorTypes([like, comment]).sort(), [
+    "COMMENT",
+    "LIKE",
+  ]);
 
   const frames: PostDetailScanFrame[] = [
     {
@@ -195,7 +219,10 @@ test("LIKE+COMMENT action row + modal edges yields FOUND; width not icon-union",
   });
   assert.equal(result.status, "FOUND");
   assert.ok(result.containerBounds);
-  assert.ok(result.containerBounds!.width > 400, "width from modal edges, not icon union");
+  assert.ok(
+    result.containerBounds!.width > 400,
+    "width from modal edges, not icon union",
+  );
   assert.ok(result.containerBounds!.width < 700);
   assert.ok(result.containerBounds!.y < like.bbox.y);
 });
@@ -234,7 +261,9 @@ test("action row without horizontal edges → AMBIGUOUS (not FOUND)", () => {
     maxFrames: 5,
     stoppedReason: "max-frames",
     // flat profile → no edges
-    horizontalProfiles: [{ frameId: "f1", columns: new Float64Array(1024).fill(128) }],
+    horizontalProfiles: [
+      { frameId: "f1", columns: new Float64Array(1024).fill(128) },
+    ],
   });
   assert.equal(result.status, "AMBIGUOUS");
   assert.equal(result.containerBounds, null);
@@ -242,12 +271,30 @@ test("action row without horizontal edges → AMBIGUOUS (not FOUND)", () => {
 
 test("selectPrimaryActionRow prefers upper main-post band over comment likes", () => {
   const main = [
-    anchor({ type: "LIKE", bbox: { x: 400, y: 200, width: 30, height: 20 }, score: 0.9 }),
-    anchor({ type: "COMMENT", bbox: { x: 450, y: 202, width: 30, height: 20 }, score: 0.88 }),
+    anchor({
+      type: "LIKE",
+      bbox: { x: 400, y: 200, width: 30, height: 20 },
+      score: 0.9,
+    }),
+    anchor({
+      type: "COMMENT",
+      bbox: { x: 450, y: 202, width: 30, height: 20 },
+      score: 0.88,
+    }),
   ];
   const commentRow = [
-    anchor({ type: "LIKE", bbox: { x: 420, y: 480, width: 24, height: 16 }, score: 0.95, candidateRank: 1 }),
-    anchor({ type: "SHARE", bbox: { x: 470, y: 482, width: 24, height: 16 }, score: 0.92, candidateRank: 1 }),
+    anchor({
+      type: "LIKE",
+      bbox: { x: 420, y: 480, width: 24, height: 16 },
+      score: 0.95,
+      candidateRank: 1,
+    }),
+    anchor({
+      type: "SHARE",
+      bbox: { x: 470, y: 482, width: 24, height: 16 },
+      score: 0.92,
+      candidateRank: 1,
+    }),
   ];
   const row = selectPrimaryActionRow(main, commentRow, { frameHeight: 560 });
   assert.ok(row);
@@ -257,15 +304,31 @@ test("selectPrimaryActionRow prefers upper main-post band over comment likes", (
 
 test("comment-zone-only action row after scroll is not selected as main post", () => {
   const commentOnly = [
-    anchor({ type: "LIKE", bbox: { x: 400, y: 500, width: 30, height: 20 }, score: 0.99 }),
-    anchor({ type: "COMMENT", bbox: { x: 450, y: 502, width: 30, height: 20 }, score: 0.97 }),
+    anchor({
+      type: "LIKE",
+      bbox: { x: 400, y: 500, width: 30, height: 20 },
+      score: 0.99,
+    }),
+    anchor({
+      type: "COMMENT",
+      bbox: { x: 450, y: 502, width: 30, height: 20 },
+      score: 0.97,
+    }),
   ];
   assert.equal(
-    selectPrimaryActionRow(commentOnly, [], { frameHeight: 560, observedScrollPx: 300 }),
+    selectPrimaryActionRow(commentOnly, [], {
+      frameHeight: 560,
+      observedScrollPx: 300,
+    }),
     null,
   );
   // Early frame at top: same geometry may still be main row entering viewport — allow.
-  assert.ok(selectPrimaryActionRow(commentOnly, [], { frameHeight: 560, observedScrollPx: 0 }));
+  assert.ok(
+    selectPrimaryActionRow(commentOnly, [], {
+      frameHeight: 560,
+      observedScrollPx: 0,
+    }),
+  );
 
   const result = detectPostDetailContainer({
     runId: "pd_comment_zone",
@@ -373,9 +436,78 @@ test("Step 2 UI wires Auto Scan pipeline and Step 3 gate needs container", () =>
   assert.match(step2, /Confirm Container/);
   assert.match(step2, /collectorPostDetailScanInputLock/);
   assert.match(step2, /Auto Scan · Input Locked/);
+  assert.match(step2, /actionRowOverlayForFrame/);
+  assert.match(step2, /ACTION ROW/);
+  assert.match(step2, /Action Row Confirmed/);
+  assert.doesNotMatch(
+    step2,
+    /onContentRoi\(containerResult\?\.containerBounds \|\| row\.bbox\)/,
+  );
   assert.doesNotMatch(step2, /Capture & Match/);
 
-  const page = read("src/renderer/post-detail-collector/PostDetailCollectorPage.tsx");
+  const page = read(
+    "src/renderer/post-detail-collector/PostDetailCollectorPage.tsx",
+  );
   assert.match(page, /containerResult/);
   assert.match(page, /canEnterStep3/);
+});
+
+test("Action Row presentation scales real frame geometry and never leaks across frames", async () => {
+  const { actionRowDisplayStatus, actionRowOverlayForFrame, scaleImageRect } =
+    await import("../src/renderer/post-detail-collector/action-row-presentation.js");
+  const row: PostDetailMainActionRow = {
+    status: "MAIN_ACTION_ROW_CANDIDATE" as const,
+    frameId: "frame-013",
+    frameIndex: 13,
+    anchors: [
+      {
+        type: "LIKE" as const,
+        frameId: "frame-013",
+        frameIndex: 13,
+        bbox: { x: 149, y: 269, width: 42, height: 26 },
+        score: 0.959,
+        templateId: "like",
+      },
+      {
+        type: "COMMENT" as const,
+        frameId: "frame-013",
+        frameIndex: 13,
+        bbox: { x: 217, y: 267, width: 41, height: 31 },
+        score: 0.835,
+        templateId: "comment",
+      },
+      {
+        type: "SHARE" as const,
+        frameId: "frame-013",
+        frameIndex: 13,
+        bbox: { x: 282, y: 268, width: 43, height: 28 },
+        score: 0.982,
+        templateId: "share",
+      },
+    ],
+    bbox: { x: 149, y: 267, width: 176, height: 31 },
+    meanScore: 0.925,
+    types: ["LIKE", "COMMENT", "SHARE"],
+    strength: "STRONG" as const,
+    orderOk: true,
+    observedScrollPx: 1200,
+    notes: [],
+  };
+
+  assert.equal(actionRowDisplayStatus(row), "CANDIDATE_FOUND");
+  assert.equal(actionRowOverlayForFrame(row, "frame-012"), null);
+  assert.equal(actionRowOverlayForFrame(row, "frame-013")?.anchors.length, 3);
+  const scaled = scaleImageRect(
+    row.bbox,
+    { width: 986, height: 437 },
+    { width: 493, height: 218.5 },
+  );
+  assert.equal(scaled.x, 74.5);
+  assert.equal(scaled.y, 133.5);
+  assert.equal(scaled.width, 88);
+  assert.ok(Math.abs(scaled.height - 15.5) < 0.001);
+  assert.equal(
+    actionRowDisplayStatus({ ...row, status: "CONFIRMED" }),
+    "CONFIRMED",
+  );
 });

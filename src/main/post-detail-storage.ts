@@ -13,6 +13,7 @@ import {
 import {
   POST_DETAIL_SCHEMA_VERSION,
   type PostDetailLoadRunResult,
+  type PostDetailHtmlExtractionResult,
   type PostDetailOcrFrame,
   type PostDetailRunManifest,
   type PostDetailSaveAutoScanInput,
@@ -49,6 +50,27 @@ export class PostDetailRunStorage {
 
   getRunDir(runId: string): string {
     return path.join(this.getRunsDir(), assertSafeRunId(runId));
+  }
+
+  async saveHtmlExtraction(result: PostDetailHtmlExtractionResult): Promise<Record<string, string>> {
+    const runDir = this.getRunDir(result.runId);
+    const dir = path.join(runDir, "html-extraction");
+    await mkdir(dir, { recursive: true });
+    const paths = {
+      rawHtml: path.join(dir, "raw-ancestor.html"),
+      extractedHtml: path.join(dir, "post-detail.html"),
+      boundary: path.join(dir, "boundary.json"),
+      result: path.join(dir, "result.json"),
+    };
+    await writeFileAtomic(paths.rawHtml, result.rawHtml);
+    await writeFileAtomic(paths.extractedHtml, result.extractedHtml);
+    await writeFileAtomic(paths.boundary, JSON.stringify(result.boundary, null, 2));
+    await writeFileAtomic(paths.result, JSON.stringify({
+      status: result.status,
+      parsed: result.parsed,
+      diagnostics: result.diagnostics,
+    }, null, 2));
+    return paths;
   }
 
   /**
