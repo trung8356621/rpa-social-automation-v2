@@ -261,11 +261,37 @@ test("teaching verifies the generated XPath and confirmed Parent before returnin
   assert.match(source, /firstZeroPrefix/);
   assert.doesNotMatch(source, /tagIndexes/);
   assert.doesNotMatch(source, /ancestor::'\+tag\+'\['\+tagIndexes/);
+  assert.match(source, /local-name\(\)='svg'/);
+  assert.doesNotMatch(source, /count\(\.\/\/svg\)/);
+  assert.match(source, /controlSlots=\(saved\?\.hits\|\|\[\]\)/);
+  assert.match(source, /new Set\(controlSlots\)\.size===3/);
+  assert.match(source, /self::button or @role='button' or \.\/\/button/);
+  assert.match(source, /AMBIGUOUS_ACTION_ROW/);
+  assert.doesNotMatch(source, /@class=/);
   assert.match(source, /diagnosticXPathPrefixes/);
   assert.match(source, /relativeExact\[0\]!==row/);
   assert.match(source, /resolvedParent!==parent/);
   assert.match(source, /DUAL_XPATH_DID_NOT_VERIFY_CONFIRMED_ACTION_ROW/);
   assert.doesNotMatch(source, /anchorUp|rowPath/);
+});
+
+test("action-row structural XPath is namespace-aware, preserves visual control order and rejects duplicates", () => {
+  const source = buildPostDetailParentProbeJs({
+    sourceUrl: "https://www.facebook.com/groups/g/posts/42/",
+    runId: "r",
+    expectedWebContentsId: 1,
+    frameId: "f",
+    screenshot: { width: 100, height: 100 },
+    anchors: [],
+  });
+  assert.match(source, /count\(\.\/\/\*\[local-name\(\)='svg'\]\)/);
+  assert.match(source, /for\(const slot of controlSlots\)/);
+  assert.match(source, /Array\.from\(row\.children\)\.indexOf\(child\)\+1/);
+  assert.match(source, /relativeExact\.length!==1/);
+  assert.match(
+    source,
+    /diagnostics\.relativeVerify\?\.matchCount>1\?'AMBIGUOUS_ACTION_ROW'/,
+  );
 });
 
 test("Confirm Parent catches verification failures, reports diagnostics and remains retryable", () => {
