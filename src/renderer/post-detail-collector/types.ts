@@ -43,20 +43,60 @@ export type PostDetailCollectorState = {
   savedParentResolution: PostDetailSavedParentResolution | null;
   variableMappings: PostDetailDomVariableMapping[];
   hiddenExtractedData: Record<string, string[]>;
+  batchUrlsText: string;
+  batchResults: BatchValidationRow[];
+  batchConfigVersion: number;
+  batchValidatedVersion: number | null;
 };
+
+export type BatchFieldResult = {
+  variableId: string;
+  variableKey: string;
+  variableLabel: string;
+  required: boolean;
+  value: string;
+  method: PostDetailExtractionMethod | "UNMAPPED";
+  attribute?: string;
+  relativeXPath: string;
+  status: "PASS" | "REVIEW";
+  reason?: string;
+};
+
+export type BatchValidationRow = {
+  url: string;
+  resolvedUrl: string;
+  postId: string | null;
+  parentStatus: "Matched" | "Failed" | "Invalid";
+  passedCount: number;
+  totalCount: number;
+  status: "PASS" | "REVIEW" | "FAILED";
+  failureReason?: string;
+  parentDiagnostics?: string[];
+  fields: BatchFieldResult[];
+  validatedAt: string;
+};
+
+export type PostDetailExtractionMethod =
+  | "DOM_TEXT"
+  | "DOM_ATTRIBUTE"
+  | "DOM_ATTRIBUTE_REF_TEXT"
+  | "DOM_TEXT_NUMBER"
+  | "DOM_ATTRIBUTE_NUMBER"
+  | "CONTENT_TEXT"
+  | "CONTENT_HTML";
 
 export type PostDetailDomVariableMapping = {
   collectorId: string;
   variableId: string;
   variableKey: string;
   variableLabel: string;
-  method: "DOM_TEXT" | "DOM_ATTRIBUTE";
+  method: PostDetailExtractionMethod;
   attribute?: string;
   relativePath: number[];
   relativeXPath: string;
   preview: string;
   sourceContext?: "post" | "comment" | "unknown";
-  sourceSemantic?: "created_at" | "content";
+  sourceSemantic?: "created_at" | "content" | "like_count" | "comment_count" | "share_count";
   outputKey?: string;
   confirmed: true;
   updatedAt: string;

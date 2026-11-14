@@ -29,6 +29,10 @@ function loadPersisted(): Partial<PostDetailCollectorState> {
       parentConfigs: parsed.parentConfigs ?? {},
       variableMappings: parsed.variableMappings ?? [],
       hiddenExtractedData: parsed.hiddenExtractedData ?? {},
+      batchUrlsText: typeof parsed.batchUrlsText === "string" ? parsed.batchUrlsText : "",
+      batchResults: Array.isArray(parsed.batchResults) ? parsed.batchResults : [],
+      batchConfigVersion: typeof parsed.batchConfigVersion === "number" ? parsed.batchConfigVersion : 1,
+      batchValidatedVersion: typeof parsed.batchValidatedVersion === "number" ? parsed.batchValidatedVersion : null,
     };
   } catch {
     return {};
@@ -56,6 +60,10 @@ const INITIAL: PostDetailCollectorState = {
   savedParentResolution: null,
   variableMappings: persisted.variableMappings ?? [],
   hiddenExtractedData: persisted.hiddenExtractedData ?? {},
+  batchUrlsText: persisted.batchUrlsText ?? "",
+  batchResults: persisted.batchResults ?? [],
+  batchConfigVersion: persisted.batchConfigVersion ?? 1,
+  batchValidatedVersion: persisted.batchValidatedVersion ?? null,
 };
 
 let globalState: PostDetailCollectorState = { ...INITIAL };
@@ -75,6 +83,10 @@ function persistLightweight(state: PostDetailCollectorState) {
         parentConfigs: state.parentConfigs,
         variableMappings: state.variableMappings,
         hiddenExtractedData: state.hiddenExtractedData,
+        batchUrlsText: state.batchUrlsText,
+        batchResults: state.batchResults,
+        batchConfigVersion: state.batchConfigVersion,
+        batchValidatedVersion: state.batchValidatedVersion,
         // Persist OCR text + metadata; strip huge screenshots from localStorage.
         frames: state.frames.map((f: PostDetailOcrFrame) => ({
           ...f,
@@ -96,15 +108,18 @@ export function getPostDetailCollectorState(): PostDetailCollectorState {
   return globalState;
 }
 
-export function setPostDetailCollectorState(patch: Partial<PostDetailCollectorState>) {
-  globalState = { ...globalState, ...patch };
+export function setPostDetailCollectorState(
+  patch: Partial<PostDetailCollectorState> | ((prev: PostDetailCollectorState) => Partial<PostDetailCollectorState>),
+) {
+  const resolved = typeof patch === "function" ? patch(globalState) : patch;
+  globalState = { ...globalState, ...resolved };
   persistLightweight(globalState);
   listeners.forEach((fn) => fn(globalState));
 }
 
 export function usePostDetailCollectorStore(): [
   PostDetailCollectorState,
-  (patch: Partial<PostDetailCollectorState>) => void,
+  (patch: Partial<PostDetailCollectorState> | ((prev: PostDetailCollectorState) => Partial<PostDetailCollectorState>)) => void,
 ] {
   const [state, setState] = useState(globalState);
   useEffect(() => {

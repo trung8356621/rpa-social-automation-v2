@@ -1,6 +1,6 @@
 import type { OcrResult, Rect } from "../contracts.js";
 
-export type PostDetailStep = 1 | 2 | 3;
+export type PostDetailStep = 1 | 2 | 3 | 4;
 
 export type VisualMatchStatus =
   "MATCHED" | "AMBIGUOUS" | "NOT_FOUND" | "MANUALLY_CONFIRMED";

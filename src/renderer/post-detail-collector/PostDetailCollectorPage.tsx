@@ -10,6 +10,7 @@ import {
   releaseCollectorHostOwner,
 } from "../collectors/collector-host-owner";
 import { BrowserCaptureStep } from "./BrowserCaptureStep";
+import { BatchValidationStep } from "./BatchValidationStep";
 import { shouldRetrySavedParentResolution } from "./auto-resume";
 import { SavedParentHtmlStep } from "./SavedParentHtmlStep";
 import { VisualRegionStep } from "./VisualRegionStep";
@@ -75,7 +76,8 @@ export function PostDetailCollectorPage({ invoke, state: parentState }: { invoke
     let cancelled = false;
     void (async () => {
       const live = await refreshProbe();
-      if (cancelled || !live || autoResolveStarted.current || state.step !== 1) return;
+      const needsResolve = state.step === 1 || (state.step === 3 && state.savedParentResolution?.status === "RESOLVING");
+      if (cancelled || !live || autoResolveStarted.current || !needsResolve) return;
       autoResolveStarted.current = true;
       const startedAtEpoch = navigationEpoch.current;
       const platform = /threads\.(?:com|net)/i.test(live.url) ? "threads" : "facebook";
@@ -83,13 +85,20 @@ export function PostDetailCollectorPage({ invoke, state: parentState }: { invoke
       if (!config) { setConnStatus(`Not Configured · ${platform}`); return; }
       updateStore({ savedParentResolution: { status: "RESOLVING", innerHTML: "", rect: null, diagnostics: ["Resolving saved Parent against the live DOM..."], diagnosticMeta: { configLoaded: true, hasActionRowLocator: Boolean(config.actionRowLocator), parentLevel: config.parentLevel } }, step: 3 });
       let savedParentResolution: import("../../shared/post-detail-collector/types").PostDetailSavedParentResolution | null = null;
-      for (let attempt = 0; attempt < 20; attempt++) {
+      try {
+        for (let attempt = 0; attempt < 20; attempt++) {
+          if (cancelled || navigationEpoch.current !== startedAtEpoch) return;
+          savedParentResolution = await invoke<import("../../shared/post-detail-collector/types").PostDetailSavedParentResolution>({ type: "postDetailResolveSavedParent", config });
+          if (savedParentResolution.status === "PARENT_MATCHED") break;
+          if (!shouldRetrySavedParentResolution(savedParentResolution)) break;
+          setConnStatus(`Đang chờ DOM bài viết render · ${savedParentResolution.failureCode} · lần ${attempt + 1}/20`);
+          if (attempt < 19) await new Promise((resolve) => setTimeout(resolve, 750));
+        }
+      } catch (err) {
         if (cancelled || navigationEpoch.current !== startedAtEpoch) return;
-        savedParentResolution = await invoke<import("../../shared/post-detail-collector/types").PostDetailSavedParentResolution>({ type: "postDetailResolveSavedParent", config });
-        if (savedParentResolution.status === "PARENT_MATCHED") break;
-        if (!shouldRetrySavedParentResolution(savedParentResolution)) break;
-        setConnStatus(`Đang chờ DOM bài viết render · ${savedParentResolution.failureCode} · lần ${attempt + 1}/20`);
-        if (attempt < 19) await new Promise((resolve) => setTimeout(resolve, 750));
+        updateStore({ savedParentResolution: { status: "REMATCH_REQUIRED", failureCode: "BROWSER_NOT_READY", innerHTML: "", rect: null, diagnostics: [`Resolve failed: ${String(err)}`], diagnosticMeta: { configLoaded: true, hasActionRowLocator: Boolean(config.actionRowLocator), parentLevel: config.parentLevel } } });
+        setConnStatus(`Resolve failed: ${String(err)}`);
+        return;
       }
       if (cancelled || !savedParentResolution || navigationEpoch.current !== startedAtEpoch) return;
       if (savedParentResolution.status !== "PARENT_MATCHED") {
@@ -114,9 +123,11 @@ export function PostDetailCollectorPage({ invoke, state: parentState }: { invoke
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
+  const canEnterStep4 = Object.keys(state.parentConfigs).length > 0 || Boolean(state.savedParentResolution);
   const goToStep = (step: PostDetailStep) => {
     if (step === 2 && !canEnterStep2(state.visualReferences.length)) return;
     if (step === 3 && !state.savedParentResolution) return;
+    if (step === 4 && !canEnterStep4) return;
     navigationEpoch.current += 1;
     if (step !== 1 && step !== 2) {
       void collectorReportBrowserHost(invoke, null);
@@ -157,6 +168,8 @@ export function PostDetailCollectorPage({ invoke, state: parentState }: { invoke
           </button>
           <span className="pdc-step-arrow">→</span>
           <button type="button" className={`pdc-step-pill ${state.step === 3 ? "active" : ""}`} disabled={!state.savedParentResolution} onClick={() => goToStep(3)}><span className="pdc-step-num">3</span><span className="pdc-step-text">Parent HTML</span></button>
+          <span className="pdc-step-arrow">→</span>
+          <button type="button" className={`pdc-step-pill ${state.step === 4 ? "active" : ""} ${state.batchResults.length ? "completed" : ""}`} disabled={!canEnterStep4} onClick={() => goToStep(4)}><span className="pdc-step-num">4</span><span className="pdc-step-text">Batch Validation</span></button>
         </nav>
       </div>
 
@@ -206,11 +219,47 @@ export function PostDetailCollectorPage({ invoke, state: parentState }: { invoke
               const savedParentResolution = await invoke<import("../../shared/post-detail-collector/types").PostDetailSavedParentResolution>({ type: "postDetailResolveSavedParent", config });
               await collectorReportBrowserHost(invoke, null);
               await collectorSetBrowserVisible(invoke, false);
-              updateStore({ parentConfigs, savedParentResolution, step: 3 });
+              updateStore((prev) => ({ parentConfigs, savedParentResolution, step: 3, batchConfigVersion: (prev.batchConfigVersion ?? 1) + 1 }));
             }}
           />
         )}
-        {state.step === 3 && <SavedParentHtmlStep invoke={invoke} result={state.savedParentResolution} currentUrl={state.sourceUrl || state.browserUrl} variableMappings={state.variableMappings} onVariableMappings={(variableMappings) => updateStore({ variableMappings })} hiddenExtractedData={state.hiddenExtractedData} onHiddenExtractedData={(hiddenExtractedData) => updateStore({ hiddenExtractedData })} onRematch={() => { navigationEpoch.current += 1; autoResolveStarted.current = false; updateStore({ step: 2 }); }} />}
+        {state.step === 3 && (
+          <SavedParentHtmlStep
+            invoke={invoke}
+            result={state.savedParentResolution}
+            currentUrl={state.sourceUrl || state.browserUrl}
+            variableMappings={state.variableMappings}
+            onVariableMappings={(variableMappings) =>
+              updateStore((prev) => ({ variableMappings, batchConfigVersion: (prev.batchConfigVersion ?? 1) + 1 }))
+            }
+            hiddenExtractedData={state.hiddenExtractedData}
+            onHiddenExtractedData={(hiddenExtractedData) => updateStore({ hiddenExtractedData })}
+            onVariablesChanged={() =>
+              updateStore((prev) => ({ batchConfigVersion: (prev.batchConfigVersion ?? 1) + 1 }))
+            }
+            onRematch={() => { navigationEpoch.current += 1; autoResolveStarted.current = false; updateStore({ step: 2 }); }}
+            onNextBatchValidation={() => goToStep(4)}
+          />
+        )}
+        {state.step === 4 && (
+          <BatchValidationStep
+            invoke={invoke}
+            parentConfigs={state.parentConfigs}
+            variableMappings={state.variableMappings}
+            batchUrlsText={state.batchUrlsText}
+            batchResults={state.batchResults}
+            batchConfigVersion={state.batchConfigVersion}
+            batchValidatedVersion={state.batchValidatedVersion}
+            onBatchUrlsText={(batchUrlsText) => updateStore({ batchUrlsText })}
+            onBatchResults={(batchResults, batchValidatedVersion) =>
+              updateStore({ batchResults, batchValidatedVersion })
+            }
+            onReviewInStep3={(url, savedParentResolution) =>
+              updateStore({ sourceUrl: url, browserUrl: url, savedParentResolution, step: 3 })
+            }
+            onBackToStep3={() => goToStep(3)}
+          />
+        )}
       </div>
     </section>
   );
