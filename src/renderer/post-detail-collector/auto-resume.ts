@@ -2,6 +2,8 @@ import type { PostDetailSavedParentResolution } from "../../shared/post-detail-c
 
 const TRANSIENT_FAILURES = new Set<PostDetailSavedParentResolution["failureCode"]>([
   "BROWSER_NOT_READY",
+  "NOT_FOUND",
+  "PARENT_MISMATCH",
   "ACTION_ROW_SELECTOR_NOT_FOUND",
   "ACTION_ROW_INVALID",
   "POST_IDENTITY_MISMATCH",

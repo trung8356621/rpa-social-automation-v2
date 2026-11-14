@@ -21,6 +21,20 @@ function canEnterStep2(refs: number): boolean {
   return refs > 0;
 }
 
+function locatorDiagnosticSummary(result: import("../../shared/post-detail-collector/types").PostDetailSavedParentResolution): string {
+  const meta = result.diagnosticMeta || {};
+  return [
+    `v${String(meta.locatorVersion ?? "?")}`,
+    `post=${String(meta.postId ?? "?")}`,
+    `abs=${String(meta.absoluteMatchCount ?? 0)}`,
+    `rel=${String(meta.relativeMatchCount ?? 0)}`,
+    `same=${String(meta.sameNode ?? false)}`,
+    `identity=${String(meta.postIdentityVerified ?? false)}`,
+    `row=${String(meta.actionRowVerified ?? false)}`,
+    `parent=${String(meta.parentVerified ?? false)}`,
+  ].join(" · ");
+}
+
 export function PostDetailCollectorPage({ invoke, state: parentState }: { invoke: Invoke; state?: State | null }) {
   const [state, updateStore] = usePostDetailCollectorStore();
   const [probe, setProbe] = useState<BrowserProbe | null>(null);
@@ -80,7 +94,7 @@ export function PostDetailCollectorPage({ invoke, state: parentState }: { invoke
       if (cancelled || !savedParentResolution || navigationEpoch.current !== startedAtEpoch) return;
       if (savedParentResolution.status !== "PARENT_MATCHED") {
         updateStore({ savedParentResolution });
-        setConnStatus(`Rematch Required · ${savedParentResolution.failureCode || savedParentResolution.status} · ${savedParentResolution.diagnostics.join(" · ")} · ${JSON.stringify(savedParentResolution.diagnosticMeta || {})}`);
+        setConnStatus(`Rematch Required · ${savedParentResolution.failureCode || savedParentResolution.status} · ${locatorDiagnosticSummary(savedParentResolution)}`);
         return;
       }
       if (cancelled || navigationEpoch.current !== startedAtEpoch) return;

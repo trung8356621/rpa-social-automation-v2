@@ -397,8 +397,52 @@ export type PostDetailParentConfirmation = {
   candidate: PostDetailParentCandidate;
 };
 
-export type PostDetailParentConfig = {
+export type ActionRowLocatorV1 = {
   version: 1;
+  strategy: "POST_IDENTITY_ANCHOR_RELATIVE_PATH";
+  anchorReason: string;
+  anchorUp: number;
+  rowPath: number[];
+  rowTag: string;
+  rowRole: string | null;
+};
+
+export type ActionRowLocatorV2 = {
+  version: 2;
+  strategy: "POST_SCOPED_RELATIVE_XPATH";
+  postIdentityAnchor: {
+    platform: string;
+    reason: string;
+    /** XPath template; {{POST_ID}} is replaced with an XPath string literal at resolve time. */
+    xpathTemplate: string;
+  };
+  absoluteXPath: string;
+  relativeXPath: string;
+  /** Teaching-time prefixes used only to diagnose the first XPath segment that stops matching. */
+  diagnosticXPathPrefixes: string[];
+  actionRowTag: string;
+  actionRowRole: string | null;
+  actionRowStructure: {
+    childCount: number;
+    svgCount: number;
+    buttonCount: number;
+    directPattern: string;
+  };
+  confirmedParentLevel: number;
+  teachingEvidence: {
+    anchorTag: string;
+    anchorReason: string;
+    anchorHrefPattern: string;
+    absoluteMatchCount: number;
+    relativeMatchCount: number;
+    sameNode: boolean;
+    confirmedRowMatched: boolean;
+    confirmedParentMatched: boolean;
+  };
+};
+
+export type PostDetailParentConfig = {
+  version: 1 | 2;
   platform: string;
   parentLevel: number;
   locatorStrategy: "POST_IDENTITY_ACTION_ROW_LEVEL" | "POST_IDENTITY_ASCEND_STRUCTURAL";
@@ -408,15 +452,7 @@ export type PostDetailParentConfig = {
   role?: string | null;
   descendantCount?: number;
   actionRowSignature?: Record<string, unknown>;
-  actionRowLocator?: {
-    version: 1;
-    strategy: "POST_IDENTITY_ANCHOR_RELATIVE_PATH";
-    anchorReason: string;
-    anchorUp: number;
-    rowPath: number[];
-    rowTag: string;
-    rowRole: string | null;
-  };
+  actionRowLocator?: ActionRowLocatorV1 | ActionRowLocatorV2;
   updatedAt: string;
 };
 
@@ -424,7 +460,7 @@ export type PostDetailSavedParentResolution = {
   status: "PARENT_MATCHED" | "REMATCH_REQUIRED" | "NOT_CONFIGURED" | "BROWSER_NOT_READY" | "RESOLVING";
   innerHTML: string;
   rect: Rect | null;
-  failureCode?: "BROWSER_NOT_READY" | "ACTION_ROW_SELECTOR_NOT_FOUND" | "ACTION_ROW_AMBIGUOUS" | "ACTION_ROW_INVALID" | "PARENT_LEVEL_NOT_FOUND" | "POST_IDENTITY_MISMATCH";
+  failureCode?: "BROWSER_NOT_READY" | "NOT_FOUND" | "AMBIGUOUS" | "INVALID" | "CONFLICT" | "PARENT_MISMATCH" | "ACTION_ROW_SELECTOR_NOT_FOUND" | "ACTION_ROW_AMBIGUOUS" | "ACTION_ROW_INVALID" | "PARENT_LEVEL_NOT_FOUND" | "POST_IDENTITY_MISMATCH";
   diagnosticMeta?: Record<string, unknown>;
   diagnostics: string[];
 };

@@ -6,6 +6,7 @@ import {
   buildPostDetailActionAnchorProbeJs,
   buildPostDetailParentProbeJs,
   buildResolveSavedParentJs,
+  classifyDualXPathResolution,
   classifyActionControlDescriptor,
   CLEAR_POST_DETAIL_PARENT_HIGHLIGHT_JS,
   dedupeNestedActionRows,
@@ -142,11 +143,11 @@ test("saved parent resolver rejects legacy config without an exact Action Row lo
     updatedAt: new Date(0).toISOString(),
   });
   assert.doesNotThrow(() => new Function(`return ${source}`));
-  assert.match(source, /config\.parentLevel/);
-  assert.match(source, /ACTION_ROW_SELECTOR_NOT_FOUND/);
-  assert.match(source, /ACTION_ROW_AMBIGUOUS/);
-  assert.match(source, /PARENT_LEVEL_NOT_FOUND/);
-  assert.match(source, /SAVED_LOCATOR_STRICT/);
+  assert.match(source, /Legacy V1 locator is preserved/);
+  assert.match(source, /'NOT_FOUND'/);
+  assert.match(source, /'AMBIGUOUS'/);
+  assert.match(source, /'PARENT_MISMATCH'/);
+  assert.match(source, /locatorVersion/);
   assert.match(source, /innerHTML:parent\.innerHTML/);
   assert.doesNotMatch(source, /outerHTML/);
   assert.doesNotMatch(source, /config\.fingerprint|config\.actionRowSignature/);
@@ -173,33 +174,123 @@ test("saved parent resolver rejects legacy config without an exact Action Row lo
   assert.match(highlight, /requestAnimationFrame/);
 });
 
-test("saved action row locator is exact, post-relative and never ranks Parent candidates", () => {
+test("saved V2 action row locator is XPath-only, post-scoped and never ranks Parent candidates", () => {
   const located = buildResolveSavedParentJs({
-    version: 1,
+    version: 2,
     platform: "facebook",
     parentLevel: 26,
     locatorStrategy: "POST_IDENTITY_ACTION_ROW_LEVEL",
     actionRowLocator: {
-      version: 1,
-      strategy: "POST_IDENTITY_ANCHOR_RELATIVE_PATH",
-      anchorReason: "facebook-permalink-path",
-      anchorUp: 4,
-      rowPath: [1, 2],
-      rowTag: "DIV",
-      rowRole: null,
+      version: 2,
+      strategy: "POST_SCOPED_RELATIVE_XPATH",
+      postIdentityAnchor: {
+        platform: "facebook",
+        reason: "facebook-permalink-path",
+        xpathTemplate: "//a[@href and contains(@href, {{POST_ID}}) and not(contains(@href, 'comment_id='))]",
+      },
+      absoluteXPath: "/html[1]/body[1]/article[1]/div[1]",
+      relativeXPath: "ancestor::article[1]//div[@role='group']",
+      diagnosticXPathPrefixes: ["ancestor::article[1]", "ancestor::article[1]//div[@role='group']"],
+      actionRowTag: "DIV",
+      actionRowRole: "group",
+      actionRowStructure: {
+        childCount: 3,
+        svgCount: 3,
+        buttonCount: 3,
+        directPattern: "DIV:|DIV:|DIV:",
+      },
+      confirmedParentLevel: 3,
+      teachingEvidence: {
+        anchorTag: "A",
+        anchorReason: "facebook-permalink-path",
+        anchorHrefPattern: "/permalink/42/",
+        absoluteMatchCount: 1,
+        relativeMatchCount: 1,
+        sameNode: true,
+        confirmedRowMatched: true,
+        confirmedParentMatched: true,
+      },
     },
     updatedAt: new Date(0).toISOString(),
   });
   assert.doesNotThrow(() => new Function(`return ${located}`));
   assert.match(located, /config\.actionRowLocator/);
-  assert.match(located, /locator\.anchorUp/);
-  assert.match(located, /locator\.rowPath/);
-  assert.match(located, /uniqueRows\.length!==1/);
+  assert.match(located, /document\.evaluate/);
+  assert.match(located, /locator\.absoluteXPath/);
+  assert.match(located, /locator\.relativeXPath/);
+  assert.match(located, /confirmedParentLevel/);
+  assert.match(located, /absoluteUnique\.length>1\|\|relativeUnique\.length>1/);
   assert.match(located, /sameReason/);
   assert.match(located, /facebook-\(\?:permalink\|posts\)-path/);
-  assert.match(located, /diagnosticMeta:meta/);
-  assert.match(located, /foreignPrimaryPostIds/);
+  assert.match(located, /failureCode:code/);
   assert.doesNotMatch(located, /identityCount|descendantCount|rankedParents/);
+  assert.doesNotMatch(located, /locator\.anchorUp|locator\.rowPath/);
+  assert.doesNotMatch(located, /runPostDetailAutoScan|LIKE|COMMENT|SHARE/);
   assert.doesNotMatch(located, /querySelectorAll\('button,\[role=button\],a'\)/);
-  assert.match(located, /innerHTMLLength/);
+  assert.match(located, /postIdentityVerified/);
+  assert.match(located, /actionRowVerified/);
+  assert.match(located, /parentVerified/);
+});
+
+test("teaching verifies the generated XPath and confirmed Parent before returning V2", () => {
+  const source = buildPostDetailParentProbeJs({
+    sourceUrl: "https://www.facebook.com/groups/g/permalink/42/",
+    runId: "r",
+    expectedWebContentsId: 1,
+    frameId: "f",
+    screenshot: { width: 100, height: 100 },
+    anchors: [],
+  });
+  assert.match(source, /POST_SCOPED_RELATIVE_XPATH/);
+  assert.match(source, /document\.evaluate\(candidate\.relativeXPath/);
+  assert.match(source, /absoluteXPathOf/);
+  assert.match(source, /absoluteExact\[0\]!==row/);
+  assert.match(source, /not\(contains\(@href, 'comment_id='\)\)/);
+  assert.match(source, /structuralRowPredicate/);
+  assert.match(source, /diagnosticXPathPrefixes/);
+  assert.match(source, /relativeExact\[0\]!==row/);
+  assert.match(source, /resolvedParent!==parent/);
+  assert.match(source, /DUAL_XPATH_DID_NOT_VERIFY_CONFIRMED_ACTION_ROW/);
+  assert.doesNotMatch(source, /anchorUp|rowPath/);
+});
+
+test("dual XPath strict resolution handles agreement, missing evidence, conflict and ambiguity", () => {
+  const rowA = { id: "post-a-row" };
+  const rowB = { id: "post-b-row" };
+  const verified = { postIdentityVerified: true, actionRowVerified: true, parentVerified: true };
+  assert.equal(classifyDualXPathResolution([rowA], [rowA], verified), "MATCHED");
+  assert.equal(
+    classifyDualXPathResolution([], [rowA], { ...verified, postIdentityVerified: false }),
+    "REMATCH_REQUIRED",
+  );
+  assert.equal(classifyDualXPathResolution([rowA], [rowB], verified), "CONFLICT");
+  assert.equal(classifyDualXPathResolution([rowA, rowB], [], verified), "AMBIGUOUS");
+  assert.equal(classifyDualXPathResolution([], [], verified), "NOT_FOUND");
+});
+
+test("Step 3 remains read-only and excludes comment/reply anchors", () => {
+  const source = buildResolveSavedParentJs({
+    version: 2,
+    platform: "facebook",
+    parentLevel: 26,
+    locatorStrategy: "POST_IDENTITY_ACTION_ROW_LEVEL",
+    actionRowLocator: {
+      version: 2,
+      strategy: "POST_SCOPED_RELATIVE_XPATH",
+      postIdentityAnchor: { platform: "facebook", reason: "facebook-posts-path", xpathTemplate: "//a[contains(@href, {{POST_ID}}) and not(contains(@href, 'comment_id=')) and not(contains(@href, 'reply_comment_id='))]" },
+      absoluteXPath: "/html[1]/body[1]/div[1]",
+      relativeXPath: "ancestor::div[@role='dialog'][1]/descendant::div[count(*)=3]",
+      diagnosticXPathPrefixes: ["ancestor::div[@role='dialog'][1]"],
+      actionRowTag: "DIV",
+      actionRowRole: null,
+      actionRowStructure: { childCount: 3, svgCount: 3, buttonCount: 3, directPattern: "DIV:|DIV:|DIV:" },
+      confirmedParentLevel: 26,
+      teachingEvidence: { anchorTag: "A", anchorReason: "facebook-posts-path", anchorHrefPattern: "/posts/42", absoluteMatchCount: 1, relativeMatchCount: 1, sameNode: true, confirmedRowMatched: true, confirmedParentMatched: true },
+    },
+    updatedAt: new Date(0).toISOString(),
+  });
+  assert.match(source, /comment_id/);
+  assert.match(source, /reply_comment_id/);
+  assert.match(source, /'CONFLICT'/);
+  assert.doesNotMatch(source, /runPostDetailAutoScan|postDetailSave|rankedParents|LIKE|COMMENT|SHARE/);
 });
