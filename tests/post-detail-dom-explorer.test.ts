@@ -19,7 +19,7 @@ test("Step 3 defaults to extracted values and keeps deep DOM under Advanced Debu
 
 test("single-pass extraction emits direct text and semantic values without ancestor textContent", () => {
   const source = extraction();
-  assert.match(source, /Only direct text and semantic values are emitted/);
+  assert.match(source, /One DFS pass for generic values/);
   assert.match(source, /node\.nodeType === Node\.TEXT_NODE/);
   assert.match(source, /tag === "a"/);
   assert.match(source, /tag === "img"/);
@@ -27,11 +27,43 @@ test("single-pass extraction emits direct text and semantic values without ances
   assert.doesNotMatch(source, /kind: "text"[^\n]*element\.textContent/);
 });
 
+test("semantic extraction uses post identity accessibility metadata and structural body boundaries", () => {
+  const source = extraction();
+  assert.match(source, /aria-describedby/);
+  assert.match(source, /findPrimaryTimestampAnchor/);
+  assert.match(source, /semanticField: "created_at"/);
+  assert.match(source, /findPostContentRoot/);
+  assert.match(source, /semanticField: "content"/);
+  assert.match(source, /content_text/);
+  assert.match(source, /content_html/);
+  assert.match(source, /isComment/);
+  assert.doesNotMatch(source, /OCR|parent\.textContent/);
+});
+
+test("links expose text and href outputs from one locator", () => {
+  const source = extraction();
+  assert.match(source, /outputs\.push\(\{ key: "text"/);
+  assert.match(source, /outputs\.push\(\{ key: "href"/);
+  assert.match(source, /sourcePaths: \[path\]/);
+});
+
+test("Step 3 supports output mapping, persisted hide and hidden-noise review", () => {
+  const source = explorer();
+  const store = readFileSync("src/renderer/post-detail-collector/store.ts", "utf8");
+  assert.match(source, /Save Mapping/);
+  assert.match(source, /Unmap Output/);
+  assert.match(source, /Show Hidden/);
+  assert.match(source, /Restore/);
+  assert.match(source, /pdc-data-hide/);
+  assert.match(source, /outputKey: selectedOutput\.key/);
+  assert.match(store, /hiddenExtractedData: state\.hiddenExtractedData/);
+});
+
 test("extraction preserves structural context and refuses ambiguous locators", () => {
   const extractSource = extraction();
   const uiSource = explorer();
   assert.match(extractSource, /getAttribute\("role"\) === "article"/);
-  assert.match(extractSource, /return "comment"/);
+  assert.match(extractSource, /isComment\(element, root\) \? "comment"/);
   assert.match(uiSource, /selectedData\.sourcePaths\.length !== 1/);
   assert.match(uiSource, /sourceContext: selectedData\.context/);
   assert.match(uiSource, /postDetailClearParentNodeHighlight/);
@@ -69,7 +101,7 @@ test("Step 3 reuses Collector variable schema and persists only verified mapping
   assert.match(source, /Missing/);
   assert.match(source, /Needs Attention/);
   assert.match(store, /variableMappings: state\.variableMappings/);
-  assert.doesNotMatch(source, /post_id|author|created_at|like_count|comment_count|share_count/);
+  assert.doesNotMatch(source, /like_count|comment_count|share_count/);
 });
 
 test("AUTO remains strict and Customize does not run visual scan", () => {

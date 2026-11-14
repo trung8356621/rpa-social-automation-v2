@@ -210,7 +210,7 @@ export function PostDetailCollectorPage({ invoke, state: parentState }: { invoke
             }}
           />
         )}
-        {state.step === 3 && <SavedParentHtmlStep invoke={invoke} result={state.savedParentResolution} variableMappings={state.variableMappings} onVariableMappings={(variableMappings) => updateStore({ variableMappings })} onRematch={() => { navigationEpoch.current += 1; autoResolveStarted.current = false; updateStore({ step: 2 }); }} />}
+        {state.step === 3 && <SavedParentHtmlStep invoke={invoke} result={state.savedParentResolution} currentUrl={state.sourceUrl || state.browserUrl} variableMappings={state.variableMappings} onVariableMappings={(variableMappings) => updateStore({ variableMappings })} hiddenExtractedData={state.hiddenExtractedData} onHiddenExtractedData={(hiddenExtractedData) => updateStore({ hiddenExtractedData })} onRematch={() => { navigationEpoch.current += 1; autoResolveStarted.current = false; updateStore({ step: 2 }); }} />}
       </div>
     </section>
   );

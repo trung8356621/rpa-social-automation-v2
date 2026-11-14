@@ -4,7 +4,7 @@ import { COLLECTOR_STORAGE_KEY, type CollectorStoreEnvelope } from "../../shared
 import { collectorReportBrowserHost, collectorSetBrowserVisible } from "../collectors/browser-capture";
 import { claimCollectorHostOwner, releaseCollectorHostOwner } from "../collectors/collector-host-owner";
 import { publishPostDetailBrowserHost } from "./publish-browser-host";
-import { extractParentData, relativeXPathForPath, type ExtractedDataItem } from "./extract-parent-data";
+import { extractParentData, relativeXPathForPath, type ExtractedDataItem, type ExtractedOutput } from "./extract-parent-data";
 import type { Invoke, PostDetailDomVariableMapping } from "./types";
 
 type ExplorerNode = { element: Element; tagName: string; directText: string; textPreview: string; childCount: number; path: number[]; attrs: Record<string, string> };
@@ -38,11 +38,13 @@ function loadVariables(): VariableOption[] {
   try { const data = JSON.parse(localStorage.getItem(COLLECTOR_STORAGE_KEY) || "null") as CollectorStoreEnvelope | null; return (data?.collectors || []).flatMap(collector => collector.variables.map(variable => ({ collectorId: collector.id, collectorName: collector.name, id: variable.id, key: variable.key, label: variable.label }))); } catch { return []; }
 }
 
-export function SavedParentHtmlStep({ invoke, result, variableMappings, onVariableMappings, onRematch }: { invoke: Invoke; result: PostDetailSavedParentResolution | null; variableMappings: PostDetailDomVariableMapping[]; onVariableMappings: (mappings: PostDetailDomVariableMapping[]) => void; onRematch: () => void }) {
+export function SavedParentHtmlStep({ invoke, result, currentUrl, variableMappings, onVariableMappings, hiddenExtractedData, onHiddenExtractedData, onRematch }: { invoke: Invoke; result: PostDetailSavedParentResolution | null; currentUrl: string; variableMappings: PostDetailDomVariableMapping[]; onVariableMappings: (mappings: PostDetailDomVariableMapping[]) => void; hiddenExtractedData: Record<string, string[]>; onHiddenExtractedData: (hidden: Record<string, string[]>) => void; onRematch: () => void }) {
   const status = result?.status || "NOT_CONFIGURED";
   const hostRef = useRef<HTMLDivElement>(null);
   const [tab, setTab] = useState<"explorer" | "raw">("explorer");
   const [selectedDataId, setSelectedDataId] = useState("");
+  const [selectedOutputKey, setSelectedOutputKey] = useState("");
+  const [showHidden, setShowHidden] = useState(false);
   const [expanded, setExpanded] = useState<Set<string>>(new Set());
   const [selected, setSelected] = useState<ExplorerNode | null>(null);
   const [focusPath, setFocusPath] = useState<number[]>([]);
@@ -58,8 +60,13 @@ export function SavedParentHtmlStep({ invoke, result, variableMappings, onVariab
     const doc = new DOMParser().parseFromString("<!doctype html><body></body>", "text/html"), root = doc.createElement("div"); root.innerHTML = result.innerHTML; return root;
   }, [result?.innerHTML, status]);
   const atPath = React.useCallback((path: number[]) => { let node: Element | null = parsed; for (const index of path) node = node?.children.item(index) || null; return node; }, [parsed]);
-  const extractedData = useMemo(() => parsed ? extractParentData(parsed) : [], [parsed]);
+  const postId = String(result?.diagnosticMeta?.postId || currentUrl.match(/\/posts\/(\d+)/)?.[1] || "current-post");
+  const extractedData = useMemo(() => parsed ? extractParentData(parsed, { postId, currentUrl }) : [], [parsed, postId, currentUrl]);
+  const manuallyHidden = hiddenExtractedData[postId] || [];
+  const hiddenCount = extractedData.filter(item => item.hiddenByDefault || manuallyHidden.includes(item.id)).length;
+  const visibleData = showHidden ? extractedData : extractedData.filter(item => !item.hiddenByDefault && !manuallyHidden.includes(item.id));
   const selectedData = extractedData.find(item => item.id === selectedDataId) || null;
+  const selectedOutput = selectedData?.outputs.find(output => output.key === selectedOutputKey) || selectedData?.outputs[0] || null;
   const focusElement = atPath(focusPath);
   const nodes = useMemo(() => focusElement ? [toNode(focusElement, focusPath)] : [], [focusElement, focusPath]);
 
@@ -86,35 +93,42 @@ export function SavedParentHtmlStep({ invoke, result, variableMappings, onVariab
     onVariableMappings([...variableMappings.filter(item => !(item.collectorId === mapping.collectorId && item.variableId === mapping.variableId)), mapping]);
   };
   const samePath = (left: number[], right: number[]) => left.length === right.length && left.every((value, index) => value === right[index]);
-  const mappingForItem = (item: ExtractedDataItem) => variableMappings.find(mapping =>
+  const mappingsForItem = (item: ExtractedDataItem) => variableMappings.filter(mapping =>
     item.sourcePaths.some(path => samePath(path, mapping.relativePath)) &&
     (!mapping.sourceContext || mapping.sourceContext === item.context) &&
-    mapping.preview === item.value);
+    (!mapping.sourceSemantic || mapping.sourceSemantic === item.semanticField));
+  const mappingForOutput = (item: ExtractedDataItem, output: ExtractedOutput) => mappingsForItem(item).find(mapping => mapping.outputKey ? mapping.outputKey === output.key : mapping.preview === output.value);
+  const suggestedVariable = (item: ExtractedDataItem) => item.context === "post" && item.semanticField ? variables.find(variable => variable.key === item.semanticField) : undefined;
+  const selectOutput = (item: ExtractedDataItem, output: ExtractedOutput) => {
+    setSelectedOutputKey(output.key);
+    const mapping = mappingForOutput(item, output), suggestion = suggestedVariable(item);
+    setVariableId(mapping ? `${mapping.collectorId}:${mapping.variableId}` : suggestion ? `${suggestion.collectorId}:${suggestion.id}` : "");
+    setMethod(output.method); setAttribute(output.attribute || "href");
+  };
   const selectData = (item: ExtractedDataItem) => {
     setSelectedDataId(item.id);
-    const mapping = mappingForItem(item);
-    setVariableId(mapping ? `${mapping.collectorId}:${mapping.variableId}` : "");
-    setMethod(item.attribute ? "DOM_ATTRIBUTE" : "DOM_TEXT");
-    setAttribute(item.attribute || "href");
+    const output = item.outputs[0]; if (output) selectOutput(item, output);
   };
   const applyDataMapping = () => {
-    if (!selectedData || selectedData.sourcePaths.length !== 1 || !variableId) return;
+    if (!selectedData || !selectedOutput || selectedData.sourcePaths.length !== 1 || !variableId) return;
     const variable = variables.find(item => `${item.collectorId}:${item.id}` === variableId);
     if (!variable) return;
     const path = selectedData.sourcePaths[0];
     const mapping: PostDetailDomVariableMapping = {
       collectorId: variable.collectorId, variableId: variable.id, variableKey: variable.key, variableLabel: variable.label,
-      method: selectedData.attribute ? "DOM_ATTRIBUTE" : "DOM_TEXT", attribute: selectedData.attribute,
-      relativePath: path, relativeXPath: relativeXPathForPath(path), preview: selectedData.value,
-      sourceContext: selectedData.context, confirmed: true, updatedAt: new Date().toISOString(),
+      method: selectedOutput.method, attribute: selectedOutput.attribute,
+      relativePath: path, relativeXPath: relativeXPathForPath(path), preview: selectedOutput.value,
+      sourceContext: selectedData.context, sourceSemantic: selectedData.semanticField, outputKey: selectedOutput.key, confirmed: true, updatedAt: new Date().toISOString(),
     };
     onVariableMappings([...variableMappings.filter(item => !(item.collectorId === mapping.collectorId && item.variableId === mapping.variableId)), mapping]);
   };
   const unmapData = () => {
-    if (!selectedData) return;
-    onVariableMappings(variableMappings.filter(mapping => !selectedData.sourcePaths.some(path => samePath(path, mapping.relativePath))));
+    if (!selectedData || !selectedOutput) return;
+    onVariableMappings(variableMappings.filter(mapping => !(selectedData.sourcePaths.some(path => samePath(path, mapping.relativePath)) && (mapping.outputKey ? mapping.outputKey === selectedOutput.key : mapping.preview === selectedOutput.value))));
     setVariableId("");
   };
+  const hideData = (item: ExtractedDataItem) => { onHiddenExtractedData({ ...hiddenExtractedData, [postId]: Array.from(new Set([...manuallyHidden, item.id])) }); if (selectedDataId === item.id) setSelectedDataId(""); };
+  const restoreHidden = () => onHiddenExtractedData({ ...hiddenExtractedData, [postId]: [] });
   const mappingRows = variableMappings.map(mapping => { const element = atPath(mapping.relativePath), value = element ? mapping.method === "DOM_ATTRIBUTE" ? element.getAttribute(mapping.attribute || "") || "" : short(element.textContent || "", 2000) : ""; return { mapping, value, mappingStatus: element ? value ? "Mapped" : "Needs Attention" : "Missing" }; });
   const breadcrumbs = focusPath.map((_, index) => focusPath.slice(0, index + 1));
   const rematch = () => { void invoke({ type: "postDetailClearParentNodeHighlight" }); onRematch(); };
@@ -126,19 +140,21 @@ export function SavedParentHtmlStep({ invoke, result, variableMappings, onVariab
     {status !== "NOT_CONFIGURED" && <div className={`pdc-dom-workspace ${browserCollapsed ? "browser-collapsed" : ""}`}><div className="pdc-dom-browser-wrap"><button className="pdc-btn pdc-btn-tiny" onClick={() => setBrowserCollapsed(value => !value)}>{browserCollapsed ? "Show Browser Preview" : "Collapse Browser Preview"}</button>{!browserCollapsed && <div ref={hostRef} className="pdc-browser-host pdc-dom-browser" data-browser-core-host="" />}</div><div className="pdc-dom-panel">
       {status === "PARENT_MATCHED" ? <><div className={`pdc-data-review ${selectedData ? "has-detail" : ""}`}>
         <div className="pdc-data-list" aria-label="Extracted values">
-          <div className="pdc-data-list-header"><h3>Extracted values</h3><span>{extractedData.length} values</span></div>
-          {extractedData.length ? extractedData.map(item => {
-            const mapping = mappingForItem(item);
-            const mappingStatus = item.sourcePaths.length > 1 ? "Needs Attention" : mapping ? "Auto Mapped" : "Unmapped";
-            return <button key={item.id} type="button" title={item.label || item.value} className={`pdc-data-tag status-${mappingStatus.toLowerCase().replace(/\s+/g, "-")} ${selectedDataId === item.id ? "selected" : ""}`} onClick={() => selectData(item)} onMouseEnter={() => { if (item.sourcePaths.length === 1) void invoke({ type: "postDetailHighlightParentNode", path: item.sourcePaths[0] }); }} onMouseLeave={() => { void invoke({ type: "postDetailClearParentNodeHighlight" }); }}>
+          <div className="pdc-data-list-header"><h3>Extracted values</h3><div className="pdc-btn-row"><span>{visibleData.length} shown · {hiddenCount} hidden</span><button className="pdc-btn pdc-btn-tiny" onClick={() => setShowHidden(value => !value)}>{showHidden ? "Hide Noise" : "Show Hidden"}</button><button className="pdc-btn pdc-btn-tiny" disabled={!manuallyHidden.length} onClick={restoreHidden}>Restore</button></div></div>
+          {visibleData.length ? visibleData.map(item => {
+            const mappings = mappingsForItem(item);
+            const mappingStatus = item.sourcePaths.length > 1 || item.extractionStatus === "needs_attention" ? "Needs Attention" : mappings.length ? "Auto Mapped" : suggestedVariable(item) ? "Suggested" : "Unmapped";
+            return <span key={item.id} className="pdc-data-tag-wrap" onMouseEnter={() => { if (item.sourcePaths.length === 1) void invoke({ type: "postDetailHighlightParentNode", path: item.sourcePaths[0] }); }} onMouseLeave={() => { void invoke({ type: "postDetailClearParentNodeHighlight" }); }}><button type="button" title={item.value} className={`pdc-data-tag status-${mappingStatus.toLowerCase().replace(/\s+/g, "-")} ${selectedDataId === item.id ? "selected" : ""}`} onClick={() => selectData(item)}>
               <span className="pdc-data-value">{item.label || item.value}</span>
-            </button>;
+            </button><button type="button" className="pdc-data-hide" aria-label={`Hide ${item.label || item.value}`} onClick={() => hideData(item)}>×</button></span>;
           }) : <p className="pdc-panel-desc">No meaningful DOM values were extracted from this Parent.</p>}
         </div>
         {selectedData && <div className="pdc-extracted-detail"><h3>Value detail</h3>
-          <dl className="pdc-kv"><dt>Value</dt><dd>{selectedData.value}</dd><dt>Type</dt><dd>{selectedData.predictedType || selectedData.kind}</dd><dt>Context</dt><dd>{selectedData.context}</dd><dt>Source</dt><dd>{selectedData.sourcePaths.length === 1 ? "Unique DOM node" : `${selectedData.sourcePaths.length} nodes · Needs Attention`}</dd></dl>
-          <p className="pdc-data-detail-status">{selectedData.sourcePaths.length > 1 ? "Needs Attention" : mappingForItem(selectedData) ? `Auto Mapped → ${mappingForItem(selectedData)?.variableLabel}` : "Unmapped"}</p>
-          {variables.length ? <><select value={variableId} onChange={event => setVariableId(event.target.value)}><option value="">Select existing variable…</option>{variables.map(variable => <option key={`${variable.collectorId}:${variable.id}`} value={`${variable.collectorId}:${variable.id}`}>{variable.collectorName} · {variable.label} ({variable.key})</option>)}</select><p>Preview: {selectedData.value}</p><div className="pdc-btn-row"><button className="pdc-btn pdc-btn-primary" disabled={!variableId || selectedData.sourcePaths.length !== 1} onClick={applyDataMapping}>{mappingForItem(selectedData) ? "Change Mapping" : "Apply Mapping"}</button><button className="pdc-btn pdc-btn-secondary" disabled={!mappingForItem(selectedData)} onClick={unmapData}>Unmap</button></div></> : <p className="pdc-panel-desc">No existing Collector variables. Create schema in Collectors first.</p>}
+          <dl className="pdc-kv"><dt>Field</dt><dd>{selectedData.semanticField || selectedData.kind}</dd><dt>Value</dt><dd className="pdc-preserve-lines">{selectedOutput?.value || selectedData.value}</dd><dt>Type</dt><dd>{selectedData.predictedType || selectedData.kind}</dd><dt>Context</dt><dd>{selectedData.context}</dd><dt>Confidence</dt><dd>{selectedData.confidence} · {selectedData.extractionStatus}</dd>{selectedData.sourceAttribute && <><dt>Source attribute</dt><dd>{selectedData.sourceAttribute}</dd></>}<dt>Source</dt><dd>{selectedData.sourcePaths.length === 1 ? "Unique DOM node" : `${selectedData.sourcePaths.length} nodes · Needs Attention`}</dd></dl>
+          {selectedData.outputs.length > 1 && <label>Output<select value={selectedOutput?.key || ""} onChange={event => { const output = selectedData.outputs.find(item => item.key === event.target.value); if (output) selectOutput(selectedData, output); }}>{selectedData.outputs.map(output => <option key={output.key} value={output.key}>{output.label}</option>)}</select></label>}
+          <p className="pdc-data-detail-status">{selectedOutput && mappingForOutput(selectedData, selectedOutput) ? `Mapped → ${mappingForOutput(selectedData, selectedOutput)?.variableLabel}` : suggestedVariable(selectedData) ? `Suggested → ${suggestedVariable(selectedData)?.label}` : selectedData.extractionStatus === "needs_attention" ? "Needs Attention" : "Unmapped"}</p>
+          {mappingsForItem(selectedData).length > 0 && <div className="pdc-output-mappings"><b>Output mappings</b>{mappingsForItem(selectedData).map(mapping => <span key={`${mapping.variableId}:${mapping.outputKey || mapping.preview}`}>{mapping.outputKey || "legacy"} → {mapping.variableLabel}</span>)}</div>}
+          {variables.length ? <><select value={variableId} onChange={event => setVariableId(event.target.value)}><option value="">Select existing variable…</option>{variables.map(variable => <option key={`${variable.collectorId}:${variable.id}`} value={`${variable.collectorId}:${variable.id}`}>{variable.collectorName} · {variable.label} ({variable.key})</option>)}</select><p>Preview: <span className="pdc-preserve-lines">{selectedOutput?.value || selectedData.value}</span></p><div className="pdc-btn-row"><button className="pdc-btn pdc-btn-primary" disabled={!variableId || !selectedOutput || selectedData.sourcePaths.length !== 1} onClick={applyDataMapping}>Save Mapping</button><button className="pdc-btn pdc-btn-secondary" disabled={!selectedOutput || !mappingForOutput(selectedData, selectedOutput)} onClick={unmapData}>Unmap Output</button></div></> : <p className="pdc-panel-desc">No existing Collector variables. Create schema in Collectors first.</p>}
         </div>}
       </div><details className="pdc-advanced-debug"><summary>Advanced Debug</summary><div className="pdc-btn-row"><button className={`pdc-btn pdc-btn-tiny ${tab === "explorer" ? "active" : ""}`} onClick={() => setTab("explorer")}>DOM Explorer</button><button className={`pdc-btn pdc-btn-tiny ${tab === "raw" ? "active" : ""}`} onClick={() => setTab("raw")}>Raw HTML</button><button className="pdc-btn pdc-btn-tiny" disabled={!focusPath.length} onClick={resetFocus}>Reset Focus</button></div>
       {tab === "raw" ? <pre className="pdc-code-preview">{result?.innerHTML}</pre> : <><div className="pdc-dom-breadcrumb"><button onClick={resetFocus}>Root</button>{breadcrumbs.map(path => <button key={pathKey(path)} onClick={() => setFocusPath(path)}>› {atPath(path)?.tagName.toLowerCase()}</button>)}</div><label className="pdc-split-control">Tree width <input type="range" min="30" max="75" value={treeRatio} onChange={event => setTreeRatio(Number(event.target.value))} /></label><div className="pdc-dom-columns" style={{ gridTemplateColumns: `${treeRatio}fr ${100 - treeRatio}fr` }}><div className="pdc-dom-tree"><ul>{nodes.map(node => <TreeNode key={pathKey(node.path)} node={node} expanded={expanded} selected={selected ? pathKey(selected.path) : ""} onToggle={key => setExpanded(current => { const next = new Set(current); next.has(key) ? next.delete(key) : next.add(key); return next; })} onSelect={choose} onFocus={focus} onHover={highlight} />)}</ul></div><div className="pdc-dom-inspector"><h3>Inspector</h3>{selected ? <>

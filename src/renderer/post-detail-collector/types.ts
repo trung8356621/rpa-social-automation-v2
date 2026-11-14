@@ -42,6 +42,7 @@ export type PostDetailCollectorState = {
   parentConfigs: Record<string, PostDetailParentConfig>;
   savedParentResolution: PostDetailSavedParentResolution | null;
   variableMappings: PostDetailDomVariableMapping[];
+  hiddenExtractedData: Record<string, string[]>;
 };
 
 export type PostDetailDomVariableMapping = {
@@ -55,6 +56,8 @@ export type PostDetailDomVariableMapping = {
   relativeXPath: string;
   preview: string;
   sourceContext?: "post" | "comment" | "unknown";
+  sourceSemantic?: "created_at" | "content";
+  outputKey?: string;
   confirmed: true;
   updatedAt: string;
 };
