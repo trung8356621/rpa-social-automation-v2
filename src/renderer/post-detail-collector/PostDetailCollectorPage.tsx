@@ -246,6 +246,7 @@ export function PostDetailCollectorPage({ invoke, state: parentState }: { invoke
             invoke={invoke}
             parentConfigs={state.parentConfigs}
             variableMappings={state.variableMappings}
+            hiddenExtractedData={state.hiddenExtractedData}
             batchUrlsText={state.batchUrlsText}
             batchResults={state.batchResults}
             batchConfigVersion={state.batchConfigVersion}
@@ -254,6 +255,10 @@ export function PostDetailCollectorPage({ invoke, state: parentState }: { invoke
             onBatchResults={(batchResults, batchValidatedVersion) =>
               updateStore({ batchResults, batchValidatedVersion })
             }
+            onVariableMappings={(variableMappings) =>
+              updateStore((prev) => ({ variableMappings, batchConfigVersion: (prev.batchConfigVersion ?? 1) + 1 }))
+            }
+            onHiddenExtractedData={(hiddenExtractedData) => updateStore({ hiddenExtractedData })}
             onReviewInStep3={(url, savedParentResolution) =>
               updateStore({ sourceUrl: url, browserUrl: url, savedParentResolution, step: 3 })
             }

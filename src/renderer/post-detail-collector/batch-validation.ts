@@ -15,6 +15,26 @@ export type ParsedBatchUrl = {
   error?: string;
 };
 
+export type ParentReadinessState = { signature: string; stableCount: number };
+export function advanceParentReadiness(opts: {
+  state: ParentReadinessState;
+  expectedPostId: string | null;
+  resolvedPostId: string | null;
+  postIdentityVerified: boolean;
+  parentMatched: boolean;
+  semanticSignature: string;
+  requiredStableSnapshots?: number;
+}): { state: ParentReadinessState; ready: boolean; reason: "PARENT_NOT_MATCHED" | "POST_IDENTITY_UNVERIFIED" | "DOM_CHANGING" | "READY" } {
+  if (!opts.parentMatched) return { state: { signature: "", stableCount: 0 }, ready: false, reason: "PARENT_NOT_MATCHED" };
+  if (!opts.postIdentityVerified || (opts.expectedPostId && opts.resolvedPostId !== opts.expectedPostId)) {
+    return { state: { signature: "", stableCount: 0 }, ready: false, reason: "POST_IDENTITY_UNVERIFIED" };
+  }
+  const stableCount = opts.semanticSignature === opts.state.signature ? opts.state.stableCount + 1 : 1;
+  const state = { signature: opts.semanticSignature, stableCount };
+  const ready = stableCount >= (opts.requiredStableSnapshots ?? 2);
+  return { state, ready, reason: ready ? "READY" : "DOM_CHANGING" };
+}
+
 export function extractPostIdentityFromUrl(rawUrl: string): {
   valid: boolean;
   normalizedUrl: string;
@@ -113,6 +133,35 @@ export function parseBatchUrls(rawText: string): {
   return { items, duplicateCount };
 }
 
+export function formatShortPostLabel(url: string, postId?: string | null): string {
+  if (postId) return `Post #${postId}`;
+  try {
+    const parsed = new URL(url);
+    const cleanPath = parsed.pathname.replace(/\/+$/, "");
+    return cleanPath.length > 36 ? `${cleanPath.slice(0, 33)}…` : cleanPath || parsed.hostname;
+  } catch {
+    return url.length > 36 ? `${url.slice(0, 33)}…` : url;
+  }
+}
+
+export function canonicalPostUrl(url: string, postId?: string | null): string {
+  if (!postId) return url;
+  try {
+    const parsed = new URL(url);
+    if (/(?:^|\.)facebook\.com$/i.test(parsed.hostname) || /(?:^|\.)fb\.com$/i.test(parsed.hostname)) {
+      const group = /^\/groups\/([^/]+)/i.exec(parsed.pathname)?.[1];
+      if (group) return `https://www.facebook.com/groups/${group}/posts/${encodeURIComponent(postId)}/`;
+    }
+    if (/(?:^|\.)threads\.(?:com|net)$/i.test(parsed.hostname)) {
+      const handle = /^(\/@[^/]+)\/post\//i.exec(parsed.pathname)?.[1];
+      if (handle) return `https://www.threads.com${handle}/post/${encodeURIComponent(postId)}`;
+    }
+  } catch {
+    /* original URL remains the navigation/debug source */
+  }
+  return url;
+}
+
 export function evaluateMatchedParentDom(opts: {
   url: string;
   resolvedUrl: string;
@@ -170,10 +219,28 @@ export function evaluateMatchedParentDom(opts: {
       : undefined;
     const semanticAmbiguous = semanticMatch?.extractionStatus === "needs_attention";
 
-    const passed =
-      executed.status === "mapped" &&
-      executed.value.trim().length > 0 &&
-      !semanticAmbiguous;
+    let parsedValues: string[] | undefined;
+    let validValue = executed.value.trim().length > 0;
+    if (mapping.method === "POST_IMAGES" || mapping.sourceSemantic === "post_images") {
+      try {
+        const arr = JSON.parse(executed.value || "[]");
+        if (Array.isArray(arr)) {
+          parsedValues = arr.map((v) => String(v));
+          validValue = true;
+        } else {
+          validValue = false;
+        }
+      } catch {
+        validValue = false;
+      }
+    }
+
+    const passed = executed.status === "mapped" && validValue && !semanticAmbiguous;
+    const fieldStatus: BatchFieldResult["fieldStatus"] = passed
+      ? "PASS"
+      : executed.status === "missing"
+        ? "MISSING"
+        : "NEEDS_ATTENTION";
 
     fields.push({
       variableId: mapping.variableId,
@@ -181,10 +248,12 @@ export function evaluateMatchedParentDom(opts: {
       variableLabel: varMeta?.label ?? mapping.variableLabel,
       required: Boolean(varMeta?.required),
       value: executed.value,
+      values: parsedValues,
       method: mapping.method,
       attribute: mapping.attribute,
       relativeXPath: mapping.relativeXPath,
       status: passed ? "PASS" : "REVIEW",
+      fieldStatus,
       reason: passed
         ? undefined
         : semanticAmbiguous
@@ -208,6 +277,7 @@ export function evaluateMatchedParentDom(opts: {
         method: "UNMAPPED",
         relativeXPath: "",
         status: "REVIEW",
+        fieldStatus: "MISSING",
         reason: "Required variable is unmapped",
       });
     }
@@ -215,6 +285,10 @@ export function evaluateMatchedParentDom(opts: {
 
   const passedCount = fields.filter((f) => f.status === "PASS").length;
   const totalCount = fields.length;
+  const extractedCount = fields.filter((f) => f.fieldStatus === "PASS").length;
+  const missingCount = fields.filter((f) => f.fieldStatus === "MISSING").length;
+  const needsAttentionCount = fields.filter((f) => f.fieldStatus === "NEEDS_ATTENTION").length;
+  const userVerifiedCount = mappings.filter((m) => m.confirmed).length;
   const allPass = totalCount > 0 && passedCount === totalCount;
 
   return {
@@ -224,6 +298,10 @@ export function evaluateMatchedParentDom(opts: {
     parentStatus: "Matched",
     passedCount,
     totalCount,
+    extractedCount,
+    missingCount,
+    needsAttentionCount,
+    userVerifiedCount,
     status: allPass ? "PASS" : "REVIEW",
     failureReason: totalCount === 0 ? "No confirmed variable mappings configured" : undefined,
     parentDiagnostics: resolution.diagnostics,

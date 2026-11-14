@@ -1,13 +1,14 @@
-import type { PostDetailDomVariableMapping, PostDetailExtractionMethod } from "./types";
+import type { PostDetailDomVariableMapping, PostDetailExtractionMethod, PostImageEntry } from "./types";
 
 export type ExtractedDataContext = "post" | "comment" | "unknown";
-export type ExtractedDataKind = "text" | "link" | "image" | "datetime" | "content" | "engagement" | "attribute";
-export type ExtractedOutput = { key: "text" | "href" | "src" | "raw_display" | "normalized_value" | "content_text" | "content_html" | "count" | "attribute"; label: string; value: string; method: PostDetailExtractionMethod; attribute?: string };
+export type ExtractedDataKind = "text" | "link" | "image" | "media" | "datetime" | "content" | "engagement" | "attribute";
+export type ExtractedOutput = { key: "text" | "href" | "src" | "raw_display" | "normalized_value" | "content_text" | "content_html" | "count" | "images" | "attribute"; label: string; value: string; method: PostDetailExtractionMethod; attribute?: string };
 export type ExtractedDataItem = {
   id: string; kind: ExtractedDataKind; value: string; label?: string; attribute?: string;
-  predictedType?: "text" | "url" | "image" | "datetime" | "number"; semanticField?: "created_at" | "content" | "like_count" | "comment_count" | "share_count";
+  predictedType?: "text" | "url" | "image" | "datetime" | "number" | "array"; semanticField?: "created_at" | "content" | "like_count" | "comment_count" | "share_count" | "post_images";
   context: ExtractedDataContext; confidence: "high" | "medium" | "low"; extractionStatus: "verified" | "needs_attention";
   sourceAttribute?: string; normalizedValue?: string; contentHtml?: string; hiddenByDefault?: boolean; hiddenReason?: string;
+  mediaItems?: PostImageEntry[];
   outputs: ExtractedOutput[]; sourcePaths: number[][]; relativeXPath?: string;
 };
 export type ExecutedVariableMapping = {
@@ -83,18 +84,31 @@ function commonAncestor(left: Element, right: Element, root: Element) {
   return null;
 }
 function branchUnder(node: Element, ancestor: Element) { let branch = node; while (branch.parentElement && branch.parentElement !== ancestor) branch = branch.parentElement; return branch.parentElement === ancestor ? branch : null; }
+function directControlBranches(node: Element) {
+  return Array.from(node.children).filter(child =>
+    child.tagName.toLowerCase() === "button" || child.getAttribute("role") === "button" || Boolean(child.querySelector("button,[role='button']")),
+  );
+}
 function firstPostControlCluster(root: Element, after: Element) {
   const controls = Array.from(root.querySelectorAll("button,[role='button']")).filter(control => !isComment(control, root) && Boolean(after.compareDocumentPosition(control) & 4));
-  for (const control of controls) for (let node: Element | null = control.parentElement; node && node !== root; node = node.parentElement) if (!node.querySelector("[role='article'],article") && node.querySelectorAll("button,[role='button']").length >= 3) return node;
-  return null;
+  const candidates = new Set<Element>();
+  for (const control of controls) {
+    for (let node: Element | null = control.parentElement; node && node !== root; node = node.parentElement) {
+      if (node.querySelector("[role='article'],article") || node.querySelector("[role='toolbar']") || node.getAttribute("role") === "toolbar") continue;
+      if (directControlBranches(node).length >= 3) candidates.add(node);
+    }
+  }
+  return Array.from(candidates).sort((left, right) =>
+    left.querySelectorAll("*").length - right.querySelectorAll("*").length,
+  )[0] || null;
 }
-function findPostContentRoot(root: Element, timestampAnchor: Element) {
+function findPostContentRoots(root: Element, timestampAnchor: Element) {
   const boundary = firstPostControlCluster(root, timestampAnchor) || root.querySelector("[role='article'],article"); if (!boundary) return null;
   const scope = commonAncestor(timestampAnchor, boundary, root); if (!scope) return null;
   const headerBranch = branchUnder(timestampAnchor, scope), boundaryBranch = branchUnder(boundary, scope); if (!headerBranch || !boundaryBranch) return null;
   const children = Array.from(scope.children), start = children.indexOf(headerBranch), end = children.indexOf(boundaryBranch); if (start < 0 || end <= start) return null;
   const candidates = children.slice(start + 1, end).filter(element => !element.querySelector("[role='article'],article") && !element.querySelector("button,[role='button']") && meaningfulText(clean(element.textContent)));
-  return candidates.length === 1 ? candidates[0] : null;
+  return candidates.length ? candidates : null;
 }
 function contentText(root: Element) {
   const chunks: string[] = [], blockTags = new Set(["DIV", "P", "H1", "H2", "H3", "H4", "LI", "UL", "OL", "SECTION", "ARTICLE"]);
@@ -117,6 +131,12 @@ function limitedContentHtml(element: Element) {
   clone.querySelectorAll("script,style,svg,button,[role='button'],[role='article'],article,[aria-hidden='true'],[hidden]").forEach(node => node.remove());
   Array.from(clone.querySelectorAll("*")).forEach(node => { if (structurallyHidden(node)) node.remove(); });
   return clone.innerHTML.trim();
+}
+function contentRangeText(elements: Element[]) {
+  return elements.map(contentText).filter(Boolean).join("\n").replace(/\n{3,}/g, "\n\n").trim();
+}
+function contentRangeHtml(elements: Element[]) {
+  return elements.map(element => limitedContentHtml(element)).filter(Boolean).join("\n").trim();
 }
 
 type EngagementField = "like_count" | "comment_count" | "share_count";
@@ -142,17 +162,17 @@ export function parseEngagementNumber(raw: string | null | undefined): number | 
 }
 
 function findActionRowCluster(root: Element, timestampAnchor: Element | null): Element | null {
+  if (timestampAnchor) return firstPostControlCluster(root, timestampAnchor);
   const firstComment = root.querySelector("[role='article'],article");
   const controls = Array.from(root.querySelectorAll("button,[role='button']")).filter(control =>
     !isComment(control, root) &&
-    (!timestampAnchor || Boolean(timestampAnchor.compareDocumentPosition(control) & 4)) &&
     (!firstComment || Boolean(control.compareDocumentPosition(firstComment) & 4)),
   );
   let lastValidRow: Element | null = null;
   for (const control of controls) {
     for (let node: Element | null = control.parentElement; node && node !== root; node = node.parentElement) {
       if (node.querySelector("[role='article'],article") || node.querySelector("[role='toolbar']") || node.getAttribute("role") === "toolbar") continue;
-      if (node.querySelectorAll("button,[role='button']").length >= 3) {
+      if (directControlBranches(node).length >= 3) {
         lastValidRow = node;
         break;
       }
@@ -189,23 +209,30 @@ function isToolbarReactionTotalSibling(el: Element, root: Element): boolean {
   return false;
 }
 
-function classifyEngagementField(el: Element, root: Element, actionRow: Element | null): EngagementField | null {
+function classifyEngagementField(el: Element, root: Element): EngagementField | null {
   const aria = clean(el.getAttribute("aria-label"));
   const text = clean(el.textContent);
-  const href = clean(el.getAttribute("href"));
-  const combined = `${aria} ${href} ${text}`.trim();
+  const combined = `${aria} ${text}`.trim();
   if (SHARE_RE.test(combined)) return "share_count";
   if (COMMENT_RE.test(combined)) return "comment_count";
   if (LIKE_RE.test(combined)) return "like_count";
   if (isInsideToolbar(el, root) || isToolbarReactionTotalSibling(el, root)) return "like_count";
-  if (actionRow && actionRow.contains(el)) {
-    const slots = Array.from(actionRow.children);
-    const slotIndex = slots.findIndex(slot => slot === el || slot.contains(el));
-    if (slots.length >= 3 && slotIndex === 0) return "like_count";
-    if (slots.length >= 3 && slotIndex === 1) return "comment_count";
-    if (slots.length >= 3 && slotIndex === 2) return "share_count";
-  }
   return null;
+}
+
+const ENGAGEMENT_NUMBER_TOKEN = String.raw`\d+(?:[.,]\d+)?\s*(?:k|m|b|nghìn|ngàn|triệu|tỷ)?`;
+const ENGAGEMENT_FIELD_LABEL: Record<EngagementField, string> = {
+  like_count: String.raw`likes?|reacts?|reactions?|thích|cảm\s*xúc|người\s*khác|others?`,
+  comment_count: String.raw`comments?|bình\s*luận|phản\s*hồi|replies|reply`,
+  share_count: String.raw`shares?|chia\s*sẻ|reposts?`,
+};
+function parseSemanticEngagementNumber(raw: string | null | undefined, field: EngagementField): number | null {
+  const text = clean(raw);
+  if (!text) return null;
+  const label = ENGAGEMENT_FIELD_LABEL[field];
+  const before = new RegExp(`(?:^|\\P{L})(${ENGAGEMENT_NUMBER_TOKEN})\\s*(?:lượt\\s*)?(?:${label})(?=\\P{L}|$)`, "iu").exec(text);
+  const after = new RegExp(`(?:^|\\P{L})(?:${label})(?=\\P{L}|$)[^\\d]{0,12}(${ENGAGEMENT_NUMBER_TOKEN})`, "iu").exec(text);
+  return parseEngagementNumber(before?.[1] || after?.[1]);
 }
 
 function candidatePriority(item: EngagementCandidate): number {
@@ -242,15 +269,15 @@ function collapseEngagementCandidates(field: EngagementField, rawList: Engagemen
   return collapsed;
 }
 
-function extractPostEngagements(root: Element, timestampAnchor: Element | null, contentRoot: Element | null, excludedRoots: Set<Element>): ExtractedDataItem[] {
+function extractPostEngagements(root: Element, timestampAnchor: Element | null, contentRoots: Element[] | null, excludedRoots: Set<Element>): ExtractedDataItem[] {
   const actionRow = findActionRowCluster(root, timestampAnchor);
   const firstComment = root.querySelector("[role='article'],article");
-  const afterNode = contentRoot || timestampAnchor;
+  const afterNode = contentRoots?.[contentRoots.length - 1] || timestampAnchor;
   if (!actionRow && !afterNode) return [];
 
   const isInEngagementZone = (el: Element): boolean => {
     if (isComment(el, root) || structurallyHidden(el)) return false;
-    if (contentRoot && (el === contentRoot || contentRoot.contains(el))) return false;
+    if (contentRoots?.some(contentRoot => el === contentRoot || contentRoot.contains(el))) return false;
     if (timestampAnchor?.parentElement && (el === timestampAnchor.parentElement || timestampAnchor.parentElement.contains(el))) return false;
     if (afterNode && !(afterNode.compareDocumentPosition(el) & 4)) return false;
     if (firstComment && !(el.compareDocumentPosition(firstComment) & 4)) return false;
@@ -259,6 +286,7 @@ function extractPostEngagements(root: Element, timestampAnchor: Element | null, 
   };
 
   const candidatesByField: Record<EngagementField, EngagementCandidate[]> = { like_count: [], comment_count: [], share_count: [] };
+  const unclassifiedActionCounts: Array<{ element: Element; value: string }> = [];
   const allElements = Array.from(root.querySelectorAll("*")).filter(isInEngagementZone);
 
   for (const el of allElements) {
@@ -266,15 +294,22 @@ function extractPostEngagements(root: Element, timestampAnchor: Element | null, 
     const isLeafText = el.children.length === 0 && Boolean(clean(el.textContent));
     if (!isInteractive && !isLeafText) continue;
 
-    const field = classifyEngagementField(el, root, actionRow);
-    if (!field) continue;
+    const field = classifyEngagementField(el, root);
+    if (!field) {
+      if (actionRow?.contains(el)) {
+        const raw = parseEngagementNumber(el.getAttribute("aria-label")) ?? parseEngagementNumber(el.textContent);
+        if (raw !== null) unclassifiedActionCounts.push({ element: el, value: String(raw) });
+      }
+      continue;
+    }
 
-    const ariaNum = parseEngagementNumber(el.getAttribute("aria-label"));
+    const structuralLikeTotal = field === "like_count" && (isInsideToolbar(el, root) || isToolbarReactionTotalSibling(el, root));
+    const ariaNum = parseSemanticEngagementNumber(el.getAttribute("aria-label"), field);
     if (ariaNum !== null) {
       candidatesByField[field].push({ field, value: String(ariaNum), method: "DOM_ATTRIBUTE_NUMBER", attribute: "aria-label", element: el });
       continue;
     }
-    const textNum = parseEngagementNumber(el.textContent);
+    const textNum = parseSemanticEngagementNumber(el.textContent, field) ?? (structuralLikeTotal ? parseEngagementNumber(el.textContent) : null);
     if (textNum !== null) {
       candidatesByField[field].push({ field, value: String(textNum), method: "DOM_TEXT_NUMBER", element: el });
     }
@@ -283,7 +318,26 @@ function extractPostEngagements(root: Element, timestampAnchor: Element | null, 
   const results: ExtractedDataItem[] = [];
   for (const field of ["like_count", "comment_count", "share_count"] as EngagementField[]) {
     const deduped = collapseEngagementCandidates(field, candidatesByField[field], root);
-    if (deduped.length === 0) continue;
+    if (deduped.length === 0) {
+      const unknownPaths = unclassifiedActionCounts.map(candidate => elementPath(candidate.element, root)).filter((path): path is number[] => Boolean(path));
+      if (unknownPaths.length) {
+        results.push({
+          id: `${field}:unclassified:${unknownPaths.length}`,
+          kind: "engagement",
+          value: "",
+          label: `${ENGAGEMENT_LABELS[field]} (Needs Attention: unlabeled numeric sources)`,
+          predictedType: "number",
+          semanticField: field,
+          context: "post",
+          confidence: "low",
+          extractionStatus: "needs_attention",
+          hiddenByDefault: false,
+          outputs: [{ key: "count", label: "Count (number)", value: "", method: "DOM_TEXT_NUMBER" }],
+          sourcePaths: unknownPaths,
+        });
+      }
+      continue;
+    }
 
     if (deduped.length === 1) {
       const winner = deduped[0];
@@ -329,6 +383,206 @@ function extractPostEngagements(root: Element, timestampAnchor: Element | null, 
   return results;
 }
 
+function parseSrcsetHighest(srcset: string | null | undefined, currentUrl?: string): { url: string; width: number } | null {
+  if (!srcset) return null;
+  let best: { url: string; width: number } | null = null;
+  for (const part of srcset.split(",")) {
+    const tokens = part.trim().split(/\s+/);
+    const rawUrl = tokens[0];
+    if (!rawUrl || rawUrl.startsWith("data:")) continue;
+    const descriptor = tokens[1] || "";
+    const wMatch = /^(\d+)w$/i.exec(descriptor);
+    const xMatch = /^(\d+(?:\.\d+)?)x$/i.exec(descriptor);
+    const score = wMatch ? Number(wMatch[1]) : xMatch ? Number(xMatch[1]) * 1000 : 1;
+    const resolved = resolveUrl(rawUrl, currentUrl);
+    if (!best || score > best.width) best = { url: resolved, width: score };
+  }
+  return best;
+}
+
+function extractCssBgUrl(style: string | null | undefined, currentUrl?: string): string {
+  if (!style) return "";
+  const match = /background-image\s*:\s*url\(\s*(['"]?)(.*?)\1\s*\)/i.exec(style);
+  const raw = clean(match?.[2]);
+  if (!raw || raw.startsWith("data:")) return "";
+  return resolveUrl(raw, currentUrl);
+}
+
+function canonicalImageKey(url: string): string {
+  try {
+    const parsed = new URL(url, "https://www.facebook.com");
+    const base = parsed.pathname.split("/").pop() || parsed.pathname;
+    if (/(?:fbcdn\.net|scontent|fbsbx\.com)$/i.test(parsed.hostname) || /\.(?:jpe?g|png|webp|gif|avif)$/i.test(base)) {
+      return base.toLowerCase();
+    }
+    return `${parsed.origin}${parsed.pathname}`.toLowerCase();
+  } catch {
+    return url.toLowerCase();
+  }
+}
+
+function findAncestor(el: Element, root: Element, predicate: (node: Element) => boolean): Element | null {
+  for (let cur: Element | null = el; cur && cur !== root; cur = cur.parentElement) {
+    if (predicate(cur)) return cur;
+  }
+  return null;
+}
+
+function isNonPostImageUrlOrNode(el: Element, url: string, root: Element, actionRow: Element | null): boolean {
+  if (!url || url.startsWith("data:image/svg+xml")) return true;
+  if (/(?:rsrc\.php|emoji\.php|\/images\/emoji|\/reaction\/|\/stickers\/|\/images\/assets_DO_NOT_USE\/)/i.test(url)) return true;
+  if (isComment(el, root) || structurallyHidden(el)) return true;
+  if (actionRow && actionRow.contains(el)) return true;
+  for (let cur: Element | null = el; cur && cur !== root; cur = cur.parentElement) {
+    const tag = cur.tagName.toLowerCase();
+    if (tag === "svg" || tag === "h1" || tag === "h2" || tag === "h3" || tag === "h4") return true;
+    const role = cur.getAttribute("role");
+    if (role === "toolbar") return true;
+    const meta = `${clean(cur.getAttribute("aria-label"))} ${clean(cur.getAttribute("data-testid"))} ${clean(cur.getAttribute("alt"))}`;
+    if (/(?:avatar|profile\s*picture|ảnh\s*đại\s*diện|sticker|emoji|reaction)/i.test(meta)) return true;
+  }
+  const w = Number(el.getAttribute("width") || "");
+  const h = Number(el.getAttribute("height") || "");
+  const isPhotoLink = Boolean(
+    findAncestor(el, root, (n) => n.tagName.toLowerCase() === "a" && /(?:\/photo|set=pcb|fbid=)/i.test(n.getAttribute("href") || "")),
+  );
+  if (((w > 0 && w <= 40) || (h > 0 && h <= 40)) && !isPhotoLink) {
+    return true;
+  }
+  return false;
+}
+
+function resolveImageElementUrl(img: Element, currentUrl?: string): { url: string; quality: PostImageEntry["quality"]; sourceAttr: string } | null {
+  const currentSrc = clean((img as HTMLImageElement).currentSrc);
+  const picture = img.parentElement?.tagName.toLowerCase() === "picture" ? img.parentElement : null;
+  let pictureBest: { url: string; width: number } | null = null;
+  if (picture) {
+    for (const source of Array.from(picture.querySelectorAll("source"))) {
+      const candidate = parseSrcsetHighest(source.getAttribute("srcset"), currentUrl);
+      if (candidate && (!pictureBest || candidate.width > pictureBest.width)) pictureBest = candidate;
+    }
+  }
+  const srcsetBest = parseSrcsetHighest(img.getAttribute("srcset"), currentUrl);
+  const bestSrcset = pictureBest && (!srcsetBest || pictureBest.width >= srcsetBest.width) ? pictureBest : srcsetBest;
+
+  if (bestSrcset) {
+    return { url: bestSrcset.url, quality: "high", sourceAttr: pictureBest === bestSrcset ? "picture/source" : "srcset" };
+  }
+  if (currentSrc && !currentSrc.startsWith("data:")) {
+    return { url: resolveUrl(currentSrc, currentUrl), quality: "high", sourceAttr: "currentSrc" };
+  }
+  for (const attr of ["data-src", "data-lazy-src", "data-original", "src"]) {
+    const raw = clean(img.getAttribute(attr));
+    if (raw && !raw.startsWith("data:")) {
+      return {
+        url: resolveUrl(raw, currentUrl),
+        quality: attr === "src" ? "standard" : "fallback",
+        sourceAttr: attr,
+      };
+    }
+  }
+  return null;
+}
+
+function extractPostImages(root: Element, timestampAnchor: Element | null, contentRoots: Element[] | null, actionRow: Element | null, currentUrl?: string): ExtractedDataItem {
+  const firstComment = root.querySelector("[role='article'],article");
+  const isInPostMediaZone = (el: Element): boolean => {
+    if (isComment(el, root) || structurallyHidden(el)) return false;
+    if (timestampAnchor?.parentElement && (el === timestampAnchor.parentElement || timestampAnchor.parentElement.contains(el))) return false;
+    if (actionRow && (actionRow.contains(el) || !(el.compareDocumentPosition(actionRow) & 4))) return false;
+    if (timestampAnchor && !(timestampAnchor.compareDocumentPosition(el) & 4)) return false;
+    if (firstComment && !(el.compareDocumentPosition(firstComment) & 4)) return false;
+    return true;
+  };
+
+  const mediaItems: PostImageEntry[] = [];
+  const seenKeys = new Set<string>();
+  let hasUnresolvedMedia = false;
+
+  const tryAddMedia = (el: Element, url: string, quality: PostImageEntry["quality"], sourceAttr: string) => {
+    if (isNonPostImageUrlOrNode(el, url, root, actionRow)) return;
+    const key = canonicalImageKey(url);
+    if (seenKeys.has(key)) return;
+    const path = elementPath(el, root);
+    if (!path) return;
+    const linkAncestor = findAncestor(el, root, (n) => n.tagName.toLowerCase() === "a" && Boolean(n.getAttribute("href")));
+    const rawHref = clean(linkAncestor?.getAttribute("href"));
+    const permalink = rawHref && /(?:\/photo|pcb\.|fbid=)/i.test(rawHref) ? resolveUrl(rawHref, currentUrl) : undefined;
+    seenKeys.add(key);
+    mediaItems.push({ url, sourcePath: path, quality, sourceAttr, permalink });
+  };
+
+  const allNodes = Array.from(root.querySelectorAll("*")).filter(isInPostMediaZone);
+  for (const el of allNodes) {
+    const tag = el.tagName.toLowerCase();
+    if (tag === "img") {
+      const resolved = resolveImageElementUrl(el, currentUrl);
+      if (resolved) {
+        tryAddMedia(el, resolved.url, resolved.quality, resolved.sourceAttr);
+      } else if (
+        el.hasAttribute("data-src") ||
+        el.hasAttribute("data-lazy-src") ||
+        Boolean(findAncestor(el, root, (n) => n.tagName.toLowerCase() === "a" && /(?:\/photo|set=pcb|fbid=)/i.test(n.getAttribute("href") || "")))
+      ) {
+        hasUnresolvedMedia = true;
+      }
+      continue;
+    }
+    const bgUrl = extractCssBgUrl(el.getAttribute("style"), currentUrl);
+    if (bgUrl) {
+      tryAddMedia(el, bgUrl, "standard", "background-image");
+    } else if (
+      tag === "a" &&
+      /(?:\/photo|set=pcb|fbid=)/i.test(el.getAttribute("href") || "") &&
+      !el.querySelector("img") &&
+      !isComment(el, root)
+    ) {
+      hasUnresolvedMedia = true;
+    }
+  }
+
+  const urls = mediaItems.map((m) => m.url);
+  const paths = mediaItems.map((m) => m.sourcePath);
+  const rootPath = contentRoots?.[0] ? elementPath(contentRoots[0], root) : [];
+  const primaryPaths = paths.length > 0 ? paths : rootPath && rootPath.length ? [rootPath] : [[0]];
+  const jsonValue = JSON.stringify(urls);
+
+  if (mediaItems.length === 0 && hasUnresolvedMedia) {
+    return {
+      id: "post_images:needs_attention",
+      kind: "media",
+      value: "",
+      label: "Post Images (Needs Attention)",
+      predictedType: "array",
+      semanticField: "post_images",
+      context: "post",
+      confidence: "low",
+      extractionStatus: "needs_attention",
+      hiddenByDefault: false,
+      mediaItems: [],
+      outputs: [{ key: "images", label: "Image URLs (array)", value: "", method: "POST_IMAGES" }],
+      sourcePaths: [],
+    };
+  }
+
+  return {
+    id: "post_images:verified",
+    kind: "media",
+    value: jsonValue,
+    label: `Post Images (${mediaItems.length})`,
+    predictedType: "array",
+    semanticField: "post_images",
+    context: "post",
+    confidence: "high",
+    extractionStatus: "verified",
+    hiddenByDefault: false,
+    mediaItems,
+    outputs: [{ key: "images", label: "Image URLs (array)", value: jsonValue, method: "POST_IMAGES" }],
+    sourcePaths: primaryPaths,
+    relativeXPath: paths.length === 1 ? relativeXPathForPath(paths[0]) : undefined,
+  };
+}
+
 /** One DFS pass for generic values, plus verified semantic header/body boundaries. */
 export function extractParentData(root: Element, options: ExtractionOptions = {}): ExtractedDataItem[] {
   const grouped = new Map<string, ExtractedDataItem>(), excludedRoots = new Set<Element>();
@@ -338,7 +592,7 @@ export function extractParentData(root: Element, options: ExtractionOptions = {}
     grouped.set(key, { ...item, id: `${item.semanticField || item.kind}:${pathKey(path)}:${grouped.size}`, sourcePaths: path.length ? [path] : [], relativeXPath: path.length ? relativeXPathForPath(path) : undefined });
   };
   const timestampAnchor = findPrimaryTimestampAnchor(root, options);
-  let contentRoot: Element | null = null;
+  let contentRoots: Element[] | null = null;
   if (timestampAnchor) {
     const path = elementPath(timestampAnchor, root);
     const described = resolveDescribedBy(root, timestampAnchor.getAttribute("aria-describedby"));
@@ -353,19 +607,27 @@ export function extractParentData(root: Element, options: ExtractionOptions = {}
     } else if (path) {
       add({ kind: "datetime", value: "", label: described.status === "ambiguous" ? "Created at (non-unique reference)" : "Created at (missing reference)", predictedType: "datetime", semanticField: "created_at", context: "post", confidence: "low", extractionStatus: "needs_attention", sourceAttribute: "aria-describedby", outputs: [{ key: "raw_display", label: "Raw display", value: "", method: "DOM_ATTRIBUTE_REF_TEXT", attribute: "aria-describedby" }, ...tsHrefOutput] }, path);
     }
-    contentRoot = findPostContentRoot(root, timestampAnchor);
-    const contentPath = contentRoot ? elementPath(contentRoot, root) : null;
-    if (contentRoot && contentPath) {
-      const text = contentText(contentRoot), html = limitedContentHtml(contentRoot);
-      if (text) add({ kind: "content", value: text, label: "Content", predictedType: "text", semanticField: "content", context: "post", confidence: "high", extractionStatus: "verified", contentHtml: html, outputs: [{ key: "content_text", label: "Plain text", value: text, method: "CONTENT_TEXT" }, { key: "content_html", label: "Limited HTML", value: html, method: "CONTENT_HTML" }] }, contentPath);
-      excludedRoots.add(contentRoot);
+    contentRoots = findPostContentRoots(root, timestampAnchor);
+    const contentPaths = (contentRoots || []).map(element => elementPath(element, root)).filter((path): path is number[] => Boolean(path));
+    if (contentRoots?.length && contentPaths.length === contentRoots.length) {
+      const text = contentRangeText(contentRoots), html = contentRangeHtml(contentRoots);
+      if (text) {
+        const firstPath = contentPaths[0];
+        add({ kind: "content", value: text, label: "Content", predictedType: "text", semanticField: "content", context: "post", confidence: "high", extractionStatus: "verified", contentHtml: html, outputs: [{ key: "content_text", label: "Plain text", value: text, method: "CONTENT_TEXT" }, { key: "content_html", label: "Limited HTML", value: html, method: "CONTENT_HTML" }] }, firstPath);
+        const item = Array.from(grouped.values()).find(candidate => candidate.semanticField === "content");
+        if (item) { item.sourcePaths = contentPaths; item.relativeXPath = contentPaths.length === 1 ? relativeXPathForPath(firstPath) : undefined; }
+      }
+      contentRoots.forEach(element => excludedRoots.add(element));
     } else {
       add({ kind: "content", value: "", label: "Content (Needs Attention)", predictedType: "text", semanticField: "content", context: "post", confidence: "low", extractionStatus: "needs_attention", outputs: [{ key: "content_text", label: "Plain text", value: "", method: "CONTENT_TEXT" }] }, []);
     }
   }
-  for (const engagementItem of extractPostEngagements(root, timestampAnchor, contentRoot, excludedRoots)) {
+  for (const engagementItem of extractPostEngagements(root, timestampAnchor, contentRoots, excludedRoots)) {
     grouped.set(engagementItem.id, engagementItem);
   }
+  const actionRowForMedia = findActionRowCluster(root, timestampAnchor);
+  const postImagesItem = extractPostImages(root, timestampAnchor, contentRoots, actionRowForMedia, options.currentUrl);
+  grouped.set(postImagesItem.id, postImagesItem);
   const visit = (element: Element, path: number[], insideSemantic = false) => {
     if (excludedRoots.has(element)) return; const tag = element.tagName.toLowerCase(); if (structurallyHidden(element) || ["script", "style", "noscript", "svg"].includes(tag)) return;
     const context = contextFor(element, root), directText = clean(Array.from(element.childNodes).filter(node => node.nodeType === 3).map(node => node.textContent).join(" "));
@@ -390,6 +652,31 @@ export function extractParentData(root: Element, options: ExtractionOptions = {}
 /** Re-executes a saved mapping against a resolved Parent DOM without using preview values. */
 export function executeVariableMapping(root: Element | null, mapping: PostDetailDomVariableMapping, options: ExtractionOptions = {}): ExecutedVariableMapping {
   if (!root) return { mapping, value: "", status: "missing", reason: "Parent root unavailable" };
+  if (mapping.sourceSemantic === "like_count" || mapping.sourceSemantic === "comment_count" || mapping.sourceSemantic === "share_count") {
+    const semanticItem = extractParentData(root, options).find(item => item.semanticField === mapping.sourceSemantic);
+    if (!semanticItem) return { mapping, value: "", status: "missing", reason: "Verified engagement source is missing" };
+    if (semanticItem.extractionStatus !== "verified" || !semanticItem.value) {
+      return { mapping, value: "", status: "needs_attention", reason: "Engagement source is ambiguous or lacks semantic evidence" };
+    }
+    return { mapping, value: semanticItem.value, status: "mapped" };
+  }
+  if (mapping.sourceSemantic === "content" && (mapping.method === "CONTENT_TEXT" || mapping.method === "CONTENT_HTML" || mapping.outputKey === "content_text" || mapping.outputKey === "content_html")) {
+    const timestampAnchor = findPrimaryTimestampAnchor(root, options);
+    const contentRoots = timestampAnchor ? findPostContentRoots(root, timestampAnchor) : null;
+    if (!contentRoots?.length) return { mapping, value: "", status: "needs_attention", reason: "Semantic post body boundary unavailable" };
+    const wantsHtml = mapping.method === "CONTENT_HTML" || mapping.outputKey === "content_html";
+    const value = wantsHtml ? contentRangeHtml(contentRoots) : contentRangeText(contentRoots);
+    return { mapping, value, status: value ? "mapped" : "needs_attention", reason: value ? undefined : "Empty semantic content" };
+  }
+  if (mapping.method === "POST_IMAGES" || mapping.sourceSemantic === "post_images") {
+    const timestampAnchor = findPrimaryTimestampAnchor(root, options);
+    const contentRoots = timestampAnchor ? findPostContentRoots(root, timestampAnchor) : null;
+    const actionRow = findActionRowCluster(root, timestampAnchor);
+    const mediaItem = extractPostImages(root, timestampAnchor, contentRoots, actionRow, options.currentUrl);
+    return mediaItem.extractionStatus === "verified"
+      ? { mapping, value: mediaItem.value, status: "mapped" }
+      : { mapping, value: "", status: "needs_attention", reason: "Post media lazy-loaded or unresolved" };
+  }
   const element = elementAtPath(root, mapping.relativePath);
   if (!element) return { mapping, value: "", status: "missing", reason: "Target element missing at locator" };
   if (mapping.sourceContext === "post" && isComment(element, root)) {

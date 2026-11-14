@@ -55,10 +55,12 @@ export type BatchFieldResult = {
   variableLabel: string;
   required: boolean;
   value: string;
+  values?: string[];
   method: PostDetailExtractionMethod | "UNMAPPED";
   attribute?: string;
   relativeXPath: string;
   status: "PASS" | "REVIEW";
+  fieldStatus?: "PASS" | "MISSING" | "NEEDS_ATTENTION";
   reason?: string;
 };
 
@@ -69,6 +71,11 @@ export type BatchValidationRow = {
   parentStatus: "Matched" | "Failed" | "Invalid";
   passedCount: number;
   totalCount: number;
+  extractedCount?: number;
+  missingCount?: number;
+  needsAttentionCount?: number;
+  userVerifiedCount?: number;
+  configVersion?: number;
   status: "PASS" | "REVIEW" | "FAILED";
   failureReason?: string;
   parentDiagnostics?: string[];
@@ -83,7 +90,16 @@ export type PostDetailExtractionMethod =
   | "DOM_TEXT_NUMBER"
   | "DOM_ATTRIBUTE_NUMBER"
   | "CONTENT_TEXT"
-  | "CONTENT_HTML";
+  | "CONTENT_HTML"
+  | "POST_IMAGES";
+
+export type PostImageEntry = {
+  url: string;
+  sourcePath: number[];
+  quality: "high" | "standard" | "fallback";
+  sourceAttr: string;
+  permalink?: string;
+};
 
 export type PostDetailDomVariableMapping = {
   collectorId: string;
@@ -96,7 +112,7 @@ export type PostDetailDomVariableMapping = {
   relativeXPath: string;
   preview: string;
   sourceContext?: "post" | "comment" | "unknown";
-  sourceSemantic?: "created_at" | "content" | "like_count" | "comment_count" | "share_count";
+  sourceSemantic?: "created_at" | "content" | "like_count" | "comment_count" | "share_count" | "post_images";
   outputKey?: string;
   confirmed: true;
   updatedAt: string;

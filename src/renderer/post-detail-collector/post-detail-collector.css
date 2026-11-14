@@ -741,6 +741,22 @@
 .pdc-kv-compact .pdc-kv-item { display: flex; align-items: baseline; gap: 5px; flex: 1 1 135px; min-width: 0; }
 .pdc-kv-compact .pdc-kv-item.pdc-kv-wide { flex: 1 0 100%; max-height: 68px; overflow: auto; }
 .pdc-detail-actions { position: sticky; bottom: -10px; z-index: 2; background: #07140f; padding: 8px 0 4px; margin-top: 8px; border-top: 1px solid #1f3d30; }
+.pdc-media-preview-list { margin: 8px 0; padding: 8px; border: 1px solid #1f3d30; border-radius: 6px; background: rgba(7, 20, 15, .85); display: grid; gap: 8px; }
+.pdc-media-preview-head { display: flex; justify-content: space-between; align-items: center; gap: 8px; font-size: 12px; color: #8fd9bd; }
+.pdc-media-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(150px, 1fr)); gap: 8px; max-height: 220px; overflow: auto; }
+.pdc-media-card { border: 1px solid #23483a; border-radius: 6px; padding: 6px; background: #050d0a; display: grid; gap: 5px; }
+.pdc-media-card:hover { border-color: #28c98b; }
+.pdc-media-card img { width: 100%; height: 96px; object-fit: cover; border-radius: 4px; background: #091b14; }
+.pdc-media-fallback { height: 96px; display: grid; place-items: center; border-radius: 4px; background: #102b20; color: #94a3b8; font-size: 11px; text-align: center; padding: 4px; }
+.pdc-media-meta { display: flex; justify-content: space-between; align-items: center; gap: 4px; }
+.pdc-media-quality { font-size: 10px; color: #8fb6a7; }
+.pdc-media-url { font-size: 10px; color: #a8c7ba; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; display: block; }
+.pdc-review-field-badge { display: flex; align-items: center; gap: 8px; margin: 4px 0; }
+.pdc-review-compact-meta { display: flex; align-items: center; flex-wrap: wrap; gap: 8px; margin-top: 4px; }
+.pdc-review-url-details { margin-top: 5px; max-width: min(760px, 75vw); font-size: 11px; color: #8fb6a7; }
+.pdc-review-url-details summary { cursor: pointer; }
+.pdc-review-url-details code { display: block; margin-top: 4px; overflow-wrap: anywhere; white-space: normal; }
+.pdc-batch-breakdown { font-size: 10px; color: #fbbf24; margin-top: 2px; }
 .pdc-data-detail-status { color: #fcd34d; font-weight: 700; }
 .pdc-preserve-lines { white-space: pre-wrap; overflow-wrap: anywhere; }
 .pdc-output-mappings { display: grid; gap: 4px; margin: 8px 0; padding: 8px; border: 1px solid #23483a; border-radius: 6px; }

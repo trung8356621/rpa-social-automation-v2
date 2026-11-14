@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import test from "node:test";
 import { executeVariableMapping, extractParentData, parseEngagementNumber } from "../src/renderer/post-detail-collector/extract-parent-data";
-import { evaluateMatchedParentDom, parseBatchUrls } from "../src/renderer/post-detail-collector/batch-validation";
+import { advanceParentReadiness, canonicalPostUrl, evaluateMatchedParentDom, formatShortPostLabel, parseBatchUrls } from "../src/renderer/post-detail-collector/batch-validation";
 import { getPostDetailCollectorState, setPostDetailCollectorState } from "../src/renderer/post-detail-collector/store";
 import {
   addRegistryVariable,
@@ -75,7 +75,8 @@ test("extraction preserves structural context and refuses ambiguous locators", (
   const uiSource = explorer();
   assert.match(extractSource, /getAttribute\("role"\) === "article"/);
   assert.match(extractSource, /isComment\(element, root\) \? "comment"/);
-  assert.match(uiSource, /selectedData\.sourcePaths\.length !== 1/);
+  assert.match(uiSource, /item\.sourcePaths\.length === 1/);
+  assert.match(uiSource, /item\.semanticField === "content"/);
   assert.match(uiSource, /sourceContext: selectedData\.context/);
   assert.match(uiSource, /postDetailClearParentNodeHighlight/);
 });
@@ -384,7 +385,7 @@ test("DOM fixture: created_at resolves aria-describedby at runtime and rejects m
   assert.equal(executeVariableMapping(postDup, savedMapping).status, "needs_attention");
 });
 
-test("DOM fixture: content_text and content_html preserve structure, exclude noise, and flag ambiguous root", () => {
+test("DOM fixture: content_text and content_html preserve structure, exclude noise, and combine ordered sibling blocks", () => {
   const post = buildFacebookPostFixture({});
   const items = extractParentData(post, { postId: "29327016206983816", currentUrl: "https://www.facebook.com/groups/g/posts/29327016206983816/" });
 
@@ -414,13 +415,19 @@ test("DOM fixture: content_text and content_html preserve structure, exclude noi
   assert.equal(executeVariableMapping(post, textMapping).value, textOut?.value);
   assert.equal(executeVariableMapping(post, htmlMapping).value, htmlOut?.value);
 
-  // Ambiguous content root -> Needs Attention, never whole Parent
-  const ambiguousPost = buildFacebookPostFixture({ ambiguousBody: true });
-  const ambItems = extractParentData(ambiguousPost, { postId: "29327016206983816" });
-  const ambContent = ambItems.find((i) => i.semanticField === "content");
-  assert.equal(ambContent?.extractionStatus, "needs_attention");
-  assert.equal(ambContent?.sourcePaths.length, 0);
-  assert.equal(ambContent?.value, "");
+  const siblingPost = buildFacebookPostFixture({ ambiguousBody: true });
+  const siblingItems = extractParentData(siblingPost, { postId: "29327016206983816" });
+  const siblingContent = siblingItems.find((i) => i.semanticField === "content");
+  assert.equal(siblingContent?.extractionStatus, "verified");
+  assert.equal(siblingContent?.sourcePaths.length, 2);
+  assert.equal(siblingContent?.value, "First ambiguous block\nSecond ambiguous block");
+  assert.doesNotMatch(siblingContent?.value || "", /Like|Comment|Share|Nice post/);
+  const siblingMapping: PostDetailDomVariableMapping = {
+    ...textMapping,
+    relativePath: siblingContent?.sourcePaths[0] || [],
+    relativeXPath: "",
+  };
+  assert.equal(executeVariableMapping(siblingPost, siblingMapping).value, siblingContent?.value);
 });
 
 test("DOM fixture: link exposes independent text and href outputs sharing one locator", () => {
@@ -569,7 +576,7 @@ test("DOM fixture: engagement extraction handles 5 likes, 4 comments, 2 shares, 
     likeAria: "Thích",
     commentText: "4 bình luận",
   });
-  assert.equal(executeVariableMapping(postNoNumLike, likeMapping).status, "needs_attention");
+  assert.equal(executeVariableMapping(postNoNumLike, likeMapping).status, "missing");
   assert.equal(executeVariableMapping(postNoNumLike, likeMapping).value, "");
 
   // 6: Conflicting engagement candidates -> Needs Attention with conflict diagnostics
@@ -731,6 +738,73 @@ test("like_count does not capture nested comment (4) or share (2) numeric leaves
   assert.equal(share?.value, "2");
 });
 
+test("unlabeled numeric action slots are Needs Attention instead of positional engagement PASS", () => {
+  const root = el("div", {}, [
+    el("div", {}, [
+      el("a", { href: "/groups/seo/posts/9190/", "aria-describedby": "ts-9190" }, ["1h"]),
+      el("span", { id: "ts-9190", hidden: "" }, ["14 tháng 11, 2026 lúc 12:00"]),
+    ]),
+    el("div", {}, ["Body"]),
+    el("div", {}, [
+      el("div", { role: "button" }, ["919"]),
+      el("div", { role: "button" }, ["919"]),
+      el("div", { role: "button" }, ["919"]),
+    ]),
+  ]) as unknown as Element;
+  const engagement = extractParentData(root, { postId: "9190" }).filter(item => item.kind === "engagement");
+  assert.equal(engagement.length, 3);
+  assert.equal(engagement.every(item => item.extractionStatus === "needs_attention" && item.value === ""), true);
+});
+
+test("numeric usernames never become engagement and runtime revalidates saved semantic mappings", () => {
+  const numericAuthorPost = (author: string, commentSummary?: string) => el("div", {}, [
+    el("div", {}, [
+      el("a", { href: `/user/${author}/` }, [author]),
+      el("a", { href: "/groups/seo/posts/post-numeric-author/", "aria-describedby": "ts-author" }, ["1h"]),
+      el("span", { id: "ts-author", hidden: "" }, ["14 tháng 11, 2026 lúc 13:00"]),
+    ]),
+    el("div", {}, ["Body without engagement numbers"]),
+    ...(commentSummary ? [el("div", {}, [el("div", { role: "button" }, [`${author} ${commentSummary}`])])] : []),
+    el("div", {}, [
+      el("div", { role: "button" }, ["Like"]),
+      el("div", { role: "button" }, ["Comment"]),
+      el("div", { role: "button" }, ["Share"]),
+    ]),
+  ]) as unknown as Element;
+
+  const clever = numericAuthorPost("CleverLemur919", "2 comments");
+  const cleverItems = extractParentData(clever, { postId: "post-numeric-author" });
+  assert.equal(cleverItems.find(item => item.semanticField === "comment_count")?.value, "2");
+  assert.equal(cleverItems.some(item => item.kind === "engagement" && item.value === "919"), false);
+
+  const staleCommentMapping: PostDetailDomVariableMapping = {
+    collectorId: "c1", variableId: "comment", variableKey: "comment_count", variableLabel: "Comments",
+    method: "DOM_TEXT_NUMBER", relativePath: [0, 0], relativeXPath: "./*[1]/*[1]", preview: "919",
+    sourceContext: "post", sourceSemantic: "comment_count", outputKey: "count", confirmed: true, updatedAt: "2026-11-14T00:00:00Z",
+  };
+  assert.equal(executeVariableMapping(clever, staleCommentMapping).value, "2");
+
+  const joyful = numericAuthorPost("JoyfulJaguar2798");
+  const joyfulItems = extractParentData(joyful, { postId: "post-numeric-author" });
+  assert.equal(joyfulItems.some(item => item.kind === "engagement" && item.value === "2798"), false);
+  const joyfulRuntime = executeVariableMapping(joyful, { ...staleCommentMapping, preview: "2798" });
+  assert.equal(joyfulRuntime.status, "missing");
+  assert.equal(joyfulRuntime.value, "");
+});
+
+test("readiness requires verified identity and resets when semantic DOM changes", () => {
+  const initial = { signature: "", stableCount: 0 };
+  const wrongIdentity = advanceParentReadiness({ state: initial, expectedPostId: "post-a", resolvedPostId: "post-b", postIdentityVerified: true, parentMatched: true, semanticSignature: "A" });
+  assert.equal(wrongIdentity.ready, false);
+  assert.equal(wrongIdentity.reason, "POST_IDENTITY_UNVERIFIED");
+  const first = advanceParentReadiness({ state: initial, expectedPostId: "post-a", resolvedPostId: "post-a", postIdentityVerified: true, parentMatched: true, semanticSignature: "A" });
+  assert.equal(first.ready, false);
+  const changed = advanceParentReadiness({ state: first.state, expectedPostId: "post-a", resolvedPostId: "post-a", postIdentityVerified: true, parentMatched: true, semanticSignature: "B" });
+  assert.equal(changed.state.stableCount, 1);
+  const stable = advanceParentReadiness({ state: changed.state, expectedPostId: "post-a", resolvedPostId: "post-a", postIdentityVerified: true, parentMatched: true, semanticSignature: "B" });
+  assert.equal(stable.ready, true);
+});
+
 test("parseBatchUrls trims, deduplicates, accepts valid FB/Threads URLs, and flags invalid URLs", () => {
   const input = [
     "  https://www.facebook.com/groups/seovamarketing/posts/29327016206983816/  ",
@@ -764,7 +838,7 @@ test("evaluateMatchedParentDom returns PASS, REVIEW, or FAILED without reusing p
     el("div", { "data-ad-preview": "message" }, ["Hello world"]),
     el("div", {}, [
       el("div", {}, [
-        el("span", {}, [el("span", {}, ["9"])]),
+        el("span", { "aria-label": "9 likes" }, [el("span", {}, ["9"])]),
         el("div", {}, [el("div", { role: "button" }, ["3 bình luận"])]),
       ]),
       el("div", { role: "toolbar" }, [el("div", { role: "button", "aria-label": "Thích" }, ["Thích"])]),
@@ -902,4 +976,152 @@ test("created_at permalink anchor exposes both raw_display and href outputs for 
   assert.ok(created);
   assert.equal(created.outputs.some((o) => o.key === "raw_display" && o.value === "14 tháng 11, 2026 lúc 10:44"), true);
   assert.equal(created.outputs.some((o) => o.key === "href" && o.value === "https://www.facebook.com/groups/seo/posts/123456/"), true);
+});
+
+test("post_images extraction: text-only, single, multi, avatars/stickers excluded, lazy, responsive variants, and unresolved", () => {
+  const mkPost = (mediaChildren: FakeElement[]) =>
+    el("div", {}, [
+      el("div", {}, [
+        el("h3", {}, [
+          el("a", { href: "/author" }, [
+            el("img", { src: "https://scontent.xx.fbcdn.net/v/avatar_author.jpg", alt: "Avatar", width: "40", height: "40" }, []),
+            "Anh Tho",
+          ]),
+        ]),
+        el("a", { href: "/groups/seo/posts/777/", "aria-describedby": "ts-777" }, ["2h"]),
+        el("span", { id: "ts-777", hidden: "" }, ["14 tháng 11, 2026 lúc 10:00"]),
+      ]),
+      el("div", { "data-ad-preview": "message" }, ["Post text"]),
+      ...mediaChildren,
+      el("div", {}, [
+        el("span", { role: "toolbar" }, [
+          el("img", { src: "https://static.xx.fbcdn.net/rsrc.php/v3/reaction_like.png", width: "18", height: "18" }, []),
+        ]),
+        el("div", { role: "button" }, ["5"]),
+      ]),
+      el("div", {}, [
+        el("div", { role: "button", "aria-label": "Thích" }, ["Thích"]),
+        el("div", { role: "button", "aria-label": "Bình luận" }, ["Bình luận"]),
+        el("div", { role: "button", "aria-label": "Chia sẻ" }, ["Chia sẻ"]),
+      ]),
+      el("div", { role: "article" }, [
+        el("img", { src: "https://scontent.xx.fbcdn.net/v/comment_avatar.jpg", alt: "Profile picture", width: "32", height: "32" }, []),
+        el("img", { src: "https://scontent.xx.fbcdn.net/v/comment_photo.jpg", width: "200", height: "200" }, []),
+      ]),
+    ]) as unknown as Element;
+
+  // 1. Text-only post -> []
+  const textOnlyItems = extractParentData(mkPost([]), { postId: "777", currentUrl: "https://www.facebook.com/groups/seo/posts/777/" });
+  const textOnlyMedia = textOnlyItems.find((i) => i.semanticField === "post_images");
+  assert.equal(textOnlyMedia?.extractionStatus, "verified");
+  assert.equal(textOnlyMedia?.value, "[]");
+  assert.deepEqual(textOnlyMedia?.mediaItems, []);
+
+  // 2. Single image with photo permalink + emoji/sticker excluded
+  const singleItems = extractParentData(
+    mkPost([
+      el("div", {}, [
+        el("img", { src: "https://static.xx.fbcdn.net/images/emoji.php/v9/t51/1/16/1f600.png", width: "16", height: "16" }, []),
+        el("a", { href: "/photo/?fbid=999" }, [
+          el("img", { src: "https://scontent.xx.fbcdn.net/v/photo_one.jpg", alt: "Product" }, []),
+        ]),
+      ]),
+    ]),
+    { postId: "777", currentUrl: "https://www.facebook.com/groups/seo/posts/777/" },
+  );
+  const singleMedia = singleItems.find((i) => i.semanticField === "post_images");
+  assert.equal(singleMedia?.extractionStatus, "verified");
+  assert.deepEqual(JSON.parse(singleMedia?.value || "[]"), ["https://scontent.xx.fbcdn.net/v/photo_one.jpg"]);
+  assert.equal(singleMedia?.mediaItems?.[0]?.permalink, "https://www.facebook.com/photo/?fbid=999");
+
+  // 3 & 7. Multi-image + responsive variants deduped + srcset highest chosen
+  const multiItems = extractParentData(
+    mkPost([
+      el("div", {}, [
+        el("picture", {}, [
+          el("source", { srcset: "https://scontent.xx.fbcdn.net/v/img_a_600.jpg?stp=s600x600 600w, https://scontent.xx.fbcdn.net/v/img_a_1080.jpg?stp=s1080x1080 1080w" }, []),
+          el("img", { src: "https://scontent.xx.fbcdn.net/v/img_a_1080.jpg?stp=s600x600", srcset: "https://scontent.xx.fbcdn.net/v/img_a_1080.jpg 1080w" }, []),
+        ]),
+        el("img", { "data-src": "https://scontent.xx.fbcdn.net/v/img_b_lazy.jpg" }, []),
+        el("div", { style: "background-image: url('https://scontent.xx.fbcdn.net/v/img_c_bg.jpg')" }, []),
+      ]),
+    ]),
+    { postId: "777", currentUrl: "https://www.facebook.com/groups/seo/posts/777/" },
+  );
+  const multiMedia = multiItems.find((i) => i.semanticField === "post_images");
+  assert.equal(multiMedia?.extractionStatus, "verified");
+  assert.deepEqual(JSON.parse(multiMedia?.value || "[]"), [
+    "https://scontent.xx.fbcdn.net/v/img_a_1080.jpg?stp=s1080x1080",
+    "https://scontent.xx.fbcdn.net/v/img_b_lazy.jpg",
+    "https://scontent.xx.fbcdn.net/v/img_c_bg.jpg",
+  ]);
+
+  // 8. Unresolved lazy/missing media container -> needs_attention
+  const unresolvedItems = extractParentData(
+    mkPost([el("a", { href: "/photo/?fbid=888" }, [el("img", { "data-src": "" }, [])])]),
+    { postId: "777", currentUrl: "https://www.facebook.com/groups/seo/posts/777/" },
+  );
+  const unresolvedMedia = unresolvedItems.find((i) => i.semanticField === "post_images");
+  assert.equal(unresolvedMedia?.extractionStatus, "needs_attention");
+});
+
+test("Batch Detail Review: short post label, runtime post_images execution, and navigation/stale guards", () => {
+  assert.equal(
+    formatShortPostLabel("https://www.facebook.com/groups/seo/posts/29327016206983816/?__cft__[0]=abc", "29327016206983816"),
+    "Post #29327016206983816",
+  );
+  const originalTrackedUrl = "https://www.facebook.com/groups/seo/posts/29327016206983816/?__cft__[0]=abc&__tn__=R";
+  assert.equal(canonicalPostUrl(originalTrackedUrl, "29327016206983816"), "https://www.facebook.com/groups/seo/posts/29327016206983816/");
+  assert.equal(canonicalPostUrl(originalTrackedUrl, null), originalTrackedUrl);
+
+  const textOnlyRoot = el("div", {}, [
+    el("div", {}, [
+      el("a", { href: "/groups/seo/posts/888/", "aria-describedby": "ts-888" }, ["1h"]),
+      el("span", { id: "ts-888", hidden: "" }, ["14 tháng 11, 2026 lúc 11:00"]),
+    ]),
+    el("div", {}, [el("span", {}, ["Text only post"])]),
+  ]) as unknown as Element;
+
+  const mappings: PostDetailDomVariableMapping[] = [
+    {
+      collectorId: "post_detail_collector",
+      variableId: "v_images",
+      variableKey: "post_images",
+      variableLabel: "Post Images",
+      relativePath: [],
+      relativeXPath: "",
+      method: "POST_IMAGES",
+      preview: "[\"https://old.example.com/sample.jpg\"]",
+      sourceContext: "post",
+      sourceSemantic: "post_images",
+      confirmed: true,
+      updatedAt: "2026-11-14T00:00:00.000Z",
+    },
+  ];
+  const row = evaluateMatchedParentDom({
+    url: "https://www.facebook.com/groups/seo/posts/888/",
+    resolvedUrl: "https://www.facebook.com/groups/seo/posts/888/",
+    postId: "888",
+    resolution: { status: "PARENT_MATCHED", innerHTML: "<div></div>", rect: null, diagnostics: [] },
+    rootElement: textOnlyRoot,
+    mappings,
+    registryVariables: [
+      { collectorId: "post_detail_collector", collectorName: "Post Detail", id: "v_images", key: "post_images", label: "Post Images", valueType: "array", required: true },
+    ],
+  });
+  assert.equal(row.status, "PASS");
+  assert.equal(row.fields[0]?.value, "[]");
+  assert.deepEqual(row.fields[0]?.values, []);
+
+  const step4Src = readFileSync("src/renderer/post-detail-collector/BatchValidationStep.tsx", "utf8");
+  const step3Src = readFileSync("src/renderer/post-detail-collector/SavedParentHtmlStep.tsx", "utf8");
+  assert.match(step4Src, /reviewEpochRef/);
+  assert.match(step4Src, /SavedParentHtmlStep/);
+  assert.match(step3Src, /Back to Results/);
+  assert.match(step3Src, /Previous Post/);
+  assert.match(step3Src, /Next Post/);
+  assert.match(step3Src, /Copy Link/);
+  assert.match(step3Src, /View URL Details/);
+  assert.match(step3Src, /reviewMode\.row\.url/);
+  assert.match(step3Src, /if \(highlightBlocked\) return;/);
 });
