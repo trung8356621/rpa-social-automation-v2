@@ -41,6 +41,22 @@ export type PostDetailCollectorState = {
   htmlExtraction: PostDetailHtmlExtractionResult | null;
   parentConfigs: Record<string, PostDetailParentConfig>;
   savedParentResolution: PostDetailSavedParentResolution | null;
+  variableMappings: PostDetailDomVariableMapping[];
+};
+
+export type PostDetailDomVariableMapping = {
+  collectorId: string;
+  variableId: string;
+  variableKey: string;
+  variableLabel: string;
+  method: "DOM_TEXT" | "DOM_ATTRIBUTE";
+  attribute?: string;
+  relativePath: number[];
+  relativeXPath: string;
+  preview: string;
+  sourceContext?: "post" | "comment" | "unknown";
+  confirmed: true;
+  updatedAt: string;
 };
 
 export type {
