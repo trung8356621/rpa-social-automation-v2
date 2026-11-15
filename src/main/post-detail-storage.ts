@@ -116,6 +116,7 @@ export class PostDetailRunStorage {
       if (buf) await writeFileAtomic(abs, buf);
       visualReferences.push({
         sampleId: sample.sampleId,
+        semanticRole: sample.semanticRole,
         label: sample.label,
         width: sample.width,
         height: sample.height,
@@ -231,6 +232,7 @@ export class PostDetailRunStorage {
       if (buf) await writeFileAtomic(abs, buf);
       visualReferences.push({
         sampleId: sample.sampleId,
+        semanticRole: sample.semanticRole,
         label: sample.label,
         width: sample.width,
         height: sample.height,
@@ -371,6 +373,7 @@ export class PostDetailRunStorage {
       }
       visualReferences.push({
         sampleId: sample.sampleId,
+        semanticRole: sample.semanticRole,
         label: sample.label,
         dataUrl,
         width: sample.width,

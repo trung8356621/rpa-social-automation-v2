@@ -12,6 +12,7 @@ import {
   CLEAR_POST_DETAIL_PARENT_HIGHLIGHT_JS,
   dedupeNestedActionRows,
   orderProgressiveCandidates,
+  mapScreenshotAnchorToViewport,
   structuralActionRowsMatch,
 } from "../src/main/post-detail-parent-probe.js";
 
@@ -292,6 +293,40 @@ test("action-row structural XPath is namespace-aware, preserves visual control o
     source,
     /diagnostics\.relativeVerify\?\.matchCount>1\?'AMBIGUOUS_ACTION_ROW'/,
   );
+});
+
+test("live action-row probe verifies post ownership and rejects comment items", () => {
+  const source = buildPostDetailActionAnchorProbeJs({ sourceUrl: "https://www.facebook.com/groups/g/posts/42/", runId: "r", expectedWebContentsId: 1, frameId: "f", screenshot: { width: 1024, height: 560 }, anchors: [] });
+  assert.match(source, /ownershipStatus=commentOwnerFound\?'COMMENT_ITEM'/);
+  assert.match(source, /postIdentityVerified/);
+  assert.match(source, /parentVerified/);
+  assert.match(source, /commentSectionStartY/);
+  assert.match(source, /ownershipStatus==='MAIN_POST'\?'FOUND':'AMBIGUOUS'/);
+  assert.match(source, /x\.kind===a\.type/);
+  assert.match(source, /coordinateDiagnostics/);
+  assert.match(source, /scrollSynchronized/);
+  assert.match(source, /LIVE_SEMANTIC_RERESOLVE/);
+  assert.match(source, /NO_SEMANTIC_CONTROL_AT_POINT/);
+});
+
+test("screenshot pixels map to CSS viewport through independent X/Y scale without BrowserCore host offset", () => {
+  const anchor = { x: 450, y: 300, width: 30, height: 20 };
+  const hidpi = mapScreenshotAnchorToViewport(anchor, { width: 1920, height: 1080 }, { width: 960, height: 540 });
+  assert.deepEqual(hidpi, { x: 232.5, y: 155, scaleX: 0.5, scaleY: 0.5 });
+  const zoomed = mapScreenshotAnchorToViewport(anchor, { width: 1366, height: 768 }, { width: 1092.8, height: 614.4 });
+  assert.ok(Math.abs(zoomed.x - 372) < 0.001);
+  assert.ok(Math.abs(zoomed.y - 248) < 0.001);
+  assert.throws(() => mapScreenshotAnchorToViewport(anchor, { width: 0, height: 768 }, { width: 1000, height: 700 }), /INVALID_SCREENSHOT_VIEWPORT_GEOMETRY/);
+});
+
+test("Parent probe reuses three connected semantic DOM hits before geometric remap", () => {
+  const source = buildPostDetailParentProbeJs({ sourceUrl: "https://www.facebook.com/groups/g/posts/42/", runId: "r", expectedWebContentsId: 1, frameId: "f", screenshot: { width: 1920, height: 1080 }, anchors: [] });
+  const cache = source.indexOf("cachedHits=saved?.hits?.length===3");
+  const stale = source.indexOf("Confirmed screenshot anchors do not resolve");
+  assert.ok(cache >= 0 && stale > cache);
+  assert.match(source, /hits=cachedHits\|\|remapHits\(\)/);
+  assert.match(source, /new Set\(saved\.hitRoles\|\|\[\]\)\.size===3/);
+  assert.doesNotMatch(source, /r\.width<=180/);
 });
 
 test("Confirm Parent catches verification failures, reports diagnostics and remains retryable", () => {

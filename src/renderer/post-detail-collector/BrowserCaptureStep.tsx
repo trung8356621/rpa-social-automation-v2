@@ -3,6 +3,7 @@ import type { BrowserCoreNavigationResult, Rect, State } from "../../shared/cont
 import { dragToCaptureRoi } from "../../shared/collector-browser-host";
 import { clientToImageCoords } from "../../shared/collectors/roi-preview-interaction";
 import { DEFAULT_POST_DETAIL_FIXTURE_URL } from "../../shared/post-detail-collector/types";
+import { auditVisualReferenceRoles, structuredReferenceRole, VISUAL_REFERENCE_ROLES } from "../../shared/post-detail-collector/visual-reference-role";
 import {
   assertCaptureFromSocialPage,
   assertNavigateToSocialTarget,
@@ -76,7 +77,8 @@ export function BrowserCaptureStep({
   const [anchorRoi, setAnchorRoi] = useState<Rect | undefined>();
   const [drag, setDrag] = useState<DragState>();
   const [hostClient, setHostClient] = useState<HostClient | null>(null);
-  const [sampleLabel, setSampleLabel] = useState("like");
+  const [sampleRole, setSampleRole] = useState<"LIKE" | "COMMENT" | "SHARE">("LIKE");
+  const roleAudit = useMemo(() => auditVisualReferenceRoles(visualReferences), [visualReferences]);
 
   const hostRef = useRef<HTMLDivElement>(null);
   const surfaceRef = useRef<HTMLDivElement>(null);
@@ -352,7 +354,8 @@ export function BrowserCaptureStep({
     const cropped = await cropDataUrl(image.dataUrl, roi);
     const sample: VisualReferenceSample = {
       sampleId: `vr_${Date.now().toString(36)}`,
-      label: sampleLabel.trim() || `sample-${existing.length + 1}`,
+      semanticRole: sampleRole,
+      label: sampleRole,
       dataUrl: cropped.dataUrl,
       width: cropped.width,
       height: cropped.height,
@@ -378,13 +381,20 @@ export function BrowserCaptureStep({
     setError("");
     setWarning("");
     try {
-      const nextRefs = await buildReferenceFromRoi(shot, anchorRoi, visualReferences);
+      const existingRole = visualReferences.find(ref => structuredReferenceRole(ref) === sampleRole);
+      if (existingRole && !window.confirm(`Replace Existing Reference for ${sampleRole}? The previous evidence remains in saved runs.`)) {
+        setWarning(`${sampleRole} reference was not replaced.`);
+        setBusy(false);
+        return;
+      }
+      const activeRefs = existingRole ? visualReferences.filter(ref => ref.sampleId !== existingRole.sampleId) : visualReferences;
+      const nextRefs = await buildReferenceFromRoi(shot, anchorRoi, activeRefs);
       if (nextRefs === visualReferences) {
         setWarning("Reference trùng ROI đã có — không tạo duplicate.");
       }
       onUpdateReferences(nextRefs);
-      const nextRole = ["like", "comment", "share"].find(role => !nextRefs.some(ref => ref.label.trim().toLowerCase() === role));
-      if (nextRole) setSampleLabel(nextRole);
+      const nextRole = VISUAL_REFERENCE_ROLES.find(role => !nextRefs.some(ref => structuredReferenceRole(ref) === role));
+      if (nextRole) setSampleRole(nextRole);
       onScreenshot(shot);
       // contentRoi is Step 2 OCR region — never set from action-row ROI here.
       await exitCaptureMode(
@@ -486,8 +496,8 @@ export function BrowserCaptureStep({
           </p>
           <label className="pdc-field">
             Sample label
-            <select value={sampleLabel} disabled={!frozen || busy} onChange={(e) => setSampleLabel(e.target.value)}>
-              <option value="like">Like</option><option value="comment">Comment</option><option value="share">Share</option>
+            <select value={sampleRole} disabled={!frozen || busy} onChange={(e) => setSampleRole(e.target.value as typeof sampleRole)}>
+              <option value="LIKE">Like</option><option value="COMMENT">Comment</option><option value="SHARE">Share</option>
             </select>
           </label>
           <div className="pdc-btn-row">
@@ -505,8 +515,13 @@ export function BrowserCaptureStep({
             {visualReferences.map((s) => (
               <li key={s.sampleId}>
                 {s.dataUrl ? <img src={s.dataUrl} alt={s.label} /> : null}
-                <select aria-label={`Semantic role for ${s.sampleId}`} value={s.label.toLowerCase()} onChange={event => onUpdateReferences(visualReferences.map(ref => ref.sampleId === s.sampleId ? { ...ref, label: event.target.value } : ref))}>
-                  <option value="like">Like</option><option value="comment">Comment</option><option value="share">Share</option>
+                <select aria-label={`Semantic role for ${s.sampleId}`} value={structuredReferenceRole(s) || ""} onChange={event => {
+                  const role = event.target.value as "LIKE" | "COMMENT" | "SHARE";
+                  const conflict = visualReferences.find(ref => ref.sampleId !== s.sampleId && structuredReferenceRole(ref) === role);
+                  if (conflict) { setWarning(`${role} already has an active reference. Remove or replace it first.`); return; }
+                  onUpdateReferences(visualReferences.map(ref => ref.sampleId === s.sampleId ? { ...ref, semanticRole: role, label: role } : ref));
+                }}>
+                  <option value="">Legacy — choose role</option><option value="LIKE">Like</option><option value="COMMENT">Comment</option><option value="SHARE">Share</option>
                 </select>
                 <span>{s.width}×{s.height}</span>
                 <button
@@ -520,6 +535,7 @@ export function BrowserCaptureStep({
             ))}
             {!visualReferences.length && <li className="pdc-muted">Chưa có visual reference — Confirm sau khi kéo ROI.</li>}
           </ul>
+          {!roleAudit.valid && visualReferences.length > 0 && <div className="pdc-alert pdc-alert-warn" role="alert">Reference roles need repair: {roleAudit.legacy.length ? `${roleAudit.legacy.length} legacy unlabeled; ` : ""}{roleAudit.duplicates.length ? `duplicate ${roleAudit.duplicates.join(", ")}; ` : ""}missing {roleAudit.missing.join(", ") || "none"}. Relabel persists without recapture.</div>}
           <button
             type="button"
             className="pdc-btn pdc-btn-primary"

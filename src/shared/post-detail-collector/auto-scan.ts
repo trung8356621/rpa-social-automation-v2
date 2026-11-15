@@ -71,7 +71,7 @@ export function anchorsFormActionRow(anchors: PostDetailVisualAnchor[], bandPx =
   return max - min <= bandPx;
 }
 
-/** Rows whose center sits in the bottom ~30% are comment-zone candidates (vs main post). */
+/** Diagnostic only. Viewport position must never decide DOM ownership. */
 export function isLikelyCommentZoneRow(row: PostDetailVisualAnchor[], frameHeight: number): boolean {
   if (!row.length || !(frameHeight > 0)) return false;
   const meanY = row.reduce((s, a) => s + a.bbox.y + a.bbox.height / 2, 0) / row.length;
@@ -114,43 +114,27 @@ function collectActionRowBands(
 
 /**
  * Prefer the uppermost action-row co-occurrence (main post) over comment-row likes.
- * If the only row sits in the comment zone after meaningful scroll (no upper competitor),
- * return null → detection stays AMBIGUOUS. Never promote comment likes as main post.
- * A single mid/lower row on early frames (post just scrolled into view) is still allowed.
+ * Visual geometry only selects a candidate. Main-post vs comment ownership is verified
+ * against the live DOM by postDetailHighlightActionAnchors.
  */
 export function selectPrimaryActionRow(
   anchors: PostDetailVisualAnchor[],
   candidates: PostDetailVisualAnchor[] = [],
-  opts?: { frameHeight?: number; observedScrollPx?: number },
+  _opts?: { frameHeight?: number; observedScrollPx?: number },
 ): PostDetailVisualAnchor[] | null {
   const clusters = clusterActionRows(anchors, candidates);
   if (!clusters.length) {
     // Fallback to legacy band collect for ≥2 types without full geometry.
     const rows = collectActionRowBands(anchors, candidates);
     if (!rows.length) return null;
-    const frameHeight = opts?.frameHeight && opts.frameHeight > 0 ? opts.frameHeight : 0;
-    const observedScrollPx = opts?.observedScrollPx ?? 0;
     const upper = rows[0]!;
     if (rows.length >= 2) return upper;
-    if (frameHeight > 0 && isLikelyCommentZoneRow(upper, frameHeight) && observedScrollPx >= 250) {
-      return null;
-    }
     return upper;
   }
 
   // Prefer uppermost valid cluster (main post before comment rows).
   const sorted = [...clusters].sort((a, b) => a.bbox.y - b.bbox.y);
-  const frameHeight = opts?.frameHeight && opts.frameHeight > 0 ? opts.frameHeight : 0;
-  const observedScrollPx = opts?.observedScrollPx ?? 0;
   const upper = sorted[0]!;
-  if (
-    sorted.length === 1 &&
-    frameHeight > 0 &&
-    isLikelyCommentZoneRow(upper.anchors, frameHeight) &&
-    observedScrollPx >= 250
-  ) {
-    return null;
-  }
   return upper.anchors;
 }
 
@@ -189,15 +173,7 @@ export function updateBestActionRow(
   // Prefer uppermost on this frame.
   clusters = [...clusters].sort((a, b) => a.bbox.y - b.bbox.y);
   let next = clusters[0]!;
-  // After meaningful scroll, reject a lone comment-zone band (do not promote comment likes).
-  if (
-    clusters.length === 1 &&
-    frame.height > 0 &&
-    isLikelyCommentZoneRow(next.anchors, frame.height) &&
-    (frame.observedScrollPx ?? 0) >= 250
-  ) {
-    return best;
-  }
+  // A low viewport Y is not proof of comment ownership; retain it for live DOM verification.
   // When multiple bands exist, uppermost is main; ignore deeper comment bands for "next".
   const picked = pickBestActionRowCandidate(
     best?.cluster ?? null,

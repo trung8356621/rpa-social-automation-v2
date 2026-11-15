@@ -1,5 +1,6 @@
 import React, { useEffect, useMemo, useRef, useState } from "react";
 import { playCompletionSound } from "../completion-sound";
+import { AutoScanStartError, runAutoScanClickPipeline, type AutoScanDiagnosticEvent } from "./auto-scan-click-pipeline";
 import type { Rect, State } from "../../shared/contracts";
 import { dragToCaptureRoi } from "../../shared/collector-browser-host";
 import { clientToImageCoords } from "../../shared/collectors/roi-preview-interaction";
@@ -107,6 +108,7 @@ export function VisualRegionStep({
       : "Thiếu visual reference — quay lại Step 1.",
   });
   const [error, setError] = useState("");
+  const [scanDiagnostics, setScanDiagnostics] = useState<AutoScanDiagnosticEvent[]>([]);
   const [frameIndex, setFrameIndex] = useState(0);
   const [manualMode, setManualMode] = useState(false);
   const [parentProbe, setParentProbe] =
@@ -211,41 +213,40 @@ export function VisualRegionStep({
   }, [electron, invoke, publishHost]);
 
   async function startAutoScan() {
-    if (!invoke || scanningRef.current) return;
-    if (!visualReferences.length) {
-      setError("Cần visual references từ Step 1 trước khi Auto Scan.");
-      return;
-    }
-    const referenceRoles = new Set(visualReferences.map(ref => ref.label.trim().toLowerCase()));
-    const missingRoles = ["like", "comment", "share"].filter(role => !referenceRoles.has(role));
-    if (missingRoles.length) {
-      setError(`Visual references thiếu semantic role: ${missingRoles.join(", ")}. Quay lại Browser & Capture để relabel/capture; không chạy scan với ba template cùng loại.`);
-      return;
-    }
     setError("");
     cancelRef.current = false;
-    scanningRef.current = true;
-    liveFramesRef.current = [];
-    onScanFrames([]);
-    onContainerResult(null);
-    onContentRoi(null);
-    setFrameIndex(0);
-    setManualMode(false);
+    setScanDiagnostics([]);
+    let ownsScan = false;
+    const onDiagnostic = (event: AutoScanDiagnosticEvent) => {
+      setScanDiagnostics(previous => [...previous.slice(-19), event]);
+      if (event.stage === "VALIDATION_PASS") {
+        ownsScan = true;
+        scanningRef.current = true;
+        setProgress({ phase: "running", frameIndex: 0, maxFrames: 20, message: "Validation passed · preparing BrowserCore input lock…" });
+        liveFramesRef.current = [];
+        onScanFrames([]);
+        onContainerResult(null);
+        onContentRoi(null);
+        setFrameIndex(0);
+        setManualMode(false);
+      }
+    };
     try {
-      const probe = await onProbeRefresh();
-      assertCaptureFromSocialPage(probe?.url || state?.url || sourceUrl || "");
-      publishHost();
-      await collectorPostDetailScanInputLock(invoke, true);
       const {
         runId,
         frames: nextFrames,
         container,
-      } = await runPostDetailAutoScan({
-        invoke,
-        sourceUrl,
+      } = await runAutoScanClickPipeline({
+        browserCoreAvailable: electron,
+        alreadyRunning: scanningRef.current,
         visualReferences,
+        probe: onProbeRefresh,
+        assertSocialPage: url => { assertCaptureFromSocialPage(url || state?.url || sourceUrl || ""); },
+        fallbackUrl: state?.url || sourceUrl || "",
+        publishHost,
+        setInputLock: locked => collectorPostDetailScanInputLock(invoke, locked),
         isCancelled: () => cancelRef.current,
-        onProgress: setProgress,
+        onDiagnostic,
         onFrame: (frame, all) => {
           liveFramesRef.current = all;
           // Lightweight UI: latest preview only — flush full frame list at end.
@@ -260,6 +261,14 @@ export function VisualRegionStep({
             onScanFrames([{ ...frame, anchorCandidates: undefined }]);
           }
         },
+        runScan: onFrame => runPostDetailAutoScan({
+          invoke,
+          sourceUrl,
+          visualReferences,
+          isCancelled: () => cancelRef.current,
+          onProgress: setProgress,
+          onFrame,
+        }),
       });
       onRunId(runId);
       onScanFrames(nextFrames);
@@ -277,8 +286,25 @@ export function VisualRegionStep({
         bestIdx === -1 ? Math.max(0, nextFrames.length - 1) : bestIdx,
       );
 
-      const row = container.mainActionRow;
+      let row = container.mainActionRow;
       let domCompleted = false;
+      if (row && row.types.length === 3) {
+        const frame = nextFrames.find(item => item.frameId === row!.frameId);
+        const probe = frame ? await onProbeRefresh() : null;
+        if (frame && probe) {
+          const ownership = await invoke<PostDetailActionAnchorProbeResult>({
+            type: "postDetailHighlightActionAnchors",
+            input: { sourceUrl, runId: runId || `ownership_${Date.now()}`, expectedWebContentsId: probe.webContentsId, frameId: frame.frameId, screenshot: { width: frame.width, height: frame.height }, anchors: row.anchors, evidenceScroll: frame.diagnostics?.scrollTarget ? { tag: frame.diagnostics.scrollTarget.tag, role: frame.diagnostics.scrollTarget.role, scrollTop: frame.diagnostics.scrollTarget.scrollTopAfter, maxScroll: frame.diagnostics.scrollTarget.maxScroll } : null, debugAnchors: false },
+          });
+          if (ownership.status === "FOUND" && ownership.ownership?.status === "MAIN_POST" && ownership.ownership.postIdentityVerified && ownership.ownership.parentVerified) {
+            row = { ...row, status: "CONFIRMED", notes: [...row.notes, "Live DOM verified: row belongs to current Post Parent and not a comment item."] };
+            domCompleted = true;
+            onContainerResult({ ...container, mainActionRow: row, notes: [...container.notes, "Main Action Row verified by live DOM ownership."] });
+          } else {
+            onContainerResult({ ...container, mainActionRow: { ...row, status: "AMBIGUOUS", notes: [...row.notes, ...(ownership.diagnostics || [])] } });
+          }
+        }
+      }
       if ((!row || row.types.length < 3) && savedDomStrategy?.domAnchors) {
         const resolved = await invoke<import("../../shared/post-detail-collector/types").PostDetailSavedParentResolution>({ type: "postDetailResolveSavedParent", config: savedDomStrategy });
         domCompleted = resolved.status === "PARENT_MATCHED" && resolved.diagnosticMeta?.postIdentityVerified === true && resolved.diagnosticMeta?.parentVerified === true && resolved.diagnosticMeta?.domAnchorsVerified === true;
@@ -305,6 +331,7 @@ export function VisualRegionStep({
           ],
         });
         if (container.containerBounds) onContentRoi(container.containerBounds);
+        else setManualMode(true);
       } else if (container.status === "FOUND" && container.containerBounds) {
         onContentRoi(container.containerBounds);
         onMatch({
@@ -370,25 +397,23 @@ export function VisualRegionStep({
         }));
       }
       if (!cancelRef.current) {
-        const complete = domCompleted || (container.status === "FOUND" && row?.strength === "STRONG" && row.types.length === 3);
+        const complete = domCompleted;
         void playCompletionSound(complete ? "SUCCESS" : "NEEDS_ATTENTION", `auto-scan:${runId}`);
         if (domCompleted && savedDomStrategy) await onParentConfigured(savedDomStrategy);
       }
     } catch (e) {
-      setError(e instanceof Error ? e.message : String(e));
-      setProgress((p) => ({ ...p, phase: "error", message: String(e) }));
+      const code = e instanceof AutoScanStartError ? e.failureCode : "UNKNOWN";
+      const message = e instanceof Error ? e.message : String(e);
+      setError(`[${code}] ${message}`);
+      setProgress((p) => ({ ...p, phase: "error", message: `[${code}] ${message}` }));
       if (liveFramesRef.current.length) onScanFrames(liveFramesRef.current);
       if (!cancelRef.current) void playCompletionSound("NEEDS_ATTENTION", `auto-scan:error:${sourceUrl}:${Date.now()}`);
     } finally {
-      scanningRef.current = false;
+      if (ownsScan) scanningRef.current = false;
       try {
-        await collectorPostDetailScanInputLock(invoke, false);
-      } catch {
-        /* ignore */
-      }
-      try {
-        await collectorSetBrowserVisible(invoke, true);
-        publishHost();
+        const reviewingEvidence = liveFramesRef.current.some(frame => Boolean(frame.screenshotDataUrl));
+        await collectorSetBrowserVisible(invoke, !reviewingEvidence);
+        if (!reviewingEvidence) publishHost();
       } catch {
         /* ignore */
       }
@@ -605,6 +630,7 @@ export function VisualRegionStep({
         frameId: frame.frameId,
         screenshot: { width: frame.width, height: frame.height },
         anchors: row.anchors,
+        evidenceScroll: frame.diagnostics?.scrollTarget ? { tag: frame.diagnostics.scrollTarget.tag, role: frame.diagnostics.scrollTarget.role, scrollTop: frame.diagnostics.scrollTarget.scrollTopAfter, maxScroll: frame.diagnostics.scrollTarget.maxScroll } : null,
         expectedParentLevel,
         debugAnchors: false,
       };
@@ -614,11 +640,13 @@ export function VisualRegionStep({
       });
       setActionAnchorProbe(anchors);
       setParentProbe(null);
-      if (anchors.status !== "FOUND")
+      if (anchors.status !== "FOUND") {
+        setShowDomDebug(true);
         throw new Error(
           anchors.diagnostics.join(" · ") ||
             `DOM anchor probe: ${anchors.status}`,
         );
+      }
       const parents = await invoke<PostDetailParentProbeResult>({
         type: "postDetailProbeParents",
         input,
@@ -823,6 +851,10 @@ export function VisualRegionStep({
       </div>
 
       {error && <div className="pdc-alert pdc-alert-error">{error}</div>}
+      {scanDiagnostics.length > 0 && <details className="pdc-advanced-debug" open={Boolean(error)}>
+        <summary>Auto Scan Pipeline Diagnostics</summary>
+        <ol>{scanDiagnostics.map((event, index) => <li key={`${event.at}-${index}`}><code>{event.stage}</code>{event.failureCode ? ` · ${event.failureCode}` : ""}{event.frameIndex != null ? ` · frame ${event.frameIndex}` : ""}{event.detail ? ` · ${event.detail}` : ""}</li>)}</ol>
+      </details>}
       {manualMode && (
         <div className="pdc-alert pdc-alert-warn">
           Kết quả AMBIGUOUS — kéo vùng container thủ công trên frame rồi Confirm
@@ -1153,9 +1185,10 @@ export function VisualRegionStep({
                 {actionAnchorProbe.hits.map((hit) => (
                   <div key={hit.type}>
                     {hit.type}: {hit.tag || "—"} {hit.role || ""} · rect{" "}
-                    {JSON.stringify(hit.rect)} · “{hit.text}”
+                    {JSON.stringify(hit.rect)} · point {JSON.stringify(hit.point)} · {hit.reason || "NO_REASON"} · “{hit.text}”
                   </div>
                 ))}
+                {actionAnchorProbe.coordinateDiagnostics && <pre className="pdc-batch-json">{JSON.stringify(actionAnchorProbe.coordinateDiagnostics, null, 2)}</pre>}
                 {actionAnchorProbe.actionRow && (
                   <div>
                     Action Row root: {actionAnchorProbe.actionRow.tag} ·

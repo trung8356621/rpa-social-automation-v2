@@ -7,6 +7,7 @@ import {
   viewportWheelPoint,
 } from "../../shared/post-detail-collector/auto-scan";
 import { clusterActionRows, explainActionRowRejection } from "../../shared/post-detail-collector/action-row";
+import { structuredReferenceRole } from "../../shared/post-detail-collector/visual-reference-role";
 import { createPostDetailFrameId, createPostDetailRunId } from "../../shared/post-detail-collector/match-status";
 import {
   defaultScrollCompareRoi,
@@ -230,7 +231,7 @@ export async function runPostDetailAutoScan(deps: AutoScanDeps): Promise<{
     throw new Error("AUTO_SCAN_NO_REFERENCES: Cần ≥1 visual reference từ Step 1.");
   }
 
-  const preparedRefs = await prepareRefs(deps.visualReferences);
+  const preparedRefs = await prepareRefs(deps.visualReferences.map(ref => ({ ...ref, label: structuredReferenceRole(ref) || "" })));
   if (!preparedRefs.length) {
     throw new Error("AUTO_SCAN_NO_REFERENCES: Không load được template Like/Comment/Share.");
   }

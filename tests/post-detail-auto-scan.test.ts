@@ -302,7 +302,7 @@ test("selectPrimaryActionRow prefers upper main-post band over comment likes", (
   assert.ok(meanY < 300);
 });
 
-test("comment-zone-only action row after scroll is not selected as main post", () => {
+test("low viewport row remains a visual candidate until DOM ownership verification", () => {
   const commentOnly = [
     anchor({
       type: "LIKE",
@@ -315,12 +315,11 @@ test("comment-zone-only action row after scroll is not selected as main post", (
       score: 0.97,
     }),
   ];
-  assert.equal(
+  assert.ok(
     selectPrimaryActionRow(commentOnly, [], {
       frameHeight: 560,
       observedScrollPx: 300,
     }),
-    null,
   );
   // Early frame at top: same geometry may still be main row entering viewport — allow.
   assert.ok(
@@ -353,8 +352,8 @@ test("comment-zone-only action row after scroll is not selected as main post", (
     observedScrollPx: 300,
     horizontalProfiles: [{ frameId: "f1", columns: cardProfile() }],
   });
-  assert.equal(result.status, "AMBIGUOUS");
-  assert.match(result.notes.join(" "), /comment-zone/i);
+  assert.equal(result.status, "FOUND");
+  assert.ok(result.mainActionRow, "visual coordinates must not discard the row before DOM ownership");
 });
 
 test("no anchors → NOT_FOUND", () => {
@@ -448,6 +447,7 @@ test("Step 2 UI wires Auto Scan pipeline and Step 3 gate needs container", () =>
   assert.match(step2, /actionRowOverlayForFrame/);
   assert.match(step2, /ACTION ROW/);
   assert.match(step2, /Action Row Confirmed/);
+  assert.match(step2, /if \(container\.containerBounds\) onContentRoi\(container\.containerBounds\);\s*else setManualMode\(true\)/);
   assert.doesNotMatch(
     step2,
     /onContentRoi\(containerResult\?\.containerBounds \|\| row\.bbox\)/,
@@ -521,4 +521,13 @@ test("Action Row presentation scales real frame geometry and never leaks across 
     actionRowDisplayStatus({ ...row, status: "CONFIRMED" }),
     "CONFIRMED",
   );
+  const confirmed = { ...row, status: "CONFIRMED" as const };
+  assert.equal(actionRowOverlayForFrame(confirmed, "frame-013")?.anchors.length, 3, "Parent may remain unknown without hiding visual evidence");
+  for (const rendered of [{ width: 683, height: 384 }, { width: 960, height: 540 }]) {
+    const box = scaleImageRect(row.bbox, { width: 1366, height: 768 }, rendered);
+    assert.ok(box.x >= 0 && box.y >= 0 && box.x + box.width <= rendered.width && box.y + box.height <= rendered.height);
+  }
+  const ui = read("src/renderer/post-detail-collector/VisualRegionStep.tsx");
+  assert.match(ui, /reviewingEvidence/);
+  assert.match(ui, /collectorSetBrowserVisible\(invoke, !reviewingEvidence\)/);
 });

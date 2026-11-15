@@ -11,6 +11,8 @@ export type OcrFrameStatus =
 /** Visual reference sample — UI variant template, not an OCR content frame. */
 export type VisualReferenceSample = {
   sampleId: string;
+  /** Structured semantic role. Missing only on legacy records awaiting relabel. */
+  semanticRole?: PostDetailAnchorType;
   label: string;
   dataUrl: string;
   width: number;
@@ -354,6 +356,12 @@ export type PostDetailParentProbeInput = {
   runId: string;
   screenshot: { width: number; height: number };
   anchors: PostDetailVisualAnchor[];
+  evidenceScroll?: {
+    tag: string;
+    role: string | null;
+    scrollTop: number;
+    maxScroll: number;
+  } | null;
   expectedParentLevel?: number | null;
   debugAnchors?: boolean;
 };
@@ -379,8 +387,25 @@ export type PostDetailParentProbeResult = {
 
 export type PostDetailActionAnchorProbeResult = {
   status: "FOUND" | "STALE_VISUAL_ANCHOR" | "AMBIGUOUS" | "WEB_CONTENTS_CHANGED";
-  hits: Array<{ type: PostDetailAnchorType; point: { x: number; y: number }; tag: string | null; role: string | null; rect: Rect | null; text: string; parentRelativePath?: number[]; structuralSignature?: Record<string, unknown>; verificationStatus?: "VERIFIED" | "NOT_VERIFIED" }>;
+  hits: Array<{ type: PostDetailAnchorType; point: { x: number; y: number }; tag: string | null; role: string | null; rect: Rect | null; text: string; reason?: string; stack?: unknown[]; screenshotBbox?: Rect; parentRelativePath?: number[]; structuralSignature?: Record<string, unknown>; verificationStatus?: "VERIFIED" | "NOT_VERIFIED" }>;
   actionRow: { tag: string; role: string | null; rect: Rect; descendantCount: number } | null;
+  ownership?: {
+    status: "MAIN_POST" | "COMMENT_ITEM" | "AMBIGUOUS";
+    postIdentityVerified: boolean;
+    parentVerified: boolean;
+    commentOwnerFound: boolean;
+    postParent: { tag: string; role: string | null; rect: Rect } | null;
+    postBodyEndY: number | null;
+    commentSectionStartY: number | null;
+  };
+  coordinateDiagnostics?: {
+    screenshot: { width: number; height: number };
+    viewport: { width: number; height: number; devicePixelRatio: number; visualScale: number; zoomRatio: number | null };
+    webContentsId: number;
+    evidenceScroll: PostDetailParentProbeInput["evidenceScroll"];
+    liveScroll: Record<string, unknown> | null;
+    scrollSynchronized: boolean;
+  };
   diagnostics: string[];
 };
 
