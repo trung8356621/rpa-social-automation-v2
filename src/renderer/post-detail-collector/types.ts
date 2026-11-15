@@ -32,9 +32,12 @@ export type PostDetailUrlItem = {
   canonicalUrl: string;
   postId: string | null;
   platform: string | null;
+  groupSlug?: string;
+  groupId?: string;
   status: PostDetailUrlStatus;
   strategyId?: string;
   diagnostics: string[];
+  engagementAnchorsVerified?: boolean;
   updatedAt: string;
 };
 

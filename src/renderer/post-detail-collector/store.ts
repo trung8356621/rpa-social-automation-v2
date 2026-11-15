@@ -5,7 +5,7 @@ import {
   type VisualReferenceSample,
 } from "../../shared/post-detail-collector/types";
 import type { PostDetailCollectorState } from "./types";
-import { legacyStrategies, mergeUrlWorkspace } from "./url-workspace";
+import { extractWorkspaceIdentity, legacyStrategies, mergeUrlWorkspace } from "./url-workspace";
 
 export const POST_DETAIL_STATE_KEY = "rpa:post-detail-collector:run";
 
@@ -17,7 +17,10 @@ export function migratePostDetailState(parsed: Partial<PostDetailCollectorState>
     schemaVersion: 2,
     majorStep: parsed.majorStep ?? 1,
     processingSubstep: parsed.processingSubstep ?? 3,
-    urlItems: Array.isArray(parsed.urlItems) ? parsed.urlItems : mergeUrlWorkspace(batchUrlsText, []),
+    urlItems: Array.isArray(parsed.urlItems) ? parsed.urlItems.map(item => {
+      const identity = extractWorkspaceIdentity(item.originalUrl);
+      return { ...item, groupSlug: item.groupSlug ?? identity.groupSlug, groupId: item.groupId ?? identity.groupId };
+    }) : mergeUrlWorkspace(batchUrlsText, []),
     selectedUrlId: typeof parsed.selectedUrlId === "string" ? parsed.selectedUrlId : null,
     strategies: Array.isArray(parsed.strategies) ? parsed.strategies : legacyStrategies(parentConfigs),
     parentConfigs,

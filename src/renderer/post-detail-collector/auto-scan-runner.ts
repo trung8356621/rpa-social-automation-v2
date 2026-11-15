@@ -280,6 +280,7 @@ export async function runPostDetailAutoScan(deps: AutoScanDeps): Promise<{
         wheelReason = [
           wheel.reason,
           wheel.focusAttempts != null ? `focusAttempts=${wheel.focusAttempts}` : null,
+          wheel.scrollTarget ? `target=${wheel.scrollTarget.tag}${wheel.scrollTarget.role ? `[role=${wheel.scrollTarget.role}]` : ""} scroll=${Math.round(wheel.scrollTarget.scrollTop)}/${Math.round(wheel.scrollTarget.maxScroll)} boundary=${wheel.scrollTarget.atBoundary}` : null,
           attempt > 0 ? `retry=${attempt}` : null,
         ]
           .filter(Boolean)
@@ -470,7 +471,8 @@ export async function runPostDetailAutoScan(deps: AutoScanDeps): Promise<{
 
     if (i > 1 && staleWheels >= maxStale) {
       stoppedReason = "SCROLL_NOT_MOVING";
-      diagnostics.stopOrRejectReason = `SCROLL_NOT_MOVING after ${staleWheels} consecutive wheels without content-band change (threshold=${motionThreshold}).`;
+      const lastWheel = wheelReason || "scroll target unavailable";
+      diagnostics.stopOrRejectReason = `SCROLL_NOT_MOVING after ${staleWheels} consecutive wheels without content-band change (threshold=${motionThreshold}); ${lastWheel}. This distinguishes a true scroll boundary from a wrong/non-scrollable target or a page that has not painted.`;
       deps.onProgress({
         phase: "stopped",
         frameIndex: i,

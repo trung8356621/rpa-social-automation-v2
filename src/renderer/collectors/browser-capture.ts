@@ -64,6 +64,7 @@ export async function collectorPostDetailWheel(
   webContentsId?: number;
   reason?: string;
   focusAttempts?: number;
+  scrollTarget?: { tag: string; role: string | null; scrollTop: number; maxScroll: number; atBoundary: boolean; scrollable: boolean };
 }> {
   if (!isElectronBrowserCoreAvailable()) throw new Error(BROWSER_CORE_UNAVAILABLE);
   return invoke({ type: "postDetailWheel", deltaY });

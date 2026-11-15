@@ -166,7 +166,13 @@ export function SavedParentHtmlStep({ invoke, result, currentUrl, variableMappin
   }, [result?.innerHTML, status]);
   const atPath = React.useCallback((path: number[]) => { let node: Element | null = parsed; for (const index of path) node = node?.children.item(index) || null; return node; }, [parsed]);
   const postId = String(result?.diagnosticMeta?.postId || currentUrl.match(/\/posts\/(\d+)/)?.[1] || "current-post");
-  const extractedData = useMemo(() => parsed ? extractParentData(parsed, { postId, currentUrl }) : [], [parsed, postId, currentUrl]);
+  const extractedData = useMemo(() => {
+    const items = parsed ? extractParentData(parsed, { postId, currentUrl }) : [];
+    if (result?.diagnosticMeta?.engagementAnchorsVerified !== false) return items;
+    return items.map(item => item.kind === "engagement"
+      ? { ...item, confidence: "low" as const, extractionStatus: "needs_attention" as const }
+      : item);
+  }, [parsed, postId, currentUrl, result?.diagnosticMeta?.engagementAnchorsVerified]);
   const manuallyHidden = hiddenExtractedData[postId] || [];
   const hiddenCount = extractedData.filter(item => item.hiddenByDefault || manuallyHidden.includes(item.id)).length;
   const visibleData = showHidden ? extractedData : extractedData.filter(item => !item.hiddenByDefault && !manuallyHidden.includes(item.id));

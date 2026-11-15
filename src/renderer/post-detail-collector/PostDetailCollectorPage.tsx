@@ -18,7 +18,7 @@ import { SavedParentHtmlStep } from "./SavedParentHtmlStep";
 import { VisualRegionStep } from "./VisualRegionStep";
 import { UrlWorkspaceStep } from "./UrlWorkspaceStep";
 import { usePostDetailCollectorStore } from "./store";
-import { rankStrategies, upsertStrategyVariation } from "./url-workspace";
+import { classifyAutoMatchGate, rankStrategies, upsertStrategyVariation } from "./url-workspace";
 import type { BrowserProbe, Invoke, PostDetailStep, PostDetailUrlItem } from "./types";
 import "./post-detail-collector.css";
 
@@ -166,9 +166,20 @@ export function PostDetailCollectorPage({ invoke, state: parentState }: { invoke
         const anchorsConfigured = ["like_anchor", "comment_anchor", "share_anchor"].every(role =>
           strategy.anchors[role as keyof typeof strategy.anchors]?.verificationStatus === "VERIFIED");
         const anchorsVerified = anchorsConfigured && resolution.diagnosticMeta?.domAnchorsVerified === true;
-        if (resolution.status === "PARENT_MATCHED" && anchorsVerified) { strategyId = strategy.id; break; }
-        if (resolution.status === "PARENT_MATCHED" && !anchorsVerified) {
-          resolution = { ...resolution, status: "REMATCH_REQUIRED", failureCode: "PARENT_MISMATCH", diagnostics: [...resolution.diagnostics, "Parent matched, but Like/Comment/Share DOM anchors are not all verified. Customize Visual Region to teach them."] };
+        const gate = classifyAutoMatchGate({
+          status: resolution.status,
+          postIdentityVerified: resolution.diagnosticMeta?.postIdentityVerified === true,
+          parentVerified: resolution.diagnosticMeta?.parentVerified === true,
+          engagementAnchorsVerified: anchorsVerified,
+        });
+        if (gate.canReview) {
+          strategyId = strategy.id;
+          resolution = {
+            ...resolution,
+            diagnosticMeta: { ...resolution.diagnosticMeta, engagementAnchorsVerified: anchorsVerified },
+            diagnostics: anchorsVerified ? resolution.diagnostics : [...resolution.diagnostics, "Parent and post identity verified. Engagement anchors remain Needs Attention; other semantic fields are available."],
+          };
+          break;
         }
       }
       if (navigationEpoch.current !== epoch) return;
@@ -181,7 +192,7 @@ export function PostDetailCollectorPage({ invoke, state: parentState }: { invoke
         savedParentResolution: resolution,
         processingSubstep: 3,
         step: 3,
-        urlItems: prev.urlItems.map(value => value.id === item.id ? { ...value, status: ready ? "READY" : "NEEDS_ATTENTION", strategyId, diagnostics: resolution!.diagnostics, updatedAt: new Date().toISOString() } : value),
+        urlItems: prev.urlItems.map(value => value.id === item.id ? { ...value, status: ready ? "READY" : "NEEDS_ATTENTION", strategyId, engagementAnchorsVerified: resolution!.diagnosticMeta?.engagementAnchorsVerified === true, diagnostics: resolution!.diagnostics, updatedAt: new Date().toISOString() } : value),
         strategies: prev.strategies.map(strategy => strategy.id === strategyId ? { ...strategy, successes: strategy.successes + (ready ? 1 : 0), failures: strategy.failures + (ready ? 0 : 1), updatedAt: new Date().toISOString() } : strategy),
       }));
     } catch (error) {
@@ -231,6 +242,7 @@ export function PostDetailCollectorPage({ invoke, state: parentState }: { invoke
 
       <div className="pdc-content-area">
         {state.majorStep === 1 && <UrlWorkspaceStep
+          invoke={invoke}
           text={state.batchUrlsText}
           items={state.urlItems}
           selectedId={state.selectedUrlId}

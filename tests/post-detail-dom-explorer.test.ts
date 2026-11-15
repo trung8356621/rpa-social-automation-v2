@@ -12,7 +12,7 @@ import {
   updateRegistryVariable,
 } from "../src/renderer/post-detail-collector/variable-registry";
 import type { PostDetailDomVariableMapping } from "../src/renderer/post-detail-collector/types";
-import { legacyStrategies, mergeUrlWorkspace, rankStrategies, upsertStrategyVariation } from "../src/renderer/post-detail-collector/url-workspace";
+import { classifyAutoMatchGate, extractWorkspaceIdentity, legacyStrategies, mergeUrlWorkspace, rankStrategies, upsertStrategyVariation } from "../src/renderer/post-detail-collector/url-workspace";
 import { migratePostDetailState } from "../src/renderer/post-detail-collector/store";
 
 const explorer = () => readFileSync("src/renderer/post-detail-collector/SavedParentHtmlStep.tsx", "utf8");
@@ -1174,4 +1174,40 @@ test("strategy variations append instead of overwriting and verified anchors ran
     },
   });
   assert.equal(rankStrategies([...two, ...legacy], "facebook")[0]?.anchors.like_anchor?.verificationStatus, "VERIFIED");
+});
+
+test("Auto Match gates on identity and Parent, not optional engagement anchors", () => {
+  assert.deepEqual(classifyAutoMatchGate({ status: "PARENT_MATCHED", postIdentityVerified: true, parentVerified: true, engagementAnchorsVerified: false }), {
+    canReview: true,
+    engagementStatus: "NEEDS_ATTENTION",
+    reason: "PARENT_READY_ENGAGEMENT_UNVERIFIED",
+  });
+  assert.equal(classifyAutoMatchGate({ status: "PARENT_MATCHED", postIdentityVerified: false, parentVerified: true, engagementAnchorsVerified: true }).canReview, false);
+  assert.equal(classifyAutoMatchGate({ status: "PARENT_MATCHED", postIdentityVerified: true, parentVerified: false, engagementAnchorsVerified: true }).canReview, false);
+});
+
+test("workspace parser preserves group context and deduplicates tracking variants", () => {
+  const parsed = extractWorkspaceIdentity("https://www.facebook.com/groups/seo.community/posts/123/?tracking=one");
+  assert.equal(parsed.platform, "facebook");
+  assert.equal(parsed.groupSlug, "seo.community");
+  assert.equal(parsed.groupId, undefined);
+  assert.equal(parsed.postId, "123");
+  const numeric = extractWorkspaceIdentity("https://www.facebook.com/groups/987654/posts/123/");
+  assert.equal(numeric.groupId, "987654");
+  assert.equal(numeric.groupSlug, undefined);
+  const merged = mergeUrlWorkspace("https://www.facebook.com/groups/seo.community/posts/123/?a=1\nhttps://www.facebook.com/groups/seo.community/posts/123/?a=2", []);
+  assert.equal(new Set(merged.map(item => item.id)).size, 1);
+  assert.match(merged[0]?.canonicalUrl || "", /groups\/seo\.community\/posts\/123/);
+});
+
+test("URL Workspace uses same BrowserCore host, single input, cards, filters, and Enter submit", () => {
+  const source = readFileSync("src/renderer/post-detail-collector/UrlWorkspaceStep.tsx", "utf8");
+  assert.match(source, /publishPostDetailBrowserHost/);
+  assert.match(source, /claimCollectorHostOwner\("pdc-url-workspace"\)/);
+  assert.match(source, /onSubmit=/);
+  assert.doesNotMatch(source, /<textarea/);
+  assert.match(source, /pdc-post-grid/);
+  assert.match(source, /Copy link address/);
+  assert.doesNotMatch(source, /<aside className="pdc-add-panel"/);
+  assert.match(source, /<section className="pdc-add-panel"/);
 });

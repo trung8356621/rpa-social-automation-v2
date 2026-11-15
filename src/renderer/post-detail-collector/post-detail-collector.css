@@ -129,6 +129,50 @@
   flex-direction: column;
 }
 
+.pdc-url-workspace { min-height: 0; height: 100%; display: flex; flex-direction: column; gap: 10px; overflow: hidden; }
+.pdc-workspace-substeps, .pdc-library-filters { display: flex; gap: 6px; flex-wrap: wrap; }
+.pdc-workspace-substeps button, .pdc-library-filters button { border: 1px solid #27473a; background: #0b1a14; color: #94a3b8; border-radius: 7px; padding: 7px 12px; cursor: pointer; }
+.pdc-workspace-substeps button.active, .pdc-library-filters button.active { background: #123b2c; border-color: #10b981; color: #ecfdf5; }
+.pdc-workspace-substeps span { margin-left: 6px; padding: 1px 6px; border-radius: 999px; background: #1f3d30; }
+.pdc-add-url-layout { min-height: 0; flex: 1; display: grid; grid-template-columns: minmax(0, 1fr) minmax(280px, 360px); gap: 12px; overflow: hidden; }
+.pdc-browser-panel, .pdc-add-panel, .pdc-library { min-width: 0; min-height: 0; background: #0b1a14; border: 1px solid #1f3d30; border-radius: 10px; }
+.pdc-browser-panel { display: flex; flex-direction: column; overflow: hidden; }
+.pdc-browser-panel > header, .pdc-add-panel { padding: 14px; }
+.pdc-browser-panel h2, .pdc-add-panel h2, .pdc-library h2 { margin: 0 0 4px; }
+.pdc-browser-panel p, .pdc-add-panel p, .pdc-library p { margin: 0; color: #94a3b8; font-size: 12px; }
+.pdc-workspace-browser-host { flex: 1; min-height: 260px; position: relative; background: #040b08; border-top: 1px solid #1f3d30; }
+.pdc-add-panel { position: relative; inset: auto; width: auto; height: auto; display: flex; flex-direction: column; gap: 18px; overflow-y: auto; }
+.pdc-add-panel form { display: flex; flex-direction: column; gap: 9px; }
+.pdc-add-panel label, .pdc-eyebrow { font-size: 11px; font-weight: 700; color: #6ee7b7; letter-spacing: .06em; }
+.pdc-url-analysis { display: grid; gap: 4px; padding: 10px; border-radius: 7px; font-size: 12px; overflow-wrap: anywhere; }
+.pdc-url-analysis.valid { background: rgba(16,185,129,.1); border: 1px solid #065f46; }
+.pdc-url-analysis.invalid { background: rgba(248,113,113,.08); border: 1px solid #7f1d1d; }
+.pdc-inline-message { font-size: 12px; color: #fbbf24; }
+.pdc-collected-summary { margin-top: auto; display: grid; grid-template-columns: auto 1fr auto; gap: 8px; align-items: center; padding: 12px; border-radius: 8px; background: #07140f; }
+.pdc-collected-summary strong { font-size: 22px; color: #34d399; }
+.pdc-library { flex: 1; padding: 16px; overflow-y: auto; }
+.pdc-library-header { display: flex; justify-content: space-between; gap: 16px; align-items: center; margin-bottom: 12px; }
+.pdc-library-filters { margin-bottom: 14px; }
+.pdc-post-grid { display: grid; grid-template-columns: repeat(3, minmax(220px, 1fr)); gap: 12px; }
+.pdc-post-card { min-width: 0; min-height: 210px; display: flex; flex-direction: column; justify-content: space-between; gap: 14px; padding: 14px; border: 1px solid #27473a; border-radius: 10px; background: #0d2119; cursor: pointer; }
+.pdc-post-card:hover, .pdc-post-card.selected { border-color: #10b981; box-shadow: 0 0 0 1px rgba(16,185,129,.2); }
+.pdc-post-card > header, .pdc-post-card > footer { display: flex; gap: 6px; flex-wrap: wrap; justify-content: space-between; }
+.pdc-post-card h3 { margin: 4px 0 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.pdc-platform, .pdc-post-status { padding: 3px 7px; border-radius: 999px; font-size: 10px; font-weight: 700; text-transform: uppercase; }
+.pdc-platform { background: #172554; color: #93c5fd; }
+.pdc-platform.threads { background: #292524; color: #e7e5e4; }
+.pdc-post-status { background: #1f2937; color: #d1d5db; }
+.pdc-post-status.status-ready { background: #064e3b; color: #a7f3d0; }
+.pdc-post-status.status-needs_attention { background: #78350f; color: #fde68a; }
+.pdc-post-status.status-failed { background: #7f1d1d; color: #fecaca; }
+.pdc-card-label { display: block; color: #94a3b8; font-size: 12px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.pdc-card-progress { display: grid; gap: 5px; color: #94a3b8; font-size: 11px; }
+.pdc-post-card footer button { font-size: 11px; padding: 6px 8px; }
+.pdc-post-card footer .danger { color: #fca5a5; }
+.pdc-empty-state { min-height: 180px; display: flex; flex-direction: column; align-items: center; justify-content: center; text-align: center; color: #94a3b8; }
+@media (max-width: 1500px) { .pdc-post-grid { grid-template-columns: repeat(2, minmax(220px, 1fr)); } }
+@media (max-width: 1050px) { .pdc-add-url-layout { grid-template-columns: minmax(0, 1fr) 300px; } .pdc-post-grid { grid-template-columns: 1fr; } }
+
 .pdc-step {
   flex: 1;
   min-height: 0;

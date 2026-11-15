@@ -1,37 +1,52 @@
 import type { PostDetailParentConfig } from "../../shared/post-detail-collector/types";
-import { extractPostIdentityFromUrl, parseBatchUrls } from "./batch-validation";
+import { canonicalPostUrl, extractPostIdentityFromUrl, parseBatchUrls } from "./batch-validation";
 import type { PostDetailDomStrategy, PostDetailUrlItem } from "./types";
 
 const now = () => new Date().toISOString();
 
 export function stableUrlId(url: string): string {
   const identity = extractPostIdentityFromUrl(url);
-  return identity ? `${identity.platform}:${identity.postId}` : `url:${url.trim()}`;
+  return identity.valid && identity.platform && identity.postId
+    ? `${identity.platform}:${identity.postId}`
+    : `url:${identity.normalizedUrl || url.trim()}`;
 }
 
-function canonicalPostUrl(url: string): string {
+export function extractWorkspaceIdentity(url: string) {
   const identity = extractPostIdentityFromUrl(url);
-  if (!identity.valid || !identity.postId) return identity.normalizedUrl || url;
-  if (identity.platform === "threads") return identity.normalizedUrl.split(/[?#]/)[0];
-  return `https://www.facebook.com/posts/${identity.postId}`;
+  let groupSlug: string | undefined;
+  let groupId: string | undefined;
+  try {
+    const group = /^\/groups\/([^/]+)/i.exec(new URL(url).pathname)?.[1];
+    if (group) {
+      const decoded = decodeURIComponent(group);
+      if (/^\d+$/.test(decoded)) groupId = decoded;
+      else groupSlug = decoded;
+    }
+  } catch { /* parser reports the URL error */ }
+  return { ...identity, groupSlug, groupId };
 }
 
 export function mergeUrlWorkspace(text: string, previous: PostDetailUrlItem[]): PostDetailUrlItem[] {
   const byId = new Map(previous.map(item => [item.id, item]));
-  return parseBatchUrls(text).items.map(parsed => {
+  const seen = new Set<string>();
+  return parseBatchUrls(text).items.flatMap(parsed => {
     const id = stableUrlId(parsed.url);
+    if (seen.has(id)) return [];
+    seen.add(id);
     const existing = byId.get(id);
-    const identity = extractPostIdentityFromUrl(parsed.url);
-    return existing || {
+    const identity = extractWorkspaceIdentity(parsed.url);
+    return [existing || {
       id,
       originalUrl: parsed.url,
-      canonicalUrl: canonicalPostUrl(parsed.url),
+      canonicalUrl: canonicalPostUrl(parsed.url, parsed.postId),
       postId: parsed.postId,
       platform: parsed.platform,
+      groupSlug: identity.groupSlug,
+      groupId: identity.groupId,
       status: parsed.valid ? "PENDING" : "FAILED",
       diagnostics: parsed.valid ? [] : [parsed.error || "Invalid URL"],
       updatedAt: now(),
-    };
+    }];
   });
 }
 
@@ -84,4 +99,18 @@ export function rankStrategies(strategies: PostDetailDomStrategy[], platform: st
     const verified = (s: PostDetailDomStrategy) => Object.values(s.anchors).filter(a => a?.verificationStatus === "VERIFIED").length;
     return verified(b) - verified(a) || b.successes - a.successes || a.failures - b.failures;
   });
+}
+
+export function classifyAutoMatchGate(input: {
+  status: string;
+  postIdentityVerified: boolean;
+  parentVerified: boolean;
+  engagementAnchorsVerified: boolean;
+}) {
+  const canReview = input.status === "PARENT_MATCHED" && input.postIdentityVerified && input.parentVerified;
+  return {
+    canReview,
+    engagementStatus: input.engagementAnchorsVerified ? "VERIFIED" as const : "NEEDS_ATTENTION" as const,
+    reason: canReview ? (input.engagementAnchorsVerified ? "READY" : "PARENT_READY_ENGAGEMENT_UNVERIFIED") : "PARENT_OR_IDENTITY_UNVERIFIED",
+  };
 }

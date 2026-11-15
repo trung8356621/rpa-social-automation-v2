@@ -2332,6 +2332,7 @@ async function boot() {
           x: Math.round(Math.max(1, bounds.width) / 2),
           y: Math.round(Math.max(1, bounds.height) / 2),
         };
+        const scrollTarget = await wc.executeJavaScript(`(()=>{const p={x:${point.x},y:${point.y}},start=document.elementFromPoint(p.x,p.y);let node=start;while(node&&node!==document.documentElement){const s=getComputedStyle(node),max=node.scrollHeight-node.clientHeight;if(max>1&&/(auto|scroll)/.test(s.overflowY))break;node=node.parentElement}if(!node||node===document.documentElement)node=document.scrollingElement||document.documentElement;const max=Math.max(0,node.scrollHeight-node.clientHeight),top=Math.max(0,node.scrollTop);return{tag:node.tagName,role:node.getAttribute?.('role')||null,scrollTop:top,maxScroll:max,atBoundary:${deltaY < 0}?top>=max-2:top<=2,scrollable:max>1}})()`, true).catch(() => null);
         let windowVisible = window.isVisible() && !window.isMinimized();
         // Electron can briefly report the main window hidden during collector-host/layout churn
         // even while Auto Scan still owns a visible native BrowserCore. Recover that transient
@@ -2394,6 +2395,7 @@ async function boot() {
               visible: true,
               webContentsId: wc.id,
               focusAttempts,
+            scrollTarget,
               reason: "Dispatched after focus reclaim failed; verify with visual motion",
             };
           } catch (error) {
@@ -2423,6 +2425,7 @@ async function boot() {
           visible: true,
           webContentsId: wc.id,
           focusAttempts,
+          scrollTarget,
         };
       }
       case "postDetailGeometryDiagnostic": {
