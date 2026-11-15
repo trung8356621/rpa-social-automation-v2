@@ -1,0 +1,11 @@
+{
+  "source": "scratch/post-detail-runs/pd_20261115T160403Z_lksjk8",
+  "frame": 8,
+  "threshold": 0.55,
+  "scrollStop": "SCROLL_BOUNDARY",
+  "references": [
+    { "id": "vr_mwhzjqys", "storedLabel": "like", "actualIcon": "LIKE", "score": 1, "bbox": { "x": 346, "y": 511, "width": 33, "height": 36 } },
+    { "id": "vr_mwhzjw03", "storedLabel": "like", "actualIcon": "COMMENT", "score": 1, "bbox": { "x": 394, "y": 517, "width": 28, "height": 26 } },
+    { "id": "vr_mwhzk197", "storedLabel": "like", "actualIcon": "SHARE", "score": 1, "bbox": { "x": 451, "y": 519, "width": 27, "height": 22 } }
+  ]
+}

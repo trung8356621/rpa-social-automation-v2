@@ -7,6 +7,7 @@ import {
   pickBestActionRowCandidate,
 } from "../src/shared/post-detail-collector/action-row.js";
 import { detectPostDetailContainer } from "../src/shared/post-detail-collector/auto-scan.js";
+import { readFileSync } from "node:fs";
 import type { PostDetailVisualAnchor } from "../src/shared/post-detail-collector/types.js";
 
 function a(
@@ -137,4 +138,13 @@ test("detectPostDetailContainer retains MAIN_ACTION_ROW_CANDIDATE without modal 
   assert.equal(result.mainActionRow!.types.length, 3);
   // Container may stay AMBIGUOUS without edges — Phase A still keeps the row.
   assert.equal(result.status, "AMBIGUOUS");
+});
+
+test("live frame 8: corrected semantic labels recover Like/Comment/Share at scroll boundary", () => {
+  const fixture = JSON.parse(readFileSync("tests/fixtures/post-detail-live-29364071799944923-frame8.json", "utf8")) as { references: Array<{ actualIcon: PostDetailVisualAnchor["type"]; score: number; bbox: PostDetailVisualAnchor["bbox"] }> };
+  const anchors = fixture.references.map((ref, index) => ({ type: ref.actualIcon, score: ref.score, bbox: ref.bbox, frameId: "frame-008", frameIndex: 8, templateId: `live-${index}` }));
+  const clusters = clusterActionRows(anchors);
+  assert.equal(clusters.length, 1);
+  assert.deepEqual(new Set(clusters[0]!.types), new Set(["LIKE", "COMMENT", "SHARE"]));
+  assert.equal(clusters[0]!.strength, "STRONG");
 });

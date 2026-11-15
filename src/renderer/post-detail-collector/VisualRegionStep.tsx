@@ -146,6 +146,11 @@ export function VisualRegionStep({
 
   const frames = scanFrames;
   const active = frames[frameIndex] || frames[frames.length - 1];
+  const anchorDiagnostics = useMemo(() => (["LIKE", "COMMENT", "SHARE"] as const).map(type => {
+    const logs = (active?.diagnostics?.matchLogs || []).filter(log => log.type === type).sort((a, b) => b.score - a.score);
+    const best = logs[0];
+    return { type, score: best?.score ?? null, threshold: best?.threshold ?? null, bbox: best?.bbox ?? null, result: best ? best.accepted ? "MATCHED" : best.score < best.threshold ? "BELOW_THRESHOLD" : "REJECTED" : "NOT_FOUND", reason: best?.rejectionReason || "" };
+  }), [active]);
   const imageWidth = active?.width ?? lastScreenshot?.width ?? 0;
   const imageHeight = active?.height ?? lastScreenshot?.height ?? 0;
   const shotUrl = active?.screenshotDataUrl || lastScreenshot?.dataUrl;
@@ -209,6 +214,12 @@ export function VisualRegionStep({
     if (!invoke || scanningRef.current) return;
     if (!visualReferences.length) {
       setError("Cần visual references từ Step 1 trước khi Auto Scan.");
+      return;
+    }
+    const referenceRoles = new Set(visualReferences.map(ref => ref.label.trim().toLowerCase()));
+    const missingRoles = ["like", "comment", "share"].filter(role => !referenceRoles.has(role));
+    if (missingRoles.length) {
+      setError(`Visual references thiếu semantic role: ${missingRoles.join(", ")}. Quay lại Browser & Capture để relabel/capture; không chạy scan với ba template cùng loại.`);
       return;
     }
     setError("");
@@ -1059,6 +1070,13 @@ export function VisualRegionStep({
               <li className="pdc-muted">Chưa có anchor trên frame này.</li>
             )}
           </ul>
+
+          <details className="pdc-advanced-debug">
+            <summary>Advanced Debug · Anchor Matcher</summary>
+            <table className="pdc-parent-table"><thead><tr><th>Anchor</th><th>Best Score</th><th>Threshold</th><th>Result</th><th>Best bbox / reason</th></tr></thead><tbody>
+              {anchorDiagnostics.map(item => <tr key={item.type}><td>{item.type}</td><td>{item.score == null ? "—" : item.score.toFixed(3)}</td><td>{item.threshold == null ? "—" : item.threshold.toFixed(3)}</td><td>{item.result}</td><td>{item.bbox ? `${Math.round(item.bbox.x)},${Math.round(item.bbox.y)} ${Math.round(item.bbox.width)}×${Math.round(item.bbox.height)}` : "—"}{item.reason ? ` · ${item.reason}` : ""}</td></tr>)}
+            </tbody></table>
+          </details>
 
           <div className="pdc-frame-nav">
             <button

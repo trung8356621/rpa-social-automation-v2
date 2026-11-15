@@ -383,6 +383,8 @@ export function BrowserCaptureStep({
         setWarning("Reference trùng ROI đã có — không tạo duplicate.");
       }
       onUpdateReferences(nextRefs);
+      const nextRole = ["like", "comment", "share"].find(role => !nextRefs.some(ref => ref.label.trim().toLowerCase() === role));
+      if (nextRole) setSampleLabel(nextRole);
       onScreenshot(shot);
       // contentRoi is Step 2 OCR region — never set from action-row ROI here.
       await exitCaptureMode(
@@ -484,7 +486,9 @@ export function BrowserCaptureStep({
           </p>
           <label className="pdc-field">
             Sample label
-            <input value={sampleLabel} disabled={!frozen || busy} onChange={(e) => setSampleLabel(e.target.value)} />
+            <select value={sampleLabel} disabled={!frozen || busy} onChange={(e) => setSampleLabel(e.target.value)}>
+              <option value="like">Like</option><option value="comment">Comment</option><option value="share">Share</option>
+            </select>
           </label>
           <div className="pdc-btn-row">
             <button
@@ -501,9 +505,10 @@ export function BrowserCaptureStep({
             {visualReferences.map((s) => (
               <li key={s.sampleId}>
                 {s.dataUrl ? <img src={s.dataUrl} alt={s.label} /> : null}
-                <span>
-                  {s.label} · {s.width}×{s.height}
-                </span>
+                <select aria-label={`Semantic role for ${s.sampleId}`} value={s.label.toLowerCase()} onChange={event => onUpdateReferences(visualReferences.map(ref => ref.sampleId === s.sampleId ? { ...ref, label: event.target.value } : ref))}>
+                  <option value="like">Like</option><option value="comment">Comment</option><option value="share">Share</option>
+                </select>
+                <span>{s.width}×{s.height}</span>
                 <button
                   type="button"
                   className="pdc-btn pdc-btn-tiny"
