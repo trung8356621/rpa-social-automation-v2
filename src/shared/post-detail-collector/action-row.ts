@@ -110,20 +110,17 @@ export function clusterActionRows(
   const pool = [...anchors, ...candidates];
   if (!pool.length) return [];
 
-  // Bucket by center Y with a fixed band (not per-icon height — mixed template
-  // crops like 26px Like vs 31px Comment must stay in one horizontal row).
-  const bandSize = 40;
-  const bands = new Map<number, PostDetailVisualAnchor[]>();
-  for (const a of pool) {
-    const cy = a.bbox.y + a.bbox.height / 2;
-    const key = Math.round(cy / bandSize);
-    const list = bands.get(key) || [];
-    list.push(a);
-    bands.set(key, list);
-  }
+  // Overlapping seed bands avoid the old Math.round bucket-edge bug where icons
+  // only a few pixels apart landed in adjacent buckets and never met.
+  const bands = pool.map(seed => {
+    const cy = seed.bbox.y + seed.bbox.height / 2;
+    const tolerance = Math.max(36, seed.bbox.height * 1.5);
+    return pool.filter(item => Math.abs(item.bbox.y + item.bbox.height / 2 - cy) <= tolerance);
+  });
 
   const clusters: ActionRowCluster[] = [];
-  for (const list of bands.values()) {
+  const emitted = new Set<string>();
+  for (const list of bands) {
     const row = dedupeByType(list);
     if (row.length < 2) continue;
     const bandOk = anchorsFormActionRow(row, Math.max(48, Math.round(Math.max(...row.map((a) => a.bbox.height)) * 1.5)));
@@ -135,6 +132,9 @@ export function clusterActionRows(
     if (!bbox) continue;
     const meanScore = row.reduce((s, a) => s + a.score, 0) / row.length;
     const types = uniqueAnchorTypes(row);
+    const key = row.map(anchor => `${anchor.type}:${Math.round(anchor.bbox.x)}:${Math.round(anchor.bbox.y)}`).join("|");
+    if (emitted.has(key)) continue;
+    emitted.add(key);
     const reasons: string[] = [];
     if (!orderOk) reasons.push("Icons not in Like→Comment→Share left-to-right order.");
     if (!spacingOk) reasons.push("Horizontal spacing outside plausible action-button range.");
@@ -171,6 +171,15 @@ export function clusterActionRows(
     return sb - sa;
   });
   return clusters;
+}
+
+export function explainActionRowRejection(anchors: PostDetailVisualAnchor[], candidates: PostDetailVisualAnchor[] = []): string {
+  const pool = [...anchors, ...candidates];
+  if (!pool.length) return "no visual anchor candidates";
+  const types = uniqueAnchorTypes(pool);
+  const positions = pool.slice(0, 12).map(anchor => `${anchor.type}@${Math.round(anchor.bbox.x)},${Math.round(anchor.bbox.y)} ${anchor.bbox.width}x${anchor.bbox.height} score=${anchor.score.toFixed(3)}`).join("; ");
+  if (types.length < 2) return `only ${types.join("/") || "no"} semantic type matched; ${positions}`;
+  return `candidates did not satisfy same-row Y band, Like→Comment→Share order, spacing, or scale constraints; ${positions}`;
 }
 
 export function scoreActionRowCluster(cluster: ActionRowCluster): number {

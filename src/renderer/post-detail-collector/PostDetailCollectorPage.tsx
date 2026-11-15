@@ -21,6 +21,7 @@ import { usePostDetailCollectorStore } from "./store";
 import { classifyAutoMatchGate, rankStrategies, upsertStrategyVariation } from "./url-workspace";
 import type { BrowserProbe, Invoke, PostDetailStep, PostDetailUrlItem } from "./types";
 import "./post-detail-collector.css";
+import { playCompletionSound } from "../completion-sound";
 
 function canEnterStep2(refs: number): boolean {
   return refs > 0;
@@ -195,12 +196,14 @@ export function PostDetailCollectorPage({ invoke, state: parentState }: { invoke
         urlItems: prev.urlItems.map(value => value.id === item.id ? { ...value, status: ready ? "READY" : "NEEDS_ATTENTION", strategyId, engagementAnchorsVerified: resolution!.diagnosticMeta?.engagementAnchorsVerified === true, diagnostics: resolution!.diagnostics, updatedAt: new Date().toISOString() } : value),
         strategies: prev.strategies.map(strategy => strategy.id === strategyId ? { ...strategy, successes: strategy.successes + (ready ? 1 : 0), failures: strategy.failures + (ready ? 0 : 1), updatedAt: new Date().toISOString() } : strategy),
       }));
+      void playCompletionSound(ready ? "SUCCESS" : "NEEDS_ATTENTION", `auto-match:${item.id}:${epoch}`);
     } catch (error) {
       if (navigationEpoch.current !== epoch) return;
       updateStore(prev => ({
         savedParentResolution: { status: "REMATCH_REQUIRED", failureCode: "BROWSER_NOT_READY", innerHTML: "", rect: null, diagnostics: [String(error)] },
         urlItems: prev.urlItems.map(value => value.id === item.id ? { ...value, status: "FAILED", diagnostics: [String(error)], updatedAt: new Date().toISOString() } : value),
       }));
+      void playCompletionSound("NEEDS_ATTENTION", `auto-match:${item.id}:${epoch}`);
     }
   };
 
@@ -274,6 +277,7 @@ export function PostDetailCollectorPage({ invoke, state: parentState }: { invoke
             invoke={invoke}
             state={parentState}
             sourceUrl={state.sourceUrl}
+            savedDomStrategy={state.parentConfigs[extractPostIdentityFromUrl(state.sourceUrl).platform || "facebook"]}
             runId={state.runId}
             visualReferences={state.visualReferences}
             containerResult={state.containerResult}

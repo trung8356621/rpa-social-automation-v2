@@ -6,7 +6,7 @@ import {
   updateBestActionRow,
   viewportWheelPoint,
 } from "../../shared/post-detail-collector/auto-scan";
-import { clusterActionRows } from "../../shared/post-detail-collector/action-row";
+import { clusterActionRows, explainActionRowRejection } from "../../shared/post-detail-collector/action-row";
 import { createPostDetailFrameId, createPostDetailRunId } from "../../shared/post-detail-collector/match-status";
 import {
   defaultScrollCompareRoi,
@@ -255,6 +255,7 @@ export async function runPostDetailAutoScan(deps: AutoScanDeps): Promise<{
 
     let wheelOutcome: PostDetailFrameDiagnostics["wheelOutcome"] = i === 1 ? "NONE" : "WHEEL_SKIPPED";
     let wheelReason: string | undefined;
+    let wheelScrollTarget: Awaited<ReturnType<typeof collectorPostDetailWheel>>["scrollTarget"];
     let visualMotionScore: number | null = null;
     let scrollConfirmed: boolean | null = i === 1 ? null : false;
     let scrollConfirmLabel: PostDetailFrameDiagnostics["scrollConfirmLabel"] = i === 1 ? "N/A" : "PENDING";
@@ -277,10 +278,11 @@ export async function runPostDetailAutoScan(deps: AutoScanDeps): Promise<{
         timings.wheelIpc = (timings.wheelIpc || 0) + (performance.now() - tw0);
         wheelPoint = wheel.wheelPoint;
         wheelOutcome = wheel.outcome as PostDetailFrameDiagnostics["wheelOutcome"];
+        wheelScrollTarget = wheel.scrollTarget;
         wheelReason = [
           wheel.reason,
           wheel.focusAttempts != null ? `focusAttempts=${wheel.focusAttempts}` : null,
-          wheel.scrollTarget ? `target=${wheel.scrollTarget.tag}${wheel.scrollTarget.role ? `[role=${wheel.scrollTarget.role}]` : ""} scroll=${Math.round(wheel.scrollTarget.scrollTop)}/${Math.round(wheel.scrollTarget.maxScroll)} boundary=${wheel.scrollTarget.atBoundary}` : null,
+          wheel.scrollTarget ? `target=${wheel.scrollTarget.tag}${wheel.scrollTarget.role ? `[role=${wheel.scrollTarget.role}]` : ""} scroll=${Math.round(wheel.scrollTarget.scrollTopBefore)}→${Math.round(wheel.scrollTarget.scrollTopAfter)}/${Math.round(wheel.scrollTarget.maxScroll)} changed=${wheel.scrollTarget.changed} boundary=${wheel.scrollTarget.atBoundary}` : null,
           attempt > 0 ? `retry=${attempt}` : null,
         ]
           .filter(Boolean)
@@ -371,9 +373,12 @@ export async function runPostDetailAutoScan(deps: AutoScanDeps): Promise<{
         scrollConfirmed = isVisualScrollConfirmed(motion.score, motionThreshold);
       }
 
-      scrollConfirmLabel = scrollConfirmed ? "VISUAL_SCROLL_CONFIRMED" : "SCROLL_NOT_MOVING";
-      if (scrollConfirmed) {
-        observedScrollPx += Math.abs(deltaY);
+      const domScrollChanged = wheelScrollTarget?.changed === true;
+      scrollConfirmLabel = scrollConfirmed ? "VISUAL_SCROLL_CONFIRMED" : domScrollChanged ? "DOM_SCROLL_CONFIRMED" : "SCROLL_NOT_MOVING";
+      if (scrollConfirmed || domScrollChanged) {
+        observedScrollPx += domScrollChanged && wheelScrollTarget
+          ? Math.abs(wheelScrollTarget.scrollTopAfter - wheelScrollTarget.scrollTopBefore)
+          : Math.abs(deltaY);
         staleWheels = 0;
       } else {
         staleWheels += 1;
@@ -424,6 +429,7 @@ export async function runPostDetailAutoScan(deps: AutoScanDeps): Promise<{
       requestedDeltaY: requestedThisWheel,
       wheelOutcome,
       wheelReason,
+      scrollTarget: wheelScrollTarget,
       screenshotBeforeRef,
       screenshotAfterRef: frameId,
       visualMotionScore,
@@ -455,6 +461,7 @@ export async function runPostDetailAutoScan(deps: AutoScanDeps): Promise<{
         `anchors=${anchors.map((a) => `${a.type}:${a.score.toFixed(3)}`).join(",") || "none"}`,
         `candidates=${candidates.length}`,
         `clusters=${clusters.length}`,
+        `actionRowReject=${clusters.length ? "none" : explainActionRowRejection(anchors, candidates)}`,
         topCluster
           ? `row=${topCluster.types.join("+")}:${topCluster.meanScore.toFixed(3)}:${topCluster.strength}`
           : "row=none",
@@ -470,9 +477,13 @@ export async function runPostDetailAutoScan(deps: AutoScanDeps): Promise<{
     diagnostics.timingsMs = timings;
 
     if (i > 1 && staleWheels >= maxStale) {
-      stoppedReason = "SCROLL_NOT_MOVING";
+      stoppedReason = wheelScrollTarget?.atBoundary
+        ? "SCROLL_BOUNDARY"
+        : wheelScrollTarget && !wheelScrollTarget.scrollable
+          ? "WRONG_SCROLL_TARGET"
+          : "WHEEL_SENT_NO_SCROLL";
       const lastWheel = wheelReason || "scroll target unavailable";
-      diagnostics.stopOrRejectReason = `SCROLL_NOT_MOVING after ${staleWheels} consecutive wheels without content-band change (threshold=${motionThreshold}); ${lastWheel}. This distinguishes a true scroll boundary from a wrong/non-scrollable target or a page that has not painted.`;
+      diagnostics.stopOrRejectReason = `${stoppedReason} after ${staleWheels} consecutive wheels without DOM scroll or content-band change (threshold=${motionThreshold}); ${lastWheel}.`;
       deps.onProgress({
         phase: "stopped",
         frameIndex: i,
@@ -538,7 +549,7 @@ export async function runPostDetailAutoScan(deps: AutoScanDeps): Promise<{
   deps.onProgress({
     phase: deps.isCancelled()
       ? "stopped"
-      : stoppedReason === "SCROLL_NOT_MOVING" || String(stoppedReason).startsWith("WHEEL_BLOCKED")
+      : ["SCROLL_BOUNDARY", "WRONG_SCROLL_TARGET", "WHEEL_SENT_NO_SCROLL"].includes(stoppedReason) || String(stoppedReason).startsWith("WHEEL_BLOCKED")
         ? "stopped"
         : "done",
     frameIndex: frames.length,

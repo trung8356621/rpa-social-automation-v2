@@ -1,4 +1,5 @@
 import React, { useEffect, useMemo, useRef, useState } from "react";
+import { playCompletionSound } from "../completion-sound";
 import type { Rect, State } from "../../shared/contracts";
 import { dragToCaptureRoi } from "../../shared/collector-browser-host";
 import { clientToImageCoords } from "../../shared/collectors/roi-preview-interaction";
@@ -62,6 +63,7 @@ type Props = {
   onProbeRefresh: () => Promise<BrowserProbe | null>;
   onBack: () => void;
   onParentConfigured: (config: PostDetailParentConfig) => Promise<void>;
+  savedDomStrategy?: PostDetailParentConfig;
 };
 
 type DragState = {
@@ -93,6 +95,7 @@ export function VisualRegionStep({
   onProbeRefresh,
   onBack,
   onParentConfigured,
+  savedDomStrategy,
 }: Props) {
   const electron = isElectronBrowserCoreAvailable();
   const [progress, setProgress] = useState<AutoScanProgress>({
@@ -264,6 +267,14 @@ export function VisualRegionStep({
       );
 
       const row = container.mainActionRow;
+      let domCompleted = false;
+      if ((!row || row.types.length < 3) && savedDomStrategy?.domAnchors) {
+        const resolved = await invoke<import("../../shared/post-detail-collector/types").PostDetailSavedParentResolution>({ type: "postDetailResolveSavedParent", config: savedDomStrategy });
+        domCompleted = resolved.status === "PARENT_MATCHED" && resolved.diagnosticMeta?.postIdentityVerified === true && resolved.diagnosticMeta?.parentVerified === true && resolved.diagnosticMeta?.domAnchorsVerified === true;
+        if (domCompleted) {
+          setProgress({ phase: "done", frameIndex: nextFrames.length, maxFrames: nextFrames.length, message: "Visual row incomplete; verified live DOM Like/Comment/Share anchors completed detection." });
+        }
+      }
       if (
         row?.status === "MAIN_ACTION_ROW_CANDIDATE" ||
         (row && row.types.length >= 2)
@@ -347,10 +358,16 @@ export function VisualRegionStep({
           message: `${p.message} · evidence save warn: ${saveErr instanceof Error ? saveErr.message : String(saveErr)}`,
         }));
       }
+      if (!cancelRef.current) {
+        const complete = domCompleted || (container.status === "FOUND" && row?.strength === "STRONG" && row.types.length === 3);
+        void playCompletionSound(complete ? "SUCCESS" : "NEEDS_ATTENTION", `auto-scan:${runId}`);
+        if (domCompleted && savedDomStrategy) await onParentConfigured(savedDomStrategy);
+      }
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e));
       setProgress((p) => ({ ...p, phase: "error", message: String(e) }));
       if (liveFramesRef.current.length) onScanFrames(liveFramesRef.current);
+      if (!cancelRef.current) void playCompletionSound("NEEDS_ATTENTION", `auto-scan:error:${sourceUrl}:${Date.now()}`);
     } finally {
       scanningRef.current = false;
       try {

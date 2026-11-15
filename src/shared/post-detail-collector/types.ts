@@ -139,7 +139,7 @@ export type PostDetailWheelOutcome =
   | "NONE";
 
 export type PostDetailScrollConfirm =
-  "VISUAL_SCROLL_CONFIRMED" | "SCROLL_NOT_MOVING" | "PENDING" | "N/A";
+  "VISUAL_SCROLL_CONFIRMED" | "DOM_SCROLL_CONFIRMED" | "SCROLL_NOT_MOVING" | "PENDING" | "N/A";
 
 /** Per-frame Auto Scan diagnostics (no secrets). */
 export type PostDetailFrameDiagnostics = {
@@ -148,6 +148,7 @@ export type PostDetailFrameDiagnostics = {
   requestedDeltaY: number | null;
   wheelOutcome: PostDetailWheelOutcome;
   wheelReason?: string;
+  scrollTarget?: { tag: string; role: string | null; scrollTopBefore: number; scrollTopAfter: number; maxScroll: number; atBoundary: boolean; scrollable: boolean; changed: boolean };
   screenshotBeforeRef?: string;
   screenshotAfterRef?: string;
   visualMotionScore: number | null;

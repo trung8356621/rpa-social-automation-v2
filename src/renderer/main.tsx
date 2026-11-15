@@ -6,6 +6,7 @@ import { StepList } from "./step-list";
 import { TargetModal } from "./target-modal";
 import { UiPopover } from "./ui-popover";
 import { NetworkSettings } from "./network-settings";
+import { CompletionSoundSettings } from "./completion-sound-settings";
 import { AppNavigation, ScenariosPage } from "./app-shell";
 import { BrowserSessionsPage, SessionSelector } from "./browser-sessions";
 import { TestLabPage, TestCaseEditor, CaseResultView, ExecutionErrorView, type CaseEditorHandle } from "./test-lab";
@@ -1415,6 +1416,7 @@ function Creator() {
           }}
         />
         <NetworkSettings state={state} locked={navigationLocked} update={async command => setState(await invoke<State>(command))} />
+        <CompletionSoundSettings />
       </section>}
       {shell && !creatorVisible && pageError && <p className="app-page-error" role="alert">{pageError}</p>}
       {shell && creatorVisible && (

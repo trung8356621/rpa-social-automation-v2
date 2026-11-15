@@ -1,4 +1,5 @@
 import React, { useMemo, useRef, useState } from "react";
+import { playCompletionSound } from "../completion-sound";
 import type {
   PostDetailParentConfig,
   PostDetailSavedParentResolution,
@@ -259,6 +260,10 @@ export function BatchValidationStep({
     } finally {
       setRunning(false);
       setProgressText(cancelRef.current ? "Batch stopped by user." : "Batch validation complete.");
+      if (!cancelRef.current) {
+        const allPass = collected.length > 0 && collected.every(row => row.status === "PASS");
+        void playCompletionSound(allPass ? "SUCCESS" : "NEEDS_ATTENTION", `batch:${runVersion}:${Date.now()}`);
+      }
     }
   };
 

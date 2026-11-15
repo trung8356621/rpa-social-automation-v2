@@ -1211,3 +1211,16 @@ test("URL Workspace uses same BrowserCore host, single input, cards, filters, an
   assert.doesNotMatch(source, /<aside className="pdc-add-panel"/);
   assert.match(source, /<section className="pdc-add-panel"/);
 });
+
+test("completion sounds are task-scoped, cancelled jobs stay silent, and packaged assets exist", () => {
+  const utility = readFileSync("src/renderer/completion-sound.ts", "utf8");
+  const scan = readFileSync("src/renderer/post-detail-collector/VisualRegionStep.tsx", "utf8");
+  const batch = readFileSync("src/renderer/post-detail-collector/BatchValidationStep.tsx", "utf8");
+  assert.match(utility, /played\.has\(taskId\)/);
+  assert.match(utility, /completion-success\.wav/);
+  assert.match(utility, /completion-attention\.wav/);
+  assert.match(scan, /if \(!cancelRef\.current\)/);
+  assert.match(batch, /if \(!cancelRef\.current\)/);
+  assert.ok(readFileSync("src/renderer/public/sounds/completion-success.wav").length > 1000);
+  assert.ok(readFileSync("src/renderer/public/sounds/completion-attention.wav").length > 1000);
+});

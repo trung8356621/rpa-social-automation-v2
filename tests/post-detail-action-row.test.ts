@@ -73,6 +73,16 @@ test("mixed template heights still form one Like→Comment→Share row", () => {
   assert.equal(shouldStopForActionRow(clusters[0]!), true);
 });
 
+test("icons across the former fixed Y-bucket boundary still form one row", () => {
+  const clusters = clusterActionRows([
+    a("LIKE", 400, 17, 0.99),
+    a("COMMENT", 460, 21, 0.94),
+    a("SHARE", 520, 19, 0.92),
+  ]);
+  assert.equal(clusters.length, 1);
+  assert.deepEqual(new Set(clusters[0]!.types), new Set(["LIKE", "COMMENT", "SHARE"]));
+});
+
 test("single Like does not form action row cluster", () => {
   assert.equal(clusterActionRows([a("LIKE", 400, 300, 1)]).length, 0);
 });

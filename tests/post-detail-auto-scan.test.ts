@@ -392,6 +392,10 @@ test("wheel dispatch uses mouseMove then mouseWheel; signed delta; visual confir
   assert.match(runner, /Frame 1: capture before any wheel/);
   assert.match(runner, /VISUAL_SCROLL_CONFIRMED/);
   assert.match(runner, /SCROLL_NOT_MOVING/);
+  assert.match(runner, /DOM_SCROLL_CONFIRMED/);
+  assert.match(runner, /SCROLL_BOUNDARY/);
+  assert.match(runner, /WRONG_SCROLL_TARGET/);
+  assert.match(runner, /scrollTopAfter - wheelScrollTarget\.scrollTopBefore/);
   assert.match(runner, /collectorCaptureKeepVisible/);
   assert.match(runner, /observedScrollPx/);
   assert.match(runner, /WHEEL_SENT_UNFOCUSED/);
@@ -414,6 +418,8 @@ test("wheel dispatch uses mouseMove then mouseWheel; signed delta; visual confir
   assert.match(main, /!window\.isMinimized\(\)/);
   assert.doesNotMatch(main, /window\.restore\(\)/);
   assert.match(main, /postDetailScanInputLock/);
+  assert.match(main, /scrollTopBefore/);
+  assert.match(main, /scrollTopAfter/);
   assert.match(main, /Do NOT call overlays\.layout/);
 
   const lock = read("src/main/post-detail-scan-lock.ts");
