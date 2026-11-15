@@ -12,6 +12,8 @@ import {
   updateRegistryVariable,
 } from "../src/renderer/post-detail-collector/variable-registry";
 import type { PostDetailDomVariableMapping } from "../src/renderer/post-detail-collector/types";
+import { legacyStrategies, mergeUrlWorkspace, rankStrategies, upsertStrategyVariation } from "../src/renderer/post-detail-collector/url-workspace";
+import { migratePostDetailState } from "../src/renderer/post-detail-collector/store";
 
 const explorer = () => readFileSync("src/renderer/post-detail-collector/SavedParentHtmlStep.tsx", "utf8");
 const extraction = () => readFileSync("src/renderer/post-detail-collector/extract-parent-data.ts", "utf8");
@@ -1124,4 +1126,52 @@ test("Batch Detail Review: short post label, runtime post_images execution, and 
   assert.match(step3Src, /View URL Details/);
   assert.match(step3Src, /reviewMode\.row\.url/);
   assert.match(step3Src, /if \(highlightBlocked\) return;/);
+});
+
+test("URL-first workspace preserves per-post state across A-B-A and strips tracking from identity", () => {
+  const a = "https://www.facebook.com/groups/seo/posts/111/?tracking=one";
+  const b = "https://www.facebook.com/groups/seo/posts/222/?tracking=two";
+  const first = mergeUrlWorkspace(`${a}\n${b}`, []);
+  const processed = first.map(item => item.postId === "111" ? { ...item, status: "READY" as const, strategyId: "s1" } : item);
+  const reopened = mergeUrlWorkspace(`${b}\n${a}`, processed);
+  assert.equal(reopened[1]?.status, "READY");
+  assert.equal(reopened[1]?.strategyId, "s1");
+  assert.equal(reopened[1]?.id, "facebook:111");
+  assert.equal(reopened[1]?.originalUrl, a);
+});
+
+test("legacy Parent configs migrate without pretending DOM anchors are verified", () => {
+  const config = { version: 2 as const, platform: "facebook", parentLevel: 3, locatorStrategy: "POST_IDENTITY_ACTION_ROW_LEVEL" as const, updatedAt: "2026-11-15T00:00:00.000Z" };
+  const migrated = migratePostDetailState({ parentConfigs: { facebook: config }, batchUrlsText: "https://www.facebook.com/posts/111/", variableMappings: [] });
+  assert.equal(migrated.schemaVersion, 2);
+  assert.equal(migrated.strategies?.[0]?.validationStatus, "LEGACY");
+  assert.deepEqual(migrated.strategies?.[0]?.anchors, {});
+  assert.equal(migrated.urlItems?.[0]?.postId, "111");
+});
+
+test("strategy variations append instead of overwriting and verified anchors rank first", () => {
+  const base = { version: 2 as const, platform: "facebook", parentLevel: 3, locatorStrategy: "POST_IDENTITY_ACTION_ROW_LEVEL" as const, actionRowSignature: { childCount: 3 }, updatedAt: "2026-11-15T00:00:00.000Z" };
+  const one = upsertStrategyVariation([], base);
+  const two = upsertStrategyVariation(one, { ...base, parentLevel: 4, actionRowSignature: { childCount: 4 }, updatedAt: "2026-11-15T00:01:00.000Z" });
+  assert.equal(two.length, 2);
+  assert.equal(two[0]?.parentConfig.parentLevel, 3);
+  assert.equal(two[1]?.validationStatus, "VARIATION");
+  const legacy = legacyStrategies({
+    facebook: {
+      ...base,
+      domAnchors: {
+        like_anchor: {
+          semanticRole: "like_anchor",
+          parentRelativePath: [1],
+          structuralSignature: {},
+          actionRowRelationship: "DESCENDANT",
+          sourceEvidence: { text: "Like", tag: "DIV", role: "button", rect: null },
+          confidence: "high",
+          verificationStatus: "VERIFIED",
+          countSource: { relationship: "UNKNOWN", verificationStatus: "NOT_VERIFIED" },
+        },
+      },
+    },
+  });
+  assert.equal(rankStrategies([...two, ...legacy], "facebook")[0]?.anchors.like_anchor?.verificationStatus, "VERIFIED");
 });

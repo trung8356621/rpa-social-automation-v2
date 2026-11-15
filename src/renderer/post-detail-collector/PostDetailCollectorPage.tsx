@@ -11,11 +11,15 @@ import {
 } from "../collectors/collector-host-owner";
 import { BrowserCaptureStep } from "./BrowserCaptureStep";
 import { BatchValidationStep } from "./BatchValidationStep";
+import { resolveStableParent } from "./BatchValidationStep";
+import { extractPostIdentityFromUrl } from "./batch-validation";
 import { shouldRetrySavedParentResolution } from "./auto-resume";
 import { SavedParentHtmlStep } from "./SavedParentHtmlStep";
 import { VisualRegionStep } from "./VisualRegionStep";
+import { UrlWorkspaceStep } from "./UrlWorkspaceStep";
 import { usePostDetailCollectorStore } from "./store";
-import type { BrowserProbe, Invoke, PostDetailStep } from "./types";
+import { rankStrategies, upsertStrategyVariation } from "./url-workspace";
+import type { BrowserProbe, Invoke, PostDetailStep, PostDetailUrlItem } from "./types";
 import "./post-detail-collector.css";
 
 function canEnterStep2(refs: number): boolean {
@@ -139,37 +143,84 @@ export function PostDetailCollectorPage({ invoke, state: parentState }: { invoke
   const connected = Boolean(probe?.available) && !probeError;
   const step2Ready = canEnterStep2(state.visualReferences.length);
 
+  const selectUrl = async (item: PostDetailUrlItem) => {
+    const epoch = ++navigationEpoch.current;
+    updateStore(prev => ({
+      selectedUrlId: item.id,
+      majorStep: 2,
+      processingSubstep: 3,
+      step: 3,
+      sourceUrl: item.originalUrl,
+      savedParentResolution: { status: "RESOLVING", innerHTML: "", rect: null, diagnostics: ["Navigating selected URL and verifying live post identity..."], diagnosticMeta: { expectedPostId: item.postId } },
+      urlItems: prev.urlItems.map(value => value.id === item.id ? { ...value, status: "PROCESSING", diagnostics: [], updatedAt: new Date().toISOString() } : value),
+    }));
+    try {
+      await invoke({ type: "postDetailNavigate", url: item.originalUrl });
+      if (navigationEpoch.current !== epoch) return;
+      const identity = extractPostIdentityFromUrl(item.originalUrl);
+      const candidates = rankStrategies(state.strategies, identity.platform || item.platform || "facebook");
+      let resolution: import("../../shared/post-detail-collector/types").PostDetailSavedParentResolution | null = null;
+      let strategyId: string | undefined;
+      for (const strategy of candidates) {
+        resolution = await resolveStableParent({ invoke, config: strategy.parentConfig, expectedPostId: item.postId, currentUrl: item.originalUrl, cancelled: () => navigationEpoch.current !== epoch, onWaiting: setConnStatus });
+        const anchorsConfigured = ["like_anchor", "comment_anchor", "share_anchor"].every(role =>
+          strategy.anchors[role as keyof typeof strategy.anchors]?.verificationStatus === "VERIFIED");
+        const anchorsVerified = anchorsConfigured && resolution.diagnosticMeta?.domAnchorsVerified === true;
+        if (resolution.status === "PARENT_MATCHED" && anchorsVerified) { strategyId = strategy.id; break; }
+        if (resolution.status === "PARENT_MATCHED" && !anchorsVerified) {
+          resolution = { ...resolution, status: "REMATCH_REQUIRED", failureCode: "PARENT_MISMATCH", diagnostics: [...resolution.diagnostics, "Parent matched, but Like/Comment/Share DOM anchors are not all verified. Customize Visual Region to teach them."] };
+        }
+      }
+      if (navigationEpoch.current !== epoch) return;
+      resolution ||= { status: "REMATCH_REQUIRED", failureCode: "NOT_FOUND", innerHTML: "", rect: null, diagnostics: [candidates.length ? "No saved DOM strategy verified this post." : "No saved DOM strategy is available for this platform."] };
+      const ready = resolution.status === "PARENT_MATCHED";
+      const liveProbe = await refreshProbe();
+      if (navigationEpoch.current !== epoch) return;
+      updateStore(prev => ({
+        browserUrl: liveProbe?.url || prev.browserUrl,
+        savedParentResolution: resolution,
+        processingSubstep: 3,
+        step: 3,
+        urlItems: prev.urlItems.map(value => value.id === item.id ? { ...value, status: ready ? "READY" : "NEEDS_ATTENTION", strategyId, diagnostics: resolution!.diagnostics, updatedAt: new Date().toISOString() } : value),
+        strategies: prev.strategies.map(strategy => strategy.id === strategyId ? { ...strategy, successes: strategy.successes + (ready ? 1 : 0), failures: strategy.failures + (ready ? 0 : 1), updatedAt: new Date().toISOString() } : strategy),
+      }));
+    } catch (error) {
+      if (navigationEpoch.current !== epoch) return;
+      updateStore(prev => ({
+        savedParentResolution: { status: "REMATCH_REQUIRED", failureCode: "BROWSER_NOT_READY", innerHTML: "", rect: null, diagnostics: [String(error)] },
+        urlItems: prev.urlItems.map(value => value.id === item.id ? { ...value, status: "FAILED", diagnostics: [String(error)], updatedAt: new Date().toISOString() } : value),
+      }));
+    }
+  };
+
   return (
     <section className="app-page post-detail-collector-page" aria-label="Post Detail Collector">
       <div className="pdc-page-header">
         <div className="pdc-title-group">
           <h1>Post Detail Collector</h1>
-          <span className="pdc-version-tag">V2 Phase 1 · OCR POC</span>
+          <span className="pdc-version-tag">V2 · URL-first DOM strategies</span>
         </div>
         <nav className="pdc-stepper" aria-label="Post Detail Collector Stepper">
           <button
             type="button"
-            className={`pdc-step-pill ${state.step === 1 ? "active" : ""} ${state.visualReferences.length ? "completed" : ""}`}
-            onClick={() => goToStep(1)}
+            className={`pdc-step-pill ${state.majorStep === 1 ? "active" : ""}`}
+            onClick={() => updateStore({ majorStep: 1 })}
           >
             <span className="pdc-step-num">1</span>
-            <span className="pdc-step-text">Browser & Capture</span>
+            <span className="pdc-step-text">URL Workspace</span>
           </button>
           <span className="pdc-step-arrow">→</span>
           <button
             type="button"
-            className={`pdc-step-pill ${state.step === 2 ? "active" : ""} ${state.lastMatch && state.contentRoi ? "completed" : ""}`}
-            disabled={!step2Ready && state.step !== 2}
-            title={step2Ready ? undefined : "Cần ≥1 visual reference từ Step 1"}
-            onClick={() => goToStep(2)}
+            className={`pdc-step-pill ${state.majorStep === 2 ? "active" : ""}`}
+            disabled={!state.selectedUrlId}
+            onClick={() => updateStore({ majorStep: 2 })}
           >
             <span className="pdc-step-num">2</span>
-            <span className="pdc-step-text">Visual Region</span>
+            <span className="pdc-step-text">Post Processing</span>
           </button>
           <span className="pdc-step-arrow">→</span>
-          <button type="button" className={`pdc-step-pill ${state.step === 3 ? "active" : ""}`} disabled={!state.savedParentResolution} onClick={() => goToStep(3)}><span className="pdc-step-num">3</span><span className="pdc-step-text">Parent HTML</span></button>
-          <span className="pdc-step-arrow">→</span>
-          <button type="button" className={`pdc-step-pill ${state.step === 4 ? "active" : ""} ${state.batchResults.length ? "completed" : ""}`} disabled={!canEnterStep4} onClick={() => goToStep(4)}><span className="pdc-step-num">4</span><span className="pdc-step-text">Batch Validation</span></button>
+          <button type="button" title="Batch Validation Summary" className={`pdc-step-pill ${state.majorStep === 3 ? "active" : ""} ${state.batchResults.length ? "completed" : ""}`} onClick={() => updateStore({ majorStep: 3 })}><span className="pdc-step-num">3</span><span className="pdc-step-text">Validation Summary</span></button>
         </nav>
       </div>
 
@@ -179,7 +230,19 @@ export function PostDetailCollectorPage({ invoke, state: parentState }: { invoke
       </div>
 
       <div className="pdc-content-area">
-        {state.step === 1 && (
+        {state.majorStep === 1 && <UrlWorkspaceStep
+          text={state.batchUrlsText}
+          items={state.urlItems}
+          selectedId={state.selectedUrlId}
+          onChange={(batchUrlsText, urlItems) => updateStore({ batchUrlsText, urlItems })}
+          onSelect={item => void selectUrl(item)}
+        />}
+        {state.majorStep === 2 && <nav className="pdc-substep-nav" aria-label="Post processing substeps">
+          <button type="button" onClick={() => updateStore({ processingSubstep: 1, step: 1 })}>1 Browser & Capture</button>
+          <button type="button" disabled={!step2Ready} onClick={() => updateStore({ processingSubstep: 2, step: 2 })}>2 Visual Region</button>
+          <button type="button" title="Parent HTML semantic review" onClick={() => updateStore({ processingSubstep: 3, step: 3 })}>3 Extracted Data Review</button>
+        </nav>}
+        {state.majorStep === 2 && state.processingSubstep === 1 && (
           <BrowserCaptureStep
             invoke={invoke}
             state={parentState}
@@ -191,10 +254,10 @@ export function PostDetailCollectorPage({ invoke, state: parentState }: { invoke
             onUpdateReferences={(visualReferences) => updateStore({ visualReferences })}
             onScreenshot={(lastScreenshot) => updateStore({ lastScreenshot })}
             onProbeRefresh={refreshProbe}
-            onNext={() => goToStep(2)}
+            onNext={() => updateStore({ step: 2, processingSubstep: 2 })}
           />
         )}
-        {state.step === 2 && (
+        {state.majorStep === 2 && state.processingSubstep === 2 && (
           <VisualRegionStep
             invoke={invoke}
             state={parentState}
@@ -213,17 +276,17 @@ export function PostDetailCollectorPage({ invoke, state: parentState }: { invoke
             onScreenshot={(lastScreenshot) => updateStore({ lastScreenshot })}
             onRunId={(runId) => updateStore({ runId })}
             onProbeRefresh={refreshProbe}
-            onBack={() => goToStep(1)}
+            onBack={() => updateStore({ step: 1, processingSubstep: 1 })}
             onParentConfigured={async (config) => {
               const parentConfigs = { ...state.parentConfigs, [config.platform]: config };
               const savedParentResolution = await invoke<import("../../shared/post-detail-collector/types").PostDetailSavedParentResolution>({ type: "postDetailResolveSavedParent", config });
               await collectorReportBrowserHost(invoke, null);
               await collectorSetBrowserVisible(invoke, false);
-              updateStore((prev) => ({ parentConfigs, savedParentResolution, step: 3, batchConfigVersion: (prev.batchConfigVersion ?? 1) + 1 }));
+              updateStore((prev) => ({ parentConfigs, strategies: upsertStrategyVariation(prev.strategies, config), savedParentResolution, step: 3, processingSubstep: 3, batchConfigVersion: (prev.batchConfigVersion ?? 1) + 1 }));
             }}
           />
         )}
-        {state.step === 3 && (
+        {state.majorStep === 2 && state.processingSubstep === 3 && (
           <SavedParentHtmlStep
             invoke={invoke}
             result={state.savedParentResolution}
@@ -237,11 +300,11 @@ export function PostDetailCollectorPage({ invoke, state: parentState }: { invoke
             onVariablesChanged={() =>
               updateStore((prev) => ({ batchConfigVersion: (prev.batchConfigVersion ?? 1) + 1 }))
             }
-            onRematch={() => { navigationEpoch.current += 1; autoResolveStarted.current = false; updateStore({ step: 2 }); }}
-            onNextBatchValidation={() => goToStep(4)}
+            onRematch={() => { navigationEpoch.current += 1; autoResolveStarted.current = false; updateStore({ step: 2, processingSubstep: 2 }); }}
+            onNextBatchValidation={() => updateStore({ majorStep: 3 })}
           />
         )}
-        {state.step === 4 && (
+        {state.majorStep === 3 && (
           <BatchValidationStep
             invoke={invoke}
             parentConfigs={state.parentConfigs}
@@ -260,9 +323,9 @@ export function PostDetailCollectorPage({ invoke, state: parentState }: { invoke
             }
             onHiddenExtractedData={(hiddenExtractedData) => updateStore({ hiddenExtractedData })}
             onReviewInStep3={(url, savedParentResolution) =>
-              updateStore({ sourceUrl: url, browserUrl: url, savedParentResolution, step: 3 })
+              updateStore({ sourceUrl: url, savedParentResolution, step: 3, majorStep: 2, processingSubstep: 3 })
             }
-            onBackToStep3={() => goToStep(3)}
+            onBackToStep3={() => updateStore({ majorStep: 2, processingSubstep: 3, step: 3 })}
           />
         )}
       </div>

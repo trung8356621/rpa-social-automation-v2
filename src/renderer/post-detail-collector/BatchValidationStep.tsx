@@ -42,7 +42,7 @@ function extractionSignature(root: Element, postId: string | null, currentUrl: s
   })));
 }
 
-async function resolveStableParent(opts: {
+export async function resolveStableParent(opts: {
   invoke: Invoke;
   config: PostDetailParentConfig;
   expectedPostId: string | null;

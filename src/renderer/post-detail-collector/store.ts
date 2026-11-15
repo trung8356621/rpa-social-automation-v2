@@ -5,8 +5,25 @@ import {
   type VisualReferenceSample,
 } from "../../shared/post-detail-collector/types";
 import type { PostDetailCollectorState } from "./types";
+import { legacyStrategies, mergeUrlWorkspace } from "./url-workspace";
 
 export const POST_DETAIL_STATE_KEY = "rpa:post-detail-collector:run";
+
+export function migratePostDetailState(parsed: Partial<PostDetailCollectorState>): Partial<PostDetailCollectorState> {
+  const parentConfigs = parsed.parentConfigs ?? {};
+  const batchUrlsText = typeof parsed.batchUrlsText === "string" ? parsed.batchUrlsText : "";
+  return {
+    ...parsed,
+    schemaVersion: 2,
+    majorStep: parsed.majorStep ?? 1,
+    processingSubstep: parsed.processingSubstep ?? 3,
+    urlItems: Array.isArray(parsed.urlItems) ? parsed.urlItems : mergeUrlWorkspace(batchUrlsText, []),
+    selectedUrlId: typeof parsed.selectedUrlId === "string" ? parsed.selectedUrlId : null,
+    strategies: Array.isArray(parsed.strategies) ? parsed.strategies : legacyStrategies(parentConfigs),
+    parentConfigs,
+    batchUrlsText,
+  };
+}
 
 function loadPersisted(): Partial<PostDetailCollectorState> {
   if (typeof localStorage === "undefined") return {};
@@ -14,7 +31,7 @@ function loadPersisted(): Partial<PostDetailCollectorState> {
     const raw = localStorage.getItem(POST_DETAIL_STATE_KEY);
     if (!raw) return {};
     const parsed = JSON.parse(raw) as Partial<PostDetailCollectorState>;
-    return {
+    return migratePostDetailState({
       runId: parsed.runId ?? null,
       sourceUrl: parsed.sourceUrl,
       browserUrl: typeof parsed.browserUrl === "string" ? parsed.browserUrl : "",
@@ -33,7 +50,13 @@ function loadPersisted(): Partial<PostDetailCollectorState> {
       batchResults: Array.isArray(parsed.batchResults) ? parsed.batchResults : [],
       batchConfigVersion: typeof parsed.batchConfigVersion === "number" ? parsed.batchConfigVersion : 1,
       batchValidatedVersion: typeof parsed.batchValidatedVersion === "number" ? parsed.batchValidatedVersion : null,
-    };
+      schemaVersion: parsed.schemaVersion,
+      majorStep: parsed.majorStep,
+      processingSubstep: parsed.processingSubstep,
+      urlItems: parsed.urlItems,
+      selectedUrlId: parsed.selectedUrlId,
+      strategies: parsed.strategies,
+    });
   } catch {
     return {};
   }
@@ -42,6 +65,12 @@ function loadPersisted(): Partial<PostDetailCollectorState> {
 const persisted = loadPersisted();
 
 const INITIAL: PostDetailCollectorState = {
+  schemaVersion: 2,
+  majorStep: persisted.majorStep ?? 1,
+  processingSubstep: persisted.processingSubstep ?? 3,
+  urlItems: persisted.urlItems ?? [],
+  selectedUrlId: persisted.selectedUrlId ?? null,
+  strategies: persisted.strategies ?? [],
   step: 1,
   sourceUrl: persisted.sourceUrl || DEFAULT_POST_DETAIL_FIXTURE_URL,
   browserUrl: persisted.browserUrl || "",
@@ -87,6 +116,12 @@ function persistLightweight(state: PostDetailCollectorState) {
         batchResults: state.batchResults,
         batchConfigVersion: state.batchConfigVersion,
         batchValidatedVersion: state.batchValidatedVersion,
+        schemaVersion: state.schemaVersion,
+        majorStep: state.majorStep,
+        processingSubstep: state.processingSubstep,
+        urlItems: state.urlItems,
+        selectedUrlId: state.selectedUrlId,
+        strategies: state.strategies,
         // Persist OCR text + metadata; strip huge screenshots from localStorage.
         frames: state.frames.map((f: PostDetailOcrFrame) => ({
           ...f,

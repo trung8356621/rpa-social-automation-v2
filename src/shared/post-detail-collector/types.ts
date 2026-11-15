@@ -378,9 +378,26 @@ export type PostDetailParentProbeResult = {
 
 export type PostDetailActionAnchorProbeResult = {
   status: "FOUND" | "STALE_VISUAL_ANCHOR" | "AMBIGUOUS" | "WEB_CONTENTS_CHANGED";
-  hits: Array<{ type: PostDetailAnchorType; point: { x: number; y: number }; tag: string | null; role: string | null; rect: Rect | null; text: string }>;
+  hits: Array<{ type: PostDetailAnchorType; point: { x: number; y: number }; tag: string | null; role: string | null; rect: Rect | null; text: string; parentRelativePath?: number[]; structuralSignature?: Record<string, unknown>; verificationStatus?: "VERIFIED" | "NOT_VERIFIED" }>;
   actionRow: { tag: string; role: string | null; rect: Rect; descendantCount: number } | null;
   diagnostics: string[];
+};
+
+export type PostDetailDomAnchorRecord = {
+  semanticRole: "like_anchor" | "comment_anchor" | "share_anchor";
+  parentRelativePath: number[];
+  structuralSignature: Record<string, unknown>;
+  actionRowRelationship: "DESCENDANT";
+  sourceEvidence: { text: string; tag: string | null; role: string | null; rect: Rect | null };
+  confidence: "high" | "medium" | "low";
+  verificationStatus: "VERIFIED" | "NOT_VERIFIED" | "AMBIGUOUS";
+  countSource: {
+    relationship: "SAME_ELEMENT" | "SIBLING" | "SUMMARY_REGION" | "UNKNOWN";
+    parentRelativePath?: number[];
+    method?: "DOM_TEXT_NUMBER" | "DOM_ATTRIBUTE_NUMBER";
+    attribute?: string;
+    verificationStatus: "VERIFIED" | "NOT_VERIFIED" | "AMBIGUOUS";
+  };
 };
 
 export type PostDetailParentConfirmation = {
@@ -453,6 +470,8 @@ export type PostDetailParentConfig = {
   descendantCount?: number;
   actionRowSignature?: Record<string, unknown>;
   actionRowLocator?: ActionRowLocatorV1 | ActionRowLocatorV2;
+  /** V3-compatible extension. Legacy configs load with all anchors NOT_VERIFIED. */
+  domAnchors?: Partial<Record<"like_anchor" | "comment_anchor" | "share_anchor", PostDetailDomAnchorRecord>>;
   updatedAt: string;
 };
 

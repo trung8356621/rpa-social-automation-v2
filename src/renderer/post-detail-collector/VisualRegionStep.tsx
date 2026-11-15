@@ -643,6 +643,7 @@ export function VisualRegionStep({
         reason?: string;
         diagnostics?: Record<string, unknown>;
         actionRowLocator?: PostDetailParentConfig["actionRowLocator"];
+        domAnchors?: PostDetailParentConfig["domAnchors"];
         verification?: Record<string, unknown>;
       }>({ type: "postDetailSelectParent", index: next, confirm: true });
       if (!selection.ok || !selection.actionRowLocator) {
@@ -694,7 +695,9 @@ export function VisualRegionStep({
         platform: parentProbe.platform || "unknown",
         parentLevel: candidate.parentLevel,
         locatorStrategy: "POST_IDENTITY_ACTION_ROW_LEVEL",
+        actionRowSignature: parentProbe.actionRowSignature || {},
         actionRowLocator: selection.actionRowLocator,
+        domAnchors: selection.domAnchors,
         updatedAt: confirmedAt,
       });
       setParentConfirmed(true);

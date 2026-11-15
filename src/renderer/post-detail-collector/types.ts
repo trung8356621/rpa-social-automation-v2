@@ -5,6 +5,7 @@ import type {
   PostDetailOcrFrame,
   PostDetailHtmlExtractionResult,
   PostDetailParentConfig,
+  PostDetailDomAnchorRecord,
   PostDetailSavedParentResolution,
   PostDetailScanFrame,
   PostDetailStep,
@@ -21,7 +22,43 @@ export type BrowserProbe = {
   sessionId?: string;
 };
 
+export type PostDetailMajorStep = 1 | 2 | 3;
+export type PostDetailProcessingSubstep = 1 | 2 | 3;
+export type PostDetailUrlStatus = "PENDING" | "PROCESSING" | "READY" | "NEEDS_ATTENTION" | "FAILED";
+
+export type PostDetailUrlItem = {
+  id: string;
+  originalUrl: string;
+  canonicalUrl: string;
+  postId: string | null;
+  platform: string | null;
+  status: PostDetailUrlStatus;
+  strategyId?: string;
+  diagnostics: string[];
+  updatedAt: string;
+};
+
+export type PostDetailDomStrategy = {
+  id: string;
+  version: 1;
+  platform: string;
+  structuralSignature: string;
+  parentConfig: PostDetailParentConfig;
+  anchors: Partial<Record<"like_anchor" | "comment_anchor" | "share_anchor", PostDetailDomAnchorRecord>>;
+  validationStatus: "CONFIRMED" | "LEGACY" | "VARIATION";
+  successes: number;
+  failures: number;
+  createdAt: string;
+  updatedAt: string;
+};
+
 export type PostDetailCollectorState = {
+  schemaVersion: 2;
+  majorStep: PostDetailMajorStep;
+  processingSubstep: PostDetailProcessingSubstep;
+  urlItems: PostDetailUrlItem[];
+  selectedUrlId: string | null;
+  strategies: PostDetailDomStrategy[];
   step: PostDetailStep;
   /** User-intended post URL (Open URL target). */
   sourceUrl: string;
