@@ -367,7 +367,7 @@ export type PostDetailParentProbeInput = {
 };
 
 export type PostDetailParentProbeResult = {
-  status: "FOUND" | "AMBIGUOUS" | "STALE_VISUAL_ANCHOR" | "URL_NOT_FOUND" | "WEB_CONTENTS_CHANGED";
+  status: "FOUND" | "AMBIGUOUS" | "STALE_VISUAL_ANCHOR" | "URL_NOT_FOUND" | "WEB_CONTENTS_CHANGED" | "PROBE_FAILED";
   currentUrl: string;
   postId: string | null;
   platform?: string;
@@ -378,15 +378,23 @@ export type PostDetailParentProbeResult = {
   levels: Array<Omit<PostDetailParentCandidate, "index" | "status"> & { status: "SCANNED" | "CANDIDATE" | "BOUNDARY_CROSSED" }>;
   candidates: PostDetailParentCandidate[];
   selectedIndex: number | null;
-  stopReason: "SECOND_ACTION_ROW_FOUND" | "NO_SECOND_ACTION_ROW" | "STALE_VISUAL_ANCHOR" | "NO_POST_ID";
+  stopReason: "SECOND_ACTION_ROW_FOUND" | "NO_SECOND_ACTION_ROW" | "STALE_VISUAL_ANCHOR" | "NO_POST_ID" | "PROBE_EXCEPTION" | "ACTION_ROW_DETACHED";
   boundaryLevel: number | null;
   expectedParentLevel?: number | null;
   calibrationMode?: "EXACT" | "EXPANDED_PLUS_MINUS_ONE" | "FULL_PROGRESSIVE";
   diagnostics: string[];
+  exception?: PostDetailDomProbeException;
+};
+
+export type PostDetailDomProbeException = {
+  stage: "ACTION_ANCHOR_PROBE" | "PARENT_PROBE";
+  name: string;
+  message: string;
+  stack: string | null;
 };
 
 export type PostDetailActionAnchorProbeResult = {
-  status: "FOUND" | "STALE_VISUAL_ANCHOR" | "AMBIGUOUS" | "WEB_CONTENTS_CHANGED";
+  status: "FOUND" | "STALE_VISUAL_ANCHOR" | "AMBIGUOUS" | "WEB_CONTENTS_CHANGED" | "PROBE_FAILED";
   hits: Array<{ type: PostDetailAnchorType; point: { x: number; y: number }; tag: string | null; role: string | null; rect: Rect | null; text: string; reason?: string; stack?: unknown[]; screenshotBbox?: Rect; parentRelativePath?: number[]; structuralSignature?: Record<string, unknown>; verificationStatus?: "VERIFIED" | "NOT_VERIFIED" }>;
   actionRow: { tag: string; role: string | null; rect: Rect; descendantCount: number } | null;
   ownership?: {
@@ -407,6 +415,7 @@ export type PostDetailActionAnchorProbeResult = {
     scrollSynchronized: boolean;
   };
   diagnostics: string[];
+  exception?: PostDetailDomProbeException;
 };
 
 export type PostDetailDomAnchorRecord = {

@@ -530,4 +530,15 @@ test("Action Row presentation scales real frame geometry and never leaks across 
   const ui = read("src/renderer/post-detail-collector/VisualRegionStep.tsx");
   assert.match(ui, /reviewingEvidence/);
   assert.match(ui, /collectorSetBrowserVisible\(invoke, !reviewingEvidence\)/);
+  assert.match(ui, /setDomProbeStage\("PROBE_FAILED"\)/);
+  assert.match(ui, /Retry Parent Probe/);
+  assert.match(ui, /position: "absolute"/);
+  assert.doesNotMatch(ui, /className="collector-capture-freeze snapshot pdc-scan-overlay"[\s\S]{0,300}position: "fixed"/);
+  const css = read("src/renderer/post-detail-collector/post-detail-collector.css");
+  assert.match(css, /grid-template-columns: minmax\(0, 1fr\) clamp\(280px, 22vw, 320px\)/);
+  assert.match(css, /\.pdc-side-panel[\s\S]*overflow-y: auto/);
+  assert.match(css, /\.pdc-probe-stages/);
+  assert.match(ui, /pdc-advanced-debug pdc-scan-pipeline-debug/);
+  assert.match(css, /\.pdc-scan-pipeline-debug[\s\S]*position: absolute/);
+  assert.match(css, /top: calc\(100% \+ 6px\)/);
 });

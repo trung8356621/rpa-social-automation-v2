@@ -30,7 +30,7 @@ import { BrowserCore } from "./browser-core.js";
 import { VisualMatchLabRuntime } from "./visual-match-lab.js";
 import { PostDetailRunStorage } from "./post-detail-storage.js";
 import { buildPostDetailExtractAboveJs, normalizeExtractionResult, parsePostDetailHtmlSnapshot, validateExpectedPostUrl } from "./post-detail-html-extractor.js";
-import { buildHighlightSavedParentNodeJs, buildPostDetailActionAnchorProbeJs, buildPostDetailActionDebugJs, buildPostDetailParentProbeJs, buildPostDetailParentSelectJs, buildResolveSavedParentJs, CLEAR_POST_DETAIL_PARENT_HIGHLIGHT_JS, CLEAR_SAVED_PARENT_NODE_HIGHLIGHT_JS } from "./post-detail-parent-probe.js";
+import { buildHighlightSavedParentNodeJs, buildPostDetailActionAnchorProbeJs, buildPostDetailActionDebugJs, buildPostDetailParentProbeJs, buildPostDetailParentSelectJs, buildResolveSavedParentJs, CLEAR_POST_DETAIL_PARENT_HIGHLIGHT_JS, CLEAR_SAVED_PARENT_NODE_HIGHLIGHT_JS, wrapPostDetailProbeScript } from "./post-detail-parent-probe.js";
 import { PostDetailScanInputLock } from "./post-detail-scan-lock.js";
 import { CollectorScrollCaptureController } from "./collector-scroll-capture.js";
 import { BrowserSessions } from "./browser-sessions.js";
@@ -2212,14 +2212,14 @@ async function boot() {
         if (wc.id !== command.input.expectedWebContentsId) {
           return { status: "WEB_CONTENTS_CHANGED", currentUrl: wc.getURL(), postId: null, actionRow: null, urlCandidates: [], candidates: [], selectedIndex: null, diagnostics: [`Expected webContents.id=${command.input.expectedWebContentsId}, live=${wc.id}.`] };
         }
-        return wc.executeJavaScript(buildPostDetailParentProbeJs(command.input), true);
+        return wc.executeJavaScript(wrapPostDetailProbeScript(buildPostDetailParentProbeJs(command.input), "PARENT_PROBE"), true);
       }
       case "postDetailHighlightActionAnchors": {
         isIdle();
         const wc = browser.view.webContents;
         if (!wc || wc.isDestroyed()) throw new Error("BROWSER_CORE_UNAVAILABLE");
         if (wc.id !== command.input.expectedWebContentsId) return { status: "WEB_CONTENTS_CHANGED", hits: [], actionRow: null, diagnostics: [`Expected webContents.id=${command.input.expectedWebContentsId}, live=${wc.id}.`] };
-        return wc.executeJavaScript(buildPostDetailActionAnchorProbeJs(command.input), true);
+        return wc.executeJavaScript(wrapPostDetailProbeScript(buildPostDetailActionAnchorProbeJs(command.input), "ACTION_ANCHOR_PROBE"), true);
       }
       case "postDetailSelectParent": {
         isIdle();

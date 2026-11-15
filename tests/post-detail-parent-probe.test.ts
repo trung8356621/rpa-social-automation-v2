@@ -14,7 +14,24 @@ import {
   orderProgressiveCandidates,
   mapScreenshotAnchorToViewport,
   structuralActionRowsMatch,
+  wrapPostDetailProbeScript,
 } from "../src/main/post-detail-parent-probe.js";
+
+test("DOM probe wrapper preserves the injected exception stage, message and stack", () => {
+  const source = wrapPostDetailProbeScript(
+    "(() => { throw new TypeError('detached row'); })()",
+    "PARENT_PROBE",
+  );
+  assert.doesNotThrow(() => new Function(`return ${source}`));
+  const result = new Function(`return ${source}`)();
+  assert.equal(result.status, "PROBE_FAILED");
+  assert.equal(result.stopReason, "PROBE_EXCEPTION");
+  assert.deepEqual(
+    { stage: result.exception.stage, name: result.exception.name, message: result.exception.message },
+    { stage: "PARENT_PROBE", name: "TypeError", message: "detached row" },
+  );
+  assert.match(result.exception.stack, /detached row/);
+});
 
 test("calibration checks exact level before ±1 and full fallback", () => {
   const rows = [
@@ -306,7 +323,13 @@ test("live action-row probe verifies post ownership and rejects comment items", 
   assert.match(source, /coordinateDiagnostics/);
   assert.match(source, /scrollSynchronized/);
   assert.match(source, /LIVE_SEMANTIC_RERESOLVE/);
-  assert.match(source, /NO_SEMANTIC_CONTROL_AT_POINT/);
+  assert.match(source, /NO_CONTROL_AT_POINT/);
+  assert.match(source, /el\?Array\.from\(el\.childNodes\|\|\[\]\)/);
+  assert.match(source, /if\(!el\)return null/);
+  assert.match(source, /POINT_STRUCTURAL_CONTROL/);
+  assert.match(source, /closest\('button,a,\[role=button\],\[tabindex="0"\]'\)/);
+  assert.match(source, /new Set\(hits\.map\(h=>h\.node\)\)\.size!==3/);
+  assert.match(source, /ordered\[0\]\.point\.x<ordered\[1\]\.point\.x/);
 });
 
 test("screenshot pixels map to CSS viewport through independent X/Y scale without BrowserCore host offset", () => {
@@ -327,6 +350,7 @@ test("Parent probe reuses three connected semantic DOM hits before geometric rem
   assert.match(source, /hits=cachedHits\|\|remapHits\(\)/);
   assert.match(source, /new Set\(saved\.hitRoles\|\|\[\]\)\.size===3/);
   assert.doesNotMatch(source, /r\.width<=180/);
+  assert.match(source, /ACTION_ROW_DETACHED/);
 });
 
 test("Confirm Parent catches verification failures, reports diagnostics and remains retryable", () => {

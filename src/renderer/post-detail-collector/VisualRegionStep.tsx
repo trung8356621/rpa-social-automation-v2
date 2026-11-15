@@ -75,6 +75,7 @@ type DragState = {
   currentY: number;
 };
 type HostClient = { left: number; top: number; width: number; height: number };
+type DomProbeStage = "IDLE" | "DOM_PROBING" | "DOM_VERIFIED" | "PARENT_RESOLVED" | "NEEDS_ATTENTION" | "PROBE_FAILED";
 
 export function VisualRegionStep({
   invoke,
@@ -122,6 +123,7 @@ export function VisualRegionStep({
   >(null);
   const [parentPipelineBusy, setParentPipelineBusy] = useState(false);
   const [parentPipelineError, setParentPipelineError] = useState("");
+  const [domProbeStage, setDomProbeStage] = useState<DomProbeStage>("IDLE");
   const [confirmBusy, setConfirmBusy] = useState(false);
   const [confirmError, setConfirmError] = useState("");
   const [confirmDiagnostics, setConfirmDiagnostics] = useState("");
@@ -292,16 +294,28 @@ export function VisualRegionStep({
         const frame = nextFrames.find(item => item.frameId === row!.frameId);
         const probe = frame ? await onProbeRefresh() : null;
         if (frame && probe) {
-          const ownership = await invoke<PostDetailActionAnchorProbeResult>({
-            type: "postDetailHighlightActionAnchors",
-            input: { sourceUrl, runId: runId || `ownership_${Date.now()}`, expectedWebContentsId: probe.webContentsId, frameId: frame.frameId, screenshot: { width: frame.width, height: frame.height }, anchors: row.anchors, evidenceScroll: frame.diagnostics?.scrollTarget ? { tag: frame.diagnostics.scrollTarget.tag, role: frame.diagnostics.scrollTarget.role, scrollTop: frame.diagnostics.scrollTarget.scrollTopAfter, maxScroll: frame.diagnostics.scrollTarget.maxScroll } : null, debugAnchors: false },
-          });
-          if (ownership.status === "FOUND" && ownership.ownership?.status === "MAIN_POST" && ownership.ownership.postIdentityVerified && ownership.ownership.parentVerified) {
-            row = { ...row, status: "CONFIRMED", notes: [...row.notes, "Live DOM verified: row belongs to current Post Parent and not a comment item."] };
-            domCompleted = true;
-            onContainerResult({ ...container, mainActionRow: row, notes: [...container.notes, "Main Action Row verified by live DOM ownership."] });
-          } else {
-            onContainerResult({ ...container, mainActionRow: { ...row, status: "AMBIGUOUS", notes: [...row.notes, ...(ownership.diagnostics || [])] } });
+          setDomProbeStage("DOM_PROBING");
+          try {
+            const ownership = await invoke<PostDetailActionAnchorProbeResult>({
+              type: "postDetailHighlightActionAnchors",
+              input: { sourceUrl, runId: runId || `ownership_${Date.now()}`, expectedWebContentsId: probe.webContentsId, frameId: frame.frameId, screenshot: { width: frame.width, height: frame.height }, anchors: row.anchors, evidenceScroll: frame.diagnostics?.scrollTarget ? { tag: frame.diagnostics.scrollTarget.tag, role: frame.diagnostics.scrollTarget.role, scrollTop: frame.diagnostics.scrollTarget.scrollTopAfter, maxScroll: frame.diagnostics.scrollTarget.maxScroll } : null, debugAnchors: false },
+            });
+            setActionAnchorProbe(ownership);
+            if (ownership.status === "FOUND" && ownership.ownership?.status === "MAIN_POST" && ownership.ownership.postIdentityVerified && ownership.ownership.parentVerified) {
+              row = { ...row, status: "CONFIRMED", notes: [...row.notes, "Live DOM verified: row belongs to current Post Parent and not a comment item."] };
+              domCompleted = true;
+              setDomProbeStage("DOM_VERIFIED");
+              onContainerResult({ ...container, mainActionRow: row, notes: [...container.notes, "Main Action Row verified by live DOM ownership."] });
+            } else {
+              setDomProbeStage(ownership.status === "PROBE_FAILED" ? "PROBE_FAILED" : "NEEDS_ATTENTION");
+              if (ownership.status === "PROBE_FAILED") setShowDomDebug(true);
+              setParentPipelineError(ownership.diagnostics.join(" · ") || `DOM anchor probe: ${ownership.status}`);
+            }
+          } catch (ownershipError) {
+            const message = ownershipError instanceof Error ? ownershipError.message : String(ownershipError);
+            setDomProbeStage("PROBE_FAILED");
+            setShowDomDebug(true);
+            setParentPipelineError(`ACTION_ANCHOR_PROBE: ${message}`);
           }
         }
       }
@@ -583,8 +597,6 @@ export function VisualRegionStep({
       }
     : null;
 
-  const canNext = containerResult?.mainActionRow?.status === "CONFIRMED";
-
   const running = progress.phase === "running";
   const mainRow = containerResult?.mainActionRow;
   const actionRowOverlay = actionRowOverlayForFrame(mainRow, active?.frameId);
@@ -610,6 +622,7 @@ export function VisualRegionStep({
     setConfirmDiagnostics("");
     setParentConfirmed(false);
     setShowDomDebug(false);
+    setDomProbeStage("DOM_PROBING");
     try {
       const probe = await onProbeRefresh();
       if (!probe) throw new Error("BrowserCore probe unavailable.");
@@ -642,23 +655,28 @@ export function VisualRegionStep({
       setParentProbe(null);
       if (anchors.status !== "FOUND") {
         setShowDomDebug(true);
-        throw new Error(
-          anchors.diagnostics.join(" · ") ||
-            `DOM anchor probe: ${anchors.status}`,
-        );
+        setDomProbeStage(anchors.status === "PROBE_FAILED" ? "PROBE_FAILED" : "NEEDS_ATTENTION");
+        setParentPipelineError(anchors.diagnostics.join(" · ") || `DOM anchor probe: ${anchors.status}`);
+        return;
       }
+      setDomProbeStage("DOM_VERIFIED");
       const parents = await invoke<PostDetailParentProbeResult>({
         type: "postDetailProbeParents",
         input,
       });
       setParentProbe(parents);
       setParentIndex(parents.selectedIndex ?? 0);
-      if (parents.status !== "FOUND")
+      if (parents.status === "FOUND") setDomProbeStage("PARENT_RESOLVED");
+      else {
+        setDomProbeStage(parents.status === "PROBE_FAILED" ? "PROBE_FAILED" : "NEEDS_ATTENTION");
         setParentPipelineError(
           parents.diagnostics.join(" · ") || `Parent probe: ${parents.status}`,
         );
+      }
     } catch (err) {
-      setParentPipelineError(err instanceof Error ? err.message : String(err));
+      const message = err instanceof Error ? err.message : String(err);
+      setDomProbeStage("PROBE_FAILED");
+      setParentPipelineError(`PARENT_PROBE: ${message}`);
     } finally {
       parentPipelineRef.current = false;
       setParentPipelineBusy(false);
@@ -757,6 +775,7 @@ export function VisualRegionStep({
         updatedAt: confirmedAt,
       });
       setParentConfirmed(true);
+      setDomProbeStage("PARENT_RESOLVED");
     } catch (err) {
       setParentConfirmed(false);
       setConfirmError(err instanceof Error ? err.message : String(err));
@@ -839,22 +858,24 @@ export function VisualRegionStep({
         </div>
       </div>
 
-      <div className="pdc-scan-status" role="status">
-        <span className={`pdc-mode ${running ? "frozen" : "live"}`}>
-          {progress.phase.toUpperCase()}
-        </span>
-        <span>
-          Frames: {running ? progress.frameIndex : frames.length}/
-          {progress.maxFrames}
-        </span>
-        <span>{progress.message}</span>
+      <div className="pdc-scan-status-wrap">
+        <div className="pdc-scan-status" role="status">
+          <span className={`pdc-mode ${running ? "frozen" : "live"}`}>
+            {progress.phase.toUpperCase()}
+          </span>
+          <span>
+            Frames: {running ? progress.frameIndex : frames.length}/
+            {progress.maxFrames}
+          </span>
+          <span>{progress.message}</span>
+        </div>
+        {scanDiagnostics.length > 0 && <details className="pdc-advanced-debug pdc-scan-pipeline-debug" open={Boolean(error)}>
+          <summary>Auto Scan Pipeline Diagnostics</summary>
+          <ol>{scanDiagnostics.map((event, index) => <li key={`${event.at}-${index}`}><code>{event.stage}</code>{event.failureCode ? ` · ${event.failureCode}` : ""}{event.frameIndex != null ? ` · frame ${event.frameIndex}` : ""}{event.detail ? ` · ${event.detail}` : ""}</li>)}</ol>
+        </details>}
       </div>
 
       {error && <div className="pdc-alert pdc-alert-error">{error}</div>}
-      {scanDiagnostics.length > 0 && <details className="pdc-advanced-debug" open={Boolean(error)}>
-        <summary>Auto Scan Pipeline Diagnostics</summary>
-        <ol>{scanDiagnostics.map((event, index) => <li key={`${event.at}-${index}`}><code>{event.stage}</code>{event.failureCode ? ` · ${event.failureCode}` : ""}{event.frameIndex != null ? ` · frame ${event.frameIndex}` : ""}{event.detail ? ` · ${event.detail}` : ""}</li>)}</ol>
-      </details>}
       {manualMode && (
         <div className="pdc-alert pdc-alert-warn">
           Kết quả AMBIGUOUS — kéo vùng container thủ công trên frame rồi Confirm
@@ -887,12 +908,10 @@ export function VisualRegionStep({
             <div
               className="collector-capture-freeze snapshot pdc-scan-overlay"
               style={{
-                position: "fixed",
-                left: hostClient.left,
-                top: hostClient.top,
-                width: hostClient.width,
-                height: hostClient.height,
-                zIndex: 40,
+                position: "absolute",
+                inset: 0,
+                width: "100%",
+                height: "100%",
                 margin: 0,
                 boxSizing: "border-box",
                 pointerEvents: manualMode ? "auto" : "none",
@@ -1163,6 +1182,12 @@ export function VisualRegionStep({
               "Chưa có diagnostics."}
           </p>
           <div className="pdc-direction-panel">
+            <div className="pdc-probe-stages" aria-label="Visual and DOM verification stages">
+              <span className={mainRow ? "done" : "pending"}>VISUAL_MATCHED</span>
+              <span className={mainRow ? "done" : "pending"}>ACTION_ROW_CANDIDATE</span>
+              <span className={domProbeStage === "DOM_PROBING" ? "active" : domProbeStage === "DOM_VERIFIED" || domProbeStage === "PARENT_RESOLVED" ? "done" : "pending"}>DOM: {domProbeStage}</span>
+              <span className={parentConfirmed ? "done" : "pending"}>PARENT: {parentConfirmed ? "CONFIRMED" : "NOT_CONFIRMED"}</span>
+            </div>
             <label className="pdc-debug-toggle">
               <input
                 type="checkbox"
@@ -1207,7 +1232,7 @@ export function VisualRegionStep({
                 <button
                   type="button"
                   className="pdc-btn pdc-btn-tiny"
-                  disabled={!canNext || parentPipelineBusy || running}
+                  disabled={!mainRow || mainRow.types.length < 3 || parentPipelineBusy || running}
                   onClick={() => mainRow && void runParentPipeline(mainRow)}
                 >
                   Retry Parent Probe
