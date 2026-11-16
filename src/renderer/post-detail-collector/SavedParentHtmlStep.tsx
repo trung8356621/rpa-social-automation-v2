@@ -75,7 +75,7 @@ function loadVariables(): VariableOption[] {
   return listRegistryVariables();
 }
 
-export function SavedParentHtmlStep({ invoke, result, currentUrl, parentConfig, variableMappings, onVariableMappings, hiddenExtractedData, onHiddenExtractedData, onVariablesChanged, onRematch, onRetryAutoMatch, onNextBatchValidation, reviewMode }: { invoke: Invoke; result: PostDetailSavedParentResolution | null; currentUrl: string; parentConfig?: PostDetailParentConfig; variableMappings: PostDetailDomVariableMapping[]; onVariableMappings: (mappings: PostDetailDomVariableMapping[]) => void; hiddenExtractedData: Record<string, string[]>; onHiddenExtractedData: (hidden: Record<string, string[]>) => void; onVariablesChanged?: () => void; onRematch: () => void; onRetryAutoMatch?: () => void; onNextBatchValidation?: () => void; reviewMode?: Step4DetailReviewProps }) {
+export function SavedParentHtmlStep({ invoke, result, currentUrl, parentConfig, variableMappings, onVariableMappings, hiddenExtractedData, onHiddenExtractedData, onVariablesChanged, onBackToLibrary, onRematch, onRetryAutoMatch, onNextBatchValidation, reviewMode }: { invoke: Invoke; result: PostDetailSavedParentResolution | null; currentUrl: string; parentConfig?: PostDetailParentConfig; variableMappings: PostDetailDomVariableMapping[]; onVariableMappings: (mappings: PostDetailDomVariableMapping[]) => void; hiddenExtractedData: Record<string, string[]>; onHiddenExtractedData: (hidden: Record<string, string[]>) => void; onVariablesChanged?: () => void; onBackToLibrary?: () => void; onRematch: () => void; onRetryAutoMatch?: () => void; onNextBatchValidation?: () => void; reviewMode?: Step4DetailReviewProps }) {
   const status = result?.status || "NOT_CONFIGURED";
   const hostRef = useRef<HTMLDivElement>(null);
   const [tab, setTab] = useState<"explorer" | "raw">("explorer");
@@ -429,6 +429,16 @@ export function SavedParentHtmlStep({ invoke, result, currentUrl, parentConfig, 
                 onClick: rematch,
               },
           directActions: [
+            ...(onBackToLibrary
+              ? [
+                  {
+                    id: "post-library",
+                    label: "← Post Library",
+                    tone: "secondary" as const,
+                    onClick: onBackToLibrary,
+                  },
+                ]
+              : []),
             {
               id: "manage-variables",
               label: "Manage Variables",
@@ -517,7 +527,7 @@ export function SavedParentHtmlStep({ invoke, result, currentUrl, parentConfig, 
           {engagementData.length > 0 && <div className="pdc-engagement-group" aria-label="Engagement"><h4>Engagement</h4><div className="pdc-engagement-tags">{engagementData.map(renderDataTag)}</div></div>}
           {generalData.length ? generalData.map(renderDataTag) : !engagementData.length ? <p className="pdc-panel-desc">No meaningful DOM values were extracted from this Parent.</p> : null}
         </div>
-        {selectedData && <div className="pdc-extracted-detail"><h3>Value detail</h3>
+        {selectedData && <div className="pdc-extracted-detail"><div className="pdc-detail-header"><h3>Value detail</h3><button type="button" className="pdc-btn pdc-btn-secondary pdc-btn-tiny" onClick={() => { setSelectedDataId(""); setSelectedOutputKey(""); }}>← Back to Extracted Values</button></div>
           <dl className="pdc-kv pdc-kv-compact">
             <div className="pdc-kv-item"><dt>Field</dt><dd>{selectedData.semanticField || selectedData.kind}</dd></div>
             <div className="pdc-kv-item"><dt>Type</dt><dd>{selectedData.predictedType || selectedData.kind}</dd></div>

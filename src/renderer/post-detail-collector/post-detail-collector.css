@@ -1001,6 +1001,8 @@
 .pdc-data-mapping { color: #86efac; font-size: 12px; }
 .pdc-data-warning { font-size: 11px; }
 .pdc-extracted-detail h3 { margin: 0 0 6px; font-size: 13px; }
+.pdc-detail-header { display: flex; align-items: center; justify-content: space-between; gap: 8px; margin-bottom: 6px; }
+.pdc-detail-header h3 { margin: 0; }
 .pdc-extracted-detail select { width: 100%; margin: 4px 0; }
 .pdc-extracted-detail dd { overflow-wrap: anywhere; }
 .pdc-kv { margin: 4px 0; display: grid; grid-template-columns: auto 1fr; gap: 3px 10px; font-size: 12px; }

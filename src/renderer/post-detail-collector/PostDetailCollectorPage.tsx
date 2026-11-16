@@ -561,7 +561,13 @@ export function PostDetailCollectorPage({ invoke, state: parentState }: { invoke
           text={state.batchUrlsText}
           items={state.urlItems}
           selectedId={state.selectedUrlId}
-          onChange={(batchUrlsText, urlItems) => updateStore({ batchUrlsText, urlItems })}
+          onChange={(batchUrlsText, urlItems) => updateStore((prev) => ({
+            batchUrlsText,
+            urlItems,
+            selectedUrlId: prev.selectedUrlId && urlItems.some(item => item.id === prev.selectedUrlId)
+              ? prev.selectedUrlId
+              : null,
+          }))}
           onSelect={item => void selectUrl(item)}
         />}
         {state.majorStep === 2 && state.processingSubstep === 1 && (
@@ -621,6 +627,7 @@ export function PostDetailCollectorPage({ invoke, state: parentState }: { invoke
             }
             hiddenExtractedData={state.hiddenExtractedData}
             onHiddenExtractedData={(hiddenExtractedData) => updateStore({ hiddenExtractedData })}
+            onBackToLibrary={() => updateStore({ majorStep: 1 })}
             onVariablesChanged={() =>
               updateStore((prev) => ({ batchConfigVersion: (prev.batchConfigVersion ?? 1) + 1 }))
             }

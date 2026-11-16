@@ -30,6 +30,16 @@ test("Step 3 defaults to extracted values and keeps deep DOM under Advanced Debu
   assert.doesNotMatch(source, /<aside className="pdc-data-mapper"/);
 });
 
+test("Step 3 value detail and post selection navigation always have explicit exits", () => {
+  const step3 = explorer();
+  const page = readFileSync("src/renderer/post-detail-collector/PostDetailCollectorPage.tsx", "utf8");
+  assert.match(step3, /← Back to Extracted Values/);
+  assert.match(step3, /setSelectedDataId\(""\); setSelectedOutputKey\(""\)/);
+  assert.match(step3, /label: "← Post Library"/);
+  assert.match(page, /onBackToLibrary=\{\(\) => updateStore\(\{ majorStep: 1 \}\)\}/);
+  assert.match(page, /urlItems\.some\(item => item\.id === prev\.selectedUrlId\)/);
+});
+
 test("single-pass extraction emits direct text and semantic values without ancestor textContent", () => {
   const source = extraction();
   assert.match(source, /One DFS pass for generic values/);
