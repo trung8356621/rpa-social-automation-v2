@@ -12,18 +12,32 @@ export const POST_DETAIL_STATE_KEY = "rpa:post-detail-collector:run";
 export function migratePostDetailState(parsed: Partial<PostDetailCollectorState>): Partial<PostDetailCollectorState> {
   const parentConfigs = parsed.parentConfigs ?? {};
   const batchUrlsText = typeof parsed.batchUrlsText === "string" ? parsed.batchUrlsText : "";
+  const rawUrlItems = Array.isArray(parsed.urlItems) ? parsed.urlItems.map(item => {
+    const identity = extractWorkspaceIdentity(item.originalUrl);
+    const normalizedStatus = item.status === "PROCESSING" ? "NEEDS_ATTENTION" : item.status;
+    const diagnostics = item.status === "PROCESSING" && (!item.diagnostics || item.diagnostics.length === 0)
+      ? ["Previous Auto Match was interrupted by app restart."]
+      : item.diagnostics;
+    return { ...item, status: normalizedStatus, diagnostics, groupSlug: item.groupSlug ?? identity.groupSlug, groupId: item.groupId ?? identity.groupId };
+  }) : mergeUrlWorkspace(batchUrlsText, []);
+  const savedParentResolution = parsed.savedParentResolution?.status === "RESOLVING"
+    ? {
+        ...parsed.savedParentResolution,
+        status: "BROWSER_NOT_READY" as const,
+        failureCode: parsed.savedParentResolution.failureCode ?? ("BROWSER_NOT_READY" as const),
+        diagnostics: [...(parsed.savedParentResolution.diagnostics || []), "Previous Auto Match was interrupted by app restart."],
+      }
+    : parsed.savedParentResolution;
   return {
     ...parsed,
     schemaVersion: 2,
     majorStep: parsed.majorStep ?? 1,
     processingSubstep: parsed.processingSubstep ?? 3,
-    urlItems: Array.isArray(parsed.urlItems) ? parsed.urlItems.map(item => {
-      const identity = extractWorkspaceIdentity(item.originalUrl);
-      return { ...item, groupSlug: item.groupSlug ?? identity.groupSlug, groupId: item.groupId ?? identity.groupId };
-    }) : mergeUrlWorkspace(batchUrlsText, []),
+    urlItems: rawUrlItems,
     selectedUrlId: typeof parsed.selectedUrlId === "string" ? parsed.selectedUrlId : null,
     strategies: Array.isArray(parsed.strategies) ? parsed.strategies : legacyStrategies(parentConfigs),
     parentConfigs,
+    savedParentResolution,
     batchUrlsText,
   };
 }

@@ -1252,11 +1252,13 @@ test("URL-first Auto Match carries selected strategy anchors into Step 3 without
   const effective = effectiveStrategyConfig(strategy);
   assert.equal(effective.domAnchors?.comment_anchor?.countSource.verificationStatus, "VERIFIED");
   const page = readFileSync("src/renderer/post-detail-collector/PostDetailCollectorPage.tsx", "utf8");
+  const autoMatch = readFileSync("src/renderer/post-detail-collector/auto-match.ts", "utf8");
+  const combined = `${page}\n${autoMatch}`;
   const review = explorer();
-  assert.match(page, /effectiveStrategyConfig\(strategy\)/);
-  assert.match(page, /parentConfigs: selectedConfig/);
-  assert.match(page, /resolution\.resolvedDomAnchors/);
-  assert.match(page, /anchors: selectedConfig\?\.domAnchors/);
+  assert.match(combined, /effectiveStrategyConfig\(strategy\)/);
+  assert.match(combined, /parentConfigs: matchResult\.selectedConfig|parentConfigs: selectedConfig/);
+  assert.match(combined, /resolution\.resolvedDomAnchors/);
+  assert.match(combined, /anchors: matchResult\.selectedConfig\?\.domAnchors|anchors: selectedConfig\?\.domAnchors/);
   assert.doesNotMatch(page.slice(page.indexOf("const selectUrl"), page.indexOf("return (", page.indexOf("const selectUrl"))), /runPostDetailAutoScan/);
   assert.match(review, /Count not available/);
   assert.match(review, /Saved Anchor/);

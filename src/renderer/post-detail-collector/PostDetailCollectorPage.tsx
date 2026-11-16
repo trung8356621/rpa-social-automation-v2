@@ -15,12 +15,18 @@ import { PostProcessingToolbar, PostProcessingToolbarProvider } from "./PostProc
 import { resolveStableParent } from "./BatchValidationStep";
 import { extractPostIdentityFromUrl } from "./batch-validation";
 import { shouldRetrySavedParentResolution } from "./auto-resume";
+import {
+  AUTO_MATCH_TOTAL_TIMEOUT_MS,
+  ensureTerminalResolution,
+  runAutoMatchStrategies,
+} from "./auto-match";
 import { SavedParentHtmlStep } from "./SavedParentHtmlStep";
 import { VisualRegionStep } from "./VisualRegionStep";
 import { UrlWorkspaceStep } from "./UrlWorkspaceStep";
 import { usePostDetailCollectorStore } from "./store";
-import { classifyAutoMatchGate, effectiveStrategyConfig, rankStrategies, upsertStrategyVariation } from "./url-workspace";
+import { legacyStrategies, rankStrategies, upsertStrategyVariation } from "./url-workspace";
 import type { BrowserProbe, Invoke, PostDetailStep, PostDetailUrlItem } from "./types";
+import type { PostDetailSavedParentResolution } from "../../shared/post-detail-collector/types";
 import "./post-detail-collector.css";
 import { playCompletionSound } from "../completion-sound";
 
@@ -49,6 +55,27 @@ export function PostDetailCollectorPage({ invoke, state: parentState }: { invoke
   const [connStatus, setConnStatus] = useState("Đang kiểm tra BrowserCore...");
   const autoResolveStarted = React.useRef(false);
   const navigationEpoch = React.useRef(0);
+  const activeResolveRunRef = React.useRef<{ epoch: number; targetKey: string } | null>(null);
+
+  const cancelActiveResolve = React.useCallback((reason = "Auto Match cancelled.") => {
+    navigationEpoch.current += 1;
+    activeResolveRunRef.current = null;
+    autoResolveStarted.current = false;
+    updateStore(prev => ({
+      savedParentResolution: prev.savedParentResolution?.status === "RESOLVING"
+        ? {
+            ...prev.savedParentResolution,
+            status: "CANCELLED",
+            diagnostics: [...(prev.savedParentResolution.diagnostics || []), reason],
+          }
+        : prev.savedParentResolution,
+      urlItems: prev.urlItems.map(value =>
+        value.status === "PROCESSING"
+          ? { ...value, status: "NEEDS_ATTENTION", diagnostics: [...value.diagnostics, reason], updatedAt: new Date().toISOString() }
+          : value,
+      ),
+    }));
+  }, [updateStore]);
 
   const refreshProbe = React.useCallback(async () => {
     if (!isElectronBrowserCoreAvailable()) {
@@ -80,6 +107,7 @@ export function PostDetailCollectorPage({ invoke, state: parentState }: { invoke
   useEffect(() => {
     const { ownerId } = claimCollectorHostOwner("pdc-page");
     let cancelled = false;
+    let startedAtEpoch = -1;
     void (async () => {
       let live = await refreshProbe();
       const restoreUrl = state.browserUrl || state.sourceUrl;
@@ -89,37 +117,130 @@ export function PostDetailCollectorPage({ invoke, state: parentState }: { invoke
         if (cancelled) return;
         live = await refreshProbe();
       }
-      const needsResolve = state.step === 1 || (state.step === 3 && state.savedParentResolution?.status === "RESOLVING");
-      if (cancelled || !live || autoResolveStarted.current || !needsResolve) return;
+      const needsResolve =
+        (state.majorStep === 2 && state.processingSubstep === 3 && state.step === 1) ||
+        state.savedParentResolution?.status === "RESOLVING";
+      if (cancelled || !live || autoResolveStarted.current || activeResolveRunRef.current || !needsResolve) return;
       autoResolveStarted.current = true;
-      const startedAtEpoch = navigationEpoch.current;
+      startedAtEpoch = ++navigationEpoch.current;
+      activeResolveRunRef.current = { epoch: startedAtEpoch, targetKey: "auto-resume" };
+      const isOwner = () =>
+        !cancelled &&
+        navigationEpoch.current === startedAtEpoch &&
+        activeResolveRunRef.current?.epoch === startedAtEpoch;
       const platform = /threads\.(?:com|net)/i.test(live.url) ? "threads" : "facebook";
       const config = state.parentConfigs[platform];
-      if (!config) { setConnStatus(`Not Configured · ${platform}`); return; }
-      updateStore({ savedParentResolution: { status: "RESOLVING", innerHTML: "", rect: null, diagnostics: ["Resolving saved Parent against the live DOM..."], diagnosticMeta: { configLoaded: true, hasActionRowLocator: Boolean(config.actionRowLocator), parentLevel: config.parentLevel } }, step: 3 });
-      let savedParentResolution: import("../../shared/post-detail-collector/types").PostDetailSavedParentResolution | null = null;
+      if (!config) {
+        setConnStatus(`Not Configured · ${platform}`);
+        if (isOwner()) {
+          updateStore({
+            savedParentResolution: {
+              status: "NOT_CONFIGURED",
+              innerHTML: "",
+              rect: null,
+              diagnostics: [`No saved DOM Parent config for ${platform}.`],
+              diagnosticMeta: { configLoaded: false, platform },
+            },
+          });
+        }
+        activeResolveRunRef.current = null;
+        autoResolveStarted.current = false;
+        return;
+      }
+      const startedAtMs = Date.now();
+      const deadlineMs = startedAtMs + AUTO_MATCH_TOTAL_TIMEOUT_MS;
+      updateStore({
+        savedParentResolution: {
+          status: "RESOLVING",
+          innerHTML: "",
+          rect: null,
+          diagnostics: ["Resolving saved Parent against the live DOM..."],
+          diagnosticMeta: {
+            configLoaded: true,
+            hasActionRowLocator: Boolean(config.actionRowLocator),
+            parentLevel: config.parentLevel,
+            attempt: 0,
+            maxAttempts: 20,
+            elapsedMs: 0,
+          },
+        },
+        step: 3,
+      });
+      let savedParentResolution: PostDetailSavedParentResolution | null = null;
       try {
         for (let attempt = 0; attempt < 20; attempt++) {
           if (cancelled || navigationEpoch.current !== startedAtEpoch) return;
-          savedParentResolution = await invoke<import("../../shared/post-detail-collector/types").PostDetailSavedParentResolution>({ type: "postDetailResolveSavedParent", config });
+          if (Date.now() >= deadlineMs) {
+            savedParentResolution = {
+              status: "BROWSER_NOT_READY",
+              failureCode: "BROWSER_NOT_READY",
+              innerHTML: "",
+              rect: null,
+              diagnostics: [
+                ...(savedParentResolution?.diagnostics || []),
+                `Auto-resume timeout reached after ${Date.now() - startedAtMs}ms.`,
+              ],
+              diagnosticMeta: {
+                ...(savedParentResolution?.diagnosticMeta || {}),
+                configLoaded: true,
+                hasActionRowLocator: Boolean(config.actionRowLocator),
+                parentLevel: config.parentLevel,
+                attempt,
+                maxAttempts: 20,
+                elapsedMs: Date.now() - startedAtMs,
+                timedOut: true,
+              },
+            };
+            break;
+          }
+          savedParentResolution = await invoke<PostDetailSavedParentResolution>({ type: "postDetailResolveSavedParent", config });
+          if (cancelled || navigationEpoch.current !== startedAtEpoch) return;
           if (savedParentResolution.status === "PARENT_MATCHED") break;
           if (!shouldRetrySavedParentResolution(savedParentResolution)) break;
+          const elapsedMs = Date.now() - startedAtMs;
           setConnStatus(`Đang chờ DOM bài viết render · ${savedParentResolution.failureCode} · lần ${attempt + 1}/20`);
-          if (attempt < 19) await new Promise((resolve) => setTimeout(resolve, 750));
+          if (isOwner()) {
+            updateStore(prev =>
+              prev.savedParentResolution?.status === "RESOLVING"
+                ? {
+                    savedParentResolution: {
+                      ...prev.savedParentResolution,
+                      diagnostics: [`Waiting for DOM render (${savedParentResolution?.failureCode || "RETRY"}) · attempt ${attempt + 1}/20`],
+                      diagnosticMeta: {
+                        ...prev.savedParentResolution.diagnosticMeta,
+                        attempt: attempt + 1,
+                        maxAttempts: 20,
+                        elapsedMs,
+                        lastFailureCode: savedParentResolution?.failureCode,
+                      },
+                    },
+                  }
+                : {},
+            );
+          }
+          if (attempt < 19) {
+            const sleepMs = Math.min(750, Math.max(0, deadlineMs - Date.now()));
+            if (sleepMs > 0) await new Promise((resolve) => setTimeout(resolve, sleepMs));
+          }
         }
       } catch (err) {
-        if (cancelled || navigationEpoch.current !== startedAtEpoch) return;
-        updateStore({ savedParentResolution: { status: "REMATCH_REQUIRED", failureCode: "BROWSER_NOT_READY", innerHTML: "", rect: null, diagnostics: [`Resolve failed: ${String(err)}`], diagnosticMeta: { configLoaded: true, hasActionRowLocator: Boolean(config.actionRowLocator), parentLevel: config.parentLevel } } });
+        if (!isOwner()) return;
+        updateStore({ savedParentResolution: { status: "REMATCH_REQUIRED", failureCode: "BROWSER_NOT_READY", innerHTML: "", rect: null, diagnostics: [`Resolve failed: ${String(err)}`], diagnosticMeta: { configLoaded: true, hasActionRowLocator: Boolean(config.actionRowLocator), parentLevel: config.parentLevel, elapsedMs: Date.now() - startedAtMs } } });
         setConnStatus(`Resolve failed: ${String(err)}`);
         return;
+      } finally {
+        if (activeResolveRunRef.current?.epoch === startedAtEpoch) {
+          activeResolveRunRef.current = null;
+        }
+        autoResolveStarted.current = false;
       }
-      if (cancelled || !savedParentResolution || navigationEpoch.current !== startedAtEpoch) return;
+      if (cancelled || navigationEpoch.current !== startedAtEpoch) return;
+      savedParentResolution = ensureTerminalResolution(savedParentResolution, "BROWSER_NOT_READY");
       if (savedParentResolution.status !== "PARENT_MATCHED") {
         updateStore({ savedParentResolution });
         setConnStatus(`Rematch Required · ${savedParentResolution.failureCode || savedParentResolution.status} · ${locatorDiagnosticSummary(savedParentResolution)}`);
         return;
       }
-      if (cancelled || navigationEpoch.current !== startedAtEpoch) return;
       const resolvedConfig = savedParentResolution.resolvedDomAnchors
         ? { ...config, domAnchors: savedParentResolution.resolvedDomAnchors, updatedAt: new Date().toISOString() }
         : config;
@@ -135,6 +256,20 @@ export function PostDetailCollectorPage({ invoke, state: parentState }: { invoke
     return () => {
       cancelled = true;
       autoResolveStarted.current = false;
+      if (startedAtEpoch >= 0 && activeResolveRunRef.current?.epoch === startedAtEpoch) {
+        activeResolveRunRef.current = null;
+        updateStore(prev =>
+          prev.savedParentResolution?.status === "RESOLVING"
+            ? {
+                savedParentResolution: {
+                  ...prev.savedParentResolution,
+                  status: "CANCELLED",
+                  diagnostics: [...(prev.savedParentResolution.diagnostics || []), "Auto-resume cancelled on unmount."],
+                },
+              }
+            : {},
+        );
+      }
       releaseCollectorHostOwner(ownerId, () => {
         void collectorReportBrowserHost(invoke, null);
         void collectorSetBrowserVisible(invoke, false);
@@ -151,7 +286,7 @@ export function PostDetailCollectorPage({ invoke, state: parentState }: { invoke
     if (step === 2 && !canEnterStep2(state.visualReferences.length)) return;
     if (step === 3 && !state.savedParentResolution) return;
     if (step === 4 && !canEnterStep4) return;
-    navigationEpoch.current += 1;
+    cancelActiveResolve("Auto Match cancelled by step navigation.");
     if (step !== 1 && step !== 2) {
       void collectorReportBrowserHost(invoke, null);
       void collectorSetBrowserVisible(invoke, false);
@@ -167,74 +302,212 @@ export function PostDetailCollectorPage({ invoke, state: parentState }: { invoke
     ? `Post #${connectionPostId.length > 14 ? `${connectionPostId.slice(0, 7)}…${connectionPostId.slice(-5)}` : connectionPostId}`
     : connected ? "BrowserCore ready" : "BrowserCore unavailable";
 
-  const selectUrl = async (item: PostDetailUrlItem) => {
+  const runUrlAutoMatch = async (opts: {
+    item?: PostDetailUrlItem;
+    targetUrl: string;
+    postId: string | null;
+    platform: string;
+    navigateFirst: boolean;
+  }) => {
+    const targetKey = opts.item?.id || opts.targetUrl;
+    if (opts.navigateFirst && activeResolveRunRef.current?.targetKey === targetKey) {
+      return;
+    }
     const epoch = ++navigationEpoch.current;
+    activeResolveRunRef.current = { epoch, targetKey };
+    autoResolveStarted.current = true;
+    const isOwner = () =>
+      navigationEpoch.current === epoch && activeResolveRunRef.current?.epoch === epoch;
+
+    const identity = extractPostIdentityFromUrl(opts.targetUrl);
+    const platform = identity.platform || opts.platform || "facebook";
+    const ranked = rankStrategies(state.strategies, platform);
+    const fallbackConfig = state.parentConfigs[platform];
+    const candidates = ranked.length
+      ? ranked
+      : fallbackConfig
+        ? legacyStrategies({ [platform]: fallbackConfig })
+        : [];
+
     updateStore(prev => ({
-      selectedUrlId: item.id,
+      selectedUrlId: opts.item ? opts.item.id : prev.selectedUrlId,
       majorStep: 2,
       processingSubstep: 3,
       step: 3,
-      sourceUrl: item.originalUrl,
-      savedParentResolution: { status: "RESOLVING", innerHTML: "", rect: null, diagnostics: ["Navigating selected URL and verifying live post identity..."], diagnosticMeta: { expectedPostId: item.postId } },
-      urlItems: prev.urlItems.map(value => value.id === item.id ? { ...value, status: "PROCESSING", diagnostics: [], updatedAt: new Date().toISOString() } : value),
+      sourceUrl: opts.targetUrl,
+      savedParentResolution: {
+        status: "RESOLVING",
+        innerHTML: "",
+        rect: null,
+        diagnostics: [
+          opts.navigateFirst
+            ? "Navigating selected URL and verifying live post identity..."
+            : "Retrying Auto Match against the current BrowserCore session...",
+        ],
+        diagnosticMeta: {
+          expectedPostId: opts.postId,
+          totalStrategies: candidates.length,
+          attempt: 0,
+          elapsedMs: 0,
+        },
+      },
+      urlItems: opts.item
+        ? prev.urlItems.map(value =>
+            value.id === opts.item!.id
+              ? { ...value, status: "PROCESSING", diagnostics: [], updatedAt: new Date().toISOString() }
+              : value,
+          )
+        : prev.urlItems,
     }));
+
     try {
-      await invoke({ type: "postDetailNavigate", url: item.originalUrl });
-      if (navigationEpoch.current !== epoch) return;
-      const identity = extractPostIdentityFromUrl(item.originalUrl);
-      const candidates = rankStrategies(state.strategies, identity.platform || item.platform || "facebook");
-      let resolution: import("../../shared/post-detail-collector/types").PostDetailSavedParentResolution | null = null;
-      let strategyId: string | undefined;
-      let selectedConfig: import("../../shared/post-detail-collector/types").PostDetailParentConfig | undefined;
-      for (const strategy of candidates) {
-        const effectiveConfig = effectiveStrategyConfig(strategy);
-        resolution = await resolveStableParent({ invoke, config: effectiveConfig, expectedPostId: item.postId, currentUrl: item.originalUrl, cancelled: () => navigationEpoch.current !== epoch, onWaiting: setConnStatus });
-        const runtimeConfig = resolution.resolvedDomAnchors
-          ? { ...effectiveConfig, domAnchors: resolution.resolvedDomAnchors, updatedAt: new Date().toISOString() }
-          : effectiveConfig;
-        const anchorsConfigured = ["like_anchor", "comment_anchor", "share_anchor"].every(role =>
-          runtimeConfig.domAnchors?.[role as keyof NonNullable<typeof runtimeConfig.domAnchors>]?.verificationStatus === "VERIFIED");
-        const anchorsVerified = anchorsConfigured && resolution.diagnosticMeta?.domAnchorsVerified === true;
-        const gate = classifyAutoMatchGate({
-          status: resolution.status,
-          postIdentityVerified: resolution.diagnosticMeta?.postIdentityVerified === true,
-          parentVerified: resolution.diagnosticMeta?.parentVerified === true,
-          engagementAnchorsVerified: anchorsVerified,
-        });
-        if (gate.canReview) {
-          strategyId = strategy.id;
-          selectedConfig = runtimeConfig;
-          resolution = {
-            ...resolution,
-            diagnosticMeta: { ...resolution.diagnosticMeta, engagementAnchorsVerified: anchorsVerified, strategyId: strategy.id, strategyVersion: strategy.version, parentConfigVersion: effectiveConfig.version },
-            diagnostics: anchorsVerified ? resolution.diagnostics : [...resolution.diagnostics, "Parent and post identity verified. Engagement anchors remain Needs Attention; other semantic fields are available."],
-          };
-          break;
-        }
+      if (opts.navigateFirst) {
+        await invoke({ type: "postDetailNavigate", url: opts.targetUrl });
+      } else {
+        await refreshProbe();
       }
-      if (navigationEpoch.current !== epoch) return;
-      resolution ||= { status: "REMATCH_REQUIRED", failureCode: "NOT_FOUND", innerHTML: "", rect: null, diagnostics: [candidates.length ? "No saved DOM strategy verified this post." : "No saved DOM strategy is available for this platform."] };
+      if (!isOwner()) return;
+
+      const matchResult = await runAutoMatchStrategies({
+        invoke,
+        strategies: candidates,
+        expectedPostId: opts.postId,
+        currentUrl: opts.targetUrl,
+        isCancelled: () => !isOwner(),
+        timeoutMs: AUTO_MATCH_TOTAL_TIMEOUT_MS,
+        onWaiting: setConnStatus,
+        onProgress: (progress) => {
+          if (!isOwner()) return;
+          updateStore(prev =>
+            prev.savedParentResolution?.status === "RESOLVING"
+              ? {
+                  savedParentResolution: {
+                    ...prev.savedParentResolution,
+                    diagnostics: [progress.message],
+                    diagnosticMeta: {
+                      ...prev.savedParentResolution.diagnosticMeta,
+                      expectedPostId: opts.postId,
+                      strategyId: progress.strategyId,
+                      strategyIndex: progress.strategyIndex,
+                      totalStrategies: progress.totalStrategies,
+                      attempt: progress.attempt,
+                      maxAttempts: progress.maxAttempts,
+                      elapsedMs: progress.elapsedMs,
+                      lastFailureCode: progress.failureCode,
+                    },
+                  },
+                }
+              : {},
+          );
+        },
+      });
+
+      if (!isOwner()) return;
+
+      if (matchResult.outcome === "CANCELLED") {
+        updateStore(prev => ({
+          savedParentResolution: matchResult.resolution,
+          urlItems: opts.item
+            ? prev.urlItems.map(value =>
+                value.id === opts.item!.id
+                  ? { ...value, status: "NEEDS_ATTENTION", diagnostics: matchResult.resolution.diagnostics, updatedAt: new Date().toISOString() }
+                  : value,
+              )
+            : prev.urlItems,
+        }));
+        return;
+      }
+
+      const resolution = ensureTerminalResolution(matchResult.resolution, "REMATCH_REQUIRED");
       const ready = resolution.status === "PARENT_MATCHED";
       const liveProbe = await refreshProbe();
-      if (navigationEpoch.current !== epoch) return;
+      if (!isOwner()) return;
+
       updateStore(prev => ({
         browserUrl: liveProbe?.url || prev.browserUrl,
         savedParentResolution: resolution,
-        parentConfigs: selectedConfig ? { ...prev.parentConfigs, [selectedConfig.platform]: selectedConfig } : prev.parentConfigs,
+        parentConfigs: matchResult.selectedConfig
+          ? { ...prev.parentConfigs, [matchResult.selectedConfig.platform]: matchResult.selectedConfig }
+          : prev.parentConfigs,
         processingSubstep: 3,
         step: 3,
-        urlItems: prev.urlItems.map(value => value.id === item.id ? { ...value, status: ready ? "READY" : "NEEDS_ATTENTION", strategyId, engagementAnchorsVerified: resolution!.diagnosticMeta?.engagementAnchorsVerified === true, diagnostics: resolution!.diagnostics, updatedAt: new Date().toISOString() } : value),
-        strategies: prev.strategies.map(strategy => strategy.id === strategyId ? { ...strategy, parentConfig: selectedConfig || strategy.parentConfig, anchors: selectedConfig?.domAnchors || strategy.anchors, successes: strategy.successes + (ready ? 1 : 0), failures: strategy.failures + (ready ? 0 : 1), updatedAt: new Date().toISOString() } : strategy),
+        urlItems: opts.item
+          ? prev.urlItems.map(value =>
+              value.id === opts.item!.id
+                ? {
+                    ...value,
+                    status: ready ? "READY" : "NEEDS_ATTENTION",
+                    strategyId: matchResult.strategyId,
+                    engagementAnchorsVerified: resolution.diagnosticMeta?.engagementAnchorsVerified === true,
+                    diagnostics: resolution.diagnostics,
+                    updatedAt: new Date().toISOString(),
+                  }
+                : value,
+            )
+          : prev.urlItems,
+        strategies: prev.strategies.map(strategy =>
+          strategy.id === matchResult.strategyId
+            ? {
+                ...strategy,
+                parentConfig: matchResult.selectedConfig || strategy.parentConfig,
+                anchors: matchResult.selectedConfig?.domAnchors || strategy.anchors,
+                successes: strategy.successes + (ready ? 1 : 0),
+                failures: strategy.failures + (ready ? 0 : 1),
+                updatedAt: new Date().toISOString(),
+              }
+            : strategy,
+        ),
       }));
-      void playCompletionSound(ready ? "SUCCESS" : "NEEDS_ATTENTION", `auto-match:${item.id}:${epoch}`);
+      void playCompletionSound(ready ? "SUCCESS" : "NEEDS_ATTENTION", `auto-match:${targetKey}:${epoch}`);
     } catch (error) {
-      if (navigationEpoch.current !== epoch) return;
+      if (!isOwner()) return;
       updateStore(prev => ({
-        savedParentResolution: { status: "REMATCH_REQUIRED", failureCode: "BROWSER_NOT_READY", innerHTML: "", rect: null, diagnostics: [String(error)] },
-        urlItems: prev.urlItems.map(value => value.id === item.id ? { ...value, status: "FAILED", diagnostics: [String(error)], updatedAt: new Date().toISOString() } : value),
+        savedParentResolution: {
+          status: "REMATCH_REQUIRED",
+          failureCode: "BROWSER_NOT_READY",
+          innerHTML: "",
+          rect: null,
+          diagnostics: [String(error)],
+          diagnosticMeta: { expectedPostId: opts.postId },
+        },
+        urlItems: opts.item
+          ? prev.urlItems.map(value =>
+              value.id === opts.item!.id
+                ? { ...value, status: "FAILED", diagnostics: [String(error)], updatedAt: new Date().toISOString() }
+                : value,
+            )
+          : prev.urlItems,
       }));
-      void playCompletionSound("NEEDS_ATTENTION", `auto-match:${item.id}:${epoch}`);
+      void playCompletionSound("NEEDS_ATTENTION", `auto-match:${targetKey}:${epoch}`);
+    } finally {
+      if (activeResolveRunRef.current?.epoch === epoch) {
+        activeResolveRunRef.current = null;
+      }
+      autoResolveStarted.current = false;
     }
+  };
+
+  const selectUrl = async (item: PostDetailUrlItem) => {
+    await runUrlAutoMatch({
+      item,
+      targetUrl: item.originalUrl,
+      postId: item.postId,
+      platform: item.platform || "facebook",
+      navigateFirst: true,
+    });
+  };
+
+  const retryAutoMatch = async () => {
+    const selectedItem = state.urlItems.find(item => item.id === state.selectedUrlId);
+    const targetUrl = selectedItem?.originalUrl || state.sourceUrl || state.browserUrl;
+    const identity = extractPostIdentityFromUrl(targetUrl);
+    await runUrlAutoMatch({
+      item: selectedItem,
+      targetUrl,
+      postId: selectedItem?.postId ?? identity.postId,
+      platform: selectedItem?.platform || identity.platform || "facebook",
+      navigateFirst: false,
+    });
   };
 
   return (
@@ -299,7 +572,7 @@ export function PostDetailCollectorPage({ invoke, state: parentState }: { invoke
             browserUrl={state.browserUrl}
             visualReferences={state.visualReferences}
             onSourceUrl={(sourceUrl) => updateStore({ sourceUrl })}
-            onBrowserUrl={(browserUrl) => { navigationEpoch.current += 1; autoResolveStarted.current = false; updateStore({ browserUrl }); }}
+            onBrowserUrl={(browserUrl) => { cancelActiveResolve("Auto Match cancelled due to browser navigation."); updateStore({ browserUrl }); }}
             onUpdateReferences={(visualReferences) => updateStore({ visualReferences })}
             onScreenshot={(lastScreenshot) => updateStore({ lastScreenshot })}
             onProbeRefresh={refreshProbe}
@@ -351,7 +624,8 @@ export function PostDetailCollectorPage({ invoke, state: parentState }: { invoke
             onVariablesChanged={() =>
               updateStore((prev) => ({ batchConfigVersion: (prev.batchConfigVersion ?? 1) + 1 }))
             }
-            onRematch={() => { navigationEpoch.current += 1; autoResolveStarted.current = false; updateStore({ step: 2, processingSubstep: 2 }); }}
+            onRematch={() => { cancelActiveResolve("Auto Match cancelled for manual rematch."); updateStore({ step: 2, processingSubstep: 2 }); }}
+            onRetryAutoMatch={() => void retryAutoMatch()}
             onNextBatchValidation={() => updateStore({ majorStep: 3 })}
           />
         )}

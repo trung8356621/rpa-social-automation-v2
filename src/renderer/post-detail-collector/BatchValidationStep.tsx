@@ -43,20 +43,94 @@ function extractionSignature(root: Element, postId: string | null, currentUrl: s
   })));
 }
 
+export type ResolveStableParentProgress = {
+  strategyId?: string;
+  strategyIndex?: number;
+  totalStrategies?: number;
+  attempt: number;
+  maxAttempts: number;
+  elapsedMs: number;
+  message: string;
+  failureCode?: string;
+};
+
 export async function resolveStableParent(opts: {
   invoke: Invoke;
   config: PostDetailParentConfig;
   expectedPostId: string | null;
   currentUrl: string;
+  maxAttempts?: number;
+  retryDelayMs?: number;
+  deadlineMs?: number;
+  startedAtMs?: number;
+  strategyId?: string;
+  strategyIndex?: number;
+  totalStrategies?: number;
   cancelled?: () => boolean;
   onWaiting?: (message: string) => void;
+  onProgress?: (progress: ResolveStableParentProgress) => void;
 }): Promise<PostDetailSavedParentResolution> {
+  const maxAttempts = opts.maxAttempts ?? MAX_RESOLVE_ATTEMPTS;
+  const retryDelayMs = opts.retryDelayMs ?? RESOLVE_RETRY_DELAY_MS;
+  const startedAtMs = opts.startedAtMs ?? Date.now();
   let last: PostDetailSavedParentResolution | null = null;
   let readinessState = { signature: "", stableCount: 0 };
-  for (let attempt = 0; attempt < MAX_RESOLVE_ATTEMPTS; attempt++) {
-    if (opts.cancelled?.()) break;
+  const elapsed = () => Math.max(0, Date.now() - startedAtMs);
+
+  const cancelledResult = (): PostDetailSavedParentResolution => ({
+    status: "CANCELLED",
+    innerHTML: "",
+    rect: null,
+    diagnosticMeta: {
+      ...(last?.diagnosticMeta || {}),
+      strategyId: opts.strategyId,
+      cancelled: true,
+      elapsedMs: elapsed(),
+    },
+    diagnostics: [...(last?.diagnostics || []), "Auto Match cancelled."],
+  });
+
+  const timeoutResult = (attempt: number): PostDetailSavedParentResolution => ({
+    status: "BROWSER_NOT_READY",
+    innerHTML: "",
+    rect: null,
+    failureCode: "BROWSER_NOT_READY",
+    diagnosticMeta: {
+      ...(last?.diagnosticMeta || {}),
+      strategyId: opts.strategyId,
+      attempt,
+      maxAttempts,
+      timedOut: true,
+      elapsedMs: elapsed(),
+      readinessVerified: false,
+      stableSnapshots: readinessState.stableCount,
+    },
+    diagnostics: [
+      ...(last?.diagnostics || []),
+      `Auto Match timeout reached after ${elapsed()}ms (attempt ${attempt}/${maxAttempts}).`,
+    ],
+  });
+
+  for (let attempt = 0; attempt < maxAttempts; attempt++) {
+    if (opts.cancelled?.()) return cancelledResult();
+    if (opts.deadlineMs !== undefined && Date.now() >= opts.deadlineMs) {
+      return timeoutResult(attempt);
+    }
+    const attemptNum = attempt + 1;
+    opts.onProgress?.({
+      strategyId: opts.strategyId,
+      strategyIndex: opts.strategyIndex,
+      totalStrategies: opts.totalStrategies,
+      attempt: attemptNum,
+      maxAttempts,
+      elapsedMs: elapsed(),
+      message: `Resolving Parent (attempt ${attemptNum}/${maxAttempts})...`,
+    });
+
     const resolution = await opts.invoke<PostDetailSavedParentResolution>({ type: "postDetailResolveSavedParent", config: opts.config });
+    if (opts.cancelled?.()) return cancelledResult();
     last = resolution;
+
     if (resolution.status === "PARENT_MATCHED") {
       const meta = resolution.diagnosticMeta || {};
       const livePostId = typeof meta.postId === "string" ? meta.postId : null;
@@ -64,7 +138,18 @@ export async function resolveStableParent(opts: {
       const root = identityVerified ? parseHtmlFragment(resolution.innerHTML) : null;
       if (!identityVerified) {
         readinessState = { signature: "", stableCount: 0 };
-        opts.onWaiting?.(`Waiting for live post identity${opts.expectedPostId ? ` #${opts.expectedPostId}` : ""} (${attempt + 1}/${MAX_RESOLVE_ATTEMPTS})`);
+        const msg = `Waiting for live post identity${opts.expectedPostId ? ` #${opts.expectedPostId}` : ""} (${attemptNum}/${maxAttempts})`;
+        opts.onWaiting?.(msg);
+        opts.onProgress?.({
+          strategyId: opts.strategyId,
+          strategyIndex: opts.strategyIndex,
+          totalStrategies: opts.totalStrategies,
+          attempt: attemptNum,
+          maxAttempts,
+          elapsedMs: elapsed(),
+          message: msg,
+          failureCode: "POST_IDENTITY_MISMATCH",
+        });
       } else if (root) {
         const signature = extractionSignature(root, opts.expectedPostId, opts.currentUrl, opts.config);
         const readiness = advanceParentReadiness({ state: readinessState, expectedPostId: opts.expectedPostId, resolvedPostId: livePostId, postIdentityVerified: identityVerified, parentMatched: true, semanticSignature: signature, requiredStableSnapshots: REQUIRED_STABLE_SNAPSHOTS });
@@ -72,26 +157,102 @@ export async function resolveStableParent(opts: {
         if (readiness.ready) {
           return {
             ...resolution,
-            diagnosticMeta: { ...meta, readinessVerified: true, stableSnapshots: readinessState.stableCount, extractionSignature: signature },
+            diagnosticMeta: {
+              ...meta,
+              strategyId: opts.strategyId ?? meta.strategyId,
+              attempt: attemptNum,
+              maxAttempts,
+              elapsedMs: elapsed(),
+              readinessVerified: true,
+              stableSnapshots: readinessState.stableCount,
+              extractionSignature: signature,
+            },
             diagnostics: [...resolution.diagnostics, `DOM readiness verified after ${readinessState.stableCount} stable semantic snapshots.`],
           };
         }
-        opts.onWaiting?.(`Waiting for semantic DOM stability (${readinessState.stableCount}/${REQUIRED_STABLE_SNAPSHOTS}, attempt ${attempt + 1}/${MAX_RESOLVE_ATTEMPTS})`);
+        const msg = `Waiting for semantic DOM stability (${readinessState.stableCount}/${REQUIRED_STABLE_SNAPSHOTS}, attempt ${attemptNum}/${maxAttempts})`;
+        opts.onWaiting?.(msg);
+        opts.onProgress?.({
+          strategyId: opts.strategyId,
+          strategyIndex: opts.strategyIndex,
+          totalStrategies: opts.totalStrategies,
+          attempt: attemptNum,
+          maxAttempts,
+          elapsedMs: elapsed(),
+          message: msg,
+        });
       }
     } else if (!shouldRetrySavedParentResolution(resolution)) {
-      return resolution;
+      return {
+        ...resolution,
+        diagnosticMeta: {
+          ...(resolution.diagnosticMeta || {}),
+          strategyId: opts.strategyId ?? resolution.diagnosticMeta?.strategyId,
+          attempt: attemptNum,
+          maxAttempts,
+          elapsedMs: elapsed(),
+        },
+      };
     } else {
       readinessState = { signature: "", stableCount: 0 };
-      opts.onWaiting?.(`Waiting for Parent locator (${resolution.failureCode || resolution.status}, ${attempt + 1}/${MAX_RESOLVE_ATTEMPTS})`);
+      const msg = `Waiting for Parent locator (${resolution.failureCode || resolution.status}, ${attemptNum}/${maxAttempts})`;
+      opts.onWaiting?.(msg);
+      opts.onProgress?.({
+        strategyId: opts.strategyId,
+        strategyIndex: opts.strategyIndex,
+        totalStrategies: opts.totalStrategies,
+        attempt: attemptNum,
+        maxAttempts,
+        elapsedMs: elapsed(),
+        message: msg,
+        failureCode: resolution.failureCode,
+      });
     }
-    if (attempt < MAX_RESOLVE_ATTEMPTS - 1) await new Promise(resolve => setTimeout(resolve, RESOLVE_RETRY_DELAY_MS));
+
+    if (attempt < maxAttempts - 1) {
+      if (opts.deadlineMs !== undefined && Date.now() >= opts.deadlineMs) {
+        return timeoutResult(attemptNum);
+      }
+      const sleepMs = opts.deadlineMs !== undefined
+        ? Math.min(retryDelayMs, Math.max(0, opts.deadlineMs - Date.now()))
+        : retryDelayMs;
+      if (sleepMs > 0) await new Promise(resolve => setTimeout(resolve, sleepMs));
+    }
+  }
+
+  if (opts.cancelled?.()) return cancelledResult();
+  if (opts.deadlineMs !== undefined && Date.now() >= opts.deadlineMs) {
+    return timeoutResult(maxAttempts);
+  }
+  if (last && last.status !== "PARENT_MATCHED" && last.status !== "RESOLVING") {
+    return {
+      ...last,
+      diagnosticMeta: {
+        ...(last.diagnosticMeta || {}),
+        strategyId: opts.strategyId ?? last.diagnosticMeta?.strategyId,
+        attempt: maxAttempts,
+        maxAttempts,
+        elapsedMs: elapsed(),
+        readinessVerified: false,
+        stableSnapshots: readinessState.stableCount,
+      },
+      diagnostics: [...(last.diagnostics || []), `Parent resolution exhausted ${maxAttempts} attempts.`],
+    };
   }
   return {
     status: "BROWSER_NOT_READY",
     innerHTML: "",
     rect: null,
     failureCode: "BROWSER_NOT_READY",
-    diagnosticMeta: { ...(last?.diagnosticMeta || {}), readinessVerified: false, stableSnapshots: readinessState.stableCount },
+    diagnosticMeta: {
+      ...(last?.diagnosticMeta || {}),
+      strategyId: opts.strategyId ?? last?.diagnosticMeta?.strategyId,
+      attempt: maxAttempts,
+      maxAttempts,
+      elapsedMs: elapsed(),
+      readinessVerified: false,
+      stableSnapshots: readinessState.stableCount,
+    },
     diagnostics: [...(last?.diagnostics || []), "Readiness timeout: post identity and semantic DOM did not produce two consecutive stable snapshots."],
   };
 }
