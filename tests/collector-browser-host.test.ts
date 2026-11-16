@@ -27,7 +27,10 @@ import {
   createRafHostPublishScheduler,
   sameHostClientRect,
 } from "../src/renderer/post-detail-collector/publish-browser-host.js";
-import { clipHostRectToVisibleArea } from "../src/renderer/collectors/publish-collector-host.js";
+import {
+  clipHostRectToVisibleArea,
+  doesExpandedDrawerOverlapHost,
+} from "../src/renderer/collectors/publish-collector-host.js";
 
 test("C2.2 browser visible only for Creator or active Collector Capture host", () => {
   assert.equal(
@@ -433,4 +436,34 @@ test("fitCaptureImageInDisplay keeps 1:1 DIP scale without stretching clipped ca
   const clipped150x = fitCaptureImageInDisplay(748, 482, 1122, 723);
   assert.equal(clipped150x.width, 748);
   assert.equal(clipped150x.height, 482);
+});
+
+test("doesExpandedDrawerOverlapHost detects overlap on 1280/1366 and clears on 1920", () => {
+  const makeHost = (drawerRect: { left: number; top: number; right: number; bottom: number; width: number } | null) =>
+    ({
+      isConnected: true,
+      getBoundingClientRect: () => ({ left: 220, top: 200, right: 1244, bottom: 760, width: 1024, height: 560 }),
+      closest: (sel: string) =>
+        sel === ".rpa-browser-workspace"
+          ? {
+              querySelector: (q: string) =>
+                q === '[data-browser-sidebar-drawer="expanded"]' && drawerRect
+                  ? { getBoundingClientRect: () => drawerRect }
+                  : null,
+            }
+          : null,
+    }) as unknown as HTMLElement;
+
+  // 1280 DIP (expanded 300px drawer at 980..1280 overlaps 220..1244)
+  assert.equal(
+    doesExpandedDrawerOverlapHost(makeHost({ left: 980, top: 200, right: 1280, bottom: 760, width: 300 })),
+    true,
+  );
+  // Collapsed drawer (no [data-browser-sidebar-drawer="expanded"]) -> false
+  assert.equal(doesExpandedDrawerOverlapHost(makeHost(null)), false);
+  // 1920x1080 @ 100% DPI (expanded 300px drawer at 1608..1908 does not overlap 220..1244) -> false
+  assert.equal(
+    doesExpandedDrawerOverlapHost(makeHost({ left: 1608, top: 200, right: 1908, bottom: 1080, width: 300 })),
+    false,
+  );
 });

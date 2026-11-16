@@ -42,6 +42,7 @@ import {
   publishPostDetailBrowserHostDetails,
   sameHostClientRect,
 } from "./publish-browser-host";
+import { doesExpandedDrawerOverlapHost } from "../collectors/publish-collector-host";
 import {
   BrowserHost,
   BrowserScrollArea,
@@ -146,6 +147,7 @@ export function VisualRegionStep({
   const [sidebarCollapsed, setSidebarCollapsed] = useState(
     () => typeof window !== "undefined" && window.innerWidth < 1548,
   );
+  const [sidebarOccludesBrowser, setSidebarOccludesBrowser] = useState(false);
   const [drag, setDrag] = useState<DragState>();
   const [hostClient, setHostClient] = useState<HostClient | null>(null);
   const cancelRef = useRef(false);
@@ -206,6 +208,12 @@ export function VisualRegionStep({
     const { ownerId } = claimCollectorHostOwner("pdc-step2");
     const safePublish = () => {
       if (cancelled || !isCollectorHostOwner(ownerId)) return;
+      if (!scanningRef.current && doesExpandedDrawerOverlapHost(hostRef.current)) {
+        setSidebarOccludesBrowser(true);
+        void collectorReportBrowserHost(invoke, null);
+        void collectorSetBrowserVisible(invoke, false);
+        return;
+      }
       // Keep host active during scan (skipping publish caused WHEEL_BLOCKED_NOT_VISIBLE).
       publishHost();
     };
@@ -633,15 +641,30 @@ export function VisualRegionStep({
 
   const running = progress.phase === "running";
   useEffect(() => {
-    if (!electron || !invoke || running || shotUrl) return;
-    const overlapsHost =
-      !sidebarCollapsed &&
-      typeof window !== "undefined" &&
-      window.innerWidth < (hostClient?.left ?? 220) + 1024 + 300;
-    void collectorSetBrowserVisible(invoke, !overlapsHost).then(() => {
-      if (!overlapsHost) requestAnimationFrame(() => publishHost());
-    });
-  }, [electron, invoke, running, shotUrl, sidebarCollapsed, hostClient?.left, publishHost]);
+    if (!electron || !invoke || running) {
+      setSidebarOccludesBrowser(false);
+      return;
+    }
+    const updateOcclusion = () => {
+      const occluded = !sidebarCollapsed && doesExpandedDrawerOverlapHost(hostRef.current);
+      setSidebarOccludesBrowser(occluded);
+      if (occluded) {
+        void collectorReportBrowserHost(invoke, null);
+        void collectorSetBrowserVisible(invoke, false);
+      } else if (!shotUrl) {
+        void collectorSetBrowserVisible(invoke, true).then(() => {
+          requestAnimationFrame(() => publishHost());
+        });
+      }
+    };
+    const rafId = requestAnimationFrame(updateOcclusion);
+    const onResize = () => requestAnimationFrame(updateOcclusion);
+    window.addEventListener("resize", onResize);
+    return () => {
+      cancelAnimationFrame(rafId);
+      window.removeEventListener("resize", onResize);
+    };
+  }, [electron, invoke, running, shotUrl, sidebarCollapsed, publishHost]);
   const mainRow = containerResult?.mainActionRow;
   const actionRowOverlay = actionRowOverlayForFrame(mainRow, active?.frameId);
   const actionRowStatus = actionRowDisplayStatus(mainRow);
@@ -935,7 +958,24 @@ export function VisualRegionStep({
             <BrowserHost
               hostRef={hostRef}
               aria-label="Browser Core host"
-            />
+            >
+              {!running && !shotUrl && sidebarOccludesBrowser && (
+                <div className="pdc-browser-occluded-notice" role="status">
+                  <strong>Preview Mode · BrowserCore tạm ẩn</strong>
+                  <p>
+                    Panel Detection &amp; Debug đang mở đè lên vùng 1024×560 trên cửa sổ hẹp.
+                    Thu gọn panel để hiện lại live BrowserCore 1024×560.
+                  </p>
+                  <button
+                    type="button"
+                    className="pdc-btn pdc-btn-primary pdc-btn-compact"
+                    onClick={() => setSidebarCollapsed(true)}
+                  >
+                    Thu gọn Panel → Xem Live 1024×560
+                  </button>
+                </div>
+              )}
+            </BrowserHost>
             {running && (
               <div
                 className="pdc-scan-input-shield"

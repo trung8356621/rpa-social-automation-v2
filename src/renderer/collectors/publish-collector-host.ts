@@ -13,6 +13,27 @@ export type HostClientRect = { left: number; top: number; width: number; height:
 const CLIPPING_OVERFLOW = new Set(["auto", "scroll", "hidden", "clip"]);
 
 /**
+ * Returns true when an expanded right-anchored SidebarDrawer in the same
+ * BrowserWorkspace physically overlaps the BrowserCore host rect.
+ */
+export function doesExpandedDrawerOverlapHost(hostEl: HTMLElement | null): boolean {
+  if (!hostEl || !hostEl.isConnected) return false;
+  const workspace =
+    typeof hostEl.closest === "function" ? hostEl.closest(".rpa-browser-workspace") : null;
+  const expandedDrawer = workspace?.querySelector('[data-browser-sidebar-drawer="expanded"]');
+  if (!expandedDrawer) return false;
+  const hostRect = hostEl.getBoundingClientRect();
+  const drawerRect = expandedDrawer.getBoundingClientRect();
+  if (hostRect.width < 10 || hostRect.height < 10 || drawerRect.width < 1) return false;
+  return (
+    drawerRect.left < hostRect.right &&
+    drawerRect.right > hostRect.left &&
+    drawerRect.top < hostRect.bottom &&
+    drawerRect.bottom > hostRect.top
+  );
+}
+
+/**
  * Intersect a host rect with its visible clipping ancestors, global sidebar,
  * and window viewport so native WebContentsView never paints over chrome.
  */
@@ -183,6 +204,12 @@ export function snapshotCollectorHostGeometry(hostEl: HTMLElement | null): Recor
     : null;
   const activeStepLabel =
     document.querySelector(".pdc-step-pill.active")?.textContent?.trim() || null;
+  const drawerEl =
+    hostEl && typeof hostEl.closest === "function"
+      ? hostEl.closest(".rpa-browser-workspace")?.querySelector("[data-browser-sidebar-drawer]")
+      : null;
+  const sidebarState = drawerEl?.getAttribute("data-browser-sidebar-drawer") || "none";
+  const sidebarOverlapsHost = doesExpandedDrawerOverlapHost(hostEl);
 
   return {
     windowInner: { width: window.innerWidth, height: window.innerHeight },
@@ -193,6 +220,8 @@ export function snapshotCollectorHostGeometry(hostEl: HTMLElement | null): Recor
     activeOwner: getCollectorHostOwner(),
     ownerRevision: getCollectorHostOwnerRevision(),
     currentStep: activeStepLabel,
+    sidebarState,
+    sidebarOverlapsHost,
     shell: box(document.querySelector("main.app-shell")),
     sidebar: box(sidebar),
     page: box(page),

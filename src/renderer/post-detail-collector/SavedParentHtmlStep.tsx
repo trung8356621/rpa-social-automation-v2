@@ -8,6 +8,7 @@ import {
   createRafHostPublishScheduler,
   publishPostDetailBrowserHost,
 } from "./publish-browser-host";
+import { doesExpandedDrawerOverlapHost } from "../collectors/publish-collector-host";
 import {
   BrowserHost,
   BrowserScrollArea,
@@ -86,6 +87,7 @@ export function SavedParentHtmlStep({ invoke, result, currentUrl, parentConfig, 
   const [isExpanded, setIsExpanded] = useState(false);
   const [browserCollapsed, setBrowserCollapsed] = useState(false);
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
+  const [sidebarOccludesBrowser, setSidebarOccludesBrowser] = useState(false);
   const [treeRatio, setTreeRatio] = useState(55);
   const [variableId, setVariableId] = useState("");
   const [method, setMethod] = useState<"DOM_TEXT" | "DOM_ATTRIBUTE">("DOM_TEXT");
@@ -208,6 +210,13 @@ export function SavedParentHtmlStep({ invoke, result, currentUrl, parentConfig, 
       if (!host) return false;
       const rect = host.getBoundingClientRect();
       if (rect.width < 10 || rect.height < 10) return false;
+      const occluded = !sidebarCollapsed && doesExpandedDrawerOverlapHost(host);
+      setSidebarOccludesBrowser((prev) => (prev === occluded ? prev : occluded));
+      if (occluded) {
+        void collectorReportBrowserHost(invoke, null);
+        void collectorSetBrowserVisible(invoke, false);
+        return true;
+      }
       publishPostDetailBrowserHost(invoke, host);
       return true;
     };
@@ -241,7 +250,9 @@ export function SavedParentHtmlStep({ invoke, result, currentUrl, parentConfig, 
   useEffect(() => {
     const ownerId = hostOwnerRef.current;
     if (!ownerId || !isCollectorHostOwner(ownerId)) return;
-    const visible = status !== "NOT_CONFIGURED" && !browserCollapsed && !variablesOpen;
+    const occluded = !sidebarCollapsed && doesExpandedDrawerOverlapHost(hostRef.current);
+    setSidebarOccludesBrowser(occluded);
+    const visible = status !== "NOT_CONFIGURED" && !browserCollapsed && !variablesOpen && !occluded;
     void collectorSetBrowserVisible(invoke, visible);
     if (!visible) {
       void collectorReportBrowserHost(invoke, null);
@@ -261,7 +272,7 @@ export function SavedParentHtmlStep({ invoke, result, currentUrl, parentConfig, 
       cancelAnimationFrame(raf1);
       if (raf2) cancelAnimationFrame(raf2);
     };
-  }, [hostMounted, variablesOpen, invoke]);
+  }, [hostMounted, variablesOpen, sidebarCollapsed, invoke]);
   useEffect(() => { if (!isExpanded) return; const close = (event: KeyboardEvent) => { if (event.key === "Escape") setIsExpanded(false); }; window.addEventListener("keydown", close); return () => window.removeEventListener("keydown", close); }, [isExpanded]);
 
   const highlight = (node: ExplorerNode | null) => void invoke(node ? { type: "postDetailHighlightParentNode", path: node.path } : selected ? { type: "postDetailHighlightParentNode", path: selected.path } : { type: "postDetailClearParentNodeHighlight" });
@@ -416,7 +427,7 @@ export function SavedParentHtmlStep({ invoke, result, currentUrl, parentConfig, 
         }) : <p className="pdc-panel-desc">No variables yet. Click + Add Variable to create one.</p>}
       </div>
     </UiPopover>}
-    {status !== "NOT_CONFIGURED" && <BrowserWorkspace className={`pdc-dom-workspace ${browserCollapsed ? "browser-collapsed" : ""}`}><BrowserScrollArea sidebarCollapsed={sidebarCollapsed}><div className="pdc-dom-browser-wrap"><button className="pdc-btn pdc-btn-tiny" onClick={() => setBrowserCollapsed(value => !value)}>{browserCollapsed ? "Show Browser Preview" : "Collapse Browser Preview"}</button>{!browserCollapsed && <div className="rpa-browser-stage"><BrowserHost hostRef={hostRef} className="pdc-dom-browser" /></div>}</div></BrowserScrollArea><SidebarDrawer title="Extracted Data" collapsed={sidebarCollapsed} onToggleCollapse={() => { setSidebarCollapsed(value => !value); if (!browserCollapsed) requestAnimationFrame(() => publishPostDetailBrowserHost(invoke, hostRef.current)); }} className="pdc-dom-panel">
+    {status !== "NOT_CONFIGURED" && <BrowserWorkspace className={`pdc-dom-workspace ${browserCollapsed ? "browser-collapsed" : ""}`}><BrowserScrollArea sidebarCollapsed={sidebarCollapsed}><div className="pdc-dom-browser-wrap"><button className="pdc-btn pdc-btn-tiny" onClick={() => setBrowserCollapsed(value => !value)}>{browserCollapsed ? "Show Browser Preview" : "Collapse Browser Preview"}</button>{!browserCollapsed && <div className="rpa-browser-stage"><BrowserHost hostRef={hostRef} className="pdc-dom-browser">{sidebarOccludesBrowser && <div className="pdc-browser-occluded-notice" role="status"><strong>Preview Mode · BrowserCore tạm ẩn</strong><p>Panel Extracted Data đang mở đè lên vùng 1024×560 trên cửa sổ hẹp. Thu gọn panel để hiện lại live BrowserCore 1024×560.</p><button type="button" className="pdc-btn pdc-btn-primary pdc-btn-compact" onClick={() => setSidebarCollapsed(true)}>Thu gọn Panel → Xem Live 1024×560</button></div>}</BrowserHost></div>}</div></BrowserScrollArea><SidebarDrawer title="Extracted Data" collapsed={sidebarCollapsed} onToggleCollapse={() => { setSidebarCollapsed(value => !value); if (!browserCollapsed) requestAnimationFrame(() => publishPostDetailBrowserHost(invoke, hostRef.current)); }} className="pdc-dom-panel">
       {status === "PARENT_MATCHED" ? <><div className={`pdc-data-review ${selectedData ? "has-detail" : ""}`}>
         <div className="pdc-data-list" aria-label="Extracted values">
           <div className="pdc-data-list-header"><h3>Extracted values</h3><div className="pdc-btn-row"><span>{visibleData.length} shown · {hiddenCount} hidden</span><button className="pdc-btn pdc-btn-tiny" onClick={() => setShowHidden(value => !value)}>{showHidden ? "Hide Noise" : "Show Hidden"}</button><button className="pdc-btn pdc-btn-tiny" disabled={!manuallyHidden.length} onClick={restoreHidden}>Restore</button></div></div>
