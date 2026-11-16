@@ -1,4 +1,5 @@
 import React, { useEffect, useMemo, useRef, useState } from "react";
+import { usePostProcessingToolbar } from "./PostProcessingToolbar";
 import type { PostDetailParentConfig, PostDetailSavedParentResolution } from "../../shared/post-detail-collector/types";
 import type { CollectorValueType, CollectorVariable } from "../../shared/collectors/types";
 import { collectorReportBrowserHost, collectorSetBrowserVisible } from "../collectors/browser-capture";
@@ -404,8 +405,73 @@ export function SavedParentHtmlStep({ invoke, result, currentUrl, parentConfig, 
   }, [reviewMode, selectedData, selectedOutput, variableMappings]);
   const reviewCanonicalUrl = reviewMode ? canonicalPostUrl(reviewMode.row.url, reviewMode.row.postId) : "";
 
+  usePostProcessingToolbar(
+    !reviewMode
+      ? {
+          statusLabel:
+            status === "PARENT_MATCHED"
+              ? "AUTO · Parent Matched"
+              : status === "RESOLVING"
+                ? "AUTO · Resolving Parent..."
+                : `Needs Attention · ${result?.failureCode || status}`,
+          statusTone: status === "PARENT_MATCHED" ? "live" : "frozen",
+          primaryAction: onNextBatchValidation
+            ? {
+                id: "batch-validation",
+                label: "Batch Validation →",
+                tone: "primary",
+                onClick: onNextBatchValidation,
+              }
+            : {
+                id: "rematch-parent",
+                label: "Customize · Rematch Parent",
+                tone: "primary",
+                onClick: rematch,
+              },
+          directActions: [
+            {
+              id: "manage-variables",
+              label: "Manage Variables",
+              active: variablesOpen,
+              tone: "secondary",
+              onClick: openVariablesDrawer,
+            },
+            ...(onNextBatchValidation
+              ? [
+                  {
+                    id: "rematch-parent",
+                    label: "Customize · Rematch Parent",
+                    tone: "secondary" as const,
+                    onClick: rematch,
+                  },
+                ]
+              : []),
+            ...(status !== "NOT_CONFIGURED"
+              ? [
+                  {
+                    id: "toggle-panel",
+                    label: sidebarCollapsed ? "Show Panel" : "Hide Panel",
+                    active: !sidebarCollapsed,
+                    tone: "secondary" as const,
+                    onClick: () => setSidebarCollapsed((value) => !value),
+                  },
+                ]
+              : []),
+          ],
+          moreActions: [
+            {
+              id: "toggle-expand",
+              label: isExpanded ? "Restore" : "Expand",
+              active: isExpanded,
+              onClick: () => setIsExpanded((value) => !value),
+            },
+          ],
+        }
+      : null,
+  );
+
   return <div className={`pdc-step pdc-step3 ${isExpanded ? "pdc-explorer-expanded" : ""}`}>
-    {!reviewMode ? <div className="pdc-compact-toolbar"><span className={`pdc-mode ${status === "PARENT_MATCHED" ? "live" : "frozen"}`}>{status === "PARENT_MATCHED" ? "AUTO · Parent Matched" : status === "RESOLVING" ? "AUTO · Resolving Parent..." : `Needs Attention · ${result?.failureCode || status}`}</span><div className="pdc-btn-row"><button type="button" className={`pdc-btn pdc-btn-secondary ${variablesOpen ? "active" : ""}`} onClick={openVariablesDrawer}>Manage Variables</button><button type="button" className="pdc-btn pdc-btn-secondary pdc-btn-compact" onClick={() => setIsExpanded(value => !value)}>{isExpanded ? "Restore" : "Expand"}</button>{status !== "NOT_CONFIGURED" && <button type="button" className={`pdc-btn pdc-btn-secondary pdc-btn-compact ${!sidebarCollapsed ? "active" : ""}`} onClick={() => setSidebarCollapsed(value => !value)}>{sidebarCollapsed ? "Show Panel" : "Hide Panel"}</button>}<button className="pdc-btn pdc-btn-secondary" onClick={rematch}>Customize · Rematch Parent</button>{onNextBatchValidation && <button type="button" className="pdc-btn pdc-btn-primary" onClick={onNextBatchValidation}>Step 4 · Batch Validation →</button>}</div></div> : (
+    {reviewMode ? (
       <div className="pdc-compact-toolbar">
         <div className="pdc-review-compact-meta">
           <span className="pdc-toolbar-title">Detail Review ({reviewMode.rowIndex + 1}/{reviewMode.totalRows})</span>
@@ -421,7 +487,7 @@ export function SavedParentHtmlStep({ invoke, result, currentUrl, parentConfig, 
           <button type="button" className="pdc-btn pdc-btn-primary pdc-btn-compact" onClick={reviewMode.onCustomizeInStep3}>Customize in Step 3</button>
         </div>
       </div>
-    )}
+    ) : null}
     {reviewMode?.staleDomWarning && <div className="pdc-alert pdc-alert-warn" role="status">{reviewMode.staleDomWarning}</div>}
     {variablesOpen && <UiPopover variant="drawer" label="Manage Variables" close={() => setVariablesOpen(false)} className="variables-drawer pdc-variables-drawer">
       <div className="popover-heading pdc-variables-drawer-header"><div><b>Variables</b><p className="pdc-panel-desc">Shared Collector Variable schema · edits do not overwrite source mappings.</p></div><button type="button" className="icon-button" aria-label="Close Variables" onClick={() => setVariablesOpen(false)}>×</button></div>

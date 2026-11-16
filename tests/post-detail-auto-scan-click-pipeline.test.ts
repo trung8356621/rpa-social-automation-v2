@@ -94,7 +94,7 @@ test("cancelled scan emits cancellation and releases input without completion", 
 
 test("VisualRegionStep displays coded errors and pipeline diagnostics from the real click handler", () => {
   const source = readFileSync("src/renderer/post-detail-collector/VisualRegionStep.tsx", "utf8");
-  assert.match(source, /onClick=\{\(\) => void startAutoScan\(\)\}/);
+  assert.match(source, /onClick:\s*\(\) => void startAutoScan\(\)/);
   assert.match(source, /runAutoScanClickPipeline/);
   assert.match(source, /Auto Scan Pipeline Diagnostics/);
   assert.match(source, /\[\$\{code\}\]/);

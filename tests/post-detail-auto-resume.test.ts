@@ -12,8 +12,8 @@ test("auto resume retries only potentially transient Facebook render failures", 
 
 test("Step 1 keeps Source URL copyable but removes Browser URL and mismatch rows", () => {
   const source = readFileSync("src/renderer/post-detail-collector/BrowserCaptureStep.tsx", "utf8");
-  assert.match(source, /aria-label="Source URL"/);
-  assert.match(source, /readOnly/);
+  assert.match(source, /id:\s*"copy-url"/);
+  assert.match(source, /clipboard\?\.writeText/);
   assert.doesNotMatch(source, /<p className="pdc-browser-url"/);
   assert.doesNotMatch(source, /Source URL ≠ Browser URL/);
 });

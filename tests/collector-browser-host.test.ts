@@ -487,3 +487,32 @@ test("Step 1, Step 2, and Step 3 share bounding-rect overlap occlusion without w
   assert.match(step3, /Show Panel/);
   assert.match(step3, /!cancelled && isCollectorHostOwner\(ownerId\)/);
 });
+
+test("Unified PostProcessingToolbar replaces separate substep nav and per-step toolbars across all 3 substeps", () => {
+  const page = readFileSync(resolve("src/renderer/post-detail-collector/PostDetailCollectorPage.tsx"), "utf8");
+  const toolbar = readFileSync(resolve("src/renderer/post-detail-collector/PostProcessingToolbar.tsx"), "utf8");
+  const step1 = readFileSync(resolve("src/renderer/post-detail-collector/BrowserCaptureStep.tsx"), "utf8");
+  const step2 = readFileSync(resolve("src/renderer/post-detail-collector/VisualRegionStep.tsx"), "utf8");
+  const step3 = readFileSync(resolve("src/renderer/post-detail-collector/SavedParentHtmlStep.tsx"), "utf8");
+  const css = readFileSync(resolve("src/renderer/post-detail-collector/post-detail-collector.css"), "utf8");
+
+  assert.match(page, /<PostProcessingToolbarProvider>/);
+  assert.match(page, /<PostProcessingToolbar[\s\S]*processingSubstep=\{state\.processingSubstep\}/);
+  assert.doesNotMatch(page, /pdc-substep-nav/);
+
+  assert.match(toolbar, /useSyncExternalStore/);
+  assert.match(toolbar, /pdc-unified-toolbar/);
+  assert.match(toolbar, /pdc-unified-more-menu/);
+
+  assert.doesNotMatch(step1, /pdc-compact-toolbar/);
+  assert.doesNotMatch(step2, /pdc-compact-toolbar/);
+  assert.match(step1, /usePostProcessingToolbar\(/);
+  assert.match(step2, /usePostProcessingToolbar\(/);
+  assert.match(step3, /usePostProcessingToolbar\(/);
+  assert.match(step2, /id:\s*"stop-scan"/);
+  assert.match(step3, /id:\s*"manage-variables"/);
+  assert.match(step3, /id:\s*"rematch-parent"/);
+
+  assert.match(css, /\.pdc-unified-toolbar\s*\{[\s\S]*?flex-wrap:\s*nowrap;/);
+  assert.match(css, /\.pdc-unified-more-menu\s*\{[\s\S]*?bottom:\s*calc\(100%\s*\+\s*4px\);/);
+});

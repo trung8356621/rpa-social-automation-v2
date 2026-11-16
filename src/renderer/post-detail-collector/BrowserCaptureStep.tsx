@@ -1,4 +1,5 @@
 import React, { useEffect, useMemo, useRef, useState } from "react";
+import { usePostProcessingToolbar } from "./PostProcessingToolbar";
 import type { BrowserCoreNavigationResult, Rect, State } from "../../shared/contracts";
 import {
   dragToCaptureRoi,
@@ -513,57 +514,69 @@ export function BrowserCaptureStep({
   const canNext = visualReferences.length > 0;
   const browserLive = Boolean(browserUrl && browserUrl !== "about:blank");
 
+  usePostProcessingToolbar(
+    electron
+      ? {
+          statusLabel: frozen ? "CAPTURE MODE" : "BROWSER LIVE",
+          statusTone: frozen ? "frozen" : "live",
+          primaryAction: {
+            id: "capture-toggle",
+            label: frozen ? "Thoát Capture → Live" : "Capture Mode ON",
+            tone: frozen ? "warn" : "primary",
+            disabled: busy,
+            onClick: () => {
+              if (frozen) void exitCaptureMode();
+              else void enterCaptureMode();
+            },
+          },
+          directActions: [
+            {
+              id: "toggle-panel",
+              label: sidebarCollapsed ? "Show Panel" : "Hide Panel",
+              active: !sidebarCollapsed,
+              tone: "secondary",
+              onClick: () => setSidebarCollapsed((v) => !v),
+            },
+            {
+              id: "next-step2",
+              label: "Next →",
+              tone: "primary",
+              disabled: !canNext,
+              title: canNext ? "Next: Visual Region" : "Cần ≥1 visual reference trước khi sang Step 2",
+              onClick: onNext,
+            },
+          ],
+          moreActions: [
+            {
+              id: "open-url",
+              label: "Open URL",
+              disabled: busy || frozen,
+              title: sourceDraft,
+              onClick: () => void openUrl(),
+            },
+            {
+              id: "copy-url",
+              label: "Copy URL",
+              title: sourceDraft || browserUrl,
+              onClick: () => {
+                const target = (sourceDraft || browserUrl || "").trim();
+                if (target) {
+                  void navigator.clipboard?.writeText(target);
+                  setMessage("Đã copy Source URL.");
+                }
+              },
+            },
+          ],
+        }
+      : null,
+  );
+
   if (!electron) {
     return <div className="pdc-alert pdc-alert-warn">{BROWSER_CORE_UNAVAILABLE}</div>;
   }
 
   return (
     <div className="pdc-step pdc-step-calibration">
-      <div className="pdc-compact-toolbar" role="toolbar" aria-label="Step 1 Browser and Capture toolbar">
-        <label className="pdc-compact-url-field">
-          <span>Source URL</span>
-          <input
-            className="pdc-url-input pdc-url-input-compact"
-            readOnly
-            value={sourceDraft}
-            placeholder={DEFAULT_POST_DETAIL_FIXTURE_URL}
-            aria-label="Source URL"
-          />
-        </label>
-        <button type="button" className="pdc-btn pdc-btn-secondary pdc-btn-compact" disabled={busy || frozen} onClick={() => void openUrl()}>
-          Open URL
-        </button>
-        <span className={`pdc-mode ${frozen ? "frozen" : "live"}`}>
-          {frozen ? "CAPTURE MODE" : "BROWSER LIVE"}
-        </span>
-        <button
-          type="button"
-          className={`pdc-btn pdc-btn-compact ${frozen ? "pdc-btn-warn" : "pdc-btn-primary"}`}
-          disabled={busy}
-          onClick={() => {
-            if (frozen) void exitCaptureMode();
-            else void enterCaptureMode();
-          }}
-        >
-          {frozen ? "Thoát Capture → Live" : "Capture Mode ON"}
-        </button>
-        <button
-          type="button"
-          className={`pdc-btn pdc-btn-secondary pdc-btn-compact ${!sidebarCollapsed ? "active" : ""}`}
-          onClick={() => setSidebarCollapsed((v) => !v)}
-        >
-          {sidebarCollapsed ? "Show Panel" : "Hide Panel"}
-        </button>
-        <button
-          type="button"
-          className="pdc-btn pdc-btn-primary pdc-btn-compact"
-          disabled={!canNext}
-          title={canNext ? undefined : "Cần ≥1 visual reference trước khi sang Step 2"}
-          onClick={onNext}
-        >
-          Next: Visual Region →
-        </button>
-      </div>
       {error && <div className="pdc-alert pdc-alert-error">{error}</div>}
       {warning && <div className="pdc-alert pdc-alert-warn">{warning}</div>}
       {message && <div className="pdc-alert pdc-alert-info">{message}</div>}

@@ -271,7 +271,9 @@ test("Post Detail separates navigateToTarget from captureFromSocialPage", async 
   assert.match(page, /postDetailBrowserProbe/);
   assert.doesNotMatch(page, /visualMatchLabState/);
   assert.match(page, /canEnterStep2/);
-  assert.match(page, /Parent HTML/);
+  const toolbar = read("src/renderer/post-detail-collector/PostProcessingToolbar.tsx");
+  assert.match(page, /PostProcessingToolbar/);
+  assert.match(toolbar, /Parent HTML/);
   assert.doesNotMatch(page, /postDetailExtractAbove/);
 
   const step1 = read("src/renderer/post-detail-collector/BrowserCaptureStep.tsx");

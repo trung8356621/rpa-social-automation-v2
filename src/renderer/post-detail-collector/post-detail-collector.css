@@ -67,6 +67,133 @@
   cursor: not-allowed;
 }
 
+.pdc-unified-toolbar {
+  flex: 0 0 auto;
+  min-width: 0;
+  max-width: 100%;
+  min-height: 34px;
+  box-sizing: border-box;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 6px;
+  flex-wrap: nowrap;
+  padding: 4px 6px;
+  margin-bottom: 6px;
+  background: #0b1a14;
+  border: 1px solid #1f3d30;
+  border-radius: 7px;
+  position: relative;
+  z-index: 40;
+}
+
+.pdc-unified-substeps {
+  flex: 0 0 auto;
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.pdc-unified-tab {
+  border: 1px solid #1f3d30;
+  background: #07120e;
+  color: #94a3b8;
+  border-radius: 6px;
+  padding: 3px 8px;
+  font-size: 11px;
+  white-space: nowrap;
+  cursor: pointer;
+}
+
+.pdc-unified-tab.active {
+  background: #123b2c;
+  border-color: #10b981;
+  color: #ecfdf5;
+  font-weight: 600;
+}
+
+.pdc-unified-tab:disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
+}
+
+.pdc-unified-divider {
+  width: 1px;
+  height: 18px;
+  background: #1f3d30;
+  flex: 0 0 auto;
+}
+
+.pdc-unified-actions {
+  flex: 1 1 auto;
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 5px;
+  flex-wrap: nowrap;
+}
+
+.pdc-unified-actions .pdc-btn {
+  white-space: nowrap;
+  flex-shrink: 0;
+}
+
+.pdc-unified-status {
+  white-space: nowrap;
+  flex-shrink: 1;
+  min-width: 0;
+  max-width: 170px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  font-variant-numeric: tabular-nums;
+}
+
+.pdc-unified-more {
+  position: relative;
+  flex: 0 0 auto;
+}
+
+.pdc-unified-more-menu {
+  position: absolute;
+  right: 0;
+  bottom: calc(100% + 4px);
+  min-width: 150px;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding: 4px;
+  background: #0c1f18;
+  border: 1px solid #2b5442;
+  border-radius: 7px;
+  box-shadow: 0 8px 20px rgba(0, 0, 0, 0.45);
+  z-index: 60;
+}
+
+.pdc-unified-more-item {
+  width: 100%;
+  text-align: left;
+  border: 1px solid transparent;
+  background: transparent;
+  color: #d1fae5;
+  border-radius: 5px;
+  padding: 5px 8px;
+  font-size: 11.5px;
+  white-space: nowrap;
+  cursor: pointer;
+}
+
+.pdc-unified-more-item:hover:not(:disabled),
+.pdc-unified-more-item.active {
+  background: #143528;
+  border-color: #1f543e;
+}
+
+.pdc-unified-more-item:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+
 .pdc-version-tag {
   font-size: 11px;
   font-weight: 600;

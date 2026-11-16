@@ -1,4 +1,5 @@
 import React, { useEffect, useMemo, useRef, useState } from "react";
+import { usePostProcessingToolbar } from "./PostProcessingToolbar";
 import { playCompletionSound } from "../completion-sound";
 import { AutoScanStartError, runAutoScanClickPipeline, type AutoScanDiagnosticEvent } from "./auto-scan-click-pipeline";
 import type { Rect, State } from "../../shared/contracts";
@@ -888,6 +889,62 @@ export function VisualRegionStep({
     void invoke({ type: "postDetailSelectParent", index: target });
   }
 
+  usePostProcessingToolbar(
+    electron
+      ? {
+          statusLabel: `${progress.phase.toUpperCase()} · ${running ? progress.frameIndex : frames.length}/${progress.maxFrames}`,
+          statusTone: running ? "frozen" : "live",
+          badge: running
+            ? {
+                label: "Input Locked",
+                title: "OS input tới BrowserCore bị chặn; engine wheel vẫn chạy",
+              }
+            : undefined,
+          primaryAction: {
+            id: "start-auto-scan",
+            label: "Start Auto Scan",
+            tone: "primary",
+            disabled: running || !visualReferences.length,
+            onClick: () => void startAutoScan(),
+          },
+          directActions: [
+            {
+              id: "stop-scan",
+              label: "Stop",
+              tone: "warn",
+              disabled: !running,
+              onClick: stopScan,
+            },
+            {
+              id: "toggle-panel",
+              label: sidebarCollapsed ? "Show Panel" : "Hide Panel",
+              active: !sidebarCollapsed,
+              tone: "secondary",
+              onClick: () => {
+                setSidebarCollapsed((v) => !v);
+                requestAnimationFrame(() => publishHost());
+              },
+            },
+          ],
+          moreActions: [
+            {
+              id: "back-step1",
+              label: "← Back",
+              disabled: running,
+              onClick: onBack,
+            },
+            {
+              id: "toggle-help",
+              label: "Help (?)",
+              active: showHelp,
+              title: "Cuộn về đầu bài trước khi Start. Auto Scan khóa input (Facebook vẫn hiện), wheel Δy=-100, settle thích ứng, tối đa 20 frame. Stop luôn mở khóa.",
+              onClick: () => setShowHelp((v) => !v),
+            },
+          ],
+        }
+      : null,
+  );
+
   if (!electron) {
     return (
       <div className="pdc-alert pdc-alert-warn">{BROWSER_CORE_UNAVAILABLE}</div>
@@ -896,64 +953,6 @@ export function VisualRegionStep({
 
   return (
     <div className="pdc-step pdc-step-calibration">
-      <div className="pdc-compact-toolbar" role="toolbar" aria-label="Step 2 Auto Scan toolbar">
-        <button
-          type="button"
-          className="pdc-btn pdc-btn-secondary pdc-btn-compact"
-          disabled={running}
-          onClick={onBack}
-        >
-          ← Back
-        </button>
-        <span className="pdc-toolbar-title">Auto Scan</span>
-        <span className={`pdc-mode ${running ? "frozen" : "live"}`} role="status">
-          {progress.phase.toUpperCase()} · {running ? progress.frameIndex : frames.length}/{progress.maxFrames}
-        </span>
-        <button
-          type="button"
-          className="pdc-btn pdc-btn-primary pdc-btn-compact"
-          disabled={running || !visualReferences.length}
-          onClick={() => void startAutoScan()}
-        >
-          Start Auto Scan
-        </button>
-        <button
-          type="button"
-          className="pdc-btn pdc-btn-warn pdc-btn-compact"
-          disabled={!running}
-          onClick={stopScan}
-        >
-          Stop
-        </button>
-        <button
-          type="button"
-          className={`pdc-btn pdc-btn-secondary pdc-btn-compact ${showHelp ? "active" : ""}`}
-          aria-expanded={showHelp}
-          title="Cuộn về đầu bài trước khi Start. Auto Scan khóa input (Facebook vẫn hiện), wheel Δy=-100, settle thích ứng, tối đa 20 frame. Stop luôn mở khóa."
-          onClick={() => setShowHelp((v) => !v)}
-        >
-          Help (?)
-        </button>
-        <button
-          type="button"
-          className={`pdc-btn pdc-btn-secondary pdc-btn-compact ${!sidebarCollapsed ? "active" : ""}`}
-          onClick={() => {
-            setSidebarCollapsed((v) => !v);
-            requestAnimationFrame(() => publishHost());
-          }}
-        >
-          {sidebarCollapsed ? "Show Panel" : "Hide Panel"}
-        </button>
-        {running && (
-          <span
-            className="pdc-input-lock-badge"
-            title="OS input tới BrowserCore bị chặn; engine wheel vẫn chạy"
-          >
-            Input Locked
-          </span>
-        )}
-      </div>
-
       {showHelp && (
         <div className="pdc-help-note">
           Cuộn về đầu bài trước khi Start. Auto Scan khóa input (Facebook vẫn hiện), wheel Δy=-100, settle thích ứng, tối đa 20 frame. Stop luôn mở khóa.

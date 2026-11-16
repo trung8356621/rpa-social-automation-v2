@@ -11,6 +11,7 @@ import {
 } from "../collectors/collector-host-owner";
 import { BrowserCaptureStep } from "./BrowserCaptureStep";
 import { BatchValidationStep } from "./BatchValidationStep";
+import { PostProcessingToolbar, PostProcessingToolbarProvider } from "./PostProcessingToolbar";
 import { resolveStableParent } from "./BatchValidationStep";
 import { extractPostIdentityFromUrl } from "./batch-validation";
 import { shouldRetrySavedParentResolution } from "./auto-resume";
@@ -237,6 +238,7 @@ export function PostDetailCollectorPage({ invoke, state: parentState }: { invoke
   };
 
   return (
+    <PostProcessingToolbarProvider>
     <section className="app-page post-detail-collector-page" aria-label="Post Detail Collector">
       <div className="pdc-page-header">
         <div className="pdc-title-group">
@@ -272,6 +274,14 @@ export function PostDetailCollectorPage({ invoke, state: parentState }: { invoke
         </nav>
       </div>
 
+      {state.majorStep === 2 && (
+        <PostProcessingToolbar
+          processingSubstep={state.processingSubstep}
+          step2Ready={step2Ready}
+          onSelectSubstep={(substep) => updateStore({ processingSubstep: substep, step: substep })}
+        />
+      )}
+
       <div className="pdc-content-area">
         {state.majorStep === 1 && <UrlWorkspaceStep
           invoke={invoke}
@@ -281,11 +291,6 @@ export function PostDetailCollectorPage({ invoke, state: parentState }: { invoke
           onChange={(batchUrlsText, urlItems) => updateStore({ batchUrlsText, urlItems })}
           onSelect={item => void selectUrl(item)}
         />}
-        {state.majorStep === 2 && <nav className="pdc-substep-nav" aria-label="Post processing substeps">
-          <button type="button" className={state.processingSubstep === 1 ? "active" : ""} onClick={() => updateStore({ processingSubstep: 1, step: 1 })}>1 Browser & Capture</button>
-          <button type="button" className={state.processingSubstep === 2 ? "active" : ""} disabled={!step2Ready} onClick={() => updateStore({ processingSubstep: 2, step: 2 })}>2 Visual Region</button>
-          <button type="button" className={state.processingSubstep === 3 ? "active" : ""} title="Parent HTML semantic review" onClick={() => updateStore({ processingSubstep: 3, step: 3 })}>3 Extracted Data Review</button>
-        </nav>}
         {state.majorStep === 2 && state.processingSubstep === 1 && (
           <BrowserCaptureStep
             invoke={invoke}
@@ -376,5 +381,6 @@ export function PostDetailCollectorPage({ invoke, state: parentState }: { invoke
         )}
       </div>
     </section>
+    </PostProcessingToolbarProvider>
   );
 }

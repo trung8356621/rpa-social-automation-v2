@@ -651,9 +651,9 @@ test("DOM fixture: live-like Facebook nested wrappers & reaction toolbar + total
 
 test("Variable sidebar registry: always-visible Manage Variables, UiPopover drawer, BrowserCore hide/restore & CRUD", () => {
   const ui = explorer();
-  // Always-visible Manage Variables button in header, independent of selectedData
-  const headerLine = ui.split("\n").find((l) => l.includes("pdc-compact-toolbar")) || "";
-  assert.match(headerLine, /Manage Variables/);
+  // Always-visible Manage Variables button in unified toolbar, independent of selectedData
+  assert.match(ui, /usePostProcessingToolbar\(/);
+  assert.match(ui, /id:\s*"manage-variables",\s*\r?\n\s*label:\s*"Manage Variables"/);
   assert.match(ui, /<UiPopover variant="drawer" label="Manage Variables"/);
   assert.match(ui, /className="variables-drawer pdc-variables-drawer"/);
   assert.match(ui, /!browserCollapsed && !variablesOpen/);
