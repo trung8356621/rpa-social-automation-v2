@@ -4,7 +4,7 @@
   max-height: calc(100vh - 36px);
   overflow: hidden;
   box-sizing: border-box;
-  padding: 8px 16px;
+  padding: 6px 12px;
   display: flex;
   flex-direction: column;
   min-height: 0;
@@ -21,7 +21,7 @@
   align-items: center;
   gap: 12px;
   flex-wrap: wrap;
-  margin-bottom: 6px;
+  margin-bottom: 3px;
 }
 
 .pdc-title-group {
@@ -32,7 +32,7 @@
 
 .pdc-title-group h1 {
   margin: 0;
-  font-size: 20px;
+  font-size: 17px;
   font-weight: 700;
 }
 
@@ -53,7 +53,7 @@
   background: #0b1a14;
   border: 1px solid #1f3d30;
   border-radius: 8px;
-  padding: 4px 8px;
+  padding: 2px 5px;
 }
 
 .pdc-step-pill {
@@ -63,7 +63,7 @@
   border: none;
   background: transparent;
   color: #94a3b8;
-  padding: 6px 12px;
+  padding: 4px 8px;
   border-radius: 6px;
   cursor: pointer;
   font-size: 13px;
@@ -85,8 +85,8 @@
 }
 
 .pdc-step-num {
-  width: 20px;
-  height: 20px;
+  width: 18px;
+  height: 18px;
   border-radius: 50%;
   display: inline-flex;
   align-items: center;
@@ -105,10 +105,17 @@
   gap: 8px;
   align-items: center;
   font-size: 12px;
-  padding: 6px 10px;
+  padding: 3px 8px;
   border-radius: 6px;
-  margin-bottom: 8px;
+  margin: 0 0 4px;
+  width: max-content;
+  max-width: 100%;
 }
+
+.pdc-connection-chip { border-radius: 999px; line-height: 1.2; }
+.pdc-connection-dot { width: 7px; height: 7px; border-radius: 50%; background: #34d399; flex: 0 0 auto; }
+.pdc-banner-disconnected .pdc-connection-dot, .banner-disconnected .pdc-connection-dot { background: #f87171; }
+.pdc-copy-link { border: 0; padding: 0 2px; background: transparent; color: #93c5fd; cursor: pointer; font-size: 10px; }
 
 .pdc-banner.banner-connected {
   background: rgba(16, 185, 129, 0.12);
@@ -124,7 +131,7 @@
   flex: 1 1 auto;
   min-width: 0;
   min-height: 0;
-  overflow: hidden;
+  overflow: auto;
   display: flex;
   flex-direction: column;
 }
@@ -193,10 +200,11 @@
   min-width: 0;
   min-height: 0;
   display: grid;
-  grid-template-columns: minmax(0, 1fr) clamp(280px, 22vw, 320px);
+  grid-template-columns: 1024px clamp(280px, 22vw, 320px);
   gap: 10px;
   align-items: stretch;
-  overflow: hidden;
+  overflow: visible;
+  min-width: 1314px;
 }
 
 .pdc-crop-container {
@@ -216,8 +224,8 @@
   flex: 1 1 auto;
   min-width: 0;
   min-height: 0;
-  width: 100%;
-  height: 100%;
+  width: 1024px;
+  height: 560px;
   position: relative;
   overflow: hidden;
   border: none;
@@ -229,8 +237,8 @@
   flex: 1 1 auto;
   min-width: 0;
   min-height: 0;
-  width: 100%;
-  height: 100%;
+  width: 1024px;
+  height: 560px;
   position: relative;
   background: #050a08;
 }
@@ -319,16 +327,11 @@
 .pdc-scan-status-wrap .pdc-scan-status { margin-bottom: 0; }
 
 .pdc-scan-pipeline-debug {
-  position: absolute;
-  z-index: 1;
-  top: calc(100% + 6px);
-  left: 0;
-  right: 0;
+  position: static;
   max-height: min(42vh, 360px);
-  margin-top: 0;
+  margin-top: 4px;
   overflow: auto;
   background: #06120d;
-  box-shadow: 0 12px 28px rgba(0, 0, 0, .45);
 }
 
 .pdc-status-found {
@@ -766,10 +769,10 @@
 .pdc-parent-table tr.selectable { cursor: pointer; }
 .pdc-parent-table tr.selectable:hover { background: rgba(34, 197, 94, .1); }
 .pdc-debug-toggle { display: flex; gap: 7px; align-items: center; font-size: 12px; color: #9db9ad; }
-.pdc-dom-workspace { display: grid; grid-template-columns: minmax(380px, 1.1fr) minmax(420px, 1fr); gap: 10px; min-height: min(68vh, 720px); }
-.pdc-dom-workspace.browser-collapsed { grid-template-columns: 1fr; }
-.pdc-dom-browser-wrap { min-width: 0; }
-.pdc-dom-browser { min-height: min(68vh, 720px); border: 1px solid #28c98b; border-radius: 4px; }
+.pdc-dom-workspace { display: grid; grid-template-columns: 1024px minmax(420px, 1fr); gap: 10px; min-width: 1454px; min-height: 560px; align-items: start; }
+.pdc-dom-workspace.browser-collapsed { grid-template-columns: 1fr; min-width: 0; }
+.pdc-dom-browser-wrap { min-width: 1024px; width: 1024px; }
+.pdc-dom-browser { width: 1024px; height: 560px; min-height: 560px; border: 1px solid #28c98b; border-radius: 4px; box-sizing: border-box; }
 .pdc-dom-panel { min-width: 0; overflow: hidden; }
 .pdc-dom-columns { display: grid; gap: 8px; height: min(60vh, 680px); min-height: 360px; }
 .pdc-dom-tree, .pdc-dom-inspector { overflow: auto; border: 1px solid #23483a; border-radius: 6px; padding: 8px; background: #07140f; }
@@ -887,7 +890,10 @@ body[data-panel="ui-overlay"] .ui-drawer.pdc-variables-drawer { height: 100vh; t
   .pdc-batch-layout { grid-template-columns: 1fr; }
   .pdc-batch-results-grid { grid-template-columns: 1fr; }
   .pdc-batch-table-wrap, .pdc-batch-detail-wrap { max-height: 40vh; }
-  .pdc-dom-workspace { grid-template-columns: minmax(270px, .65fr) minmax(560px, 1.35fr); }
+  .pdc-dom-workspace { grid-template-columns: 1024px; min-width: 1024px; }
+  .pdc-dom-panel { width: 1024px; }
+  .pdc-calibration-workspace { grid-template-columns: 1024px; min-width: 1024px; }
+  .pdc-side-panel { width: 1024px; box-sizing: border-box; }
   .pdc-data-review.has-detail { grid-template-columns: minmax(0, 1fr) minmax(270px, .9fr); }
   .pdc-data-list, .pdc-extracted-detail { max-height: min(64vh, 690px); }
 }

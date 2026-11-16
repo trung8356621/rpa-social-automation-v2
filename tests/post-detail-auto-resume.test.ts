@@ -47,3 +47,33 @@ test("Step 3 keeps BrowserCore mounted while resolving or showing failure", () =
   assert.match(source, /data-browser-core-host/);
   assert.match(source, /diagnosticMeta/);
 });
+
+test("Step 3 host attachment primes a BrowserCore page loaded while hidden", () => {
+  const core = readFileSync("src/main/browser-core.ts", "utf8");
+  const main = readFileSync("src/main/main.ts", "utf8");
+  assert.match(core, /async prepareVisibleSurface/);
+  assert.match(core, /capturePage\(\)/);
+  assert.match(core, /attempt <= 2/);
+  assert.match(main, /host\?\.active && browser\.visible/);
+  assert.match(main, /await browser\.prepareVisibleSurface\(\)/);
+});
+
+test("Step 3 cold-start owns, measures, republishes and cleans up its BrowserCore host independently", () => {
+  const source = readFileSync("src/renderer/post-detail-collector/SavedParentHtmlStep.tsx", "utf8");
+  assert.match(source, /claimCollectorHostOwner\("pdc-step3"\)/);
+  assert.match(source, /isCollectorHostOwner\(ownerId\)/);
+  assert.match(source, /getBoundingClientRect\(\)/);
+  assert.match(source, /attachWhenMeasured = \(remaining = 8\)/);
+  assert.match(source, /window\.addEventListener\("scroll", publish, true\)/);
+  assert.match(source, /ResizeObserver/);
+  assert.match(source, /releaseCollectorHostOwner\(ownerId/);
+});
+
+test("post navigation re-primes the current native surface without creating another webContents", () => {
+  const core = readFileSync("src/main/browser-core.ts", "utf8");
+  const main = readFileSync("src/main/main.ts", "utf8");
+  assert.match(core, /preparedVisibleSurfaceKey/);
+  assert.match(core, /did-start-navigation/);
+  assert.match(main, /BrowserCore post-navigation surface not ready/);
+  assert.doesNotMatch(main, /post-navigation[\s\S]{0,300}new WebContentsView/);
+});

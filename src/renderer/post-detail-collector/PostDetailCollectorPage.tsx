@@ -160,6 +160,11 @@ export function PostDetailCollectorPage({ invoke, state: parentState }: { invoke
 
   const connected = Boolean(probe?.available) && !probeError;
   const step2Ready = canEnterStep2(state.visualReferences.length);
+  const connectionUrl = probe?.url || state.browserUrl || state.sourceUrl;
+  const connectionPostId = extractPostIdentityFromUrl(connectionUrl).postId;
+  const connectionLabel = connectionPostId
+    ? `Post #${connectionPostId.length > 14 ? `${connectionPostId.slice(0, 7)}…${connectionPostId.slice(-5)}` : connectionPostId}`
+    : connected ? "BrowserCore ready" : "BrowserCore unavailable";
 
   const selectUrl = async (item: PostDetailUrlItem) => {
     const epoch = ++navigationEpoch.current;
@@ -236,7 +241,7 @@ export function PostDetailCollectorPage({ invoke, state: parentState }: { invoke
       <div className="pdc-page-header">
         <div className="pdc-title-group">
           <h1>Post Detail Collector</h1>
-          <span className="pdc-version-tag">V2 · URL-first DOM strategies</span>
+          <span className="pdc-version-tag">V2</span>
         </div>
         <nav className="pdc-stepper" aria-label="Post Detail Collector Stepper">
           <button
@@ -262,9 +267,10 @@ export function PostDetailCollectorPage({ invoke, state: parentState }: { invoke
         </nav>
       </div>
 
-      <div className={`pdc-banner ${connected ? "banner-connected" : "banner-disconnected"}`} role="status">
-        <span>{connected ? "🟢" : "🔴"}</span>
-        <span>{connStatus}</span>
+      <div className={`pdc-banner pdc-connection-chip ${connected ? "banner-connected" : "banner-disconnected"}`} role="status" title={`${connStatus}\n${connectionUrl}`}>
+        <span className="pdc-connection-dot" aria-hidden />
+        <span>{connectionLabel}</span>
+        {connectionUrl && <button type="button" className="pdc-copy-link" onClick={() => void navigator.clipboard.writeText(connectionUrl)}>Copy</button>}
       </div>
 
       <div className="pdc-content-area">

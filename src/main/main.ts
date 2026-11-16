@@ -2086,6 +2086,10 @@ async function boot() {
         }
 
         wc.setZoomFactor(browser.zoom);
+        if (overlays.collectorHost?.active && browser.visible) {
+          const surface = await browser.prepareVisibleSurface();
+          if (!surface.ok) console.warn("[BrowserCore post-navigation surface not ready]", surface);
+        }
         const finalUrl = wc.getURL();
         let redirected = false;
         let redirectReason: string | undefined;
@@ -2563,6 +2567,10 @@ async function boot() {
         }
         publishLayout();
         postDetailScanLock.syncBounds();
+        if (host?.active && browser.visible) {
+          const surface = await browser.prepareVisibleSurface();
+          if (!surface.ok) console.warn("[BrowserCore visible surface not ready]", surface);
+        }
         return state();
       }
       case "collectorScrollCaptureBegin": {

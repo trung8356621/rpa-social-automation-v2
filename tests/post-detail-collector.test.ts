@@ -48,6 +48,16 @@ test("Post Detail Collector menu sits under Feed Item and is wired", () => {
   assert.match(tabs, /"post-detail-collector": "Post Detail Collector"/);
 });
 
+test("Post Detail keeps the Scripts canonical 1024x560 viewport and scrolls smaller workspaces", () => {
+  const geometry = read("src/shared/geometry.ts");
+  const css = read("src/renderer/post-detail-collector/post-detail-collector.css");
+  assert.match(geometry, /EXECUTION_VIEWPORT = Object\.freeze\(\{ width: 1024, height: 560 \}\)/);
+  assert.match(css, /grid-template-columns: 1024px/);
+  assert.match(css, /\.pdc-dom-browser \{ width: 1024px; height: 560px/);
+  assert.match(css, /\.pdc-content-area[\s\S]*overflow: auto/);
+  assert.doesNotMatch(css, /transform:\s*scale\([^)]*\)[^}]*pdc-dom-browser/);
+});
+
 test("Post Detail uses shared BrowserCore host pages without new window", () => {
   assert.equal(isCollectorBrowserHostPage("post-detail-collector"), true);
   assert.equal(

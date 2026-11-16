@@ -2,7 +2,7 @@ import React, { useEffect, useMemo, useRef, useState } from "react";
 import type { PostDetailParentConfig, PostDetailSavedParentResolution } from "../../shared/post-detail-collector/types";
 import type { CollectorValueType, CollectorVariable } from "../../shared/collectors/types";
 import { collectorReportBrowserHost, collectorSetBrowserVisible } from "../collectors/browser-capture";
-import { claimCollectorHostOwner, releaseCollectorHostOwner } from "../collectors/collector-host-owner";
+import { claimCollectorHostOwner, isCollectorHostOwner, releaseCollectorHostOwner } from "../collectors/collector-host-owner";
 import { UiPopover } from "../ui-popover";
 import { publishPostDetailBrowserHost } from "./publish-browser-host";
 import { canonicalPostUrl } from "./batch-validation";
@@ -178,17 +178,54 @@ export function SavedParentHtmlStep({ invoke, result, currentUrl, parentConfig, 
   const nodes = useMemo(() => focusElement ? [toNode(focusElement, focusPath)] : [], [focusElement, focusPath]);
 
   useEffect(() => {
-    const { ownerId } = claimCollectorHostOwner("pdc-step3"), publish = () => publishPostDetailBrowserHost(invoke, hostRef.current);
-    void collectorSetBrowserVisible(invoke, true).then(publish);
-    const observer = new ResizeObserver(publish); if (hostRef.current) observer.observe(hostRef.current); window.addEventListener("resize", publish);
-    return () => { observer.disconnect(); window.removeEventListener("resize", publish); void invoke({ type: "postDetailClearParentNodeHighlight" }); releaseCollectorHostOwner(ownerId, () => { void collectorReportBrowserHost(invoke, null); void collectorSetBrowserVisible(invoke, false); }); };
+    const { ownerId } = claimCollectorHostOwner("pdc-step3");
+    if (browserCollapsed) {
+      void collectorReportBrowserHost(invoke, null);
+      void collectorSetBrowserVisible(invoke, false);
+      return () => { releaseCollectorHostOwner(ownerId, () => void collectorReportBrowserHost(invoke, null)); };
+    }
+    let cancelled = false;
+    const rafIds = new Set<number>();
+    const publish = () => {
+      if (cancelled || !isCollectorHostOwner(ownerId)) return false;
+      const host = hostRef.current;
+      if (!host) return false;
+      const rect = host.getBoundingClientRect();
+      if (rect.width < 10 || rect.height < 10) return false;
+      publishPostDetailBrowserHost(invoke, host);
+      return true;
+    };
+    const attachWhenMeasured = (remaining = 8) => {
+      if (publish() || remaining <= 0 || cancelled) return;
+      const id = requestAnimationFrame(() => { rafIds.delete(id); attachWhenMeasured(remaining - 1); });
+      rafIds.add(id);
+    };
+    attachWhenMeasured();
+    const first = requestAnimationFrame(() => { rafIds.delete(first); attachWhenMeasured(); });
+    rafIds.add(first);
+    const observer = new ResizeObserver(() => publish());
+    if (hostRef.current) observer.observe(hostRef.current);
+    window.addEventListener("resize", publish);
+    window.addEventListener("scroll", publish, true);
+    void collectorSetBrowserVisible(invoke, true).then(() => attachWhenMeasured());
+    return () => {
+      cancelled = true;
+      rafIds.forEach(id => cancelAnimationFrame(id));
+      observer.disconnect();
+      window.removeEventListener("resize", publish);
+      window.removeEventListener("scroll", publish, true);
+      void invoke({ type: "postDetailClearParentNodeHighlight" });
+      releaseCollectorHostOwner(ownerId, () => { void collectorReportBrowserHost(invoke, null); void collectorSetBrowserVisible(invoke, false); });
+    };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
+  }, [browserCollapsed, invoke]);
   useEffect(() => {
     const visible = !browserCollapsed && !variablesOpen;
     void collectorSetBrowserVisible(invoke, visible);
     if (visible) {
-      requestAnimationFrame(() => publishPostDetailBrowserHost(invoke, hostRef.current));
+      requestAnimationFrame(() => requestAnimationFrame(() => publishPostDetailBrowserHost(invoke, hostRef.current)));
+    } else {
+      void collectorReportBrowserHost(invoke, null);
     }
   }, [browserCollapsed, variablesOpen, invoke]);
   useEffect(() => { if (!isExpanded) return; const close = (event: KeyboardEvent) => { if (event.key === "Escape") setIsExpanded(false); }; window.addEventListener("keydown", close); return () => window.removeEventListener("keydown", close); }, [isExpanded]);
@@ -348,7 +385,6 @@ export function SavedParentHtmlStep({ invoke, result, currentUrl, parentConfig, 
       </div>
     </UiPopover>}
     <div className={`pdc-alert ${status === "PARENT_MATCHED" ? "pdc-alert-ok" : "pdc-alert-warn"}`}>{status === "PARENT_MATCHED" ? "AUTO · Parent Matched" : status === "RESOLVING" ? "AUTO · Resolving Parent..." : `Needs Attention · ${result?.failureCode || status}`}</div>
-    {result?.diagnostics.map(item => <p key={item} className="pdc-panel-desc">{item}</p>)}
     {status !== "NOT_CONFIGURED" && <div className={`pdc-dom-workspace ${browserCollapsed ? "browser-collapsed" : ""}`}><div className="pdc-dom-browser-wrap"><button className="pdc-btn pdc-btn-tiny" onClick={() => setBrowserCollapsed(value => !value)}>{browserCollapsed ? "Show Browser Preview" : "Collapse Browser Preview"}</button>{!browserCollapsed && <div ref={hostRef} className="pdc-browser-host pdc-dom-browser" data-browser-core-host="" />}</div><div className="pdc-dom-panel">
       {status === "PARENT_MATCHED" ? <><div className={`pdc-data-review ${selectedData ? "has-detail" : ""}`}>
         <div className="pdc-data-list" aria-label="Extracted values">
@@ -427,7 +463,7 @@ export function SavedParentHtmlStep({ invoke, result, currentUrl, parentConfig, 
           {mappingsForItem(selectedData).length > 0 && <div className="pdc-output-mappings"><b>Output mappings</b>{mappingsForItem(selectedData).map(mapping => <span key={`${mapping.variableId}:${mapping.outputKey || mapping.preview}`}>{mapping.outputKey || "legacy"} → {mapping.variableLabel}</span>)}</div>}
           {variables.length ? <><select value={variableId} onChange={event => setVariableId(event.target.value)}><option value="">Select existing variable…</option>{variables.map(variable => <option key={`${variable.collectorId}:${variable.id}`} value={`${variable.collectorId}:${variable.id}`}>{variable.collectorName} · {variable.label} ({variable.key})</option>)}</select><p>Preview: <span className="pdc-preserve-lines">{selectedOutput?.value || selectedData.value}</span></p><div className="pdc-btn-row pdc-detail-actions"><button className="pdc-btn pdc-btn-primary" disabled={!canMapSelectedData(selectedData, selectedOutput)} onClick={applyDataMapping}>Save Mapping</button><button className="pdc-btn pdc-btn-secondary" disabled={!selectedOutput || !mappingForOutput(selectedData, selectedOutput)} onClick={unmapData}>Unmap Output</button></div></> : <p className="pdc-panel-desc">No existing Collector variables. Create schema in Collectors first.</p>}
         </div>}
-      </div><details className="pdc-advanced-debug"><summary>Advanced Debug</summary><p className="pdc-panel-desc">Strategy {String(result?.diagnosticMeta?.strategyId || "platform fallback")} · version {String(result?.diagnosticMeta?.strategyVersion || parentConfig?.version || "legacy")}</p><div className="pdc-parent-table-wrap"><table className="pdc-parent-table"><thead><tr><th>Field</th><th>Saved Anchor</th><th>Live Anchor</th><th>Count Source</th><th>Value</th><th>Source / failure</th></tr></thead><tbody>{(["like_count", "comment_count", "share_count"] as const).map(field => { const item = engagementData.find(candidate => candidate.semanticField === field); const role = field.replace("_count", "_anchor") as "like_anchor" | "comment_anchor" | "share_anchor"; const saved = parentConfig?.domAnchors?.[role]; return <tr key={field}><td>{field.replace("_count", "").toUpperCase()}</td><td>{saved ? `${saved.verificationStatus} · ${saved.parentRelativePath.join("/")}` : "MISSING"}</td><td>{item?.engagementEvidence?.actionAnchorStatus || "MISSING"}</td><td>{item?.engagementEvidence?.countSourceStatus || "MISSING"}</td><td>{item?.value || "—"}</td><td>{item?.sourcePaths.map(path => path.join("/")).join(", ") || item?.engagementEvidence?.reason || "NO_SOURCE"}</td></tr>; })}</tbody></table></div><div className="pdc-btn-row"><button className={`pdc-btn pdc-btn-tiny ${tab === "explorer" ? "active" : ""}`} onClick={() => setTab("explorer")}>DOM Explorer</button><button className={`pdc-btn pdc-btn-tiny ${tab === "raw" ? "active" : ""}`} onClick={() => setTab("raw")}>Raw HTML</button><button className="pdc-btn pdc-btn-tiny" disabled={!focusPath.length} onClick={resetFocus}>Reset Focus</button></div>
+      </div><details className="pdc-advanced-debug"><summary>Advanced Debug</summary>{result?.diagnostics.map(item => <p key={item} className="pdc-panel-desc">{item}</p>)}<p className="pdc-panel-desc">Strategy {String(result?.diagnosticMeta?.strategyId || "platform fallback")} · version {String(result?.diagnosticMeta?.strategyVersion || parentConfig?.version || "legacy")}</p><div className="pdc-parent-table-wrap"><table className="pdc-parent-table"><thead><tr><th>Field</th><th>Saved Anchor</th><th>Live Anchor</th><th>Count Source</th><th>Value</th><th>Source / failure</th></tr></thead><tbody>{(["like_count", "comment_count", "share_count"] as const).map(field => { const item = engagementData.find(candidate => candidate.semanticField === field); const role = field.replace("_count", "_anchor") as "like_anchor" | "comment_anchor" | "share_anchor"; const saved = parentConfig?.domAnchors?.[role]; return <tr key={field}><td>{field.replace("_count", "").toUpperCase()}</td><td>{saved ? `${saved.verificationStatus} · ${saved.parentRelativePath.join("/")}` : "MISSING"}</td><td>{item?.engagementEvidence?.actionAnchorStatus || "MISSING"}</td><td>{item?.engagementEvidence?.countSourceStatus || "MISSING"}</td><td>{item?.value || "—"}</td><td>{item?.sourcePaths.map(path => path.join("/")).join(", ") || item?.engagementEvidence?.reason || "NO_SOURCE"}</td></tr>; })}</tbody></table></div><div className="pdc-btn-row"><button className={`pdc-btn pdc-btn-tiny ${tab === "explorer" ? "active" : ""}`} onClick={() => setTab("explorer")}>DOM Explorer</button><button className={`pdc-btn pdc-btn-tiny ${tab === "raw" ? "active" : ""}`} onClick={() => setTab("raw")}>Raw HTML</button><button className="pdc-btn pdc-btn-tiny" disabled={!focusPath.length} onClick={resetFocus}>Reset Focus</button></div>
       {tab === "raw" ? <pre className="pdc-code-preview">{result?.innerHTML}</pre> : <><div className="pdc-dom-breadcrumb"><button onClick={resetFocus}>Root</button>{breadcrumbs.map(path => <button key={pathKey(path)} onClick={() => setFocusPath(path)}>› {atPath(path)?.tagName.toLowerCase()}</button>)}</div><label className="pdc-split-control">Tree width <input type="range" min="30" max="75" value={treeRatio} onChange={event => setTreeRatio(Number(event.target.value))} /></label><div className="pdc-dom-columns" style={{ gridTemplateColumns: `${treeRatio}fr ${100 - treeRatio}fr` }}><div className="pdc-dom-tree"><ul>{nodes.map(node => <TreeNode key={pathKey(node.path)} node={node} expanded={expanded} selected={selected ? pathKey(selected.path) : ""} onToggle={key => setExpanded(current => { const next = new Set(current); next.has(key) ? next.delete(key) : next.add(key); return next; })} onSelect={choose} onFocus={focus} onHover={highlight} />)}</ul></div><div className="pdc-dom-inspector"><h3>Inspector</h3>{selected ? <>
         <section><h4>Attributes</h4><dl className="pdc-kv">{Object.entries(selected.attrs).map(([name, value]) => <React.Fragment key={name}><dt>{name}</dt><dd>{value}</dd></React.Fragment>)}</dl></section>
         <section><h4>Text</h4><p>{selected.directText || selected.textPreview || "—"}</p><button className="pdc-btn pdc-btn-tiny" onClick={() => copy(selected.element.textContent || "")}>Copy Text</button><details><summary>Full text</summary><pre>{selected.element.textContent}</pre></details><details><summary>outerHTML</summary><pre>{selected.element.outerHTML}</pre></details></section>

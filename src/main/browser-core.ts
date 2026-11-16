@@ -57,6 +57,7 @@ export class BrowserCore {
   private captures = new Map<string, Buffer>();
   /** Serialize CDP screenshots — overlapping capture/detach races hang first extends. */
   private captureGate: Promise<void> = Promise.resolve();
+  private preparedVisibleSurfaceKey = "";
   zoom = 1;
   visible = true;
   /**
@@ -142,6 +143,9 @@ export class BrowserCore {
       if (!/^https?:\/\//.test(url)) event.preventDefault();
     });
     wc.on("did-finish-load", () => wc.setZoomFactor(this.zoom));
+    wc.on("did-start-navigation", (_event, _url, _isInPlace, isMainFrame) => {
+      if (isMainFrame) this.preparedVisibleSurfaceKey = "";
+    });
     void wc.setVisualZoomLevelLimits(1, 1);
     wc.session.setPermissionRequestHandler((_wc, _permission, callback) =>
       callback(false),
@@ -228,6 +232,42 @@ export class BrowserCore {
     if (!visible && this.scanHoldVisible) return;
     this.visible = visible;
     this.view.setVisible(visible);
+    if (visible && !this.view.webContents.isDestroyed()) this.view.webContents.invalidate();
+  }
+
+  /**
+   * A page may finish loading while WebContentsView is hidden during renderer restore.
+   * Showing it changes native visibility but does not always schedule a compositor frame
+   * (notably after an Electron restart through Windows RDP). Prime one bounded frame
+   * without navigating or replacing the persistent BrowserCore session.
+   */
+  async prepareVisibleSurface(): Promise<{ ok: boolean; attempts: number; error?: string }> {
+    const wc = this.view.webContents;
+    if (wc.isDestroyed()) return { ok: false, attempts: 0, error: "WEB_CONTENTS_DESTROYED" };
+    const surfaceKey = `${wc.id}:${wc.getURL()}`;
+    if (surfaceKey === this.preparedVisibleSurfaceKey) {
+      wc.invalidate();
+      return { ok: true, attempts: 0 };
+    }
+    this.view.setVisible(true);
+    wc.invalidate();
+    let lastError = "EMPTY_SURFACE_FRAME";
+    for (let attempt = 1; attempt <= 2; attempt++) {
+      try {
+        await wc.executeJavaScript("new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve)))", true);
+        const frame = await wc.capturePage();
+        if (!frame.isEmpty()) {
+          this.preparedVisibleSurfaceKey = surfaceKey;
+          wc.invalidate();
+          return { ok: true, attempts: attempt };
+        }
+      } catch (error) {
+        lastError = error instanceof Error ? error.message : String(error);
+      }
+      await new Promise(resolve => setTimeout(resolve, 50));
+      wc.invalidate();
+    }
+    return { ok: false, attempts: 2, error: lastError };
   }
 
   /**
