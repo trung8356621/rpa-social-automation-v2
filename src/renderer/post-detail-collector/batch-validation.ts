@@ -170,6 +170,7 @@ export function evaluateMatchedParentDom(opts: {
   rootElement: Element | null;
   mappings: PostDetailDomVariableMapping[];
   registryVariables: RegistryVariableOption[];
+  parentConfig?: import("../../shared/post-detail-collector/types").PostDetailParentConfig;
 }): BatchValidationRow {
   const now = new Date().toISOString();
   const { url, resolvedUrl, postId, resolution, rootElement, mappings, registryVariables } = opts;
@@ -196,6 +197,7 @@ export function evaluateMatchedParentDom(opts: {
   const semanticItems = extractParentData(rootElement, {
     postId: postId || undefined,
     currentUrl: resolvedUrl || url,
+    domAnchors: opts.parentConfig?.domAnchors,
   });
 
   const varMetaById = new Map(
@@ -212,6 +214,7 @@ export function evaluateMatchedParentDom(opts: {
     const executed = executeVariableMapping(rootElement, mapping, {
       postId: postId || undefined,
       currentUrl: resolvedUrl || url,
+      domAnchors: opts.parentConfig?.domAnchors,
     });
 
     const semanticMatch = mapping.sourceSemantic

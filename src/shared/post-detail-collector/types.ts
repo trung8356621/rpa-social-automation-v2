@@ -516,5 +516,7 @@ export type PostDetailSavedParentResolution = {
   rect: Rect | null;
   failureCode?: "BROWSER_NOT_READY" | "NOT_FOUND" | "AMBIGUOUS" | "INVALID" | "CONFLICT" | "PARENT_MISMATCH" | "ACTION_ROW_SELECTOR_NOT_FOUND" | "ACTION_ROW_AMBIGUOUS" | "ACTION_ROW_INVALID" | "PARENT_LEVEL_NOT_FOUND" | "POST_IDENTITY_MISMATCH";
   diagnosticMeta?: Record<string, unknown>;
+  /** Live, post-owned anchors re-resolved inside the verified Main Action Row. */
+  resolvedDomAnchors?: PostDetailParentConfig["domAnchors"];
   diagnostics: string[];
 };

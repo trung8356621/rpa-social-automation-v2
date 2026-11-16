@@ -22,7 +22,7 @@ test("auto resume guards unmount and navigation before entering Step 3", () => {
   const source = readFileSync("src/renderer/post-detail-collector/PostDetailCollectorPage.tsx", "utf8");
   assert.match(source, /cancelled \|\| navigationEpoch\.current !== startedAtEpoch/);
   assert.match(source, /shouldRetrySavedParentResolution/);
-  assert.match(source, /updateStore\(\{ savedParentResolution, step: 3 \}\)/);
+  assert.match(source, /savedParentResolution,/);
   assert.match(source, /status: "RESOLVING"/);
   assert.match(source, /step: 3/);
   assert.match(source, /Auto-resume belongs to this Collector mount/);
@@ -30,6 +30,14 @@ test("auto resume guards unmount and navigation before entering Step 3", () => {
   assert.doesNotMatch(source, /runPostDetailAutoScan/);
   assert.doesNotMatch(source, /postDetailResolveVisualActionRowParent/);
   assert.match(source, /\}, \[\]\);/);
+});
+
+test("Post Detail restores the persisted social URL when restarted BrowserCore is blank", () => {
+  const source = readFileSync("src/renderer/post-detail-collector/PostDetailCollectorPage.tsx", "utf8");
+  assert.match(source, /const restoreUrl = state\.browserUrl \|\| state\.sourceUrl/);
+  assert.match(source, /live && !live\.isSocialPage/);
+  assert.match(source, /type: "postDetailNavigate", url: restoreUrl/);
+  assert.match(source, /Restoring the last BrowserCore post/);
 });
 
 test("Step 3 keeps BrowserCore mounted while resolving or showing failure", () => {

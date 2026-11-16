@@ -101,6 +101,16 @@ export function rankStrategies(strategies: PostDetailDomStrategy[], platform: st
   });
 }
 
+export function effectiveStrategyConfig(strategy: PostDetailDomStrategy): PostDetailParentConfig {
+  return {
+    ...strategy.parentConfig,
+    domAnchors: {
+      ...(strategy.parentConfig.domAnchors || {}),
+      ...strategy.anchors,
+    },
+  };
+}
+
 export function classifyAutoMatchGate(input: {
   status: string;
   postIdentityVerified: boolean;

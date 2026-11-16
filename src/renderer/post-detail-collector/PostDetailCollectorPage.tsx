@@ -18,7 +18,7 @@ import { SavedParentHtmlStep } from "./SavedParentHtmlStep";
 import { VisualRegionStep } from "./VisualRegionStep";
 import { UrlWorkspaceStep } from "./UrlWorkspaceStep";
 import { usePostDetailCollectorStore } from "./store";
-import { classifyAutoMatchGate, rankStrategies, upsertStrategyVariation } from "./url-workspace";
+import { classifyAutoMatchGate, effectiveStrategyConfig, rankStrategies, upsertStrategyVariation } from "./url-workspace";
 import type { BrowserProbe, Invoke, PostDetailStep, PostDetailUrlItem } from "./types";
 import "./post-detail-collector.css";
 import { playCompletionSound } from "../completion-sound";
@@ -80,7 +80,14 @@ export function PostDetailCollectorPage({ invoke, state: parentState }: { invoke
     const { ownerId } = claimCollectorHostOwner("pdc-page");
     let cancelled = false;
     void (async () => {
-      const live = await refreshProbe();
+      let live = await refreshProbe();
+      const restoreUrl = state.browserUrl || state.sourceUrl;
+      if (live && !live.isSocialPage && /^https?:\/\/(?:www\.)?(?:facebook\.com|threads\.(?:com|net))\//i.test(restoreUrl)) {
+        setConnStatus("Restoring the last BrowserCore post…");
+        await invoke({ type: "postDetailNavigate", url: restoreUrl });
+        if (cancelled) return;
+        live = await refreshProbe();
+      }
       const needsResolve = state.step === 1 || (state.step === 3 && state.savedParentResolution?.status === "RESOLVING");
       if (cancelled || !live || autoResolveStarted.current || !needsResolve) return;
       autoResolveStarted.current = true;
@@ -112,7 +119,17 @@ export function PostDetailCollectorPage({ invoke, state: parentState }: { invoke
         return;
       }
       if (cancelled || navigationEpoch.current !== startedAtEpoch) return;
-      updateStore({ savedParentResolution, step: 3 });
+      const resolvedConfig = savedParentResolution.resolvedDomAnchors
+        ? { ...config, domAnchors: savedParentResolution.resolvedDomAnchors, updatedAt: new Date().toISOString() }
+        : config;
+      updateStore(prev => ({
+        savedParentResolution,
+        step: 3,
+        parentConfigs: { ...prev.parentConfigs, [platform]: resolvedConfig },
+        strategies: prev.strategies.map(strategy => strategy.platform === platform && strategy.parentConfig === config
+          ? { ...strategy, parentConfig: resolvedConfig, anchors: resolvedConfig.domAnchors || strategy.anchors }
+          : strategy),
+      }));
     })();
     return () => {
       cancelled = true;
@@ -162,10 +179,15 @@ export function PostDetailCollectorPage({ invoke, state: parentState }: { invoke
       const candidates = rankStrategies(state.strategies, identity.platform || item.platform || "facebook");
       let resolution: import("../../shared/post-detail-collector/types").PostDetailSavedParentResolution | null = null;
       let strategyId: string | undefined;
+      let selectedConfig: import("../../shared/post-detail-collector/types").PostDetailParentConfig | undefined;
       for (const strategy of candidates) {
-        resolution = await resolveStableParent({ invoke, config: strategy.parentConfig, expectedPostId: item.postId, currentUrl: item.originalUrl, cancelled: () => navigationEpoch.current !== epoch, onWaiting: setConnStatus });
+        const effectiveConfig = effectiveStrategyConfig(strategy);
+        resolution = await resolveStableParent({ invoke, config: effectiveConfig, expectedPostId: item.postId, currentUrl: item.originalUrl, cancelled: () => navigationEpoch.current !== epoch, onWaiting: setConnStatus });
+        const runtimeConfig = resolution.resolvedDomAnchors
+          ? { ...effectiveConfig, domAnchors: resolution.resolvedDomAnchors, updatedAt: new Date().toISOString() }
+          : effectiveConfig;
         const anchorsConfigured = ["like_anchor", "comment_anchor", "share_anchor"].every(role =>
-          strategy.anchors[role as keyof typeof strategy.anchors]?.verificationStatus === "VERIFIED");
+          runtimeConfig.domAnchors?.[role as keyof NonNullable<typeof runtimeConfig.domAnchors>]?.verificationStatus === "VERIFIED");
         const anchorsVerified = anchorsConfigured && resolution.diagnosticMeta?.domAnchorsVerified === true;
         const gate = classifyAutoMatchGate({
           status: resolution.status,
@@ -175,9 +197,10 @@ export function PostDetailCollectorPage({ invoke, state: parentState }: { invoke
         });
         if (gate.canReview) {
           strategyId = strategy.id;
+          selectedConfig = runtimeConfig;
           resolution = {
             ...resolution,
-            diagnosticMeta: { ...resolution.diagnosticMeta, engagementAnchorsVerified: anchorsVerified },
+            diagnosticMeta: { ...resolution.diagnosticMeta, engagementAnchorsVerified: anchorsVerified, strategyId: strategy.id, strategyVersion: strategy.version, parentConfigVersion: effectiveConfig.version },
             diagnostics: anchorsVerified ? resolution.diagnostics : [...resolution.diagnostics, "Parent and post identity verified. Engagement anchors remain Needs Attention; other semantic fields are available."],
           };
           break;
@@ -191,10 +214,11 @@ export function PostDetailCollectorPage({ invoke, state: parentState }: { invoke
       updateStore(prev => ({
         browserUrl: liveProbe?.url || prev.browserUrl,
         savedParentResolution: resolution,
+        parentConfigs: selectedConfig ? { ...prev.parentConfigs, [selectedConfig.platform]: selectedConfig } : prev.parentConfigs,
         processingSubstep: 3,
         step: 3,
         urlItems: prev.urlItems.map(value => value.id === item.id ? { ...value, status: ready ? "READY" : "NEEDS_ATTENTION", strategyId, engagementAnchorsVerified: resolution!.diagnosticMeta?.engagementAnchorsVerified === true, diagnostics: resolution!.diagnostics, updatedAt: new Date().toISOString() } : value),
-        strategies: prev.strategies.map(strategy => strategy.id === strategyId ? { ...strategy, successes: strategy.successes + (ready ? 1 : 0), failures: strategy.failures + (ready ? 0 : 1), updatedAt: new Date().toISOString() } : strategy),
+        strategies: prev.strategies.map(strategy => strategy.id === strategyId ? { ...strategy, parentConfig: selectedConfig || strategy.parentConfig, anchors: selectedConfig?.domAnchors || strategy.anchors, successes: strategy.successes + (ready ? 1 : 0), failures: strategy.failures + (ready ? 0 : 1), updatedAt: new Date().toISOString() } : strategy),
       }));
       void playCompletionSound(ready ? "SUCCESS" : "NEEDS_ATTENTION", `auto-match:${item.id}:${epoch}`);
     } catch (error) {
@@ -307,6 +331,7 @@ export function PostDetailCollectorPage({ invoke, state: parentState }: { invoke
             invoke={invoke}
             result={state.savedParentResolution}
             currentUrl={state.sourceUrl || state.browserUrl}
+            parentConfig={state.parentConfigs[extractPostIdentityFromUrl(state.sourceUrl || state.browserUrl).platform || "facebook"]}
             variableMappings={state.variableMappings}
             onVariableMappings={(variableMappings) =>
               updateStore((prev) => ({ variableMappings, batchConfigVersion: (prev.batchConfigVersion ?? 1) + 1 }))

@@ -34,8 +34,8 @@ function parseHtmlFragment(innerHTML: string): Element | null {
   return root;
 }
 
-function extractionSignature(root: Element, postId: string | null, currentUrl: string) {
-  return JSON.stringify(extractParentData(root, { postId: postId || undefined, currentUrl }).filter(item => item.semanticField).map(item => ({
+function extractionSignature(root: Element, postId: string | null, currentUrl: string, config: PostDetailParentConfig) {
+  return JSON.stringify(extractParentData(root, { postId: postId || undefined, currentUrl, domAnchors: config.domAnchors }).filter(item => item.semanticField).map(item => ({
     semanticField: item.semanticField,
     value: item.value,
     extractionStatus: item.extractionStatus,
@@ -66,7 +66,7 @@ export async function resolveStableParent(opts: {
         readinessState = { signature: "", stableCount: 0 };
         opts.onWaiting?.(`Waiting for live post identity${opts.expectedPostId ? ` #${opts.expectedPostId}` : ""} (${attempt + 1}/${MAX_RESOLVE_ATTEMPTS})`);
       } else if (root) {
-        const signature = extractionSignature(root, opts.expectedPostId, opts.currentUrl);
+        const signature = extractionSignature(root, opts.expectedPostId, opts.currentUrl, opts.config);
         const readiness = advanceParentReadiness({ state: readinessState, expectedPostId: opts.expectedPostId, resolvedPostId: livePostId, postIdentityVerified: identityVerified, parentMatched: true, semanticSignature: signature, requiredStableSnapshots: REQUIRED_STABLE_SNAPSHOTS });
         readinessState = readiness.state;
         if (readiness.ready) {
@@ -252,6 +252,7 @@ export function BatchValidationStep({
           rootElement,
           mappings: variableMappings,
           registryVariables,
+          parentConfig: config,
         });
         collected.push(row);
         onBatchResults([...collected], runVersion);
@@ -375,6 +376,7 @@ export function BatchValidationStep({
           rootElement: root,
           mappings: variableMappings,
           registryVariables: listRegistryVariables(),
+          parentConfig: config,
         });
         const differences = row.fields.flatMap((f) => {
           const liveF = liveEval.fields.find((lf) => lf.variableId === f.variableId);
@@ -410,6 +412,7 @@ export function BatchValidationStep({
         invoke={invoke}
         result={reviewResolution}
         currentUrl={reviewRow.resolvedUrl || reviewRow.url}
+        parentConfig={parentConfigs[extractPostIdentityFromUrl(reviewRow.resolvedUrl || reviewRow.url).platform || "facebook"]}
         variableMappings={variableMappings}
         onVariableMappings={onVariableMappings}
         hiddenExtractedData={hiddenExtractedData}

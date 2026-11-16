@@ -12,7 +12,7 @@ import {
   updateRegistryVariable,
 } from "../src/renderer/post-detail-collector/variable-registry";
 import type { PostDetailDomVariableMapping } from "../src/renderer/post-detail-collector/types";
-import { classifyAutoMatchGate, extractWorkspaceIdentity, legacyStrategies, mergeUrlWorkspace, rankStrategies, upsertStrategyVariation } from "../src/renderer/post-detail-collector/url-workspace";
+import { classifyAutoMatchGate, effectiveStrategyConfig, extractWorkspaceIdentity, legacyStrategies, mergeUrlWorkspace, rankStrategies, upsertStrategyVariation } from "../src/renderer/post-detail-collector/url-workspace";
 import { migratePostDetailState } from "../src/renderer/post-detail-collector/store";
 
 const explorer = () => readFileSync("src/renderer/post-detail-collector/SavedParentHtmlStep.tsx", "utf8");
@@ -117,7 +117,9 @@ test("Step 3 reuses Collector variable schema and persists only verified mapping
   assert.match(source, /Missing/);
   assert.match(source, /Needs Attention/);
   assert.match(store, /variableMappings: state\.variableMappings/);
-  assert.doesNotMatch(source, /like_count|comment_count|share_count/);
+  assert.match(source, /Saved Anchor/);
+  assert.match(source, /Live Anchor/);
+  assert.match(source, /Count Source/);
 });
 
 test("AUTO remains strict and Customize does not run visual scan", () => {
@@ -758,6 +760,73 @@ test("unlabeled numeric action slots are Needs Attention instead of positional e
   assert.equal(engagement.every(item => item.extractionStatus === "needs_attention" && item.value === ""), true);
 });
 
+test("saved DOM anchors verify engagement independently with sibling counts, explicit zero and missing fields", () => {
+  const root = el("div", {}, [
+    el("div", {}, [
+      el("a", { href: "/user/CleverLemur919/" }, ["CleverLemur919"]),
+      el("a", { href: "/groups/seo/posts/anchor-first/", "aria-describedby": "ts-anchor" }, ["1h"]),
+      el("span", { id: "ts-anchor", hidden: "" }, ["16 tháng 11, 2026"]),
+    ]),
+    el("div", {}, ["Body 2026"]),
+    el("div", {}, [
+      el("div", {}, [el("div", { role: "button" }, ["Like"]), el("span", {}, ["0"])]),
+      el("div", {}, [el("div", { role: "button" }, ["Comment"]), el("span", {}, ["1"])]),
+      el("div", {}, [el("div", { role: "button" }, ["Share"])]),
+    ]),
+    el("div", { role: "article" }, [el("span", {}, ["Comment item 88"])]),
+  ]) as unknown as Element;
+  const anchor = (semanticRole: "like_anchor" | "comment_anchor" | "share_anchor", parentRelativePath: number[]) => ({
+    semanticRole,
+    parentRelativePath,
+    structuralSignature: { tag: "DIV", role: "button", childCount: 0, svgCount: 0 },
+    actionRowRelationship: "DESCENDANT" as const,
+    sourceEvidence: { text: semanticRole, tag: "DIV", role: "button", rect: null },
+    confidence: "high" as const,
+    verificationStatus: "VERIFIED" as const,
+    countSource: { relationship: "UNKNOWN" as const, verificationStatus: "NOT_VERIFIED" as const },
+  });
+  const items = extractParentData(root, {
+    postId: "anchor-first",
+    domAnchors: {
+      like_anchor: anchor("like_anchor", [2, 0, 0]),
+      comment_anchor: anchor("comment_anchor", [2, 1, 0]),
+      share_anchor: anchor("share_anchor", [2, 2, 0]),
+    },
+  });
+  const like = items.find(item => item.semanticField === "like_count")!;
+  const comment = items.find(item => item.semanticField === "comment_count")!;
+  const share = items.find(item => item.semanticField === "share_count")!;
+  assert.equal(like.value, "0");
+  assert.equal(like.engagementEvidence?.actionAnchorStatus, "VERIFIED");
+  assert.equal(like.engagementEvidence?.countSourceStatus, "VERIFIED");
+  assert.equal(like.engagementEvidence?.method, "STRUCTURAL_RELATION");
+  assert.equal(comment.value, "1");
+  assert.equal(comment.extractionStatus, "verified");
+  assert.equal(share.value, "");
+  assert.equal(share.extractionStatus, "needs_attention");
+  assert.equal(share.engagementEvidence?.countSourceStatus, "MISSING");
+  assert.equal(items.some(item => item.kind === "engagement" && item.value === "919"), false);
+  assert.equal(items.some(item => item.kind === "engagement" && item.value === "88"), false);
+});
+
+test("saved anchors use a unique separate summary slot and keep a stale field isolated", () => {
+  const root = el("div", {}, [
+    el("div", {}, [el("a", { href: "/groups/seo/posts/summary/", "aria-describedby": "ts-summary" }, ["1h"]), el("span", { id: "ts-summary", hidden: "" }, ["Now"])]),
+    el("div", {}, ["Body"]),
+    el("div", {}, [el("span", { "aria-label": "5 likes" }, ["5"]), el("span", { "aria-label": "1 comment" }, ["1"]), el("span", { "aria-label": "2 shares" }, ["2"])]),
+    el("div", {}, [el("div", { role: "button" }, ["Like"]), el("div", { role: "button" }, ["Comment"]), el("div", { role: "button" }, ["Share"])]),
+  ]) as unknown as Element;
+  const record = (semanticRole: "like_anchor" | "comment_anchor" | "share_anchor", index: number, childCount = 0) => ({ semanticRole, parentRelativePath: [3, index], structuralSignature: { tag: "DIV", role: "button", childCount, svgCount: 0 }, actionRowRelationship: "DESCENDANT" as const, sourceEvidence: { text: semanticRole, tag: "DIV", role: "button", rect: null }, confidence: "high" as const, verificationStatus: "VERIFIED" as const, countSource: { relationship: "UNKNOWN" as const, verificationStatus: "NOT_VERIFIED" as const } });
+  const items = extractParentData(root, { postId: "summary", domAnchors: { like_anchor: record("like_anchor", 0), comment_anchor: record("comment_anchor", 1), share_anchor: record("share_anchor", 2) } });
+  assert.equal(items.find(item => item.semanticField === "like_count")?.value, "5");
+  assert.equal(items.find(item => item.semanticField === "comment_count")?.value, "1");
+  assert.equal(items.find(item => item.semanticField === "share_count")?.value, "2");
+  const staleItems = extractParentData(root, { postId: "summary", domAnchors: { comment_anchor: record("comment_anchor", 1, 99) } });
+  const staleComment = staleItems.find(item => item.semanticField === "comment_count")!;
+  assert.equal(staleComment.engagementEvidence?.actionAnchorStatus, "STALE");
+  assert.equal(staleComment.extractionStatus, "needs_attention");
+});
+
 test("numeric usernames never become engagement and runtime revalidates saved semantic mappings", () => {
   const numericAuthorPost = (author: string, commentSummary?: string) => el("div", {}, [
     el("div", {}, [
@@ -1174,6 +1243,24 @@ test("strategy variations append instead of overwriting and verified anchors ran
     },
   });
   assert.equal(rankStrategies([...two, ...legacy], "facebook")[0]?.anchors.like_anchor?.verificationStatus, "VERIFIED");
+});
+
+test("URL-first Auto Match carries selected strategy anchors into Step 3 without visual scan", () => {
+  const base = { version: 2 as const, platform: "facebook", parentLevel: 3, locatorStrategy: "POST_IDENTITY_ACTION_ROW_LEVEL" as const, updatedAt: "2026-11-16T00:00:00.000Z" };
+  const record = { semanticRole: "comment_anchor" as const, parentRelativePath: [2, 1], structuralSignature: { tag: "DIV", role: "button", childCount: 1, svgCount: 0 }, actionRowRelationship: "DESCENDANT" as const, sourceEvidence: { text: "Comment", tag: "DIV", role: "button", rect: null }, confidence: "high" as const, verificationStatus: "VERIFIED" as const, countSource: { relationship: "SAME_ELEMENT" as const, parentRelativePath: [2, 1, 0], method: "DOM_TEXT_NUMBER" as const, verificationStatus: "VERIFIED" as const } };
+  const strategy = { id: "strategy:facebook:selected", version: 1 as const, platform: "facebook", structuralSignature: "v2", parentConfig: base, anchors: { comment_anchor: record }, validationStatus: "CONFIRMED" as const, successes: 1, failures: 0, createdAt: base.updatedAt, updatedAt: base.updatedAt };
+  const effective = effectiveStrategyConfig(strategy);
+  assert.equal(effective.domAnchors?.comment_anchor?.countSource.verificationStatus, "VERIFIED");
+  const page = readFileSync("src/renderer/post-detail-collector/PostDetailCollectorPage.tsx", "utf8");
+  const review = explorer();
+  assert.match(page, /effectiveStrategyConfig\(strategy\)/);
+  assert.match(page, /parentConfigs: selectedConfig/);
+  assert.match(page, /resolution\.resolvedDomAnchors/);
+  assert.match(page, /anchors: selectedConfig\?\.domAnchors/);
+  assert.doesNotMatch(page.slice(page.indexOf("const selectUrl"), page.indexOf("return (", page.indexOf("const selectUrl"))), /runPostDetailAutoScan/);
+  assert.match(review, /Count not available/);
+  assert.match(review, /Saved Anchor/);
+  assert.match(review, /strategyId/);
 });
 
 test("Auto Match gates on identity and Parent, not optional engagement anchors", () => {

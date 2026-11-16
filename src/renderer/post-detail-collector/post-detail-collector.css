@@ -861,6 +861,7 @@ body[data-panel="ui-overlay"] .ui-drawer.pdc-variables-drawer { height: 100vh; t
 .pdc-engagement-group { flex: 0 0 100%; display: grid; gap: 6px; padding: 8px; border: 1px solid #1f3d30; border-radius: 7px; background: rgba(16, 43, 32, .45); }
 .pdc-engagement-group h4 { margin: 0; font-size: 12px; color: #8fd9bd; text-transform: uppercase; letter-spacing: .04em; }
 .pdc-engagement-tags { display: flex; flex-wrap: wrap; gap: 6px; }
+.pdc-engagement-evidence { display: block; margin-top: 3px; color: #9db9ad; font-size: 10px; font-weight: 500; white-space: normal; text-align: left; }
 .pdc-step4 { display: grid; gap: 12px; }
 .pdc-batch-layout { display: grid; grid-template-columns: minmax(320px, .9fr) minmax(420px, 1.4fr); gap: 12px; align-items: start; }
 .pdc-batch-input-panel, .pdc-batch-results-panel { display: grid; gap: 10px; min-width: 0; }

@@ -1,4 +1,5 @@
 import type { PostDetailDomVariableMapping, PostDetailExtractionMethod, PostImageEntry } from "./types";
+import type { PostDetailDomAnchorRecord } from "../../shared/post-detail-collector/types";
 
 export type ExtractedDataContext = "post" | "comment" | "unknown";
 export type ExtractedDataKind = "text" | "link" | "image" | "media" | "datetime" | "content" | "engagement" | "attribute";
@@ -10,6 +11,12 @@ export type ExtractedDataItem = {
   sourceAttribute?: string; normalizedValue?: string; contentHtml?: string; hiddenByDefault?: boolean; hiddenReason?: string;
   mediaItems?: PostImageEntry[];
   outputs: ExtractedOutput[]; sourcePaths: number[][]; relativeXPath?: string;
+  engagementEvidence?: {
+    actionAnchorStatus: "VERIFIED" | "MISSING" | "STALE";
+    countSourceStatus: "VERIFIED" | "AMBIGUOUS" | "MISSING";
+    method: "DOM_TEXT" | "DOM_ATTRIBUTE" | "STRUCTURAL_RELATION" | "NONE";
+    reason: string;
+  };
 };
 export type ExecutedVariableMapping = {
   mapping: PostDetailDomVariableMapping;
@@ -18,7 +25,11 @@ export type ExecutedVariableMapping = {
   reason?: string;
 };
 
-type ExtractionOptions = { postId?: string; currentUrl?: string };
+type ExtractionOptions = {
+  postId?: string;
+  currentUrl?: string;
+  domAnchors?: Partial<Record<"like_anchor" | "comment_anchor" | "share_anchor", PostDetailDomAnchorRecord>>;
+};
 const clean = (value: string | null | undefined) => (value || "").replace(/[\u034f\u200b-\u200f\u2060\ufeff]/g, "").replace(/\s+/g, " ").trim();
 const pathKey = (path: number[]) => path.join("/");
 export const relativeXPathForPath = (path: number[]) => `.${path.map(index => `/*[${index + 1}]`).join("")}`;
@@ -142,6 +153,11 @@ function contentRangeHtml(elements: Element[]) {
 type EngagementField = "like_count" | "comment_count" | "share_count";
 type EngagementCandidate = { field: EngagementField; value: string; method: "DOM_TEXT_NUMBER" | "DOM_ATTRIBUTE_NUMBER"; attribute?: string; element: Element };
 const ENGAGEMENT_LABELS: Record<EngagementField, string> = { like_count: "Likes", comment_count: "Comments", share_count: "Shares" };
+const ENGAGEMENT_ANCHOR_ROLE: Record<EngagementField, "like_anchor" | "comment_anchor" | "share_anchor"> = {
+  like_count: "like_anchor",
+  comment_count: "comment_anchor",
+  share_count: "share_anchor",
+};
 
 export function parseEngagementNumber(raw: string | null | undefined): number | null {
   const text = clean(raw);
@@ -269,11 +285,148 @@ function collapseEngagementCandidates(field: EngagementField, rawList: Engagemen
   return collapsed;
 }
 
-function extractPostEngagements(root: Element, timestampAnchor: Element | null, contentRoots: Element[] | null, excludedRoots: Set<Element>): ExtractedDataItem[] {
+function anchorMatchesRecord(element: Element, record: PostDetailDomAnchorRecord): boolean {
+  const signature = record.structuralSignature || {};
+  return (
+    (!signature.tag || element.tagName === signature.tag) &&
+    (!signature.role || element.getAttribute("role") === signature.role) &&
+    (!Number.isInteger(signature.childCount) || element.children.length === signature.childCount) &&
+    (!Number.isInteger(signature.svgCount) || element.querySelectorAll("svg").length === signature.svgCount)
+  );
+}
+
+function numericSourcesWithin(element: Element): Array<{ element: Element; value: string; method: "DOM_TEXT_NUMBER" | "DOM_ATTRIBUTE_NUMBER"; attribute?: string }> {
+  const nodes = [element, ...Array.from(element.querySelectorAll("[aria-label],[title],[data-count],span"))];
+  const out: Array<{ element: Element; value: string; method: "DOM_TEXT_NUMBER" | "DOM_ATTRIBUTE_NUMBER"; attribute?: string }> = [];
+  for (const node of nodes) {
+    if (structurallyHidden(node)) continue;
+    for (const attribute of ["aria-label", "title", "data-count"] as const) {
+      const raw = node.getAttribute(attribute);
+      const value = parseEngagementNumber(raw);
+      if (value !== null) out.push({ element: node, value: String(value), method: "DOM_ATTRIBUTE_NUMBER", attribute });
+    }
+    const direct = clean(Array.from(node.childNodes).filter(child => child.nodeType === 3).map(child => child.textContent).join(" "));
+    const value = parseEngagementNumber(direct);
+    if (value !== null) out.push({ element: node, value: String(value), method: "DOM_TEXT_NUMBER" });
+  }
+  const unique = new Map<string, (typeof out)[number]>();
+  for (const item of out) unique.set(`${elementPath(item.element, element)?.join("/") || "root"}:${item.attribute || "text"}:${item.value}`, item);
+  return Array.from(unique.values());
+}
+
+function resolveSavedCountSource(root: Element, record: PostDetailDomAnchorRecord) {
+  const saved = record.countSource;
+  if (saved.verificationStatus !== "VERIFIED" || !saved.parentRelativePath) return null;
+  const element = elementAtPath(root, saved.parentRelativePath);
+  if (!element || isComment(element, root)) return { status: "STALE" as const };
+  const raw = saved.method === "DOM_ATTRIBUTE_NUMBER"
+    ? element.getAttribute(saved.attribute || "aria-label")
+    : element.textContent;
+  const value = parseEngagementNumber(raw);
+  return value === null
+    ? { status: "STALE" as const }
+    : { status: "VERIFIED" as const, element, value: String(value), method: saved.method || "DOM_TEXT_NUMBER", attribute: saved.attribute, relationship: saved.relationship };
+}
+
+function extractAnchorFirstEngagements(root: Element, options: ExtractionOptions): Map<EngagementField, ExtractedDataItem> {
+  const results = new Map<EngagementField, ExtractedDataItem>();
+  const anchors = options.domAnchors || {};
+  const resolvedAnchors = new Map<EngagementField, Element>();
+  for (const field of ["like_count", "comment_count", "share_count"] as EngagementField[]) {
+    const record = anchors[ENGAGEMENT_ANCHOR_ROLE[field]];
+    const element = record ? elementAtPath(root, record.parentRelativePath) : null;
+    if (record && element && !isComment(element, root) && record.verificationStatus === "VERIFIED" && anchorMatchesRecord(element, record)) resolvedAnchors.set(field, element);
+  }
+  const resolvedNodes = new Set(resolvedAnchors.values());
+  const resolvedList = Array.from(resolvedAnchors.values());
+  const anchorRow = resolvedList.length >= 2
+    ? resolvedList.slice(1).reduce<Element | null>((common, element) => common ? commonAncestor(common, element, root) : null, resolvedList[0])
+    : null;
+  const precedingSummaryRegions: Element[] = [];
+  for (let node = anchorRow; node && node !== root; node = node.parentElement) {
+    const siblings = node.parentElement ? Array.from(node.parentElement.children) : [];
+    const index = siblings.indexOf(node);
+    if (index > 0) precedingSummaryRegions.push(siblings[index - 1]);
+    if (precedingSummaryRegions.length >= 3) break;
+  }
+  for (const field of ["like_count", "comment_count", "share_count"] as EngagementField[]) {
+    const role = ENGAGEMENT_ANCHOR_ROLE[field];
+    const record = anchors[role];
+    if (!record) continue;
+    const anchor = elementAtPath(root, record.parentRelativePath);
+    const anchorVerified = resolvedAnchors.get(field) === anchor;
+    const anchorStatus = !anchor ? "MISSING" as const : anchorVerified ? "VERIFIED" as const : "STALE" as const;
+    const saved = resolveSavedCountSource(root, record);
+    const local = anchorVerified && anchor ? numericSourcesWithin(anchor) : [];
+    const sibling = anchorVerified && anchor?.parentElement
+      ? Array.from(anchor.parentElement.children)
+          .filter(element => element !== anchor && !resolvedNodes.has(element) && !Array.from(resolvedNodes).some(other => element.contains(other)))
+          .flatMap(numericSourcesWithin)
+      : [];
+    const semanticSummary = precedingSummaryRegions.flatMap(region => Array.from(region.querySelectorAll("[aria-label],[title],button,[role='button'],span"))).flatMap(element => {
+      if (classifyEngagementField(element, root) !== field) return [];
+      const value = parseSemanticEngagementNumber(element.getAttribute("aria-label"), field) ?? parseSemanticEngagementNumber(element.textContent, field);
+      return value === null ? [] : [{ element, value: String(value), method: element.getAttribute("aria-label") ? "DOM_ATTRIBUTE_NUMBER" as const : "DOM_TEXT_NUMBER" as const, attribute: element.getAttribute("aria-label") ? "aria-label" : undefined }];
+    });
+    const fieldIndex = (["like_count", "comment_count", "share_count"] as EngagementField[]).indexOf(field);
+    const structuralSummary = precedingSummaryRegions.flatMap(region => {
+      if (region.children.length !== 3) return [];
+      const branches = Array.from(region.children).map(numericSourcesWithin);
+      if (branches.some(items => new Set(items.map(item => item.value)).size !== 1)) return [];
+      return branches[fieldIndex]?.slice(0, 1) || [];
+    });
+    const discovered = local.length ? local : sibling.length ? sibling : semanticSummary.length ? semanticSummary : structuralSummary;
+    const values = new Set(discovered.map(item => item.value));
+    const winner = saved?.status === "VERIFIED"
+      ? saved
+      : discovered.length && values.size === 1
+        ? { status: "VERIFIED" as const, ...discovered[0], relationship: local.length ? "SAME_ELEMENT" as const : sibling.length ? "SIBLING" as const : "SUMMARY_REGION" as const }
+        : null;
+    const ambiguous = anchorVerified && !winner && values.size > 1;
+    const source = winner?.element || anchor;
+    const sourcePath = source ? elementPath(source, root) : null;
+    const value = winner?.value || "";
+    const countSourceStatus = winner ? "VERIFIED" as const : ambiguous ? "AMBIGUOUS" as const : "MISSING" as const;
+    const reason = anchorStatus !== "VERIFIED"
+      ? `Saved ${role} did not resolve uniquely with its structural signature.`
+      : winner
+        ? `Count resolved from the verified ${role} using ${winner.relationship}.`
+        : ambiguous
+          ? `Verified ${role} contains conflicting numeric sources: ${Array.from(values).join(", ")}.`
+          : `Verified ${role} has no explicit numeric count source.`;
+    results.set(field, {
+      id: `${field}:anchor:${sourcePath?.join("/") || anchorStatus.toLowerCase()}`,
+      kind: "engagement",
+      value,
+      label: ENGAGEMENT_LABELS[field],
+      attribute: winner?.attribute,
+      predictedType: "number",
+      semanticField: field,
+      context: "post",
+      confidence: winner ? "high" : "low",
+      extractionStatus: winner ? "verified" : "needs_attention",
+      sourceAttribute: winner?.attribute,
+      hiddenByDefault: false,
+      outputs: [{ key: "count", label: "Count (number)", value, method: winner?.method || "DOM_TEXT_NUMBER", attribute: winner?.attribute }],
+      sourcePaths: sourcePath ? [sourcePath] : [],
+      relativeXPath: sourcePath ? relativeXPathForPath(sourcePath) : undefined,
+      engagementEvidence: {
+        actionAnchorStatus: anchorStatus,
+        countSourceStatus,
+        method: winner ? (winner.relationship === "SAME_ELEMENT" ? (winner.attribute ? "DOM_ATTRIBUTE" : "DOM_TEXT") : "STRUCTURAL_RELATION") : "NONE",
+        reason,
+      },
+    });
+  }
+  return results;
+}
+
+function extractPostEngagements(root: Element, timestampAnchor: Element | null, contentRoots: Element[] | null, excludedRoots: Set<Element>, options: ExtractionOptions): ExtractedDataItem[] {
+  const anchorFirst = extractAnchorFirstEngagements(root, options);
   const actionRow = findActionRowCluster(root, timestampAnchor);
   const firstComment = root.querySelector("[role='article'],article");
   const afterNode = contentRoots?.[contentRoots.length - 1] || timestampAnchor;
-  if (!actionRow && !afterNode) return [];
+  if (!actionRow && !afterNode) return Array.from(anchorFirst.values());
 
   const isInEngagementZone = (el: Element): boolean => {
     if (isComment(el, root) || structurallyHidden(el)) return false;
@@ -379,6 +532,11 @@ function extractPostEngagements(root: Element, timestampAnchor: Element | null, 
         sourcePaths: paths,
       });
     }
+  }
+  for (const [field, item] of anchorFirst) {
+    const legacyIndex = results.findIndex(candidate => candidate.semanticField === field);
+    if (legacyIndex >= 0) results.splice(legacyIndex, 1, item);
+    else results.push(item);
   }
   return results;
 }
@@ -622,7 +780,7 @@ export function extractParentData(root: Element, options: ExtractionOptions = {}
       add({ kind: "content", value: "", label: "Content (Needs Attention)", predictedType: "text", semanticField: "content", context: "post", confidence: "low", extractionStatus: "needs_attention", outputs: [{ key: "content_text", label: "Plain text", value: "", method: "CONTENT_TEXT" }] }, []);
     }
   }
-  for (const engagementItem of extractPostEngagements(root, timestampAnchor, contentRoots, excludedRoots)) {
+  for (const engagementItem of extractPostEngagements(root, timestampAnchor, contentRoots, excludedRoots, options)) {
     grouped.set(engagementItem.id, engagementItem);
   }
   const actionRowForMedia = findActionRowCluster(root, timestampAnchor);

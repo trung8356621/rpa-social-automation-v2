@@ -1,5 +1,5 @@
 import React, { useEffect, useMemo, useRef, useState } from "react";
-import type { PostDetailSavedParentResolution } from "../../shared/post-detail-collector/types";
+import type { PostDetailParentConfig, PostDetailSavedParentResolution } from "../../shared/post-detail-collector/types";
 import type { CollectorValueType, CollectorVariable } from "../../shared/collectors/types";
 import { collectorReportBrowserHost, collectorSetBrowserVisible } from "../collectors/browser-capture";
 import { claimCollectorHostOwner, releaseCollectorHostOwner } from "../collectors/collector-host-owner";
@@ -64,7 +64,7 @@ function loadVariables(): VariableOption[] {
   return listRegistryVariables();
 }
 
-export function SavedParentHtmlStep({ invoke, result, currentUrl, variableMappings, onVariableMappings, hiddenExtractedData, onHiddenExtractedData, onVariablesChanged, onRematch, onNextBatchValidation, reviewMode }: { invoke: Invoke; result: PostDetailSavedParentResolution | null; currentUrl: string; variableMappings: PostDetailDomVariableMapping[]; onVariableMappings: (mappings: PostDetailDomVariableMapping[]) => void; hiddenExtractedData: Record<string, string[]>; onHiddenExtractedData: (hidden: Record<string, string[]>) => void; onVariablesChanged?: () => void; onRematch: () => void; onNextBatchValidation?: () => void; reviewMode?: Step4DetailReviewProps }) {
+export function SavedParentHtmlStep({ invoke, result, currentUrl, parentConfig, variableMappings, onVariableMappings, hiddenExtractedData, onHiddenExtractedData, onVariablesChanged, onRematch, onNextBatchValidation, reviewMode }: { invoke: Invoke; result: PostDetailSavedParentResolution | null; currentUrl: string; parentConfig?: PostDetailParentConfig; variableMappings: PostDetailDomVariableMapping[]; onVariableMappings: (mappings: PostDetailDomVariableMapping[]) => void; hiddenExtractedData: Record<string, string[]>; onHiddenExtractedData: (hidden: Record<string, string[]>) => void; onVariablesChanged?: () => void; onRematch: () => void; onNextBatchValidation?: () => void; reviewMode?: Step4DetailReviewProps }) {
   const status = result?.status || "NOT_CONFIGURED";
   const hostRef = useRef<HTMLDivElement>(null);
   const [tab, setTab] = useState<"explorer" | "raw">("explorer");
@@ -167,12 +167,8 @@ export function SavedParentHtmlStep({ invoke, result, currentUrl, variableMappin
   const atPath = React.useCallback((path: number[]) => { let node: Element | null = parsed; for (const index of path) node = node?.children.item(index) || null; return node; }, [parsed]);
   const postId = String(result?.diagnosticMeta?.postId || currentUrl.match(/\/posts\/(\d+)/)?.[1] || "current-post");
   const extractedData = useMemo(() => {
-    const items = parsed ? extractParentData(parsed, { postId, currentUrl }) : [];
-    if (result?.diagnosticMeta?.engagementAnchorsVerified !== false) return items;
-    return items.map(item => item.kind === "engagement"
-      ? { ...item, confidence: "low" as const, extractionStatus: "needs_attention" as const }
-      : item);
-  }, [parsed, postId, currentUrl, result?.diagnosticMeta?.engagementAnchorsVerified]);
+    return parsed ? extractParentData(parsed, { postId, currentUrl, domAnchors: parentConfig?.domAnchors }) : [];
+  }, [parsed, postId, currentUrl, parentConfig?.domAnchors]);
   const manuallyHidden = hiddenExtractedData[postId] || [];
   const hiddenCount = extractedData.filter(item => item.hiddenByDefault || manuallyHidden.includes(item.id)).length;
   const visibleData = showHidden ? extractedData : extractedData.filter(item => !item.hiddenByDefault && !manuallyHidden.includes(item.id));
@@ -288,12 +284,16 @@ export function SavedParentHtmlStep({ invoke, result, currentUrl, variableMappin
     const mappings = mappingsForItem(item);
     const mappingStatus = (item.sourcePaths.length > 1 && item.semanticField !== "content") || item.extractionStatus === "needs_attention" ? "Needs Attention" : mappings.length ? "Auto Mapped" : suggestedVariable(item) ? "Suggested" : "Unmapped";
     const displayLabel = item.kind === "engagement"
-      ? `${item.label || item.semanticField}: ${item.value || "Needs Attention"}`
+      ? item.value
+        ? `${item.label || item.semanticField}: ${item.value}`
+        : item.engagementEvidence?.countSourceStatus === "MISSING"
+          ? `${item.label || item.semanticField}: Count not available`
+          : `${item.label || item.semanticField}: Needs Attention`
       : item.semanticField === "post_images"
         ? `Post Images (${item.mediaItems?.length ?? 0})`
         : (item.label || item.value);
     return <span key={item.id} className="pdc-data-tag-wrap" onMouseEnter={() => { if (item.sourcePaths.length === 1) highlightNodePath(item.sourcePaths[0]); }} onMouseLeave={() => { void invoke({ type: "postDetailClearParentNodeHighlight" }); }}><button type="button" title={item.value || displayLabel} className={`pdc-data-tag status-${mappingStatus.toLowerCase().replace(/\s+/g, "-")} ${selectedDataId === item.id ? "selected" : ""}`} onClick={() => selectData(item)}>
-      <span className="pdc-data-value">{displayLabel}</span>
+      <span className="pdc-data-value">{displayLabel}</span>{item.engagementEvidence && <small className="pdc-engagement-evidence">Anchor: {item.engagementEvidence.actionAnchorStatus} · Count: {item.engagementEvidence.countSourceStatus} · {item.engagementEvidence.method} · {item.engagementEvidence.reason}</small>}
     </button><button type="button" className="pdc-data-hide" aria-label={`Hide ${displayLabel}`} onClick={() => hideData(item)}>×</button></span>;
   };
 
@@ -427,7 +427,7 @@ export function SavedParentHtmlStep({ invoke, result, currentUrl, variableMappin
           {mappingsForItem(selectedData).length > 0 && <div className="pdc-output-mappings"><b>Output mappings</b>{mappingsForItem(selectedData).map(mapping => <span key={`${mapping.variableId}:${mapping.outputKey || mapping.preview}`}>{mapping.outputKey || "legacy"} → {mapping.variableLabel}</span>)}</div>}
           {variables.length ? <><select value={variableId} onChange={event => setVariableId(event.target.value)}><option value="">Select existing variable…</option>{variables.map(variable => <option key={`${variable.collectorId}:${variable.id}`} value={`${variable.collectorId}:${variable.id}`}>{variable.collectorName} · {variable.label} ({variable.key})</option>)}</select><p>Preview: <span className="pdc-preserve-lines">{selectedOutput?.value || selectedData.value}</span></p><div className="pdc-btn-row pdc-detail-actions"><button className="pdc-btn pdc-btn-primary" disabled={!canMapSelectedData(selectedData, selectedOutput)} onClick={applyDataMapping}>Save Mapping</button><button className="pdc-btn pdc-btn-secondary" disabled={!selectedOutput || !mappingForOutput(selectedData, selectedOutput)} onClick={unmapData}>Unmap Output</button></div></> : <p className="pdc-panel-desc">No existing Collector variables. Create schema in Collectors first.</p>}
         </div>}
-      </div><details className="pdc-advanced-debug"><summary>Advanced Debug</summary><div className="pdc-btn-row"><button className={`pdc-btn pdc-btn-tiny ${tab === "explorer" ? "active" : ""}`} onClick={() => setTab("explorer")}>DOM Explorer</button><button className={`pdc-btn pdc-btn-tiny ${tab === "raw" ? "active" : ""}`} onClick={() => setTab("raw")}>Raw HTML</button><button className="pdc-btn pdc-btn-tiny" disabled={!focusPath.length} onClick={resetFocus}>Reset Focus</button></div>
+      </div><details className="pdc-advanced-debug"><summary>Advanced Debug</summary><p className="pdc-panel-desc">Strategy {String(result?.diagnosticMeta?.strategyId || "platform fallback")} · version {String(result?.diagnosticMeta?.strategyVersion || parentConfig?.version || "legacy")}</p><div className="pdc-parent-table-wrap"><table className="pdc-parent-table"><thead><tr><th>Field</th><th>Saved Anchor</th><th>Live Anchor</th><th>Count Source</th><th>Value</th><th>Source / failure</th></tr></thead><tbody>{(["like_count", "comment_count", "share_count"] as const).map(field => { const item = engagementData.find(candidate => candidate.semanticField === field); const role = field.replace("_count", "_anchor") as "like_anchor" | "comment_anchor" | "share_anchor"; const saved = parentConfig?.domAnchors?.[role]; return <tr key={field}><td>{field.replace("_count", "").toUpperCase()}</td><td>{saved ? `${saved.verificationStatus} · ${saved.parentRelativePath.join("/")}` : "MISSING"}</td><td>{item?.engagementEvidence?.actionAnchorStatus || "MISSING"}</td><td>{item?.engagementEvidence?.countSourceStatus || "MISSING"}</td><td>{item?.value || "—"}</td><td>{item?.sourcePaths.map(path => path.join("/")).join(", ") || item?.engagementEvidence?.reason || "NO_SOURCE"}</td></tr>; })}</tbody></table></div><div className="pdc-btn-row"><button className={`pdc-btn pdc-btn-tiny ${tab === "explorer" ? "active" : ""}`} onClick={() => setTab("explorer")}>DOM Explorer</button><button className={`pdc-btn pdc-btn-tiny ${tab === "raw" ? "active" : ""}`} onClick={() => setTab("raw")}>Raw HTML</button><button className="pdc-btn pdc-btn-tiny" disabled={!focusPath.length} onClick={resetFocus}>Reset Focus</button></div>
       {tab === "raw" ? <pre className="pdc-code-preview">{result?.innerHTML}</pre> : <><div className="pdc-dom-breadcrumb"><button onClick={resetFocus}>Root</button>{breadcrumbs.map(path => <button key={pathKey(path)} onClick={() => setFocusPath(path)}>› {atPath(path)?.tagName.toLowerCase()}</button>)}</div><label className="pdc-split-control">Tree width <input type="range" min="30" max="75" value={treeRatio} onChange={event => setTreeRatio(Number(event.target.value))} /></label><div className="pdc-dom-columns" style={{ gridTemplateColumns: `${treeRatio}fr ${100 - treeRatio}fr` }}><div className="pdc-dom-tree"><ul>{nodes.map(node => <TreeNode key={pathKey(node.path)} node={node} expanded={expanded} selected={selected ? pathKey(selected.path) : ""} onToggle={key => setExpanded(current => { const next = new Set(current); next.has(key) ? next.delete(key) : next.add(key); return next; })} onSelect={choose} onFocus={focus} onHover={highlight} />)}</ul></div><div className="pdc-dom-inspector"><h3>Inspector</h3>{selected ? <>
         <section><h4>Attributes</h4><dl className="pdc-kv">{Object.entries(selected.attrs).map(([name, value]) => <React.Fragment key={name}><dt>{name}</dt><dd>{value}</dd></React.Fragment>)}</dl></section>
         <section><h4>Text</h4><p>{selected.directText || selected.textPreview || "—"}</p><button className="pdc-btn pdc-btn-tiny" onClick={() => copy(selected.element.textContent || "")}>Copy Text</button><details><summary>Full text</summary><pre>{selected.element.textContent}</pre></details><details><summary>outerHTML</summary><pre>{selected.element.outerHTML}</pre></details></section>

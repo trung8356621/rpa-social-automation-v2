@@ -258,6 +258,16 @@ test("saved V2 action row locator is XPath-only, post-scoped and never ranks Par
   assert.match(located, /parentVerified/);
 });
 
+test("saved Parent resolver repairs stale engagement paths only from semantic controls in verified Action Row", () => {
+  const source = readFileSync("src/main/post-detail-parent-probe.ts", "utf8");
+  assert.match(source, /SEMANTIC_ACTION_ROW/);
+  assert.match(source, /semanticPattern/);
+  assert.match(source, /row\.querySelectorAll\('button,\[role=button\],a\[aria-label\],\[title\]'\)/);
+  assert.match(source, /matches\.length===1\?matches\[0\]:null/);
+  assert.match(source, /resolvedDomAnchors/);
+  assert.doesNotMatch(source, /semanticNode\s*\|\|\s*row\.children/);
+});
+
 test("teaching verifies the generated XPath and confirmed Parent before returning V2", () => {
   const source = buildPostDetailParentProbeJs({
     sourceUrl: "https://www.facebook.com/groups/g/permalink/42/",
@@ -285,6 +295,9 @@ test("teaching verifies the generated XPath and confirmed Parent before returnin
   assert.match(source, /new Set\(controlSlots\)\.size===3/);
   assert.match(source, /self::button or @role='button' or \.\/\/button/);
   assert.match(source, /AMBIGUOUS_ACTION_ROW/);
+  assert.match(source, /countSource:count&&countPath/);
+  assert.match(source, /relationship:'SAME_ELEMENT'/);
+  assert.match(source, /relationship:'SIBLING'/);
   assert.doesNotMatch(source, /@class=/);
   assert.match(source, /diagnosticXPathPrefixes/);
   assert.match(source, /relativeExact\[0\]!==row/);
