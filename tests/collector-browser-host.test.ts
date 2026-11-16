@@ -348,23 +348,13 @@ test("clipHostRectToVisibleArea clips host to sidebar, scroll container, and vie
     });
     assert.equal(offscreen.height, 0);
 
-    // Expanded right-anchored sidebar drawer overlapping host on 1366x768 -> native right edge clipped
-    const drawerHost = {
+    // Canonical .rpa-browser-host keeps exact 1024x560 even when drawer or window is narrower
+    const canonicalHost = {
       parentElement: contentArea,
-      closest: (sel: string) => {
-        if (sel === ".app-page") return {};
-        if (sel === ".rpa-browser-workspace") {
-          return {
-            querySelector: (q: string) =>
-              q === "[data-browser-sidebar-drawer]"
-                ? { getBoundingClientRect: () => ({ left: 1054, top: 120, right: 1354, bottom: 760, width: 300, height: 640 }) }
-                : null,
-          };
-        }
-        return null;
-      },
+      classList: { contains: (cls: string) => cls === "rpa-browser-host" },
+      closest: (sel: string) => (sel === ".app-page" ? {} : null),
     } as unknown as HTMLElement;
-    const drawerClipped = clipHostRectToVisibleArea(drawerHost, {
+    const canonicalClipped = clipHostRectToVisibleArea(canonicalHost, {
       left: 220,
       top: 120,
       right: 220 + 1024,
@@ -372,9 +362,9 @@ test("clipHostRectToVisibleArea clips host to sidebar, scroll container, and vie
       width: 1024,
       height: 560,
     });
-    assert.equal(drawerClipped.left, 220);
-    assert.equal(drawerClipped.width, 1054 - 220);
-    assert.equal(drawerClipped.height, 560);
+    assert.equal(canonicalClipped.left, 220);
+    assert.equal(canonicalClipped.width, 1024);
+    assert.equal(canonicalClipped.height, 560);
   } finally {
     g.window = prevWindow;
     g.document = prevDoc;
@@ -420,4 +410,27 @@ test("createRafHostPublishScheduler coalesces multiple calls into one animation 
     g.requestAnimationFrame = prevRaf;
     g.cancelAnimationFrame = prevCancel;
   }
+});
+
+test("fitCaptureImageInDisplay keeps 1:1 DIP scale without stretching clipped captures", () => {
+  // Full 1024x560 capture at DPR 1 and DPR 1.25 -> 1024x560
+  const full1x = fitCaptureImageInDisplay(1024, 560, 1024, 560);
+  assert.equal(full1x.width, 1024);
+  assert.equal(full1x.height, 560);
+  const full125x = fitCaptureImageInDisplay(1024, 560, 1280, 700);
+  assert.equal(full125x.width, 1024);
+  assert.equal(full125x.height, 560);
+
+  // Drawer-clipped capture (700x560 at DPR 1 or 875x700 at DPR 1.25) -> 700x560 (not 1024x819)
+  const clipped1x = fitCaptureImageInDisplay(1024, 560, 700, 560);
+  assert.equal(clipped1x.width, 700);
+  assert.equal(clipped1x.height, 560);
+  const clipped125x = fitCaptureImageInDisplay(1024, 560, 875, 700);
+  assert.equal(clipped125x.width, 700);
+  assert.equal(clipped125x.height, 560);
+
+  // 1920x1080 @ 150% DPI (1280x720 DIP), drawer open: hostShell 748x482, image 1122x723 -> 748x482
+  const clipped150x = fitCaptureImageInDisplay(748, 482, 1122, 723);
+  assert.equal(clipped150x.width, 748);
+  assert.equal(clipped150x.height, 482);
 });

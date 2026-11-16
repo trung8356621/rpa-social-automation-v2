@@ -63,23 +63,31 @@ export function clipHostRectToVisibleArea(
     }
   }
 
-  // Native WebContentsView occlusion: if the right-anchored sidebar drawer (expanded
-  // or collapsed tab) in the same BrowserWorkspace overlaps the host, clip native
-  // right edge so the drawer/tab remains visible and clickable above WebContentsView.
-  const workspace = typeof hostEl.closest === "function" ? hostEl.closest(".rpa-browser-workspace") : null;
-  const drawer = workspace?.querySelector("[data-browser-sidebar-drawer]");
-  if (drawer) {
-    const drawerRect = drawer.getBoundingClientRect();
-    if (drawerRect.width > 0 && drawerRect.left < right && drawerRect.right > left) {
-      right = Math.min(right, drawerRect.left);
+  const width = Math.max(0, right - left);
+  const height = Math.max(0, bottom - top);
+  const isCanonicalFixedHost =
+    typeof hostEl.classList?.contains === "function" &&
+    hostEl.classList.contains("rpa-browser-host");
+
+  if (isCanonicalFixedHost) {
+    // Hard-lock canonical 1024x560 dimensions for .rpa-browser-host so OpenCV
+    // and DOM coordinates never shrink. Hide only if completely scrolled off-screen.
+    if (width < 10 || height < 10) {
+      return { left, top, width: 0, height: 0 };
     }
+    return {
+      left,
+      top,
+      width: rect.width,
+      height: rect.height,
+    };
   }
 
   return {
     left,
     top,
-    width: Math.max(0, right - left),
-    height: Math.max(0, bottom - top),
+    width,
+    height,
   };
 }
 

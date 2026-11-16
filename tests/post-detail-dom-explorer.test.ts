@@ -20,7 +20,7 @@ const extraction = () => readFileSync("src/renderer/post-detail-collector/extrac
 
 test("Step 3 defaults to extracted values and keeps deep DOM under Advanced Debug", () => {
   const source = explorer();
-  assert.match(source, /Step 3 — Extracted Data Review/);
+  assert.match(source, /pdc-compact-toolbar/);
   assert.match(source, /Extracted values/);
   assert.match(source, /<details className="pdc-advanced-debug"><summary>Advanced Debug<\/summary>/);
   assert.match(source, /Auto Mapped/);
@@ -652,7 +652,7 @@ test("DOM fixture: live-like Facebook nested wrappers & reaction toolbar + total
 test("Variable sidebar registry: always-visible Manage Variables, UiPopover drawer, BrowserCore hide/restore & CRUD", () => {
   const ui = explorer();
   // Always-visible Manage Variables button in header, independent of selectedData
-  const headerLine = ui.split("\n").find((l) => l.includes("pdc-section-header")) || "";
+  const headerLine = ui.split("\n").find((l) => l.includes("pdc-compact-toolbar")) || "";
   assert.match(headerLine, /Manage Variables/);
   assert.match(ui, /<UiPopover variant="drawer" label="Manage Variables"/);
   assert.match(ui, /className="variables-drawer pdc-variables-drawer"/);

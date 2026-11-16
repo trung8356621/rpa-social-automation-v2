@@ -17,6 +17,13 @@ export function publishPostDetailBrowserHost(
   return published?.client ?? null;
 }
 
+export function publishPostDetailBrowserHostDetails(
+  invoke: CollectorInvoke,
+  hostEl: HTMLElement | null,
+) {
+  return publishCollectorHostFromElement(invoke, hostEl);
+}
+
 export function snapshotPostDetailGeometry(hostEl: HTMLElement | null): Record<string, unknown> {
   return snapshotCollectorHostGeometry(hostEl);
 }

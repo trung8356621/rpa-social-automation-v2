@@ -1,6 +1,9 @@
 import React, { useEffect, useMemo, useRef, useState } from "react";
 import type { BrowserCoreNavigationResult, Rect, State } from "../../shared/contracts";
-import { dragToCaptureRoi } from "../../shared/collector-browser-host";
+import {
+  dragToCaptureRoi,
+  fitCaptureImageInDisplay,
+} from "../../shared/collector-browser-host";
 import { clientToImageCoords } from "../../shared/collectors/roi-preview-interaction";
 import { DEFAULT_POST_DETAIL_FIXTURE_URL } from "../../shared/post-detail-collector/types";
 import { auditVisualReferenceRoles, structuredReferenceRole, VISUAL_REFERENCE_ROLES } from "../../shared/post-detail-collector/visual-reference-role";
@@ -24,7 +27,7 @@ import {
 import { cropDataUrl } from "./image-utils";
 import {
   createRafHostPublishScheduler,
-  publishPostDetailBrowserHost,
+  publishPostDetailBrowserHostDetails,
   sameHostClientRect,
 } from "./publish-browser-host";
 import {
@@ -109,17 +112,24 @@ export function BrowserCaptureStep({
 
   const imageBox = useMemo(() => {
     if (!hostClient || !imageWidth || !imageHeight) return null;
-    const width = hostClient.width;
-    const height = (imageHeight / imageWidth) * width;
-    return { width, height };
+    const dpr = typeof window !== "undefined" && window.devicePixelRatio > 0 ? window.devicePixelRatio : 1;
+    const dipW = Math.min(hostClient.width, imageWidth / dpr);
+    const dipH = Math.min(hostClient.height, imageHeight / dpr);
+    const fitted = fitCaptureImageInDisplay(
+      dipW,
+      dipH,
+      imageWidth,
+      imageHeight,
+    );
+    return { width: fitted.width, height: fitted.height };
   }, [hostClient, imageWidth, imageHeight]);
   imageBoxRef.current = imageBox;
 
   const publishHost = React.useCallback(() => {
     if (!electron || !invoke) return;
-    const client = publishPostDetailBrowserHost(invoke, hostRef.current);
-    if (client) {
-      setHostClient((prev) => (sameHostClientRect(prev, client) ? prev : client));
+    const details = publishPostDetailBrowserHostDetails(invoke, hostRef.current);
+    if (details) {
+      setHostClient((prev) => (sameHostClientRect(prev, details.client) ? prev : details.client));
     } else if (!hostRef.current) {
       setHostClient((prev) => (prev === null ? prev : null));
     }

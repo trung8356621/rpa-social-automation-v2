@@ -4243,7 +4243,7 @@ body[data-panel="shell"] .collector-capture-split > aside.collector-capture-tool
   --rpa-browser-width: 1024px;
   --rpa-browser-height: 560px;
   --rpa-sidebar-width: 300px;
-  --rpa-sidebar-tab-width: 34px;
+  --rpa-sidebar-tab-width: 28px;
 }
 
 .rpa-browser-workspace {
@@ -4310,7 +4310,7 @@ body[data-panel="shell"] .collector-capture-split > aside.collector-capture-tool
   width: var(--rpa-sidebar-tab-width);
   align-items: center;
   justify-content: flex-start;
-  padding: 6px 2px;
+  padding: 6px 1px;
 }
 
 .rpa-browser-sidebar-header {
@@ -4350,8 +4350,8 @@ body[data-panel="shell"] .collector-capture-split > aside.collector-capture-tool
 }
 
 .rpa-browser-sidebar-tab {
-  width: 28px;
-  padding: 8px 2px;
+  width: 24px;
+  padding: 8px 1px;
   display: flex;
   flex-direction: column;
   align-items: center;

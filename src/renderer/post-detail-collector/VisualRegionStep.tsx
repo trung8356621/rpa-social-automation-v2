@@ -2,7 +2,10 @@ import React, { useEffect, useMemo, useRef, useState } from "react";
 import { playCompletionSound } from "../completion-sound";
 import { AutoScanStartError, runAutoScanClickPipeline, type AutoScanDiagnosticEvent } from "./auto-scan-click-pipeline";
 import type { Rect, State } from "../../shared/contracts";
-import { dragToCaptureRoi } from "../../shared/collector-browser-host";
+import {
+  dragToCaptureRoi,
+  fitCaptureImageInDisplay,
+} from "../../shared/collector-browser-host";
 import { clientToImageCoords } from "../../shared/collectors/roi-preview-interaction";
 import { assertCaptureFromSocialPage } from "../../shared/post-detail-collector/social-url";
 import type {
@@ -36,7 +39,7 @@ import {
 } from "./action-row-presentation";
 import {
   createRafHostPublishScheduler,
-  publishPostDetailBrowserHost,
+  publishPostDetailBrowserHostDetails,
   sameHostClientRect,
 } from "./publish-browser-host";
 import {
@@ -139,7 +142,10 @@ export function VisualRegionStep({
   const [confirmDiagnostics, setConfirmDiagnostics] = useState("");
   const [confirmDiagnosticsCopied, setConfirmDiagnosticsCopied] = useState(false);
   const [showDomDebug, setShowDomDebug] = useState(false);
-  const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
+  const [showHelp, setShowHelp] = useState(false);
+  const [sidebarCollapsed, setSidebarCollapsed] = useState(
+    () => typeof window !== "undefined" && window.innerWidth < 1548,
+  );
   const [drag, setDrag] = useState<DragState>();
   const [hostClient, setHostClient] = useState<HostClient | null>(null);
   const cancelRef = useRef(false);
@@ -172,16 +178,23 @@ export function VisualRegionStep({
 
   const imageBox = useMemo(() => {
     if (!hostClient || !imageWidth || !imageHeight) return null;
-    const width = hostClient.width;
-    const height = (imageHeight / imageWidth) * width;
-    return { width, height };
+    const dpr = typeof window !== "undefined" && window.devicePixelRatio > 0 ? window.devicePixelRatio : 1;
+    const dipW = Math.min(hostClient.width, imageWidth / dpr);
+    const dipH = Math.min(hostClient.height, imageHeight / dpr);
+    const fitted = fitCaptureImageInDisplay(
+      dipW,
+      dipH,
+      imageWidth,
+      imageHeight,
+    );
+    return { width: fitted.width, height: fitted.height };
   }, [hostClient, imageWidth, imageHeight]);
 
   const publishHost = React.useCallback(() => {
     if (!electron || !invoke) return;
-    const client = publishPostDetailBrowserHost(invoke, hostRef.current);
-    if (client) {
-      setHostClient((prev) => (sameHostClientRect(prev, client) ? prev : client));
+    const details = publishPostDetailBrowserHostDetails(invoke, hostRef.current);
+    if (details) {
+      setHostClient((prev) => (sameHostClientRect(prev, details.client) ? prev : details.client));
     } else if (!hostRef.current) {
       setHostClient((prev) => (prev === null ? prev : null));
     }
@@ -236,6 +249,9 @@ export function VisualRegionStep({
     setError("");
     cancelRef.current = false;
     setScanDiagnostics([]);
+    if (!sidebarCollapsed && hostClient && typeof window !== "undefined" && window.innerWidth < hostClient.left + hostClient.width + 300) {
+      setSidebarCollapsed(true);
+    }
     let ownsScan = false;
     const onDiagnostic = (event: AutoScanDiagnosticEvent) => {
       setScanDiagnostics(previous => [...previous.slice(-19), event]);
@@ -616,6 +632,16 @@ export function VisualRegionStep({
     : null;
 
   const running = progress.phase === "running";
+  useEffect(() => {
+    if (!electron || !invoke || running || shotUrl) return;
+    const overlapsHost =
+      !sidebarCollapsed &&
+      typeof window !== "undefined" &&
+      window.innerWidth < (hostClient?.left ?? 220) + 1024 + 300;
+    void collectorSetBrowserVisible(invoke, !overlapsHost).then(() => {
+      if (!overlapsHost) requestAnimationFrame(() => publishHost());
+    });
+  }, [electron, invoke, running, shotUrl, sidebarCollapsed, hostClient?.left, publishHost]);
   const mainRow = containerResult?.mainActionRow;
   const actionRowOverlay = actionRowOverlayForFrame(mainRow, active?.frameId);
   const actionRowStatus = actionRowDisplayStatus(mainRow);
@@ -831,67 +857,69 @@ export function VisualRegionStep({
 
   return (
     <div className="pdc-step pdc-step-calibration">
-      <div className="pdc-section-header">
-        <div>
-          <h2>Step 2 — Auto Scroll & Container Detection</h2>
-          <p className="pdc-subtitle">
-            Cuộn về đầu bài trước khi Start. Auto Scan khóa input (Facebook vẫn
-            hiện), wheel Δy=-100, settle thích ứng, tối đa 20 frame. Stop luôn
-            mở khóa.
-          </p>
-        </div>
-        <div className="pdc-btn-row">
-          <button
-            type="button"
-            className="pdc-btn pdc-btn-secondary"
-            disabled={running}
-            onClick={onBack}
+      <div className="pdc-compact-toolbar" role="toolbar" aria-label="Step 2 Auto Scan toolbar">
+        <button
+          type="button"
+          className="pdc-btn pdc-btn-secondary pdc-btn-compact"
+          disabled={running}
+          onClick={onBack}
+        >
+          ← Back
+        </button>
+        <span className="pdc-toolbar-title">Auto Scan</span>
+        <span className={`pdc-mode ${running ? "frozen" : "live"}`} role="status">
+          {progress.phase.toUpperCase()} · {running ? progress.frameIndex : frames.length}/{progress.maxFrames}
+        </span>
+        <button
+          type="button"
+          className="pdc-btn pdc-btn-primary pdc-btn-compact"
+          disabled={running || !visualReferences.length}
+          onClick={() => void startAutoScan()}
+        >
+          Start Auto Scan
+        </button>
+        <button
+          type="button"
+          className="pdc-btn pdc-btn-warn pdc-btn-compact"
+          disabled={!running}
+          onClick={stopScan}
+        >
+          Stop
+        </button>
+        <button
+          type="button"
+          className={`pdc-btn pdc-btn-secondary pdc-btn-compact ${showHelp ? "active" : ""}`}
+          aria-expanded={showHelp}
+          title="Cuộn về đầu bài trước khi Start. Auto Scan khóa input (Facebook vẫn hiện), wheel Δy=-100, settle thích ứng, tối đa 20 frame. Stop luôn mở khóa."
+          onClick={() => setShowHelp((v) => !v)}
+        >
+          Help (?)
+        </button>
+        <button
+          type="button"
+          className={`pdc-btn pdc-btn-secondary pdc-btn-compact ${!sidebarCollapsed ? "active" : ""}`}
+          onClick={() => {
+            setSidebarCollapsed((v) => !v);
+            requestAnimationFrame(() => publishHost());
+          }}
+        >
+          {sidebarCollapsed ? "Show Panel" : "Hide Panel"}
+        </button>
+        {running && (
+          <span
+            className="pdc-input-lock-badge"
+            title="OS input tới BrowserCore bị chặn; engine wheel vẫn chạy"
           >
-            ← Back
-          </button>
-          <button
-            type="button"
-            className="pdc-btn pdc-btn-primary"
-            disabled={running || !visualReferences.length}
-            onClick={() => void startAutoScan()}
-          >
-            Start Auto Scan
-          </button>
-          <button
-            type="button"
-            className="pdc-btn pdc-btn-warn"
-            disabled={!running}
-            onClick={stopScan}
-          >
-            Stop
-          </button>
-          {running && (
-            <span
-              className="pdc-input-lock-badge"
-              title="OS input tới BrowserCore bị chặn; engine wheel vẫn chạy"
-            >
-              Auto Scan · Input Locked
-            </span>
-          )}
-        </div>
+            Input Locked
+          </span>
+        )}
       </div>
 
-      <div className="pdc-scan-status-wrap">
-        <div className="pdc-scan-status" role="status">
-          <span className={`pdc-mode ${running ? "frozen" : "live"}`}>
-            {progress.phase.toUpperCase()}
-          </span>
-          <span>
-            Frames: {running ? progress.frameIndex : frames.length}/
-            {progress.maxFrames}
-          </span>
-          <span>{progress.message}</span>
+      {showHelp && (
+        <div className="pdc-help-note">
+          Cuộn về đầu bài trước khi Start. Auto Scan khóa input (Facebook vẫn hiện), wheel Δy=-100, settle thích ứng, tối đa 20 frame. Stop luôn mở khóa.
         </div>
-        {scanDiagnostics.length > 0 && <details className="pdc-advanced-debug pdc-scan-pipeline-debug" open={Boolean(error)}>
-          <summary>Auto Scan Pipeline Diagnostics</summary>
-          <ol>{scanDiagnostics.map((event, index) => <li key={`${event.at}-${index}`}><code>{event.stage}</code>{event.failureCode ? ` · ${event.failureCode}` : ""}{event.frameIndex != null ? ` · frame ${event.frameIndex}` : ""}{event.detail ? ` · ${event.detail}` : ""}</li>)}</ol>
-        </details>}
-      </div>
+      )}
 
       {error && <div className="pdc-alert pdc-alert-error">{error}</div>}
       {manualMode && (
@@ -1143,8 +1171,15 @@ export function VisualRegionStep({
             )}
           </ul>
 
-          <details className="pdc-advanced-debug">
+          <details className="pdc-advanced-debug" open={Boolean(error)}>
             <summary>Advanced Debug · Anchor Matcher</summary>
+            <p className="pdc-panel-desc">{progress.message}</p>
+            {scanDiagnostics.length > 0 && (
+              <div className="pdc-scan-pipeline-debug">
+                <strong>Auto Scan Pipeline Diagnostics</strong>
+                <ol>{scanDiagnostics.map((event, index) => <li key={`${event.at}-${index}`}><code>{event.stage}</code>{event.failureCode ? ` · ${event.failureCode}` : ""}{event.frameIndex != null ? ` · frame ${event.frameIndex}` : ""}{event.detail ? ` · ${event.detail}` : ""}</li>)}</ol>
+              </div>
+            )}
             <table className="pdc-parent-table"><thead><tr><th>Anchor</th><th>Best Score</th><th>Threshold</th><th>Result</th><th>Best bbox / reason</th></tr></thead><tbody>
               {anchorDiagnostics.map(item => <tr key={item.type}><td>{item.type}</td><td>{item.score == null ? "—" : item.score.toFixed(3)}</td><td>{item.threshold == null ? "—" : item.threshold.toFixed(3)}</td><td>{item.result}</td><td>{item.bbox ? `${Math.round(item.bbox.x)},${Math.round(item.bbox.y)} ${Math.round(item.bbox.width)}×${Math.round(item.bbox.height)}` : "—"}{item.reason ? ` · ${item.reason}` : ""}</td></tr>)}
             </tbody></table>

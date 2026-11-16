@@ -377,22 +377,20 @@ export function SavedParentHtmlStep({ invoke, result, currentUrl, parentConfig, 
   const reviewCanonicalUrl = reviewMode ? canonicalPostUrl(reviewMode.row.url, reviewMode.row.postId) : "";
 
   return <div className={`pdc-step pdc-step3 ${isExpanded ? "pdc-explorer-expanded" : ""}`}>
-    {!reviewMode ? <div className="pdc-section-header"><div><h2>Step 3 — Extracted Data Review</h2><p className="pdc-subtitle">AUTO resolves the saved Parent and shows meaningful DOM values without wrapper markup.</p></div><div className="pdc-btn-row"><button type="button" className={`pdc-btn pdc-btn-secondary ${variablesOpen ? "active" : ""}`} onClick={openVariablesDrawer}>Manage Variables</button><button className="pdc-btn pdc-btn-secondary" onClick={() => setIsExpanded(value => !value)}>{isExpanded ? "Restore" : "Expand"}</button><button className="pdc-btn pdc-btn-secondary" onClick={rematch}>Customize · Rematch Parent</button>{onNextBatchValidation && <button type="button" className="pdc-btn pdc-btn-primary" onClick={onNextBatchValidation}>Step 4 · Batch Validation →</button>}</div></div> : (
-      <div className="pdc-section-header">
-        <div>
-          <h2>Step 4 — Detail Review ({reviewMode.rowIndex + 1}/{reviewMode.totalRows})</h2>
-          <div className="pdc-review-compact-meta">
-            <span>{reviewMode.row.postId ? `Post #${reviewMode.row.postId}` : "Post identity unavailable"}</span>
-            <span className={`pdc-batch-pill status-${reviewMode.row.status.toLowerCase()}`}>{reviewMode.row.status}</span>
-            <button type="button" className="pdc-btn pdc-btn-tiny" onClick={() => copy(reviewCanonicalUrl)}>Copy Link</button>
-          </div>
+    {!reviewMode ? <div className="pdc-compact-toolbar"><span className={`pdc-mode ${status === "PARENT_MATCHED" ? "live" : "frozen"}`}>{status === "PARENT_MATCHED" ? "AUTO · Parent Matched" : status === "RESOLVING" ? "AUTO · Resolving Parent..." : `Needs Attention · ${result?.failureCode || status}`}</span><div className="pdc-btn-row"><button type="button" className={`pdc-btn pdc-btn-secondary ${variablesOpen ? "active" : ""}`} onClick={openVariablesDrawer}>Manage Variables</button><button className="pdc-btn pdc-btn-secondary" onClick={() => setIsExpanded(value => !value)}>{isExpanded ? "Restore" : "Expand"}</button><button className="pdc-btn pdc-btn-secondary" onClick={rematch}>Customize · Rematch Parent</button>{onNextBatchValidation && <button type="button" className="pdc-btn pdc-btn-primary" onClick={onNextBatchValidation}>Step 4 · Batch Validation →</button>}</div></div> : (
+      <div className="pdc-compact-toolbar">
+        <div className="pdc-review-compact-meta">
+          <span className="pdc-toolbar-title">Detail Review ({reviewMode.rowIndex + 1}/{reviewMode.totalRows})</span>
+          <span>{reviewMode.row.postId ? `Post #${reviewMode.row.postId}` : "Post identity unavailable"}</span>
+          <span className={`pdc-batch-pill status-${reviewMode.row.status.toLowerCase()}`}>{reviewMode.row.status}</span>
+          <button type="button" className="pdc-btn pdc-btn-tiny" onClick={() => copy(reviewCanonicalUrl)}>Copy Link</button>
           <details className="pdc-review-url-details"><summary>View URL Details</summary><code>{reviewMode.row.url}</code>{reviewMode.row.resolvedUrl && reviewMode.row.resolvedUrl !== reviewMode.row.url ? <code>{reviewMode.row.resolvedUrl}</code> : null}</details>
         </div>
         <div className="pdc-btn-row">
-          <button type="button" className="pdc-btn pdc-btn-secondary" onClick={reviewMode.onBackToResults}>← Back to Results</button>
-          <button type="button" className="pdc-btn pdc-btn-secondary" disabled={!reviewMode.canPrev} onClick={reviewMode.onPrevPost}>← Previous Post</button>
-          <button type="button" className="pdc-btn pdc-btn-secondary" disabled={!reviewMode.canNext} onClick={reviewMode.onNextPost}>Next Post →</button>
-          <button type="button" className="pdc-btn pdc-btn-primary" onClick={reviewMode.onCustomizeInStep3}>Customize in Step 3</button>
+          <button type="button" className="pdc-btn pdc-btn-secondary pdc-btn-compact" onClick={reviewMode.onBackToResults}>← Back to Results</button>
+          <button type="button" className="pdc-btn pdc-btn-secondary pdc-btn-compact" disabled={!reviewMode.canPrev} onClick={reviewMode.onPrevPost}>← Previous Post</button>
+          <button type="button" className="pdc-btn pdc-btn-secondary pdc-btn-compact" disabled={!reviewMode.canNext} onClick={reviewMode.onNextPost}>Next Post →</button>
+          <button type="button" className="pdc-btn pdc-btn-primary pdc-btn-compact" onClick={reviewMode.onCustomizeInStep3}>Customize in Step 3</button>
         </div>
       </div>
     )}
@@ -418,7 +416,6 @@ export function SavedParentHtmlStep({ invoke, result, currentUrl, parentConfig, 
         }) : <p className="pdc-panel-desc">No variables yet. Click + Add Variable to create one.</p>}
       </div>
     </UiPopover>}
-    <div className={`pdc-alert ${status === "PARENT_MATCHED" ? "pdc-alert-ok" : "pdc-alert-warn"}`}>{status === "PARENT_MATCHED" ? "AUTO · Parent Matched" : status === "RESOLVING" ? "AUTO · Resolving Parent..." : `Needs Attention · ${result?.failureCode || status}`}</div>
     {status !== "NOT_CONFIGURED" && <BrowserWorkspace className={`pdc-dom-workspace ${browserCollapsed ? "browser-collapsed" : ""}`}><BrowserScrollArea sidebarCollapsed={sidebarCollapsed}><div className="pdc-dom-browser-wrap"><button className="pdc-btn pdc-btn-tiny" onClick={() => setBrowserCollapsed(value => !value)}>{browserCollapsed ? "Show Browser Preview" : "Collapse Browser Preview"}</button>{!browserCollapsed && <div className="rpa-browser-stage"><BrowserHost hostRef={hostRef} className="pdc-dom-browser" /></div>}</div></BrowserScrollArea><SidebarDrawer title="Extracted Data" collapsed={sidebarCollapsed} onToggleCollapse={() => { setSidebarCollapsed(value => !value); if (!browserCollapsed) requestAnimationFrame(() => publishPostDetailBrowserHost(invoke, hostRef.current)); }} className="pdc-dom-panel">
       {status === "PARENT_MATCHED" ? <><div className={`pdc-data-review ${selectedData ? "has-detail" : ""}`}>
         <div className="pdc-data-list" aria-label="Extracted values">

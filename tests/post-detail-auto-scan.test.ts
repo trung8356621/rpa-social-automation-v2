@@ -542,6 +542,6 @@ test("Action Row presentation scales real frame geometry and never leaks across 
   assert.match(sharedCss, /\.rpa-browser-sidebar\s*\{[\s\S]*position:\s*absolute;[\s\S]*right:\s*0;/);
   assert.match(sharedCss, /\.rpa-browser-sidebar-body\s*\{[\s\S]*overflow-y:\s*auto;/);
   assert.match(css, /\.pdc-probe-stages/);
-  assert.match(ui, /pdc-advanced-debug pdc-scan-pipeline-debug/);
+  assert.match(ui, /pdc-scan-pipeline-debug/);
   assert.match(css, /\.pdc-scan-pipeline-debug[\s\S]*position: static/);
 });

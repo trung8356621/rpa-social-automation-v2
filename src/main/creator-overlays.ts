@@ -74,25 +74,16 @@ export class CreatorOverlays {
     const scrollLeft = Math.min(this.scroll.left, Math.max(0, bounds.minWidth - width));
     bounds.browser.x -= scrollLeft;
     bounds.browser.y -= this.scroll.top;
-    let browserBounds = resolveBrowserViewBounds({
+    const browserBounds = resolveBrowserViewBounds({
       page: this.page,
       collectorHost: this.collectorHost,
       creatorBrowser: bounds.browser,
     });
-    let hostVisibleInWindow = true;
     if (isCollectorBrowserHostPage(this.page) && this.collectorHost?.active) {
-      const left = Math.max(0, browserBounds.x);
-      const top = Math.max(0, browserBounds.y);
-      const right = Math.min(width, browserBounds.x + browserBounds.width);
-      const bottom = Math.min(height, browserBounds.y + browserBounds.height);
-      const clippedWidth = Math.max(0, right - left);
-      const clippedHeight = Math.max(0, bottom - top);
-      if (clippedWidth < 4 || clippedHeight < 4) {
-        hostVisibleInWindow = false;
-      } else {
-        browserBounds = { x: left, y: top, width: clippedWidth, height: clippedHeight };
-      }
+      browserBounds.x = Math.max(0, browserBounds.x);
+      browserBounds.y = Math.max(0, browserBounds.y);
     }
+    const hostVisibleInWindow = true;
     Object.assign(this.browser.bounds, browserBounds);
     if (!sameRect(this.lastBrowserBounds, browserBounds)) {
       this.lastBrowserBounds = { ...browserBounds };

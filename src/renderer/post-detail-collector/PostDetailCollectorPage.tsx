@@ -242,6 +242,11 @@ export function PostDetailCollectorPage({ invoke, state: parentState }: { invoke
         <div className="pdc-title-group">
           <h1>Post Detail Collector</h1>
           <span className="pdc-version-tag">V2</span>
+          <div className={`pdc-banner pdc-connection-chip ${connected ? "banner-connected" : "banner-disconnected"}`} role="status" title={`${connStatus}\n${connectionUrl}`}>
+            <span className="pdc-connection-dot" aria-hidden />
+            <span>{connectionLabel}</span>
+            {connectionUrl && <button type="button" className="pdc-copy-link" onClick={() => void navigator.clipboard.writeText(connectionUrl)}>Copy</button>}
+          </div>
         </div>
         <nav className="pdc-stepper" aria-label="Post Detail Collector Stepper">
           <button
@@ -267,12 +272,6 @@ export function PostDetailCollectorPage({ invoke, state: parentState }: { invoke
         </nav>
       </div>
 
-      <div className={`pdc-banner pdc-connection-chip ${connected ? "banner-connected" : "banner-disconnected"}`} role="status" title={`${connStatus}\n${connectionUrl}`}>
-        <span className="pdc-connection-dot" aria-hidden />
-        <span>{connectionLabel}</span>
-        {connectionUrl && <button type="button" className="pdc-copy-link" onClick={() => void navigator.clipboard.writeText(connectionUrl)}>Copy</button>}
-      </div>
-
       <div className="pdc-content-area">
         {state.majorStep === 1 && <UrlWorkspaceStep
           invoke={invoke}
@@ -283,9 +282,9 @@ export function PostDetailCollectorPage({ invoke, state: parentState }: { invoke
           onSelect={item => void selectUrl(item)}
         />}
         {state.majorStep === 2 && <nav className="pdc-substep-nav" aria-label="Post processing substeps">
-          <button type="button" onClick={() => updateStore({ processingSubstep: 1, step: 1 })}>1 Browser & Capture</button>
-          <button type="button" disabled={!step2Ready} onClick={() => updateStore({ processingSubstep: 2, step: 2 })}>2 Visual Region</button>
-          <button type="button" title="Parent HTML semantic review" onClick={() => updateStore({ processingSubstep: 3, step: 3 })}>3 Extracted Data Review</button>
+          <button type="button" className={state.processingSubstep === 1 ? "active" : ""} onClick={() => updateStore({ processingSubstep: 1, step: 1 })}>1 Browser & Capture</button>
+          <button type="button" className={state.processingSubstep === 2 ? "active" : ""} disabled={!step2Ready} onClick={() => updateStore({ processingSubstep: 2, step: 2 })}>2 Visual Region</button>
+          <button type="button" className={state.processingSubstep === 3 ? "active" : ""} title="Parent HTML semantic review" onClick={() => updateStore({ processingSubstep: 3, step: 3 })}>3 Extracted Data Review</button>
         </nav>}
         {state.majorStep === 2 && state.processingSubstep === 1 && (
           <BrowserCaptureStep
