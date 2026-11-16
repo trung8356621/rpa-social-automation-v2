@@ -220,6 +220,9 @@
 
 .pdc-compact-toolbar {
   flex: 0 0 auto;
+  min-width: 0;
+  max-width: 100%;
+  box-sizing: border-box;
   display: flex;
   align-items: center;
   gap: 8px;
@@ -250,6 +253,27 @@
   color: #94a3b8;
   font-size: 11px;
   line-height: 1.35;
+}
+
+.pdc-compact-url-field {
+  flex: 1 1 180px;
+  min-width: 140px;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 11px;
+  color: #94a3b8;
+}
+
+.pdc-compact-url-field > span {
+  white-space: nowrap;
+}
+
+.pdc-url-input-compact {
+  flex: 1 1 auto;
+  min-width: 80px;
+  padding: 3px 8px;
+  font-size: 11px;
 }
 
 .pdc-browser-occluded-notice {

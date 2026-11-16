@@ -144,10 +144,11 @@ export function VisualRegionStep({
   const [confirmDiagnosticsCopied, setConfirmDiagnosticsCopied] = useState(false);
   const [showDomDebug, setShowDomDebug] = useState(false);
   const [showHelp, setShowHelp] = useState(false);
-  const [sidebarCollapsed, setSidebarCollapsed] = useState(
-    () => typeof window !== "undefined" && window.innerWidth < 1548,
-  );
+  const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
   const [sidebarOccludesBrowser, setSidebarOccludesBrowser] = useState(false);
+  const initialAutoCollapseDoneRef = useRef(false);
+  const sidebarCollapsedRef = useRef(sidebarCollapsed);
+  sidebarCollapsedRef.current = sidebarCollapsed;
   const [drag, setDrag] = useState<DragState>();
   const [hostClient, setHostClient] = useState<HostClient | null>(null);
   const cancelRef = useRef(false);
@@ -208,12 +209,27 @@ export function VisualRegionStep({
     const { ownerId } = claimCollectorHostOwner("pdc-step2");
     const safePublish = () => {
       if (cancelled || !isCollectorHostOwner(ownerId)) return;
-      if (!scanningRef.current && doesExpandedDrawerOverlapHost(hostRef.current)) {
+      const overlaps = doesExpandedDrawerOverlapHost(hostRef.current);
+      if (!initialAutoCollapseDoneRef.current && hostRef.current) {
+        const rect = hostRef.current.getBoundingClientRect();
+        if (rect.width >= 10 && rect.height >= 10) {
+          initialAutoCollapseDoneRef.current = true;
+          if (overlaps && !sidebarCollapsedRef.current) {
+            sidebarCollapsedRef.current = true;
+            setSidebarCollapsed(true);
+            setSidebarOccludesBrowser(false);
+            publishHost();
+            return;
+          }
+        }
+      }
+      if (!scanningRef.current && !sidebarCollapsedRef.current && overlaps) {
         setSidebarOccludesBrowser(true);
         void collectorReportBrowserHost(invoke, null);
         void collectorSetBrowserVisible(invoke, false);
         return;
       }
+      setSidebarOccludesBrowser(false);
       // Keep host active during scan (skipping publish caused WHEEL_BLOCKED_NOT_VISIBLE).
       publishHost();
     };
@@ -257,7 +273,7 @@ export function VisualRegionStep({
     setError("");
     cancelRef.current = false;
     setScanDiagnostics([]);
-    if (!sidebarCollapsed && hostClient && typeof window !== "undefined" && window.innerWidth < hostClient.left + hostClient.width + 300) {
+    if (!sidebarCollapsed && doesExpandedDrawerOverlapHost(hostRef.current)) {
       setSidebarCollapsed(true);
     }
     let ownsScan = false;

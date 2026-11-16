@@ -30,6 +30,7 @@ import {
   publishPostDetailBrowserHostDetails,
   sameHostClientRect,
 } from "./publish-browser-host";
+import { doesExpandedDrawerOverlapHost } from "../collectors/publish-collector-host";
 import {
   BrowserHost,
   BrowserScrollArea,
@@ -92,6 +93,8 @@ export function BrowserCaptureStep({
   const [hostClient, setHostClient] = useState<HostClient | null>(null);
   const [sampleRole, setSampleRole] = useState<"LIKE" | "COMMENT" | "SHARE">("LIKE");
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
+  const [sidebarOccludesBrowser, setSidebarOccludesBrowser] = useState(false);
+  const initialAutoCollapseDoneRef = useRef(false);
   const roleAudit = useMemo(() => auditVisualReferenceRoles(visualReferences), [visualReferences]);
 
   const hostRef = useRef<HTMLDivElement>(null);
@@ -101,6 +104,8 @@ export function BrowserCaptureStep({
   const shotRef = useRef<typeof shot>(undefined);
   const hostClientRef = useRef<HostClient | null>(null);
   const frozenRef = useRef(frozen);
+  const sidebarCollapsedRef = useRef(sidebarCollapsed);
+  const hostOwnerRef = useRef<string | null>(null);
   const imageBoxRef = useRef<{ width: number; height: number } | null>(null);
   const imageSizeRef = useRef({ width: 0, height: 0 });
   const confirmingRef = useRef(false);
@@ -109,6 +114,7 @@ export function BrowserCaptureStep({
   const imageHeight = shot?.height ?? 0;
   imageSizeRef.current = { width: imageWidth, height: imageHeight };
   frozenRef.current = frozen;
+  sidebarCollapsedRef.current = sidebarCollapsed;
 
   const imageBox = useMemo(() => {
     if (!hostClient || !imageWidth || !imageHeight) return null;
@@ -139,8 +145,30 @@ export function BrowserCaptureStep({
     if (!electron || !invoke) return;
     let cancelled = false;
     const { ownerId } = claimCollectorHostOwner("pdc-step1");
+    hostOwnerRef.current = ownerId;
     const safePublish = () => {
       if (cancelled || !isCollectorHostOwner(ownerId)) return;
+      const overlaps = doesExpandedDrawerOverlapHost(hostRef.current);
+      if (!initialAutoCollapseDoneRef.current && hostRef.current) {
+        const rect = hostRef.current.getBoundingClientRect();
+        if (rect.width >= 10 && rect.height >= 10) {
+          initialAutoCollapseDoneRef.current = true;
+          if (overlaps && !sidebarCollapsedRef.current) {
+            sidebarCollapsedRef.current = true;
+            setSidebarCollapsed(true);
+            setSidebarOccludesBrowser(false);
+            publishHost();
+            return;
+          }
+        }
+      }
+      if (!frozenRef.current && !sidebarCollapsedRef.current && overlaps) {
+        setSidebarOccludesBrowser(true);
+        void collectorReportBrowserHost(invoke, null);
+        void collectorSetBrowserVisible(invoke, false);
+        return;
+      }
+      setSidebarOccludesBrowser(false);
       publishHost();
     };
     const scheduler = createRafHostPublishScheduler(safePublish);
@@ -154,9 +182,11 @@ export function BrowserCaptureStep({
     if (el && ro) ro.observe(el);
     window.addEventListener("resize", scheduler.schedule);
     window.addEventListener("scroll", scheduler.schedule, true);
-    void collectorSetBrowserVisible(invoke, true).then(() => {
-      scheduler.schedule();
-    });
+    if (!frozenRef.current && (sidebarCollapsedRef.current || !doesExpandedDrawerOverlapHost(hostRef.current))) {
+      void collectorSetBrowserVisible(invoke, true).then(() => {
+        if (!cancelled && isCollectorHostOwner(ownerId)) scheduler.schedule();
+      });
+    }
     return () => {
       cancelled = true;
       scheduler.cancel();
@@ -164,12 +194,44 @@ export function BrowserCaptureStep({
       ro?.disconnect();
       window.removeEventListener("resize", scheduler.schedule);
       window.removeEventListener("scroll", scheduler.schedule, true);
+      if (hostOwnerRef.current === ownerId) hostOwnerRef.current = null;
       releaseCollectorHostOwner(ownerId, () => {
         void collectorReportBrowserHost(invoke, null);
         void collectorSetBrowserVisible(invoke, false);
       });
     };
   }, [electron, invoke, publishHost]);
+
+  useEffect(() => {
+    if (!electron || !invoke) return;
+    const ownerId = hostOwnerRef.current;
+    if (!ownerId || !isCollectorHostOwner(ownerId)) return;
+    if (frozen) {
+      setSidebarOccludesBrowser(false);
+      return;
+    }
+    let cancelled = false;
+    const syncOcclusion = () => {
+      if (cancelled || !isCollectorHostOwner(ownerId)) return;
+      const occluded = !sidebarCollapsed && doesExpandedDrawerOverlapHost(hostRef.current);
+      setSidebarOccludesBrowser(occluded);
+      if (occluded) {
+        void collectorReportBrowserHost(invoke, null);
+        void collectorSetBrowserVisible(invoke, false);
+      } else {
+        void collectorSetBrowserVisible(invoke, true).then(() => {
+          if (!cancelled && isCollectorHostOwner(ownerId)) {
+            requestAnimationFrame(() => publishHost());
+          }
+        });
+      }
+    };
+    const rafId = requestAnimationFrame(syncOcclusion);
+    return () => {
+      cancelled = true;
+      cancelAnimationFrame(rafId);
+    };
+  }, [electron, invoke, frozen, sidebarCollapsed, publishHost]);
 
   // Sync browser URL from live BrowserCore / parent state — do not overwrite Source URL.
   useEffect(() => {
@@ -457,16 +519,26 @@ export function BrowserCaptureStep({
 
   return (
     <div className="pdc-step pdc-step-calibration">
-      <div className="pdc-section-header">
-        <div>
-          <h2>Step 1 — Browser & Detail Capture</h2>
-          <p className="pdc-subtitle">
-            Confirm tự lưu visual reference (action row), không phải OCR content ROI.
-          </p>
-        </div>
+      <div className="pdc-compact-toolbar" role="toolbar" aria-label="Step 1 Browser and Capture toolbar">
+        <label className="pdc-compact-url-field">
+          <span>Source URL</span>
+          <input
+            className="pdc-url-input pdc-url-input-compact"
+            readOnly
+            value={sourceDraft}
+            placeholder={DEFAULT_POST_DETAIL_FIXTURE_URL}
+            aria-label="Source URL"
+          />
+        </label>
+        <button type="button" className="pdc-btn pdc-btn-secondary pdc-btn-compact" disabled={busy || frozen} onClick={() => void openUrl()}>
+          Open URL
+        </button>
+        <span className={`pdc-mode ${frozen ? "frozen" : "live"}`}>
+          {frozen ? "CAPTURE MODE" : "BROWSER LIVE"}
+        </span>
         <button
           type="button"
-          className={`pdc-btn ${frozen ? "pdc-btn-warn" : "pdc-btn-primary"}`}
+          className={`pdc-btn pdc-btn-compact ${frozen ? "pdc-btn-warn" : "pdc-btn-primary"}`}
           disabled={busy}
           onClick={() => {
             if (frozen) void exitCaptureMode();
@@ -475,25 +547,22 @@ export function BrowserCaptureStep({
         >
           {frozen ? "Thoát Capture → Live" : "Capture Mode ON"}
         </button>
-      </div>
-
-      <div className="pdc-toolbar pdc-toolbar-stack">
-        <label className="pdc-field pdc-url-field">
-          Source URL
-          <input
-            className="pdc-url-input"
-            readOnly
-            value={sourceDraft}
-            placeholder={DEFAULT_POST_DETAIL_FIXTURE_URL}
-            aria-label="Source URL"
-          />
-        </label>
-        <button type="button" className="pdc-btn pdc-btn-secondary" disabled={busy || frozen} onClick={() => void openUrl()}>
-          Open URL
+        <button
+          type="button"
+          className={`pdc-btn pdc-btn-secondary pdc-btn-compact ${!sidebarCollapsed ? "active" : ""}`}
+          onClick={() => setSidebarCollapsed((v) => !v)}
+        >
+          {sidebarCollapsed ? "Show Panel" : "Hide Panel"}
         </button>
-        <span className={`pdc-mode ${frozen ? "frozen" : "live"}`}>
-          {frozen ? "CAPTURE MODE" : "BROWSER LIVE"}
-        </span>
+        <button
+          type="button"
+          className="pdc-btn pdc-btn-primary pdc-btn-compact"
+          disabled={!canNext}
+          title={canNext ? undefined : "Cần ≥1 visual reference trước khi sang Step 2"}
+          onClick={onNext}
+        >
+          Next: Visual Region →
+        </button>
       </div>
       {error && <div className="pdc-alert pdc-alert-error">{error}</div>}
       {warning && <div className="pdc-alert pdc-alert-warn">{warning}</div>}
@@ -506,11 +575,26 @@ export function BrowserCaptureStep({
               hostRef={hostRef}
               aria-label="Browser Core live workspace"
             >
-              {!browserLive && !frozen && (
+              {!frozen && sidebarOccludesBrowser ? (
+                <div className="pdc-browser-occluded-notice" role="status">
+                  <strong>Preview Mode · BrowserCore tạm ẩn</strong>
+                  <p>
+                    Panel Visual References đang mở đè lên vùng 1024×560 trên cửa sổ hẹp.
+                    Thu gọn panel để hiện lại live BrowserCore 1024×560.
+                  </p>
+                  <button
+                    type="button"
+                    className="pdc-btn pdc-btn-primary pdc-btn-compact"
+                    onClick={() => setSidebarCollapsed(true)}
+                  >
+                    Thu gọn Panel → Xem Live 1024×560
+                  </button>
+                </div>
+              ) : !browserLive && !frozen ? (
                 <div className="collector-sample-empty collector-browser-host-placeholder">
                   Nhập Source URL rồi bấm Open URL. BrowserCore Default sẽ điều hướng vào khung này.
                 </div>
-              )}
+              ) : null}
             </BrowserHost>
             {frozen && shot && hostClient && imageBox && (
               <div

@@ -467,3 +467,23 @@ test("doesExpandedDrawerOverlapHost detects overlap on 1280/1366 and clears on 1
     false,
   );
 });
+
+test("Step 1, Step 2, and Step 3 share bounding-rect overlap occlusion without window.innerWidth hardcoding", () => {
+  const step1 = readFileSync(resolve("src/renderer/post-detail-collector/BrowserCaptureStep.tsx"), "utf8");
+  const step2 = readFileSync(resolve("src/renderer/post-detail-collector/VisualRegionStep.tsx"), "utf8");
+  const step3 = readFileSync(resolve("src/renderer/post-detail-collector/SavedParentHtmlStep.tsx"), "utf8");
+
+  assert.match(step1, /initialAutoCollapseDoneRef/);
+  assert.match(step1, /doesExpandedDrawerOverlapHost/);
+  assert.match(step1, /Show Panel/);
+  assert.match(step1, /pdc-browser-occluded-notice/);
+  assert.match(step1, /!cancelled && isCollectorHostOwner\(ownerId\)/);
+
+  assert.match(step2, /doesExpandedDrawerOverlapHost/);
+  assert.doesNotMatch(step2, /window\.innerWidth\s*<\s*1548/);
+
+  assert.match(step3, /doesExpandedDrawerOverlapHost/);
+  assert.match(step3, /initialAutoCollapseDoneRef/);
+  assert.match(step3, /Show Panel/);
+  assert.match(step3, /!cancelled && isCollectorHostOwner\(ownerId\)/);
+});

@@ -190,6 +190,9 @@ export function SavedParentHtmlStep({ invoke, result, currentUrl, parentConfig, 
   const nodes = useMemo(() => focusElement ? [toNode(focusElement, focusPath)] : [], [focusElement, focusPath]);
 
   const hostOwnerRef = useRef<string | null>(null);
+  const initialAutoCollapseDoneRef = useRef(false);
+  const sidebarCollapsedRef = useRef(sidebarCollapsed);
+  sidebarCollapsedRef.current = sidebarCollapsed;
   const hostMounted = status !== "NOT_CONFIGURED" && !browserCollapsed;
   useEffect(() => {
     const { ownerId } = claimCollectorHostOwner("pdc-step3");
@@ -210,7 +213,17 @@ export function SavedParentHtmlStep({ invoke, result, currentUrl, parentConfig, 
       if (!host) return false;
       const rect = host.getBoundingClientRect();
       if (rect.width < 10 || rect.height < 10) return false;
-      const occluded = !sidebarCollapsed && doesExpandedDrawerOverlapHost(host);
+      const overlaps = doesExpandedDrawerOverlapHost(host);
+      if (!initialAutoCollapseDoneRef.current) {
+        initialAutoCollapseDoneRef.current = true;
+        if (overlaps && !sidebarCollapsedRef.current) {
+          sidebarCollapsedRef.current = true;
+          setSidebarCollapsed(true);
+          publishPostDetailBrowserHost(invoke, host);
+          return true;
+        }
+      }
+      const occluded = !sidebarCollapsedRef.current && overlaps;
       setSidebarOccludesBrowser((prev) => (prev === occluded ? prev : occluded));
       if (occluded) {
         void collectorReportBrowserHost(invoke, null);
@@ -233,7 +246,11 @@ export function SavedParentHtmlStep({ invoke, result, currentUrl, parentConfig, 
     if (hostRef.current) observer.observe(hostRef.current);
     window.addEventListener("resize", scheduler.schedule);
     window.addEventListener("scroll", scheduler.schedule, true);
-    void collectorSetBrowserVisible(invoke, true).then(() => attachWhenMeasured());
+    if (!variablesOpen && (sidebarCollapsedRef.current || !doesExpandedDrawerOverlapHost(hostRef.current))) {
+      void collectorSetBrowserVisible(invoke, true).then(() => {
+        if (!cancelled && isCollectorHostOwner(ownerId)) attachWhenMeasured();
+      });
+    }
     return () => {
       cancelled = true;
       scheduler.cancel();
@@ -388,7 +405,7 @@ export function SavedParentHtmlStep({ invoke, result, currentUrl, parentConfig, 
   const reviewCanonicalUrl = reviewMode ? canonicalPostUrl(reviewMode.row.url, reviewMode.row.postId) : "";
 
   return <div className={`pdc-step pdc-step3 ${isExpanded ? "pdc-explorer-expanded" : ""}`}>
-    {!reviewMode ? <div className="pdc-compact-toolbar"><span className={`pdc-mode ${status === "PARENT_MATCHED" ? "live" : "frozen"}`}>{status === "PARENT_MATCHED" ? "AUTO · Parent Matched" : status === "RESOLVING" ? "AUTO · Resolving Parent..." : `Needs Attention · ${result?.failureCode || status}`}</span><div className="pdc-btn-row"><button type="button" className={`pdc-btn pdc-btn-secondary ${variablesOpen ? "active" : ""}`} onClick={openVariablesDrawer}>Manage Variables</button><button className="pdc-btn pdc-btn-secondary" onClick={() => setIsExpanded(value => !value)}>{isExpanded ? "Restore" : "Expand"}</button><button className="pdc-btn pdc-btn-secondary" onClick={rematch}>Customize · Rematch Parent</button>{onNextBatchValidation && <button type="button" className="pdc-btn pdc-btn-primary" onClick={onNextBatchValidation}>Step 4 · Batch Validation →</button>}</div></div> : (
+    {!reviewMode ? <div className="pdc-compact-toolbar"><span className={`pdc-mode ${status === "PARENT_MATCHED" ? "live" : "frozen"}`}>{status === "PARENT_MATCHED" ? "AUTO · Parent Matched" : status === "RESOLVING" ? "AUTO · Resolving Parent..." : `Needs Attention · ${result?.failureCode || status}`}</span><div className="pdc-btn-row"><button type="button" className={`pdc-btn pdc-btn-secondary ${variablesOpen ? "active" : ""}`} onClick={openVariablesDrawer}>Manage Variables</button><button type="button" className="pdc-btn pdc-btn-secondary pdc-btn-compact" onClick={() => setIsExpanded(value => !value)}>{isExpanded ? "Restore" : "Expand"}</button>{status !== "NOT_CONFIGURED" && <button type="button" className={`pdc-btn pdc-btn-secondary pdc-btn-compact ${!sidebarCollapsed ? "active" : ""}`} onClick={() => setSidebarCollapsed(value => !value)}>{sidebarCollapsed ? "Show Panel" : "Hide Panel"}</button>}<button className="pdc-btn pdc-btn-secondary" onClick={rematch}>Customize · Rematch Parent</button>{onNextBatchValidation && <button type="button" className="pdc-btn pdc-btn-primary" onClick={onNextBatchValidation}>Step 4 · Batch Validation →</button>}</div></div> : (
       <div className="pdc-compact-toolbar">
         <div className="pdc-review-compact-meta">
           <span className="pdc-toolbar-title">Detail Review ({reviewMode.rowIndex + 1}/{reviewMode.totalRows})</span>
