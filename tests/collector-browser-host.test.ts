@@ -10,11 +10,24 @@ import {
   dragToCaptureRoi,
   fitCaptureImageInDisplay,
   nextCollectorCapturePhase,
+  normalizeCollectorHost,
   resolveBrowserViewBounds,
   resizeCaptureRoi,
+  sameCollectorHost,
+  sameRect,
   shellBoundsToCssFixed,
   shouldShowBrowserForPage,
 } from "../src/shared/collector-browser-host.js";
+import {
+  collectorReportBrowserHost,
+  resetCollectorBrowserHostReportCache,
+} from "../src/renderer/collectors/browser-capture.js";
+import { claimCollectorHostOwner } from "../src/renderer/collectors/collector-host-owner.js";
+import {
+  createRafHostPublishScheduler,
+  sameHostClientRect,
+} from "../src/renderer/post-detail-collector/publish-browser-host.js";
+import { clipHostRectToVisibleArea } from "../src/renderer/collectors/publish-collector-host.js";
 
 test("C2.2 browser visible only for Creator or active Collector Capture host", () => {
   assert.equal(
@@ -238,4 +251,173 @@ test("C2.4 Capture Region button replaces Capture mode checkbox", () => {
   assert.doesNotMatch(capture, /Capture mode/);
   assert.doesNotMatch(capture, /captureMode|setCaptureMode/);
   assert.doesNotMatch(capture, /type=\"checkbox\"/);
+});
+
+test("Host bounds normalization, dedupe, and owner reset prevent stale/duplicate IPC", async () => {
+  const a = normalizeCollectorHost({ x: 220.4, y: 140.6, width: 1024, height: 560, active: true });
+  const b = normalizeCollectorHost({ x: 220.1, y: 141.2, width: 1024, height: 560, active: true });
+  assert.deepEqual(a, { x: 220, y: 141, width: 1024, height: 560, active: true });
+  assert.equal(sameCollectorHost(a, b), true);
+  assert.equal(sameRect({ x: 10.2, y: 20.4, width: 100, height: 50 }, { x: 10.4, y: 20.1, width: 100, height: 50 }), true);
+  assert.equal(
+    sameHostClientRect(
+      { left: 220.2, top: 140.4, width: 1024, height: 560 },
+      { left: 220.4, top: 140.1, width: 1024, height: 560 },
+    ),
+    true,
+  );
+
+  const g = globalThis as unknown as { window?: unknown };
+  const prevWindow = g.window;
+  const sent: Array<unknown> = [];
+  g.window = { creator: {} };
+  try {
+    resetCollectorBrowserHostReportCache();
+    claimCollectorHostOwner("pdc-step2");
+    const invoke = async (cmd: unknown) => {
+      sent.push(cmd);
+      return undefined as never;
+    };
+    const host = { x: 220, y: 150, width: 1024, height: 560, active: true };
+    await collectorReportBrowserHost(invoke, host);
+    await collectorReportBrowserHost(invoke, { ...host });
+    assert.equal(sent.length, 1);
+
+    await collectorReportBrowserHost(invoke, { ...host, y: 155 });
+    assert.equal(sent.length, 2);
+
+    claimCollectorHostOwner("pdc-step3");
+    await collectorReportBrowserHost(invoke, { ...host, y: 155 });
+    assert.equal(sent.length, 3);
+  } finally {
+    resetCollectorBrowserHostReportCache();
+    if (prevWindow === undefined) delete g.window;
+    else g.window = prevWindow;
+  }
+});
+
+test("clipHostRectToVisibleArea clips host to sidebar, scroll container, and viewport", () => {
+  const g = globalThis as unknown as {
+    window?: { innerWidth: number; innerHeight: number };
+    document?: { querySelector: (sel: string) => unknown };
+    getComputedStyle?: (el: unknown) => { overflow: string; overflowX: string; overflowY: string };
+  };
+  const prevWindow = g.window;
+  const prevDoc = g.document;
+  const prevComputed = g.getComputedStyle;
+  g.window = { innerWidth: 1366, innerHeight: 768 };
+  g.document = {
+    querySelector: (sel: string) =>
+      sel === ".app-sidebar"
+        ? { getBoundingClientRect: () => ({ left: 0, top: 0, right: 208, bottom: 768, width: 208, height: 768 }) }
+        : null,
+  };
+  g.getComputedStyle = () => ({ overflow: "auto", overflowX: "auto", overflowY: "auto" });
+  try {
+    const contentArea = {
+      parentElement: null,
+      getBoundingClientRect: () => ({ left: 220, top: 120, right: 1354, bottom: 760, width: 1134, height: 640 }),
+    };
+    const hostEl = {
+      parentElement: contentArea,
+      closest: (sel: string) => (sel === ".app-page" ? {} : null),
+    } as unknown as HTMLElement;
+
+    // Scrolled up and left into header & sidebar -> clipped cleanly inside contentArea & right of sidebar
+    const clipped = clipHostRectToVisibleArea(hostEl, {
+      left: 150,
+      top: 60,
+      right: 150 + 1024,
+      bottom: 60 + 560,
+      width: 1024,
+      height: 560,
+    });
+    assert.equal(clipped.left, 220);
+    assert.equal(clipped.top, 120);
+    assert.equal(clipped.width, 150 + 1024 - 220);
+    assert.equal(clipped.height, 60 + 560 - 120);
+
+    // Scrolled completely off-screen above header -> width/height collapse to 0
+    const offscreen = clipHostRectToVisibleArea(hostEl, {
+      left: 220,
+      top: -600,
+      right: 1244,
+      bottom: -40,
+      width: 1024,
+      height: 560,
+    });
+    assert.equal(offscreen.height, 0);
+
+    // Expanded right-anchored sidebar drawer overlapping host on 1366x768 -> native right edge clipped
+    const drawerHost = {
+      parentElement: contentArea,
+      closest: (sel: string) => {
+        if (sel === ".app-page") return {};
+        if (sel === ".rpa-browser-workspace") {
+          return {
+            querySelector: (q: string) =>
+              q === "[data-browser-sidebar-drawer]"
+                ? { getBoundingClientRect: () => ({ left: 1054, top: 120, right: 1354, bottom: 760, width: 300, height: 640 }) }
+                : null,
+          };
+        }
+        return null;
+      },
+    } as unknown as HTMLElement;
+    const drawerClipped = clipHostRectToVisibleArea(drawerHost, {
+      left: 220,
+      top: 120,
+      right: 220 + 1024,
+      bottom: 120 + 560,
+      width: 1024,
+      height: 560,
+    });
+    assert.equal(drawerClipped.left, 220);
+    assert.equal(drawerClipped.width, 1054 - 220);
+    assert.equal(drawerClipped.height, 560);
+  } finally {
+    g.window = prevWindow;
+    g.document = prevDoc;
+    g.getComputedStyle = prevComputed;
+  }
+});
+
+test("createRafHostPublishScheduler coalesces multiple calls into one animation frame", () => {
+  const g = globalThis as unknown as {
+    requestAnimationFrame?: (cb: FrameRequestCallback) => number;
+    cancelAnimationFrame?: (id: number) => void;
+  };
+  const prevRaf = g.requestAnimationFrame;
+  const prevCancel = g.cancelAnimationFrame;
+  const callbacks = new Map<number, FrameRequestCallback>();
+  let nextId = 1;
+  g.requestAnimationFrame = (cb) => {
+    const id = nextId++;
+    callbacks.set(id, cb);
+    return id;
+  };
+  g.cancelAnimationFrame = (id) => {
+    callbacks.delete(id);
+  };
+  try {
+    let count = 0;
+    const scheduler = createRafHostPublishScheduler(() => {
+      count += 1;
+    });
+    scheduler.schedule();
+    scheduler.schedule();
+    scheduler.schedule();
+    assert.equal(callbacks.size, 1);
+    for (const [id, cb] of [...callbacks.entries()]) {
+      callbacks.delete(id);
+      cb(16);
+    }
+    assert.equal(count, 1);
+    scheduler.schedule();
+    scheduler.cancel();
+    assert.equal(callbacks.size, 0);
+  } finally {
+    g.requestAnimationFrame = prevRaf;
+    g.cancelAnimationFrame = prevCancel;
+  }
 });

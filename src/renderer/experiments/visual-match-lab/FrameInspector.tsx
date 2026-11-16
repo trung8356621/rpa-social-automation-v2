@@ -2,8 +2,14 @@ import React, { useState, useMemo, useEffect, useRef } from "react";
 import type { BrowserCoreNavigationResult, Command } from "../../../shared/contracts";
 import type { BoundaryProbeResult } from "../../../shared/boundary-probe";
 import type { UserPermalinkRule } from "../../../shared/permalink-rules";
-import { domRectToShellBounds } from "../../../shared/collector-browser-host";
-import { readAdminUiZoom } from "../../ui-zoom";
+import { BrowserHost } from "../../components/BrowserWorkspace";
+import { publishCollectorHostFromElement } from "../../collectors/publish-collector-host";
+import {
+  claimCollectorHostOwner,
+  isCollectorHostOwner,
+  releaseCollectorHostOwner,
+} from "../../collectors/collector-host-owner";
+import { createRafHostPublishScheduler } from "../../post-detail-collector/publish-browser-host";
 import type { FrameReport, LiveCandidate } from "./LiveScrollTest";
 import { FrameNavigation, type FrameFilter } from "./FrameNavigation";
 import { FrameScreenshot } from "./FrameScreenshot";
@@ -31,31 +37,32 @@ function BrowserCoreUrlInspectionHost({
   useEffect(() => {
     const el = hostRef.current;
     if (!el) return;
+    let cancelled = false;
+    const { ownerId } = claimCollectorHostOwner("vml-inspect");
 
     const publishHost = () => {
-      const target = hostRef.current;
-      if (!target) return;
-      const rect = target.getBoundingClientRect();
-      const bounds = domRectToShellBounds(rect, readAdminUiZoom());
-      void invoke({
-        type: "collectorBrowserHost",
-        host: { ...bounds, active: true },
-      });
+      if (cancelled || !isCollectorHostOwner(ownerId)) return;
+      publishCollectorHostFromElement(invoke, hostRef.current);
       void invoke({ type: "browserVisible", visible: true });
     };
 
+    const scheduler = createRafHostPublishScheduler(publishHost);
     publishHost();
-    const observer = new ResizeObserver(publishHost);
+    const observer = new ResizeObserver(scheduler.schedule);
     observer.observe(el);
-    window.addEventListener("resize", publishHost);
-    window.addEventListener("scroll", publishHost, true);
+    window.addEventListener("resize", scheduler.schedule);
+    window.addEventListener("scroll", scheduler.schedule, true);
 
     return () => {
+      cancelled = true;
+      scheduler.cancel();
       observer.disconnect();
-      window.removeEventListener("resize", publishHost);
-      window.removeEventListener("scroll", publishHost, true);
-      void invoke({ type: "collectorBrowserHost", host: null });
-      void invoke({ type: "browserVisible", visible: false });
+      window.removeEventListener("resize", scheduler.schedule);
+      window.removeEventListener("scroll", scheduler.schedule, true);
+      releaseCollectorHostOwner(ownerId, () => {
+        void invoke({ type: "collectorBrowserHost", host: null });
+        void invoke({ type: "browserVisible", visible: false });
+      });
     };
   }, [invoke, inspection.requestedUrl, inspection.finalUrl]);
 
@@ -189,17 +196,11 @@ function BrowserCoreUrlInspectionHost({
       </div>
 
       {/* Live BrowserCore WebContentsView Host Area */}
-      <div
-        ref={hostRef}
-        className="vml-browsercore-viewport-host"
-        style={{
-          flex: 1,
-          width: "100%",
-          minHeight: 520,
-          background: "#020617",
-          position: "relative",
-        }}
-      />
+      <div className="rpa-browser-scroll is-sidebar-collapsed">
+        <div className="rpa-browser-stage">
+          <BrowserHost hostRef={hostRef} className="vml-browsercore-viewport-host" />
+        </div>
+      </div>
     </div>
   );
 }

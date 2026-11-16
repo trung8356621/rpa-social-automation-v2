@@ -22,7 +22,17 @@ import {
   releaseCollectorHostOwner,
 } from "../collectors/collector-host-owner";
 import { cropDataUrl } from "./image-utils";
-import { publishPostDetailBrowserHost } from "./publish-browser-host";
+import {
+  createRafHostPublishScheduler,
+  publishPostDetailBrowserHost,
+  sameHostClientRect,
+} from "./publish-browser-host";
+import {
+  BrowserHost,
+  BrowserScrollArea,
+  BrowserWorkspace,
+  SidebarDrawer,
+} from "../components/BrowserWorkspace";
 import type { BrowserProbe, Invoke, VisualReferenceSample } from "./types";
 
 type Props = {
@@ -78,6 +88,7 @@ export function BrowserCaptureStep({
   const [drag, setDrag] = useState<DragState>();
   const [hostClient, setHostClient] = useState<HostClient | null>(null);
   const [sampleRole, setSampleRole] = useState<"LIKE" | "COMMENT" | "SHARE">("LIKE");
+  const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
   const roleAudit = useMemo(() => auditVisualReferenceRoles(visualReferences), [visualReferences]);
 
   const hostRef = useRef<HTMLDivElement>(null);
@@ -107,35 +118,42 @@ export function BrowserCaptureStep({
   const publishHost = React.useCallback(() => {
     if (!electron || !invoke) return;
     const client = publishPostDetailBrowserHost(invoke, hostRef.current);
-    if (client) setHostClient(client);
-    else if (!hostRef.current) setHostClient(null);
+    if (client) {
+      setHostClient((prev) => (sameHostClientRect(prev, client) ? prev : client));
+    } else if (!hostRef.current) {
+      setHostClient((prev) => (prev === null ? prev : null));
+    }
   }, [electron, invoke]);
 
   useEffect(() => {
     if (!electron || !invoke) return;
+    let cancelled = false;
     const { ownerId } = claimCollectorHostOwner("pdc-step1");
     const safePublish = () => {
-      if (!isCollectorHostOwner(ownerId)) return;
+      if (cancelled || !isCollectorHostOwner(ownerId)) return;
       publishHost();
     };
+    const scheduler = createRafHostPublishScheduler(safePublish);
     safePublish();
     const rafIds = [
       requestAnimationFrame(safePublish),
       requestAnimationFrame(() => requestAnimationFrame(safePublish)),
     ];
     const el = hostRef.current;
-    const ro = typeof ResizeObserver !== "undefined" ? new ResizeObserver(() => safePublish()) : null;
+    const ro = typeof ResizeObserver !== "undefined" ? new ResizeObserver(() => scheduler.schedule()) : null;
     if (el && ro) ro.observe(el);
-    window.addEventListener("resize", safePublish);
-    window.addEventListener("scroll", safePublish, true);
+    window.addEventListener("resize", scheduler.schedule);
+    window.addEventListener("scroll", scheduler.schedule, true);
     void collectorSetBrowserVisible(invoke, true).then(() => {
-      requestAnimationFrame(safePublish);
+      scheduler.schedule();
     });
     return () => {
+      cancelled = true;
+      scheduler.cancel();
       for (const id of rafIds) cancelAnimationFrame(id);
       ro?.disconnect();
-      window.removeEventListener("resize", safePublish);
-      window.removeEventListener("scroll", safePublish, true);
+      window.removeEventListener("resize", scheduler.schedule);
+      window.removeEventListener("scroll", scheduler.schedule, true);
       releaseCollectorHostOwner(ownerId, () => {
         void collectorReportBrowserHost(invoke, null);
         void collectorSetBrowserVisible(invoke, false);
@@ -471,13 +489,11 @@ export function BrowserCaptureStep({
       {warning && <div className="pdc-alert pdc-alert-warn">{warning}</div>}
       {message && <div className="pdc-alert pdc-alert-info">{message}</div>}
 
-      <div className="pdc-calibration-workspace">
-        <div className="pdc-crop-container">
-          <div className="collector-capture-workspace collector-browser-workspace">
-            <div
-              ref={hostRef}
-              className="collector-browser-host"
-              data-browser-core-host=""
+      <BrowserWorkspace className="pdc-calibration-workspace">
+        <BrowserScrollArea sidebarCollapsed={sidebarCollapsed}>
+          <div className="rpa-browser-stage pdc-crop-container">
+            <BrowserHost
+              hostRef={hostRef}
               aria-label="Browser Core live workspace"
             >
               {!browserLive && !frozen && (
@@ -485,11 +501,79 @@ export function BrowserCaptureStep({
                   Nhập Source URL rồi bấm Open URL. BrowserCore Default sẽ điều hướng vào khung này.
                 </div>
               )}
-            </div>
+            </BrowserHost>
+            {frozen && shot && hostClient && imageBox && (
+              <div
+                ref={surfaceRef}
+                className="collector-capture-freeze snapshot"
+                style={{
+                  position: "absolute",
+                  inset: 0,
+                  width: "100%",
+                  height: "100%",
+                  zIndex: 10,
+                  margin: 0,
+                  boxSizing: "border-box",
+                }}
+                onPointerDown={onPointerDown}
+                onPointerMove={onPointerMove}
+                onPointerUp={onPointerUp}
+                onPointerCancel={onPointerUp}
+                role="img"
+                aria-label="Frozen browser capture for visual reference crop"
+              >
+                <div
+                  ref={previewScrollRef}
+                  className="collector-capture-preview-scroll"
+                  style={{ width: "100%", height: "100%", overflow: "hidden" }}
+                >
+                  <div style={{ width: imageBox.width, height: imageBox.height, position: "relative" }}>
+                    <img
+                      src={shot.dataUrl}
+                      alt="Frozen capture"
+                      draggable={false}
+                      style={{
+                        display: "block",
+                        width: imageBox.width,
+                        height: imageBox.height,
+                        maxWidth: "none",
+                        maxHeight: "none",
+                        objectFit: "fill",
+                        userSelect: "none",
+                        pointerEvents: "none",
+                      }}
+                    />
+                    {liveRoi && liveRoi.width > 0 && liveRoi.height > 0 && (
+                      <div
+                        className="collector-roi-highlight"
+                        style={{
+                          left: (liveRoi.x / shot.width) * imageBox.width,
+                          top: (liveRoi.y / shot.height) * imageBox.height,
+                          width: (liveRoi.width / shot.width) * imageBox.width,
+                          height: (liveRoi.height / shot.height) * imageBox.height,
+                          border: "2px solid #34d399",
+                          background: "rgba(52, 211, 153, 0.2)",
+                          position: "absolute",
+                          pointerEvents: "none",
+                        }}
+                      />
+                    )}
+                  </div>
+                </div>
+              </div>
+            )}
           </div>
-        </div>
+        </BrowserScrollArea>
 
-        <div className="pdc-side-panel">
+        <SidebarDrawer
+          title="Visual References"
+          collapsed={sidebarCollapsed}
+          onToggleCollapse={() => {
+            setSidebarCollapsed((v) => !v);
+            requestAnimationFrame(() => publishHost());
+          }}
+          className="pdc-side-panel"
+        >
           <h3>Visual References</h3>
           <p className="pdc-panel-desc">
             Confirm = lưu reference từ ROI vừa chọn rồi về Live. OCR content ROI chọn ở Step 2.
@@ -545,70 +629,8 @@ export function BrowserCaptureStep({
           >
             Next: Visual Region →
           </button>
-        </div>
-      </div>
-
-      {frozen && shot && hostClient && imageBox && (
-        <div
-          ref={surfaceRef}
-          className="collector-capture-freeze snapshot"
-          style={{
-            position: "fixed",
-            left: hostClient.left,
-            top: hostClient.top,
-            width: hostClient.width,
-            height: hostClient.height,
-            zIndex: 40,
-            margin: 0,
-            boxSizing: "border-box",
-          }}
-          onPointerDown={onPointerDown}
-          onPointerMove={onPointerMove}
-          onPointerUp={onPointerUp}
-          onPointerCancel={onPointerUp}
-          role="img"
-          aria-label="Frozen browser capture for visual reference crop"
-        >
-          <div
-            ref={previewScrollRef}
-            className="collector-capture-preview-scroll"
-            style={{ width: "100%", height: "100%", overflow: "hidden" }}
-          >
-            <div style={{ width: imageBox.width, height: imageBox.height, position: "relative" }}>
-              <img
-                src={shot.dataUrl}
-                alt="Frozen capture"
-                draggable={false}
-                style={{
-                  display: "block",
-                  width: imageBox.width,
-                  height: imageBox.height,
-                  maxWidth: "none",
-                  maxHeight: "none",
-                  objectFit: "fill",
-                  userSelect: "none",
-                  pointerEvents: "none",
-                }}
-              />
-              {liveRoi && liveRoi.width > 0 && liveRoi.height > 0 && (
-                <div
-                  className="collector-roi-highlight"
-                  style={{
-                    left: (liveRoi.x / shot.width) * imageBox.width,
-                    top: (liveRoi.y / shot.height) * imageBox.height,
-                    width: (liveRoi.width / shot.width) * imageBox.width,
-                    height: (liveRoi.height / shot.height) * imageBox.height,
-                    border: "2px solid #34d399",
-                    background: "rgba(52, 211, 153, 0.2)",
-                    position: "absolute",
-                    pointerEvents: "none",
-                  }}
-                />
-              )}
-            </div>
-          </div>
-        </div>
-      )}
+        </SidebarDrawer>
+      </BrowserWorkspace>
     </div>
   );
 }

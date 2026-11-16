@@ -44,7 +44,8 @@ test("Step 3 keeps BrowserCore mounted while resolving or showing failure", () =
   const source = readFileSync("src/renderer/post-detail-collector/SavedParentHtmlStep.tsx", "utf8");
   assert.match(source, /Resolving Parent\.\.\./);
   assert.match(source, /status !== "NOT_CONFIGURED"/);
-  assert.match(source, /data-browser-core-host/);
+  assert.match(source, /<BrowserHost/);
+  assert.match(readFileSync("src/renderer/components/BrowserWorkspace.tsx", "utf8"), /data-browser-core-host=""/);
   assert.match(source, /diagnosticMeta/);
 });
 
@@ -64,7 +65,7 @@ test("Step 3 cold-start owns, measures, republishes and cleans up its BrowserCor
   assert.match(source, /isCollectorHostOwner\(ownerId\)/);
   assert.match(source, /getBoundingClientRect\(\)/);
   assert.match(source, /attachWhenMeasured = \(remaining = 8\)/);
-  assert.match(source, /window\.addEventListener\("scroll", publish, true\)/);
+  assert.match(source, /window\.addEventListener\("scroll", scheduler\.schedule, true\)/);
   assert.match(source, /ResizeObserver/);
   assert.match(source, /releaseCollectorHostOwner\(ownerId/);
 });

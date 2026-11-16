@@ -1,8 +1,23 @@
 import React, { useEffect, useMemo, useRef, useState } from "react";
 import type { Rect, State } from "../../shared/contracts";
-import { domRectToShellBounds, dragToCaptureRoi } from "../../shared/collector-browser-host";
+import {
+  BrowserHost,
+  BrowserScrollArea,
+  BrowserWorkspace,
+  SidebarDrawer,
+} from "../components/BrowserWorkspace";
+import { publishCollectorHostFromElement } from "../collectors/publish-collector-host";
+import {
+  claimCollectorHostOwner,
+  isCollectorHostOwner,
+  releaseCollectorHostOwner,
+} from "../collectors/collector-host-owner";
+import {
+  createRafHostPublishScheduler,
+  sameHostClientRect,
+} from "../post-detail-collector/publish-browser-host";
 import { clientToImageCoords } from "../../shared/collectors/roi-preview-interaction";
-import { readAdminUiZoom } from "../ui-zoom";
+import { dragToCaptureRoi } from "../../shared/collector-browser-host";
 import {
   BROWSER_CORE_UNAVAILABLE,
   collectorFreezeFrame,
@@ -54,6 +69,7 @@ export function CalibrationStep({
   const [hostClient, setHostClient] = useState<HostClient | null>(null);
   const [kind, setKind] = useState<LiveIconKind>("like");
   const [showHelpExample, setShowHelpExample] = useState(false);
+  const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
 
   const hostRef = useRef<HTMLDivElement>(null);
   const surfaceRef = useRef<HTMLDivElement>(null);
@@ -87,50 +103,48 @@ export function CalibrationStep({
 
   const publishHost = React.useCallback(() => {
     if (!electron || !invoke) return;
-    const el = hostRef.current;
-    if (!el) {
-      setHostClient(null);
-      void collectorReportBrowserHost(invoke, null);
-      return;
+    const published = publishCollectorHostFromElement(invoke, hostRef.current);
+    if (published?.client) {
+      setHostClient((prev) => (sameHostClientRect(prev, published.client) ? prev : published.client));
+    } else if (!hostRef.current) {
+      setHostClient((prev) => (prev === null ? prev : null));
     }
-    const rect = el.getBoundingClientRect();
-    if (rect.width < 10 || rect.height < 10) {
-      return;
-    }
-    setHostClient({
-      left: rect.left,
-      top: rect.top,
-      width: rect.width,
-      height: rect.height,
-    });
-    const zoom = readAdminUiZoom();
-    const next = domRectToShellBounds(rect, zoom);
-    void collectorReportBrowserHost(invoke, { ...next, active: true });
   }, [electron, invoke]);
 
   // Mount/unmount lifecycle for BrowserCore WebContentsView in Live Mode
   useEffect(() => {
     if (!electron || !invoke) return;
-    publishHost();
-    const rafId = requestAnimationFrame(publishHost);
+    let cancelled = false;
+    const { ownerId } = claimCollectorHostOwner("fic-calibration");
+    const safePublish = () => {
+      if (cancelled || !isCollectorHostOwner(ownerId)) return;
+      publishHost();
+    };
+    const scheduler = createRafHostPublishScheduler(safePublish);
+    safePublish();
+    const rafId = requestAnimationFrame(safePublish);
     const el = hostRef.current;
-    const ro = typeof ResizeObserver !== "undefined" ? new ResizeObserver(() => publishHost()) : null;
+    const ro = typeof ResizeObserver !== "undefined" ? new ResizeObserver(() => scheduler.schedule()) : null;
     if (el && ro) ro.observe(el);
-    window.addEventListener("resize", publishHost);
-    window.addEventListener("scroll", publishHost, true);
+    window.addEventListener("resize", scheduler.schedule);
+    window.addEventListener("scroll", scheduler.schedule, true);
 
     // Default to Browser Live Mode
     void collectorSetBrowserVisible(invoke, true).then(() => {
-      requestAnimationFrame(publishHost);
+      scheduler.schedule();
     });
 
     return () => {
+      cancelled = true;
+      scheduler.cancel();
       cancelAnimationFrame(rafId);
       ro?.disconnect();
-      window.removeEventListener("resize", publishHost);
-      window.removeEventListener("scroll", publishHost, true);
-      void collectorReportBrowserHost(invoke, null);
-      void collectorSetBrowserVisible(invoke, false);
+      window.removeEventListener("resize", scheduler.schedule);
+      window.removeEventListener("scroll", scheduler.schedule, true);
+      releaseCollectorHostOwner(ownerId, () => {
+        void collectorReportBrowserHost(invoke, null);
+        void collectorSetBrowserVisible(invoke, false);
+      });
     };
   }, [electron, invoke, publishHost]);
 
@@ -461,27 +475,93 @@ export function CalibrationStep({
       )}
 
       {/* Main Workspace Layout */}
-      <div className="fic-calibration-workspace">
-        {/* Left Column: BrowserCore Live Host or Frozen Overlay */}
-        <div className="fic-crop-container card">
-          <div className="collector-capture-workspace collector-browser-workspace">
-            <div
-              ref={hostRef}
-              className="collector-browser-host"
+      <BrowserWorkspace className="fic-calibration-workspace">
+        <BrowserScrollArea sidebarCollapsed={sidebarCollapsed}>
+          <div className="rpa-browser-stage fic-crop-container card">
+            <BrowserHost
+              hostRef={hostRef}
               aria-label="Browser Core live workspace"
-              data-browser-core-host=""
             >
               {!opened && !frozen && (
                 <div className="collector-sample-empty collector-browser-host-placeholder">
                   Đang tải BrowserCore... Bạn có thể nhập URL Facebook và bấm "Đi tới URL".
                 </div>
               )}
-            </div>
+            </BrowserHost>
+            {/* Frozen Overlay for ROI Selection (matches Collector V1) */}
+            {frozen && shot && hostClient && imageBox && (
+              <div
+                ref={surfaceRef}
+                className="collector-capture-freeze snapshot"
+                style={{
+                  position: "absolute",
+                  inset: 0,
+                  width: "100%",
+                  height: "100%",
+                  zIndex: 10,
+                  margin: 0,
+                  boxSizing: "border-box",
+                }}
+                onPointerDown={onPointerDown}
+                onPointerMove={onPointerMove}
+                onPointerUp={onPointerUp}
+                onPointerCancel={onPointerUp}
+                role="img"
+                aria-label="Frozen browser capture for ROI crop"
+              >
+                <div
+                  ref={previewScrollRef}
+                  className="collector-capture-preview-scroll"
+                  style={{ width: "100%", height: "100%", overflow: "hidden" }}
+                >
+                  <div style={{ width: imageBox.width, height: imageBox.height, position: "relative" }}>
+                    <img
+                      src={shot.dataUrl}
+                      alt="Frozen capture"
+                      draggable={false}
+                      style={{
+                        display: "block",
+                        width: imageBox.width,
+                        height: imageBox.height,
+                        maxWidth: "none",
+                        maxHeight: "none",
+                        objectFit: "fill",
+                        userSelect: "none",
+                        pointerEvents: "none",
+                      }}
+                    />
+                    {liveRoi && liveRoi.width > 0 && liveRoi.height > 0 && (
+                      <div
+                        className="collector-roi-highlight"
+                        style={{
+                          left: (liveRoi.x / shot.width) * imageBox.width,
+                          top: (liveRoi.y / shot.height) * imageBox.height,
+                          width: (liveRoi.width / shot.width) * imageBox.width,
+                          height: (liveRoi.height / shot.height) * imageBox.height,
+                          border: "2px solid #38bdf8",
+                          background: "rgba(56, 189, 248, 0.2)",
+                          position: "absolute",
+                          pointerEvents: "none",
+                        }}
+                      />
+                    )}
+                  </div>
+                </div>
+              </div>
+            )}
           </div>
-        </div>
+        </BrowserScrollArea>
 
         {/* Right Column: Template Management & Calibration Controls */}
-        <div className="fic-sidebar-panel card">
+        <SidebarDrawer
+          title="Templates Hiệu Chuẩn"
+          collapsed={sidebarCollapsed}
+          onToggleCollapse={() => {
+            setSidebarCollapsed((v) => !v);
+            requestAnimationFrame(() => publishHost());
+          }}
+          className="fic-sidebar-panel card"
+        >
           <h3>Templates Hiệu Chuẩn</h3>
           <p className="fic-panel-desc">
             Cần có đủ 3 icon: Like, Comment và Share. Khi bật <b>Capture Mode: ON</b>, chọn loại icon tương ứng rồi kéo khoanh vùng để lưu.
@@ -582,77 +662,8 @@ export function CalibrationStep({
               Tiếp tục sang Bước 2: Auto Match →
             </button>
           </div>
-        </div>
-      </div>
-
-      {/* Frozen Overlay for ROI Selection (matches Collector V1) */}
-      {frozen && shot && hostClient && imageBox && (
-        <div
-          ref={surfaceRef}
-          className="collector-capture-freeze snapshot"
-          style={{
-            position: "fixed",
-            left: hostClient.left,
-            top: hostClient.top,
-            width: hostClient.width,
-            height: hostClient.height,
-            zIndex: 40,
-            margin: 0,
-            boxSizing: "border-box",
-          }}
-          onPointerDown={onPointerDown}
-          onPointerMove={onPointerMove}
-          onPointerUp={onPointerUp}
-          onPointerCancel={onPointerUp}
-          role="img"
-          aria-label="Frozen browser capture for ROI crop"
-        >
-          <div
-            ref={previewScrollRef}
-            className="collector-capture-preview-scroll"
-            style={{ width: "100%", height: "100%", overflow: "hidden" }}
-          >
-            <div
-              style={{
-                width: imageBox.width,
-                height: imageBox.height,
-                position: "relative",
-              }}
-            >
-              <img
-                src={shot.dataUrl}
-                alt="Frozen capture"
-                draggable={false}
-                style={{
-                  display: "block",
-                  width: imageBox.width,
-                  height: imageBox.height,
-                  maxWidth: "none",
-                  maxHeight: "none",
-                  objectFit: "fill",
-                  userSelect: "none",
-                  pointerEvents: "none",
-                }}
-              />
-              {liveRoi && liveRoi.width > 0 && liveRoi.height > 0 && (
-                <div
-                  className="collector-roi-highlight"
-                  style={{
-                    left: (liveRoi.x / shot.width) * imageBox.width,
-                    top: (liveRoi.y / shot.height) * imageBox.height,
-                    width: (liveRoi.width / shot.width) * imageBox.width,
-                    height: (liveRoi.height / shot.height) * imageBox.height,
-                    border: "2px solid #38bdf8",
-                    background: "rgba(56, 189, 248, 0.2)",
-                    position: "absolute",
-                    pointerEvents: "none",
-                  }}
-                />
-              )}
-            </div>
-          </div>
-        </div>
-      )}
+        </SidebarDrawer>
+      </BrowserWorkspace>
     </div>
   );
 }

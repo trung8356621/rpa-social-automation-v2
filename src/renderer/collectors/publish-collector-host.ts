@@ -6,8 +6,82 @@
 import { domRectToShellBounds } from "../../shared/collector-browser-host";
 import { readAdminUiZoom } from "../ui-zoom";
 import { collectorReportBrowserHost, type CollectorInvoke } from "./browser-capture";
+import { getCollectorHostOwner, getCollectorHostOwnerRevision } from "./collector-host-owner";
 
 export type HostClientRect = { left: number; top: number; width: number; height: number };
+
+const CLIPPING_OVERFLOW = new Set(["auto", "scroll", "hidden", "clip"]);
+
+/**
+ * Intersect a host rect with its visible clipping ancestors, global sidebar,
+ * and window viewport so native WebContentsView never paints over chrome.
+ */
+export function clipHostRectToVisibleArea(
+  hostEl: HTMLElement,
+  rect: Pick<DOMRect, "left" | "top" | "right" | "bottom" | "width" | "height">,
+): HostClientRect {
+  let left = rect.left;
+  let top = rect.top;
+  let right = rect.right;
+  let bottom = rect.bottom;
+
+  if (typeof window !== "undefined") {
+    left = Math.max(left, 0);
+    top = Math.max(top, 0);
+    right = Math.min(right, window.innerWidth);
+    bottom = Math.min(bottom, window.innerHeight);
+  }
+
+  if (typeof getComputedStyle === "function") {
+    let parent = hostEl.parentElement;
+    while (parent) {
+      const style = getComputedStyle(parent);
+      const clipsX = CLIPPING_OVERFLOW.has(style.overflowX) || CLIPPING_OVERFLOW.has(style.overflow);
+      const clipsY = CLIPPING_OVERFLOW.has(style.overflowY) || CLIPPING_OVERFLOW.has(style.overflow);
+      if (clipsX || clipsY) {
+        const pr = parent.getBoundingClientRect();
+        if (clipsX) {
+          left = Math.max(left, pr.left);
+          right = Math.min(right, pr.right);
+        }
+        if (clipsY) {
+          top = Math.max(top, pr.top);
+          bottom = Math.min(bottom, pr.bottom);
+        }
+      }
+      parent = parent.parentElement;
+    }
+  }
+
+  if (typeof document !== "undefined" && hostEl.closest(".app-page")) {
+    const sidebar = document.querySelector(".app-sidebar");
+    if (sidebar) {
+      const sideRect = sidebar.getBoundingClientRect();
+      if (sideRect.width > 0) {
+        left = Math.max(left, sideRect.right);
+      }
+    }
+  }
+
+  // Native WebContentsView occlusion: if the right-anchored sidebar drawer (expanded
+  // or collapsed tab) in the same BrowserWorkspace overlaps the host, clip native
+  // right edge so the drawer/tab remains visible and clickable above WebContentsView.
+  const workspace = typeof hostEl.closest === "function" ? hostEl.closest(".rpa-browser-workspace") : null;
+  const drawer = workspace?.querySelector("[data-browser-sidebar-drawer]");
+  if (drawer) {
+    const drawerRect = drawer.getBoundingClientRect();
+    if (drawerRect.width > 0 && drawerRect.left < right && drawerRect.right > left) {
+      right = Math.min(right, drawerRect.left);
+    }
+  }
+
+  return {
+    left,
+    top,
+    width: Math.max(0, right - left),
+    height: Math.max(0, bottom - top),
+  };
+}
 
 export type PublishCollectorHostResult = {
   client: HostClientRect;
@@ -20,12 +94,21 @@ export function publishCollectorHostFromElement(
   invoke: CollectorInvoke,
   hostEl: HTMLElement | null,
 ): PublishCollectorHostResult | null {
-  if (!hostEl) {
+  if (!hostEl || !hostEl.isConnected) {
     void collectorReportBrowserHost(invoke, null);
     return null;
   }
   const rect = hostEl.getBoundingClientRect();
-  if (rect.width < 10 || rect.height < 10) return null;
+  if (rect.width < 10 || rect.height < 10) {
+    void collectorReportBrowserHost(invoke, null);
+    return null;
+  }
+
+  const clipped = clipHostRectToVisibleArea(hostEl, rect);
+  if (clipped.width < 10 || clipped.height < 10) {
+    void collectorReportBrowserHost(invoke, null);
+    return null;
+  }
 
   const zoom = readAdminUiZoom();
   const raw = {
@@ -34,7 +117,7 @@ export function publishCollectorHostFromElement(
     width: rect.width,
     height: rect.height,
   };
-  const shellRect = domRectToShellBounds(rect, zoom);
+  const shellRect = domRectToShellBounds(clipped, zoom);
   const shell = { ...shellRect, active: true as const };
   void collectorReportBrowserHost(invoke, shell);
   return {
@@ -83,17 +166,32 @@ export function snapshotCollectorHostGeometry(hostEl: HTMLElement | null): Recor
     document.querySelector(".fic-page-header");
   const toolbar = document.querySelector(".pdc-toolbar") || document.querySelector(".fic-toolbar");
 
+  const rawHost = box(hostEl);
+  const clippedHost = hostEl && hostEl.isConnected
+    ? clipHostRectToVisibleArea(hostEl, hostEl.getBoundingClientRect())
+    : null;
+  const calculatedShell = clippedHost && clippedHost.width >= 10 && clippedHost.height >= 10
+    ? domRectToShellBounds(clippedHost, readAdminUiZoom())
+    : null;
+  const activeStepLabel =
+    document.querySelector(".pdc-step-pill.active")?.textContent?.trim() || null;
+
   return {
     windowInner: { width: window.innerWidth, height: window.innerHeight },
     devicePixelRatio: window.devicePixelRatio,
     cssZoomStyle: zoomStyle,
     adminUiZoom: readAdminUiZoom(),
     navCssVar: navVar,
+    activeOwner: getCollectorHostOwner(),
+    ownerRevision: getCollectorHostOwnerRevision(),
+    currentStep: activeStepLabel,
     shell: box(document.querySelector("main.app-shell")),
     sidebar: box(sidebar),
     page: box(page),
     workspace: box(workspace),
-    host: box(hostEl),
+    host: rawHost,
+    clippedHost,
+    calculatedShell,
     sidePanel: box(sidePanel),
     header: box(header),
     toolbar: box(toolbar),

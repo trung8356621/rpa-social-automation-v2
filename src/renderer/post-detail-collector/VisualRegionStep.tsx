@@ -34,7 +34,17 @@ import {
   actionRowOverlayForFrame,
   scaleImageRect,
 } from "./action-row-presentation";
-import { publishPostDetailBrowserHost } from "./publish-browser-host";
+import {
+  createRafHostPublishScheduler,
+  publishPostDetailBrowserHost,
+  sameHostClientRect,
+} from "./publish-browser-host";
+import {
+  BrowserHost,
+  BrowserScrollArea,
+  BrowserWorkspace,
+  SidebarDrawer,
+} from "../components/BrowserWorkspace";
 import type { BrowserProbe, Invoke, PostDetailMatchResult } from "./types";
 
 type Props = {
@@ -129,6 +139,7 @@ export function VisualRegionStep({
   const [confirmDiagnostics, setConfirmDiagnostics] = useState("");
   const [confirmDiagnosticsCopied, setConfirmDiagnosticsCopied] = useState(false);
   const [showDomDebug, setShowDomDebug] = useState(false);
+  const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
   const [drag, setDrag] = useState<DragState>();
   const [hostClient, setHostClient] = useState<HostClient | null>(null);
   const cancelRef = useRef(false);
@@ -169,18 +180,23 @@ export function VisualRegionStep({
   const publishHost = React.useCallback(() => {
     if (!electron || !invoke) return;
     const client = publishPostDetailBrowserHost(invoke, hostRef.current);
-    if (client) setHostClient(client);
-    else if (!hostRef.current) setHostClient(null);
+    if (client) {
+      setHostClient((prev) => (sameHostClientRect(prev, client) ? prev : client));
+    } else if (!hostRef.current) {
+      setHostClient((prev) => (prev === null ? prev : null));
+    }
   }, [electron, invoke]);
 
   useEffect(() => {
     if (!electron || !invoke) return;
+    let cancelled = false;
     const { ownerId } = claimCollectorHostOwner("pdc-step2");
     const safePublish = () => {
-      if (!isCollectorHostOwner(ownerId)) return;
+      if (cancelled || !isCollectorHostOwner(ownerId)) return;
       // Keep host active during scan (skipping publish caused WHEEL_BLOCKED_NOT_VISIBLE).
       publishHost();
     };
+    const scheduler = createRafHostPublishScheduler(safePublish);
     safePublish();
     const rafIds = [
       requestAnimationFrame(safePublish),
@@ -189,19 +205,21 @@ export function VisualRegionStep({
     const el = hostRef.current;
     const ro =
       typeof ResizeObserver !== "undefined"
-        ? new ResizeObserver(() => safePublish())
+        ? new ResizeObserver(() => scheduler.schedule())
         : null;
     if (el && ro) ro.observe(el);
-    window.addEventListener("resize", safePublish);
-    window.addEventListener("scroll", safePublish, true);
+    window.addEventListener("resize", scheduler.schedule);
+    window.addEventListener("scroll", scheduler.schedule, true);
     void collectorSetBrowserVisible(invoke, true).then(() =>
-      requestAnimationFrame(safePublish),
+      scheduler.schedule(),
     );
     return () => {
+      cancelled = true;
+      scheduler.cancel();
       for (const id of rafIds) cancelAnimationFrame(id);
       ro?.disconnect();
-      window.removeEventListener("resize", safePublish);
-      window.removeEventListener("scroll", safePublish, true);
+      window.removeEventListener("resize", scheduler.schedule);
+      window.removeEventListener("scroll", scheduler.schedule, true);
       cancelRef.current = true;
       scanningRef.current = false;
       void collectorPostDetailScanInputLock(invoke, false).catch(
@@ -883,16 +901,11 @@ export function VisualRegionStep({
         </div>
       )}
 
-      <div className="pdc-calibration-workspace">
-        <div className="pdc-crop-container">
-          <div
-            className="collector-capture-workspace collector-browser-workspace"
-            style={{ position: "relative" }}
-          >
-            <div
-              ref={hostRef}
-              className="collector-browser-host"
-              data-browser-core-host=""
+      <BrowserWorkspace className="pdc-calibration-workspace">
+        <BrowserScrollArea sidebarCollapsed={sidebarCollapsed}>
+          <div className="rpa-browser-stage pdc-crop-container">
+            <BrowserHost
+              hostRef={hostRef}
               aria-label="Browser Core host"
             />
             {running && (
@@ -902,9 +915,8 @@ export function VisualRegionStep({
                 title="Auto Scan · Input Locked"
               />
             )}
-          </div>
-          {/* Live BrowserCore during scan — freeze screenshot only after Stop / for manual ROI. */}
-          {!running && shotUrl && hostClient && imageBox && (
+            {/* Live BrowserCore during scan — freeze screenshot only after Stop / for manual ROI. */}
+            {!running && shotUrl && hostClient && imageBox && (
             <div
               className="collector-capture-freeze snapshot pdc-scan-overlay"
               style={{
@@ -1026,9 +1038,18 @@ export function VisualRegionStep({
               </div>
             </div>
           )}
-        </div>
+          </div>
+        </BrowserScrollArea>
 
-        <div className="pdc-side-panel">
+        <SidebarDrawer
+          title="Detection & Debug"
+          collapsed={sidebarCollapsed}
+          onToggleCollapse={() => {
+            setSidebarCollapsed((v) => !v);
+            requestAnimationFrame(() => publishHost());
+          }}
+          className="pdc-side-panel"
+        >
           <h3>Detection</h3>
           <div
             className={`pdc-action-result pdc-action-result-${actionRowStatus.toLowerCase()}`}
@@ -1382,8 +1403,8 @@ export function VisualRegionStep({
               </div>
             )}
           </div>
-        </div>
-      </div>
+        </SidebarDrawer>
+      </BrowserWorkspace>
     </div>
   );
 }

@@ -51,9 +51,12 @@ test("Post Detail Collector menu sits under Feed Item and is wired", () => {
 test("Post Detail keeps the Scripts canonical 1024x560 viewport and scrolls smaller workspaces", () => {
   const geometry = read("src/shared/geometry.ts");
   const css = read("src/renderer/post-detail-collector/post-detail-collector.css");
+  const sharedCss = read("src/renderer/style.css");
   assert.match(geometry, /EXECUTION_VIEWPORT = Object\.freeze\(\{ width: 1024, height: 560 \}\)/);
-  assert.match(css, /grid-template-columns: 1024px/);
-  assert.match(css, /\.pdc-dom-browser \{ width: 1024px; height: 560px/);
+  assert.match(sharedCss, /--rpa-browser-width:\s*1024px;/);
+  assert.match(sharedCss, /--rpa-browser-height:\s*560px;/);
+  assert.match(sharedCss, /\.rpa-browser-host\s*\{[\s\S]*position:\s*static;[\s\S]*width:\s*var\(--rpa-browser-width\);[\s\S]*height:\s*var\(--rpa-browser-height\);/);
+  assert.match(sharedCss, /\.rpa-browser-scroll[\s\S]*overflow:\s*auto/);
   assert.match(css, /\.pdc-content-area[\s\S]*overflow: auto/);
   assert.doesNotMatch(css, /transform:\s*scale\([^)]*\)[^}]*pdc-dom-browser/);
 });
@@ -200,10 +203,11 @@ test("Post Detail host publish matches Feed Item (no sidebar clamp)", async () =
   const fic = read("src/renderer/feed-item-collector/feed-item-collector.css");
   assert.match(fic, /margin-left:\s*var\(--app-nav-width\)/);
 
-  // Global style.css pins bare <aside> to Creator steps (absolute left:0 width:320). Feed Item uses <div>.
+  // Global style.css pins bare <aside> to Creator steps (absolute left:0 width:320). Shared SidebarDrawer uses <div>.
+  const sharedCss = read("src/renderer/style.css");
   assert.doesNotMatch(step1, /<aside\s+className="pdc-side-panel"/);
-  assert.match(step1, /<div\s+className="pdc-side-panel"/);
-  assert.match(css, /\.pdc-side-panel\s*\{[\s\S]*position:\s*relative/);
+  assert.match(step1, /className="pdc-side-panel"/);
+  assert.match(sharedCss, /\.rpa-browser-sidebar\s*\{[\s\S]*position:\s*absolute;[\s\S]*right:\s*0;/);
   const step2 = read("src/renderer/post-detail-collector/VisualRegionStep.tsx");
   const step3 = read("src/renderer/post-detail-collector/OcrPreviewStep.tsx");
   assert.doesNotMatch(step2, /<aside\s+className="pdc-side-panel"/);
@@ -281,9 +285,9 @@ test("Post Detail separates navigateToTarget from captureFromSocialPage", async 
   assert.match(step1, /Browser URL/);
   assert.doesNotMatch(step1, /onContentRoi/);
   assert.match(step1, /collector-capture-freeze snapshot/);
-  assert.match(step1, /position:\s*"fixed"/);
+  assert.match(step1, /position:\s*"absolute"/);
   assert.match(step1, /collectorReportBrowserHost/);
-  assert.match(step1, /data-browser-core-host=""/);
+  assert.match(step1, /<BrowserHost/);
 
   const step2 = read("src/renderer/post-detail-collector/VisualRegionStep.tsx");
   assert.match(step2, /Start Auto Scan/);

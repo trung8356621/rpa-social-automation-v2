@@ -212,8 +212,8 @@ test("Phase 3 (Step 1 Refactor): Reuses Collector V1 Capture Mode & Browser Live
   // Browser Live Mode by default
   assert.match(step1Source, /collectorSetBrowserVisible\(invoke, true\)/);
   assert.match(step1Source, /collectorReportBrowserHost/);
-  assert.match(step1Source, /className="collector-browser-host"/);
-  assert.match(step1Source, /data-browser-core-host=""/);
+  assert.match(step1Source, /<BrowserHost/);
+  assert.match(read("src/renderer/components/BrowserWorkspace.tsx"), /data-browser-core-host=""/);
 
   // Capture Mode ON / OFF toggle and freeze mechanism
   assert.match(step1Source, /Capture Mode:\s*ON/i);
@@ -233,14 +233,15 @@ test("Phase 3 (Step 1 Refactor): Reuses Collector V1 Capture Mode & Browser Live
   assert.match(step1Source, /showHelpExample/);
   assert.match(step1Source, /Mẫu Facebook tiêu chuẩn/);
 
-  // BrowserCore position fix: scroll & resize listener, fixed workspace bounds
-  assert.match(step1Source, /window\.addEventListener\("scroll",\s*publishHost,\s*true\)/);
-  assert.match(step1Source, /window\.addEventListener\("resize",\s*publishHost\)/);
+  // BrowserCore position fix: rAF-coalesced scroll & resize listener, shared BrowserWorkspace bounds
+  assert.match(step1Source, /window\.addEventListener\("scroll",\s*scheduler\.schedule,\s*true\)/);
+  assert.match(step1Source, /window\.addEventListener\("resize",\s*scheduler\.schedule\)/);
   assert.doesNotMatch(step1Source, /style=\{\{\s*width:\s*"100%",\s*height:\s*560\s*\}\}/);
 
   const ficCss = read("src/renderer/feed-item-collector/feed-item-collector.css");
+  const sharedCss = read("src/renderer/style.css");
   assert.match(ficCss, /\.workspace-page-strip ~ \.app-page\.feed-item-collector-page[\s\S]*overflow:\s*hidden/);
-  assert.match(ficCss, /\.fic-calibration-workspace[\s\S]*overflow:\s*hidden/);
+  assert.match(sharedCss, /\.rpa-browser-workspace[\s\S]*overflow:\s*hidden/);
 
   const creatorOverlays = read("src/main/creator-overlays.ts");
   const browserHost = read("src/shared/collector-browser-host.ts");

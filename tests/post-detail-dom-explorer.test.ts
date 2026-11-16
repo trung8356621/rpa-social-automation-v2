@@ -1296,7 +1296,7 @@ test("URL Workspace uses same BrowserCore host, single input, cards, filters, an
   assert.match(source, /pdc-post-grid/);
   assert.match(source, /Copy link address/);
   assert.doesNotMatch(source, /<aside className="pdc-add-panel"/);
-  assert.match(source, /<section className="pdc-add-panel"/);
+  assert.match(source, /className="pdc-add-panel"/);
 });
 
 test("completion sounds are task-scoped, cancelled jobs stay silent, and packaged assets exist", () => {

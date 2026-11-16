@@ -4,7 +4,16 @@ import type { CollectorValueType, CollectorVariable } from "../../shared/collect
 import { collectorReportBrowserHost, collectorSetBrowserVisible } from "../collectors/browser-capture";
 import { claimCollectorHostOwner, isCollectorHostOwner, releaseCollectorHostOwner } from "../collectors/collector-host-owner";
 import { UiPopover } from "../ui-popover";
-import { publishPostDetailBrowserHost } from "./publish-browser-host";
+import {
+  createRafHostPublishScheduler,
+  publishPostDetailBrowserHost,
+} from "./publish-browser-host";
+import {
+  BrowserHost,
+  BrowserScrollArea,
+  BrowserWorkspace,
+  SidebarDrawer,
+} from "../components/BrowserWorkspace";
 import { canonicalPostUrl } from "./batch-validation";
 import { executeVariableMapping, extractParentData, relativeXPathForPath, type ExtractedDataItem, type ExtractedOutput } from "./extract-parent-data";
 import {
@@ -76,6 +85,7 @@ export function SavedParentHtmlStep({ invoke, result, currentUrl, parentConfig, 
   const [focusPath, setFocusPath] = useState<number[]>([]);
   const [isExpanded, setIsExpanded] = useState(false);
   const [browserCollapsed, setBrowserCollapsed] = useState(false);
+  const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
   const [treeRatio, setTreeRatio] = useState(55);
   const [variableId, setVariableId] = useState("");
   const [method, setMethod] = useState<"DOM_TEXT" | "DOM_ATTRIBUTE">("DOM_TEXT");
@@ -177,12 +187,18 @@ export function SavedParentHtmlStep({ invoke, result, currentUrl, parentConfig, 
   const focusElement = atPath(focusPath);
   const nodes = useMemo(() => focusElement ? [toNode(focusElement, focusPath)] : [], [focusElement, focusPath]);
 
+  const hostOwnerRef = useRef<string | null>(null);
+  const hostMounted = status !== "NOT_CONFIGURED" && !browserCollapsed;
   useEffect(() => {
     const { ownerId } = claimCollectorHostOwner("pdc-step3");
-    if (browserCollapsed) {
+    hostOwnerRef.current = ownerId;
+    if (!hostMounted) {
       void collectorReportBrowserHost(invoke, null);
       void collectorSetBrowserVisible(invoke, false);
-      return () => { releaseCollectorHostOwner(ownerId, () => void collectorReportBrowserHost(invoke, null)); };
+      return () => {
+        if (hostOwnerRef.current === ownerId) hostOwnerRef.current = null;
+        releaseCollectorHostOwner(ownerId, () => void collectorReportBrowserHost(invoke, null));
+      };
     }
     let cancelled = false;
     const rafIds = new Set<number>();
@@ -203,31 +219,49 @@ export function SavedParentHtmlStep({ invoke, result, currentUrl, parentConfig, 
     attachWhenMeasured();
     const first = requestAnimationFrame(() => { rafIds.delete(first); attachWhenMeasured(); });
     rafIds.add(first);
-    const observer = new ResizeObserver(() => publish());
+    const scheduler = createRafHostPublishScheduler(() => { void publish(); });
+    const observer = new ResizeObserver(() => scheduler.schedule());
     if (hostRef.current) observer.observe(hostRef.current);
-    window.addEventListener("resize", publish);
-    window.addEventListener("scroll", publish, true);
+    window.addEventListener("resize", scheduler.schedule);
+    window.addEventListener("scroll", scheduler.schedule, true);
     void collectorSetBrowserVisible(invoke, true).then(() => attachWhenMeasured());
     return () => {
       cancelled = true;
+      scheduler.cancel();
       rafIds.forEach(id => cancelAnimationFrame(id));
       observer.disconnect();
-      window.removeEventListener("resize", publish);
-      window.removeEventListener("scroll", publish, true);
+      window.removeEventListener("resize", scheduler.schedule);
+      window.removeEventListener("scroll", scheduler.schedule, true);
       void invoke({ type: "postDetailClearParentNodeHighlight" });
+      if (hostOwnerRef.current === ownerId) hostOwnerRef.current = null;
       releaseCollectorHostOwner(ownerId, () => { void collectorReportBrowserHost(invoke, null); void collectorSetBrowserVisible(invoke, false); });
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [browserCollapsed, invoke]);
+  }, [hostMounted, invoke]);
   useEffect(() => {
-    const visible = !browserCollapsed && !variablesOpen;
+    const ownerId = hostOwnerRef.current;
+    if (!ownerId || !isCollectorHostOwner(ownerId)) return;
+    const visible = status !== "NOT_CONFIGURED" && !browserCollapsed && !variablesOpen;
     void collectorSetBrowserVisible(invoke, visible);
-    if (visible) {
-      requestAnimationFrame(() => requestAnimationFrame(() => publishPostDetailBrowserHost(invoke, hostRef.current)));
-    } else {
+    if (!visible) {
       void collectorReportBrowserHost(invoke, null);
+      return;
     }
-  }, [browserCollapsed, variablesOpen, invoke]);
+    let cancelled = false;
+    let raf2 = 0;
+    const raf1 = requestAnimationFrame(() => {
+      raf2 = requestAnimationFrame(() => {
+        if (!cancelled && isCollectorHostOwner(ownerId)) {
+          publishPostDetailBrowserHost(invoke, hostRef.current);
+        }
+      });
+    });
+    return () => {
+      cancelled = true;
+      cancelAnimationFrame(raf1);
+      if (raf2) cancelAnimationFrame(raf2);
+    };
+  }, [hostMounted, variablesOpen, invoke]);
   useEffect(() => { if (!isExpanded) return; const close = (event: KeyboardEvent) => { if (event.key === "Escape") setIsExpanded(false); }; window.addEventListener("keydown", close); return () => window.removeEventListener("keydown", close); }, [isExpanded]);
 
   const highlight = (node: ExplorerNode | null) => void invoke(node ? { type: "postDetailHighlightParentNode", path: node.path } : selected ? { type: "postDetailHighlightParentNode", path: selected.path } : { type: "postDetailClearParentNodeHighlight" });
@@ -385,7 +419,7 @@ export function SavedParentHtmlStep({ invoke, result, currentUrl, parentConfig, 
       </div>
     </UiPopover>}
     <div className={`pdc-alert ${status === "PARENT_MATCHED" ? "pdc-alert-ok" : "pdc-alert-warn"}`}>{status === "PARENT_MATCHED" ? "AUTO · Parent Matched" : status === "RESOLVING" ? "AUTO · Resolving Parent..." : `Needs Attention · ${result?.failureCode || status}`}</div>
-    {status !== "NOT_CONFIGURED" && <div className={`pdc-dom-workspace ${browserCollapsed ? "browser-collapsed" : ""}`}><div className="pdc-dom-browser-wrap"><button className="pdc-btn pdc-btn-tiny" onClick={() => setBrowserCollapsed(value => !value)}>{browserCollapsed ? "Show Browser Preview" : "Collapse Browser Preview"}</button>{!browserCollapsed && <div ref={hostRef} className="pdc-browser-host pdc-dom-browser" data-browser-core-host="" />}</div><div className="pdc-dom-panel">
+    {status !== "NOT_CONFIGURED" && <BrowserWorkspace className={`pdc-dom-workspace ${browserCollapsed ? "browser-collapsed" : ""}`}><BrowserScrollArea sidebarCollapsed={sidebarCollapsed}><div className="pdc-dom-browser-wrap"><button className="pdc-btn pdc-btn-tiny" onClick={() => setBrowserCollapsed(value => !value)}>{browserCollapsed ? "Show Browser Preview" : "Collapse Browser Preview"}</button>{!browserCollapsed && <div className="rpa-browser-stage"><BrowserHost hostRef={hostRef} className="pdc-dom-browser" /></div>}</div></BrowserScrollArea><SidebarDrawer title="Extracted Data" collapsed={sidebarCollapsed} onToggleCollapse={() => { setSidebarCollapsed(value => !value); if (!browserCollapsed) requestAnimationFrame(() => publishPostDetailBrowserHost(invoke, hostRef.current)); }} className="pdc-dom-panel">
       {status === "PARENT_MATCHED" ? <><div className={`pdc-data-review ${selectedData ? "has-detail" : ""}`}>
         <div className="pdc-data-list" aria-label="Extracted values">
           <div className="pdc-data-list-header"><h3>Extracted values</h3><div className="pdc-btn-row"><span>{visibleData.length} shown · {hiddenCount} hidden</span><button className="pdc-btn pdc-btn-tiny" onClick={() => setShowHidden(value => !value)}>{showHidden ? "Hide Noise" : "Show Hidden"}</button><button className="pdc-btn pdc-btn-tiny" disabled={!manuallyHidden.length} onClick={restoreHidden}>Restore</button></div></div>
@@ -470,6 +504,6 @@ export function SavedParentHtmlStep({ invoke, result, currentUrl, parentConfig, 
         <section><h4>Selector</h4><code>{relativeXPath(selected.path)}</code><div className="pdc-btn-row"><button className="pdc-btn pdc-btn-tiny" onClick={() => copy(relativeXPath(selected.path))}>Copy XPath</button><button className="pdc-btn pdc-btn-tiny" onClick={() => copy(relativeSelector(selected.path))}>Copy Selector</button></div></section>
         <section><h4>Variables</h4>{variables.length ? <><select value={variableId} onChange={event => setVariableId(event.target.value)}><option value="">Select existing variable…</option>{variables.map(variable => <option key={`${variable.collectorId}:${variable.id}`} value={`${variable.collectorId}:${variable.id}`}>{variable.collectorName} · {variable.label} ({variable.key})</option>)}</select><select value={method} onChange={event => setMethod(event.target.value as typeof method)}><option value="DOM_TEXT">text</option><option value="DOM_ATTRIBUTE">attribute</option></select>{method === "DOM_ATTRIBUTE" && <input value={attribute} onChange={event => setAttribute(event.target.value)} placeholder="href" />}<p>Preview: {selectedValue || "Missing / Needs Attention"}</p><p>Locator matches: {selectedMatchCount} {selectedMatchCount === 1 ? "· verified" : "· Needs Attention"}</p><button className="pdc-btn pdc-btn-primary" disabled={!variableId || !selectedValue || selectedMatchCount !== 1} onClick={saveMapping}>Confirm Mapping</button></> : <p className="pdc-panel-desc">No existing Collector variables. Create schema in Collectors first.</p>}</section>
       </> : <p className="pdc-panel-desc">Chọn một node. Double-click để Focus Root.</p>}</div></div><section className="pdc-variable-status"><h3>Confirmed mappings</h3>{mappingRows.length ? mappingRows.map(({ mapping, value, mappingStatus }) => <div key={`${mapping.collectorId}:${mapping.variableId}`}><b>{mapping.variableLabel}</b> · <span>{mappingStatus}</span> · {value || "—"}</div>) : <p className="pdc-panel-desc">Unmapped · chưa có mapping đã xác nhận.</p>}</section></>}</details></> : <div><h3>Parent resolution failed</h3><p className="pdc-panel-desc">AUTO did not accept a Parent without identity, Action Row ownership, and Parent validation.</p>{result?.diagnosticMeta && <pre className="pdc-code-preview">{JSON.stringify(result.diagnosticMeta, null, 2)}</pre>}</div>}
-    </div></div>}
+    </SidebarDrawer></BrowserWorkspace>}
   </div>;
 }

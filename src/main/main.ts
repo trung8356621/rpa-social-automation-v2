@@ -2547,8 +2547,9 @@ async function boot() {
         isIdle();
         if (event.sender !== window.webContents) throw new Error("Invalid collector host sender");
         const host = command.host;
+        let changed = false;
         if (host === null) {
-          overlays.setCollectorHost(null);
+          changed = overlays.setCollectorHost(null);
         } else {
           if (
             ![host.x, host.y, host.width, host.height].every(Number.isFinite) ||
@@ -2557,7 +2558,7 @@ async function boot() {
           ) {
             throw new Error("Invalid collector browser host bounds.");
           }
-          overlays.setCollectorHost({
+          changed = overlays.setCollectorHost({
             x: Math.round(host.x),
             y: Math.round(host.y),
             width: Math.round(host.width),
@@ -2565,11 +2566,13 @@ async function boot() {
             active: Boolean(host.active),
           });
         }
-        publishLayout();
-        postDetailScanLock.syncBounds();
-        if (host?.active && browser.visible) {
-          const surface = await browser.prepareVisibleSurface();
-          if (!surface.ok) console.warn("[BrowserCore visible surface not ready]", surface);
+        if (changed) {
+          publishLayout();
+          postDetailScanLock.syncBounds();
+          if (host?.active && browser.visible) {
+            const surface = await browser.prepareVisibleSurface();
+            if (!surface.ok) console.warn("[BrowserCore visible surface not ready]", surface);
+          }
         }
         return state();
       }

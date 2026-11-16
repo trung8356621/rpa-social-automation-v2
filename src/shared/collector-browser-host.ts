@@ -229,3 +229,36 @@ export function assertRoiFitsCapture(roi: Rect, imageWidth: number, imageHeight:
     height: Math.round(roi.height),
   };
 }
+
+export function normalizeCollectorHost(
+  host: CollectorBrowserHost | null,
+): CollectorBrowserHost | null {
+  if (!host) return null;
+  return {
+    x: Math.round(host.x),
+    y: Math.round(host.y),
+    width: Math.round(host.width),
+    height: Math.round(host.height),
+    active: Boolean(host.active),
+  };
+}
+
+export function sameRect(a: Rect | null, b: Rect | null): boolean {
+  if (a === b) return true;
+  if (!a || !b) return false;
+  return (
+    Math.round(a.x) === Math.round(b.x) &&
+    Math.round(a.y) === Math.round(b.y) &&
+    Math.round(a.width) === Math.round(b.width) &&
+    Math.round(a.height) === Math.round(b.height)
+  );
+}
+
+export function sameCollectorHost(
+  a: CollectorBrowserHost | null,
+  b: CollectorBrowserHost | null,
+): boolean {
+  if (a === b) return true;
+  if (!a || !b) return false;
+  return sameRect(a, b) && Boolean(a.active) === Boolean(b.active);
+}

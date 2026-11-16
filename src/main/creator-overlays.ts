@@ -2,12 +2,15 @@ import { WebContentsView, type BrowserWindow } from "electron";
 import type { BrowserCore } from "./browser-core.js";
 import {
   isCollectorBrowserHostPage,
+  normalizeCollectorHost,
   resolveBrowserViewBounds,
+  sameCollectorHost,
+  sameRect,
   shouldShowBrowserForPage,
   type CollectorBrowserHost,
 } from "../shared/collector-browser-host.js";
 import { workspaceLayout } from "../shared/geometry.js";
-import type { AppPage } from "../shared/contracts.js";
+import type { AppPage, Rect } from "../shared/contracts.js";
 
 /** Shell Editor and browser layout. Debug is detached for legacy diagnostics. */
 export class CreatorOverlays {
@@ -20,6 +23,7 @@ export class CreatorOverlays {
   scroll = { left: 0, top: 0 };
   /** Capture-step host from renderer; ignored outside collectors. */
   collectorHost: CollectorBrowserHost | null = null;
+  private lastBrowserBounds: Rect | null = null;
   constructor(
     readonly window: BrowserWindow,
     preload: string,
@@ -51,8 +55,11 @@ export class CreatorOverlays {
     return this.expanded.debug;
   }
   setCollectorHost(host: CollectorBrowserHost | null) {
-    this.collectorHost = host;
+    const normalized = normalizeCollectorHost(host);
+    if (sameCollectorHost(this.collectorHost, normalized)) return false;
+    this.collectorHost = normalized;
     this.layout();
+    return true;
   }
   layout() {
     const [width, height] = this.window.getContentSize();
@@ -67,20 +74,40 @@ export class CreatorOverlays {
     const scrollLeft = Math.min(this.scroll.left, Math.max(0, bounds.minWidth - width));
     bounds.browser.x -= scrollLeft;
     bounds.browser.y -= this.scroll.top;
-    const browserBounds = resolveBrowserViewBounds({
+    let browserBounds = resolveBrowserViewBounds({
       page: this.page,
       collectorHost: this.collectorHost,
       creatorBrowser: bounds.browser,
     });
+    let hostVisibleInWindow = true;
+    if (isCollectorBrowserHostPage(this.page) && this.collectorHost?.active) {
+      const left = Math.max(0, browserBounds.x);
+      const top = Math.max(0, browserBounds.y);
+      const right = Math.min(width, browserBounds.x + browserBounds.width);
+      const bottom = Math.min(height, browserBounds.y + browserBounds.height);
+      const clippedWidth = Math.max(0, right - left);
+      const clippedHeight = Math.max(0, bottom - top);
+      if (clippedWidth < 4 || clippedHeight < 4) {
+        hostVisibleInWindow = false;
+      } else {
+        browserBounds = { x: left, y: top, width: clippedWidth, height: clippedHeight };
+      }
+    }
     Object.assign(this.browser.bounds, browserBounds);
-    this.browser.view.setBounds(browserBounds);
+    if (!sameRect(this.lastBrowserBounds, browserBounds)) {
+      this.lastBrowserBounds = { ...browserBounds };
+      this.browser.view.setBounds(browserBounds);
+    }
     const show =
       this.browser.isScanHoldVisible ||
-      shouldShowBrowserForPage({
-        page: this.page,
-        browserVisible: this.browser.visible,
-        collectorHostActive: Boolean(this.collectorHost?.active),
-      });
+      (hostVisibleInWindow &&
+        shouldShowBrowserForPage({
+          page: this.page,
+          browserVisible: this.browser.visible,
+          collectorHostActive: Boolean(this.collectorHost?.active),
+        }));
+    // Always enforce native view visibility in layout() because BrowserCore.setVisible /
+    // prepareVisibleSurface can mutate view visibility directly between layout() passes.
     this.browser.view.setVisible(show);
     // Legacy diagnostics can inspect bounds, but no Debug surface is attached.
     this.debug.setBounds(bounds.debug);

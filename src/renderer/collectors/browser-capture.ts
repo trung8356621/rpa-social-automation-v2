@@ -4,6 +4,12 @@
  * Does not create a second browser engine or session store.
  */
 import type { Capture, Command, OcrResult, Rect } from "../../shared/contracts";
+import {
+  normalizeCollectorHost,
+  sameCollectorHost,
+  type CollectorBrowserHost,
+} from "../../shared/collector-browser-host";
+import { getCollectorHostOwnerRevision } from "./collector-host-owner";
 import type {
   CollectorDomSnapshot,
   LayoutContextKind,
@@ -93,12 +99,35 @@ export async function collectorSetBrowserVisible(
   await invoke({ type: "browserVisible", visible });
 }
 
+let lastReportedHost: CollectorBrowserHost | null = null;
+let lastReportedOwnerRevision = -1;
+
+export function resetCollectorBrowserHostReportCache(): void {
+  lastReportedHost = null;
+  lastReportedOwnerRevision = -1;
+}
+
 export async function collectorReportBrowserHost(
   invoke: CollectorInvoke,
   host: null | { x: number; y: number; width: number; height: number; active: boolean },
 ): Promise<void> {
   if (!isElectronBrowserCoreAvailable()) return;
-  await invoke({ type: "collectorBrowserHost", host });
+  const normalized = normalizeCollectorHost(host);
+  const ownerRevision = getCollectorHostOwnerRevision();
+  if (
+    ownerRevision === lastReportedOwnerRevision &&
+    sameCollectorHost(lastReportedHost, normalized)
+  ) {
+    return;
+  }
+  lastReportedOwnerRevision = ownerRevision;
+  lastReportedHost = normalized;
+  try {
+    await invoke({ type: "collectorBrowserHost", host: normalized });
+  } catch (err) {
+    lastReportedOwnerRevision = -1;
+    throw err;
+  }
 }
 
 export async function collectorFreezeFrame(invoke: CollectorInvoke): Promise<Capture> {

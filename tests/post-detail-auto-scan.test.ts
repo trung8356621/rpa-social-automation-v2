@@ -535,8 +535,12 @@ test("Action Row presentation scales real frame geometry and never leaks across 
   assert.match(ui, /position: "absolute"/);
   assert.doesNotMatch(ui, /className="collector-capture-freeze snapshot pdc-scan-overlay"[\s\S]{0,300}position: "fixed"/);
   const css = read("src/renderer/post-detail-collector/post-detail-collector.css");
-  assert.match(css, /grid-template-columns: 1024px clamp\(280px, 22vw, 320px\)/);
-  assert.match(css, /\.pdc-side-panel[\s\S]*overflow-y: auto/);
+  const sharedCss = read("src/renderer/style.css");
+  assert.match(sharedCss, /--rpa-browser-width:\s*1024px;/);
+  assert.match(sharedCss, /--rpa-browser-height:\s*560px;/);
+  assert.match(sharedCss, /\.rpa-browser-host\s*\{[\s\S]*position:\s*static;[\s\S]*width:\s*var\(--rpa-browser-width\);[\s\S]*height:\s*var\(--rpa-browser-height\);[\s\S]*flex-shrink:\s*0;/);
+  assert.match(sharedCss, /\.rpa-browser-sidebar\s*\{[\s\S]*position:\s*absolute;[\s\S]*right:\s*0;/);
+  assert.match(sharedCss, /\.rpa-browser-sidebar-body\s*\{[\s\S]*overflow-y:\s*auto;/);
   assert.match(css, /\.pdc-probe-stages/);
   assert.match(ui, /pdc-advanced-debug pdc-scan-pipeline-debug/);
   assert.match(css, /\.pdc-scan-pipeline-debug[\s\S]*position: static/);

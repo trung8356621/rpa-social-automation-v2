@@ -27,3 +27,7 @@ export function isCollectorHostOwner(ownerId: string): boolean {
 export function getCollectorHostOwner(): string | null {
   return currentOwner;
 }
+
+export function getCollectorHostOwnerRevision(): number {
+  return revision;
+}
