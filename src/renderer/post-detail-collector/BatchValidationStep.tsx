@@ -9,6 +9,7 @@ import { shouldRetrySavedParentResolution } from "./auto-resume";
 import {
   advanceParentReadiness,
   evaluateMatchedParentDom,
+  reconcileBatchEngagement,
   extractPostIdentityFromUrl,
   formatShortPostLabel,
   parseBatchUrls,
@@ -22,6 +23,7 @@ import type {
   PostDetailDomVariableMapping,
 } from "./types";
 import { listRegistryVariables } from "./variable-registry";
+import { SidebarDrawer } from "../components/BrowserWorkspace";
 
 const MAX_RESOLVE_ATTEMPTS = 10;
 const RESOLVE_RETRY_DELAY_MS = 750;
@@ -272,6 +274,7 @@ export function BatchValidationStep({
   onBatchResults,
   onVariableMappings,
   onHiddenExtractedData,
+  onEngagementResult,
   onReviewInStep3,
   onBackToStep3,
 }: {
@@ -288,18 +291,23 @@ export function BatchValidationStep({
   onBatchResults: (rows: BatchValidationRow[], validatedVersion: number) => void;
   onVariableMappings: (mappings: PostDetailDomVariableMapping[]) => void;
   onHiddenExtractedData: (hidden: Record<string, string[]>) => void;
+  onEngagementResult: (result: PostDetailEngagementOcrResult) => void;
   onReviewInStep3: (url: string, resolution: PostDetailSavedParentResolution) => void;
   onBackToStep3: () => void;
 }) {
   const [running, setRunning] = useState(false);
   const [progressText, setProgressText] = useState("");
   const [selectedUrl, setSelectedUrl] = useState<string>("");
+  const [statusFilter, setStatusFilter] = useState<"ALL" | "PASS" | "REVIEW" | "FAILED">("ALL");
   const [copiedJson, setCopiedJson] = useState(false);
+  const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
   const [reviewUrl, setReviewUrl] = useState<string | null>(null);
   const [reviewResolution, setReviewResolution] = useState<PostDetailSavedParentResolution | null>(null);
   const [reviewStaleWarning, setReviewStaleWarning] = useState<string>("");
   const cancelRef = useRef(false);
   const reviewEpochRef = useRef(0);
+  const summaryScrollRef = useRef<HTMLDivElement | null>(null);
+  const savedSummaryScrollRef = useRef(0);
 
   const parsed = useMemo(() => parseBatchUrls(batchUrlsText), [batchUrlsText]);
   const validCount = parsed.items.filter((i) => i.valid).length;
@@ -309,8 +317,41 @@ export function BatchValidationStep({
     batchValidatedVersion !== null &&
     batchValidatedVersion !== batchConfigVersion;
 
+  const reconciledRows = useMemo(
+    () => batchResults.map(row => reconcileBatchEngagement(row, variableMappings, row.postId ? engagementResults[row.postId] : undefined)),
+    [batchResults, variableMappings, engagementResults],
+  );
+
+  const statusCounts = useMemo(() => ({
+    total: reconciledRows.length,
+    pass: reconciledRows.filter(row => row.status === "PASS").length,
+    review: reconciledRows.filter(row => row.status === "REVIEW").length,
+    failed: reconciledRows.filter(row => row.status === "FAILED").length,
+  }), [reconciledRows]);
+
+  const filteredRows = useMemo(
+    () => statusFilter === "ALL" ? reconciledRows : reconciledRows.filter(row => row.status === statusFilter),
+    [reconciledRows, statusFilter],
+  );
+
   const selectedRow =
-    batchResults.find((r) => r.url === selectedUrl) || batchResults[0] || null;
+    reconciledRows.find((r) => r.url === selectedUrl) || filteredRows[0] || reconciledRows[0] || null;
+
+  const engagementCoverage = (row: BatchValidationRow) => {
+    const ocr = row.postId ? engagementResults[row.postId] : undefined;
+    if (ocr?.fields) {
+      const verified = Object.values(ocr.fields).filter(field => field.status === "verified").length;
+      return `${verified}/3`;
+    }
+    const visual = row.fields.filter(field => field.method === "VISUAL_OCR");
+    if (!visual.length) return "—";
+    return `${visual.filter(field => field.status === "PASS").length}/${visual.length}`;
+  };
+
+  const selectRow = (row: BatchValidationRow) => {
+    setSelectedUrl(row.url);
+    setCopiedJson(false);
+  };
 
   const runBatch = async () => {
     if (running || parsed.items.length === 0) return;
@@ -438,14 +479,6 @@ export function BatchValidationStep({
     setProgressText("Stopping after current check...");
   };
 
-  const openInBrowser = async (url: string) => {
-    try {
-      await invoke({ type: "postDetailNavigate", url });
-    } catch {
-      /* ignore */
-    }
-  };
-
   const customizeRowInStep3 = async (row: BatchValidationRow) => {
     const platform = /threads\.(?:com|net)/i.test(row.url) ? "threads" : "facebook";
     const config = parentConfigs[platform];
@@ -570,8 +603,8 @@ export function BatchValidationStep({
     }
   };
 
-  const reviewRowIndex = reviewUrl ? batchResults.findIndex((r) => r.url === reviewUrl) : -1;
-  const reviewRow = reviewRowIndex >= 0 ? batchResults[reviewRowIndex] : null;
+  const reviewRowIndex = reviewUrl ? reconciledRows.findIndex((r) => r.url === reviewUrl) : -1;
+  const reviewRow = reviewRowIndex >= 0 ? reconciledRows[reviewRowIndex] : null;
   if (reviewRow) {
     return (
       <SavedParentHtmlStep
@@ -580,7 +613,7 @@ export function BatchValidationStep({
         currentUrl={reviewRow.resolvedUrl || reviewRow.url}
         runId={engagementResults[reviewRow.postId || ""]?.runId || null}
         engagementResult={engagementResults[reviewRow.postId || ""]}
-        onEngagementResult={() => { /* Detail Review consumes the persisted Step 3 snapshot. */ }}
+        onEngagementResult={onEngagementResult}
         parentConfig={parentConfigs[extractPostIdentityFromUrl(reviewRow.resolvedUrl || reviewRow.url).platform || "facebook"]}
         variableMappings={variableMappings}
         onVariableMappings={onVariableMappings}
@@ -590,21 +623,30 @@ export function BatchValidationStep({
         reviewMode={{
           row: reviewRow,
           rowIndex: reviewRowIndex,
-          totalRows: batchResults.length,
+          totalRows: reconciledRows.length,
           canPrev: reviewRowIndex > 0,
-          canNext: reviewRowIndex < batchResults.length - 1,
+          canNext: reviewRowIndex < reconciledRows.length - 1,
           staleDomWarning: reviewStaleWarning || undefined,
           onBackToResults: () => {
             reviewEpochRef.current += 1;
             setReviewUrl(null);
             setReviewResolution(null);
             setReviewStaleWarning("");
+            requestAnimationFrame(() => {
+              if (summaryScrollRef.current) summaryScrollRef.current.scrollTop = savedSummaryScrollRef.current;
+            });
           },
           onPrevPost: () => {
-            if (reviewRowIndex > 0) void openRowDetailReview(batchResults[reviewRowIndex - 1]);
+            if (reviewRowIndex > 0) {
+              savedSummaryScrollRef.current = summaryScrollRef.current?.scrollTop || savedSummaryScrollRef.current;
+              void openRowDetailReview(reconciledRows[reviewRowIndex - 1]);
+            }
           },
           onNextPost: () => {
-            if (reviewRowIndex < batchResults.length - 1) void openRowDetailReview(batchResults[reviewRowIndex + 1]);
+            if (reviewRowIndex < reconciledRows.length - 1) {
+              savedSummaryScrollRef.current = summaryScrollRef.current?.scrollTop || savedSummaryScrollRef.current;
+              void openRowDetailReview(reconciledRows[reviewRowIndex + 1]);
+            }
           },
           onCustomizeInStep3: () => void customizeRowInStep3(reviewRow),
         }}
@@ -612,49 +654,57 @@ export function BatchValidationStep({
     );
   }
 
+  const selectedEngagement = selectedRow?.postId ? engagementResults[selectedRow.postId] : undefined;
+  const staleEngagementPipeline = Boolean(
+    selectedEngagement?.diagnostics?.some(item => /ocr_preprocess:normalize\b/i.test(item) || /overlaps an action\/icon region/i.test(item))
+      && !selectedEngagement?.preprocessVariant
+      && !selectedEngagement?.diagnostics?.some(item => /ocr_preprocess:left-/i.test(item)),
+  );
+
   return (
-    <div className="pdc-step pdc-step4">
-      <div className="pdc-section-header">
-        <div>
-          <h2>Step 4 — Batch Validation</h2>
-          <p className="pdc-subtitle">
-            Read-only validation of saved Parent locator and Variable mappings across multiple Facebook Post URLs using BrowserCore.
-          </p>
-        </div>
-        <div className="pdc-btn-row">
-          <button type="button" className="pdc-btn pdc-btn-secondary" onClick={onBackToStep3}>
-            ← Back to Step 3
-          </button>
-          {running ? (
-            <button type="button" className="pdc-btn pdc-btn-danger" onClick={stopBatch}>
-              Stop Batch
+    <div className={`pdc-step pdc-step4 pdc-validation-summary ${sidebarCollapsed ? "sidebar-collapsed" : ""}`}>
+      <div className="pdc-summary-main" ref={summaryScrollRef}>
+        <div className="pdc-section-header">
+          <div>
+            <span className="pdc-eyebrow">VALIDATION SUMMARY</span>
+            <h2>Validation Summary</h2>
+            <p className="pdc-subtitle">
+              Select a card to inspect Row Details in the right sidebar. Review opens Detail Review explicitly.
+            </p>
+          </div>
+          <div className="pdc-btn-row">
+            <button type="button" className="pdc-btn pdc-btn-secondary" onClick={onBackToStep3}>
+              ← Back to Step 3
             </button>
-          ) : (
-            <button
-              type="button"
-              className="pdc-btn pdc-btn-primary"
-              disabled={parsed.items.length === 0}
-              onClick={() => void runBatch()}
-            >
-              Run Batch Validation ({parsed.items.length})
-            </button>
-          )}
+            {running ? (
+              <button type="button" className="pdc-btn pdc-btn-danger" onClick={stopBatch}>
+                Stop Batch
+              </button>
+            ) : (
+              <button
+                type="button"
+                className="pdc-btn pdc-btn-primary"
+                disabled={parsed.items.length === 0}
+                onClick={() => void runBatch()}
+              >
+                Run Batch Validation ({parsed.items.length})
+              </button>
+            )}
+          </div>
         </div>
-      </div>
 
-      {isStale && (
-        <div className="pdc-alert pdc-alert-warn" role="status">
-          Mappings or Variable definitions changed since the last validation run. Re-run Batch Validation to verify latest configuration.
-        </div>
-      )}
+        {isStale && (
+          <div className="pdc-alert pdc-alert-warn" role="status">
+            Mappings or Variable definitions changed since the last validation run. Re-run Batch Validation to verify latest configuration.
+          </div>
+        )}
 
-      {progressText && (
-        <div className="pdc-alert pdc-alert-ok" role="status">
-          {progressText}
-        </div>
-      )}
+        {progressText && (
+          <div className="pdc-alert pdc-alert-ok" role="status">
+            {progressText}
+          </div>
+        )}
 
-      <div className="pdc-batch-layout">
         <div className="pdc-batch-input-card">
           <div className="pdc-batch-card-head">
             <h3>Post URLs (one per line)</h3>
@@ -665,7 +715,7 @@ export function BatchValidationStep({
           <textarea
             className="pdc-batch-textarea"
             aria-label="Batch Post URLs"
-            rows={5}
+            rows={3}
             disabled={running}
             value={batchUrlsText}
             onChange={(e) => onBatchUrlsText(e.target.value)}
@@ -673,146 +723,214 @@ export function BatchValidationStep({
           />
         </div>
 
-        <div className="pdc-batch-results-grid">
-          <div className="pdc-batch-table-wrap">
-            <h3>Validation Results ({batchResults.length})</h3>
-            {batchResults.length ? (
-              <table className="pdc-batch-table">
-                <thead>
-                  <tr>
-                    <th>Post</th>
-                    <th>Parent</th>
-                    <th>Fields</th>
-                    <th>Status</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {batchResults.map((row) => (
-                    <tr
-                      key={row.url}
-                      className={selectedRow?.url === row.url ? "selected" : ""}
-                      onClick={() => void openRowDetailReview(row)}
-                    >
-                      <td className="pdc-batch-url-cell" title={row.url}>
-                        {formatShortPostLabel(row.url, row.postId)}
-                      </td>
-                      <td>{row.parentStatus}</td>
-                      <td title={`Extracted: ${row.extractedCount ?? row.passedCount} · Missing: ${row.missingCount ?? 0} · Needs Attention: ${row.needsAttentionCount ?? 0}`}>
-                        {row.passedCount}/{row.totalCount}
-                        {(row.missingCount || row.needsAttentionCount) ? (
-                          <div className="pdc-batch-breakdown">
-                            {row.missingCount ? `${row.missingCount} miss` : ""}{row.missingCount && row.needsAttentionCount ? " · " : ""}{row.needsAttentionCount ? `${row.needsAttentionCount} attn` : ""}
-                          </div>
-                        ) : null}
-                      </td>
-                      <td>
-                        <span className={`pdc-batch-pill status-${row.status.toLowerCase()}`}>
-                          {row.status}
-                        </span>
-                      </td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-            ) : (
-              <p className="pdc-panel-desc">
-                Paste Facebook Post URLs above and click Run Batch Validation.
-              </p>
-            )}
-          </div>
+        <div className="pdc-summary-counters" aria-label="Validation counters">
+          <span><strong>{statusCounts.total}</strong> Total</span>
+          <span><strong>{statusCounts.pass}</strong> Passed</span>
+          <span><strong>{statusCounts.review}</strong> Review</span>
+          <span><strong>{statusCounts.failed}</strong> Failed</span>
+        </div>
 
-          <div className="pdc-batch-detail-wrap">
-            <div className="pdc-batch-card-head">
-              <h3>Row Details</h3>
-              {selectedRow && (
-                <div className="pdc-btn-row">
-                  <button type="button" className="pdc-btn pdc-btn-tiny" onClick={copyRowJson}>
-                    {copiedJson ? "Copied!" : "Copy JSON"}
-                  </button>
-                  <button
-                    type="button"
-                    className="pdc-btn pdc-btn-tiny"
-                    onClick={() => void openInBrowser(selectedRow.url)}
-                  >
-                    Open in BrowserCore
-                  </button>
-                  <button
-                    type="button"
-                    className="pdc-btn pdc-btn-tiny pdc-btn-primary"
-                    onClick={() => void customizeRowInStep3(selectedRow)}
-                  >
-                    Customize in Step 3
-                  </button>
-                </div>
-              )}
+        <div className="pdc-library-filters" role="tablist" aria-label="Validation status filter">
+          {(["ALL", "PASS", "REVIEW", "FAILED"] as const).map(value => (
+            <button
+              type="button"
+              key={value}
+              className={statusFilter === value ? "active" : ""}
+              onClick={() => setStatusFilter(value)}
+            >
+              {value === "ALL" ? "All" : value === "PASS" ? "Passed" : value === "REVIEW" ? "Review" : "Failed"}
+            </button>
+          ))}
+        </div>
+
+        {!reconciledRows.length ? (
+          <div className="pdc-empty-state">
+            <h3>No validation results yet</h3>
+            <p>Paste Facebook Post URLs above and click Run Batch Validation.</p>
+          </div>
+        ) : !filteredRows.length ? (
+          <div className="pdc-empty-state">
+            <h3>No posts match this filter</h3>
+            <p>Try another status filter to inspect batch results.</p>
+          </div>
+        ) : (
+          <div className="pdc-post-grid pdc-summary-grid">
+            {filteredRows.map(row => {
+              const selected = selectedRow?.url === row.url;
+              return (
+                <article
+                  key={row.url}
+                  className={`pdc-post-card ${selected ? "selected" : ""}`}
+                  onClick={() => selectRow(row)}
+                >
+                  <header>
+                    <span className={`pdc-platform ${/threads\.(?:com|net)/i.test(row.url) ? "threads" : "facebook"}`}>
+                      {/threads\.(?:com|net)/i.test(row.url) ? "Threads" : "Facebook"}
+                    </span>
+                    <span className={`pdc-batch-pill status-${row.status.toLowerCase()}`}>{row.status}</span>
+                  </header>
+                  <div>
+                    <span className="pdc-card-label">{formatShortPostLabel(row.url, row.postId)}</span>
+                    <h3 title={row.postId || row.url}>#{row.postId && row.postId.length > 16 ? `${row.postId.slice(0, 8)}…${row.postId.slice(-6)}` : row.postId || "unknown"}</h3>
+                  </div>
+                  <div className="pdc-card-progress">
+                    <span>Parent {row.parentStatus}</span>
+                    <span>Fields {row.passedCount}/{row.totalCount}</span>
+                    <span>Engagement {engagementCoverage(row)}</span>
+                  </div>
+                  <footer>
+                    <button
+                      type="button"
+                      className="pdc-primary-button"
+                      onClick={event => {
+                        event.stopPropagation();
+                        savedSummaryScrollRef.current = summaryScrollRef.current?.scrollTop || 0;
+                        void openRowDetailReview(row);
+                      }}
+                    >
+                      Review
+                    </button>
+                    <button
+                      type="button"
+                      onClick={event => {
+                        event.stopPropagation();
+                        selectRow(row);
+                        if (sidebarCollapsed) setSidebarCollapsed(false);
+                      }}
+                    >
+                      View Details
+                    </button>
+                    <button
+                      type="button"
+                      onClick={event => {
+                        event.stopPropagation();
+                        selectRow(row);
+                        void navigator.clipboard.writeText(JSON.stringify(row, null, 2));
+                        setCopiedJson(true);
+                        setTimeout(() => setCopiedJson(false), 1800);
+                      }}
+                    >
+                      {copiedJson && selected ? "Copied!" : "Copy JSON"}
+                    </button>
+                  </footer>
+                </article>
+              );
+            })}
+          </div>
+        )}
+      </div>
+
+      <SidebarDrawer
+        title="Row Details"
+        collapsed={sidebarCollapsed}
+        onToggleCollapse={() => setSidebarCollapsed(value => !value)}
+        className="pdc-summary-sidebar"
+      >
+        {selectedRow ? (
+          <div className="pdc-batch-detail-body">
+            <div className="pdc-btn-row pdc-summary-sidebar-actions">
+              <button type="button" className="pdc-btn pdc-btn-tiny" onClick={copyRowJson}>
+                {copiedJson ? "Copied!" : "Copy JSON"}
+              </button>
+              <button
+                type="button"
+                className="pdc-btn pdc-btn-tiny pdc-btn-primary"
+                onClick={() => {
+                  savedSummaryScrollRef.current = summaryScrollRef.current?.scrollTop || 0;
+                  void openRowDetailReview(selectedRow);
+                }}
+              >
+                Review
+              </button>
+              <button
+                type="button"
+                className="pdc-btn pdc-btn-tiny"
+                onClick={() => void customizeRowInStep3(selectedRow)}
+              >
+                Customize in Step 3
+              </button>
             </div>
 
-            {selectedRow ? (
-              <div className="pdc-batch-detail-body">
-                <dl className="pdc-kv">
-                  <dt>Source URL</dt>
-                  <dd>{selectedRow.url}</dd>
-                  <dt>Resolved URL</dt>
-                  <dd>{selectedRow.resolvedUrl || "—"}</dd>
-                  <dt>Parent</dt>
-                  <dd>{selectedRow.parentStatus}</dd>
-                  {selectedRow.failureReason && (
-                    <>
-                      <dt>Failure / Note</dt>
-                      <dd>{selectedRow.failureReason}</dd>
-                    </>
-                  )}
-                </dl>
+            {staleEngagementPipeline && (
+              <div className="pdc-alert pdc-alert-warn" role="status">
+                Cached Engagement OCR used the old preprocess/classifier pipeline. Recapture Engagement in Step 3 or Detail Review with the current build.
+              </div>
+            )}
 
-                {selectedRow.fields.length > 0 && (
-                  <table className="pdc-batch-table">
-                    <thead>
-                      <tr>
-                        <th>Variable</th>
-                        <th>Value</th>
-                        <th>Method</th>
-                        <th>Locator</th>
-                        <th>Status</th>
+            <dl className="pdc-kv pdc-summary-kv">
+              <dt>Post ID</dt>
+              <dd title={selectedRow.postId || ""}>{selectedRow.postId || "—"}</dd>
+              <dt>Parent</dt>
+              <dd>{selectedRow.parentStatus}</dd>
+              <dt>Fields</dt>
+              <dd>{selectedRow.passedCount}/{selectedRow.totalCount}</dd>
+              <dt>Status</dt>
+              <dd><span className={`pdc-batch-pill status-${selectedRow.status.toLowerCase()}`}>{selectedRow.status}</span></dd>
+              <dt>Engagement</dt>
+              <dd>
+                {engagementCoverage(selectedRow)}
+                {selectedEngagement?.preprocessVariant ? ` · ${selectedEngagement.preprocessVariant}` : ""}
+                {selectedEngagement?.cropSha256 ? ` · ${selectedEngagement.cropSha256.slice(0, 8)}…` : ""}
+              </dd>
+              {selectedRow.failureReason && (
+                <>
+                  <dt>Failure / Note</dt>
+                  <dd>{selectedRow.failureReason}</dd>
+                </>
+              )}
+            </dl>
+
+            {selectedRow.fields.length > 0 ? (
+              <div className="pdc-summary-fields-scroll">
+                <table className="pdc-batch-table">
+                  <thead>
+                    <tr>
+                      <th>Variable</th>
+                      <th>Value</th>
+                      <th>Method</th>
+                      <th>Status</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {selectedRow.fields.map((f) => (
+                      <tr key={`${f.variableId}:${f.variableKey}`}>
+                        <td>{f.variableKey}</td>
+                        <td className="pdc-preserve-lines pdc-summary-value">{f.value || "—"}</td>
+                        <td>{f.attribute ? `${f.method}(${f.attribute})` : f.method}</td>
+                        <td>
+                          <span className={`pdc-batch-pill status-${f.status.toLowerCase()}`}>
+                            {f.status}
+                          </span>
+                          {f.reason && <div className="pdc-panel-desc">{f.reason}</div>}
+                        </td>
                       </tr>
-                    </thead>
-                    <tbody>
-                      {selectedRow.fields.map((f) => (
-                        <tr key={`${f.variableId}:${f.variableKey}`}>
-                          <td>{f.variableKey}</td>
-                          <td className="pdc-preserve-lines">{f.value || "—"}</td>
-                          <td>{f.attribute ? `${f.method}(${f.attribute})` : f.method}</td>
-                          <td>
-                            <code>{f.relativeXPath || "—"}</code>
-                          </td>
-                          <td>
-                            <span className={`pdc-batch-pill status-${f.status.toLowerCase()}`}>
-                              {f.status}
-                            </span>
-                            {f.reason && <div className="pdc-panel-desc">{f.reason}</div>}
-                          </td>
-                        </tr>
-                      ))}
-                    </tbody>
-                  </table>
-                )}
-
-                {selectedRow.parentDiagnostics && selectedRow.parentDiagnostics.length > 0 && (
-                  <details className="pdc-advanced-debug">
-                    <summary>Parent Diagnostics</summary>
-                    {selectedRow.parentDiagnostics.map((d, i) => (
-                      <p key={i} className="pdc-panel-desc">
-                        {d}
-                      </p>
                     ))}
-                  </details>
-                )}
+                  </tbody>
+                </table>
               </div>
             ) : (
-              <p className="pdc-panel-desc">Select a row from the results table to inspect field extraction.</p>
+              <p className="pdc-panel-desc">No mapped field output for this post.</p>
             )}
+
+            <details className="pdc-advanced-debug">
+              <summary>Locators &amp; diagnostics</summary>
+              {selectedRow.fields.map((f) => (
+                <p key={`loc:${f.variableId}:${f.variableKey}`} className="pdc-panel-desc pdc-truncate-url" title={f.relativeXPath || ""}>
+                  <b>{f.variableKey}</b>: <code>{f.relativeXPath || "—"}</code>
+                </p>
+              ))}
+              {selectedRow.parentDiagnostics?.map((d, i) => (
+                <p key={`diag:${i}`} className="pdc-panel-desc">{d}</p>
+              ))}
+              {selectedEngagement?.diagnostics?.map((d, i) => (
+                <p key={`ocr:${i}`} className="pdc-panel-desc">{d}</p>
+              ))}
+            </details>
           </div>
-        </div>
-      </div>
+        ) : (
+          <p className="pdc-panel-desc">Select a card to inspect field extraction without leaving this summary.</p>
+        )}
+      </SidebarDrawer>
     </div>
   );
 }

@@ -28,6 +28,30 @@ export function shouldShowBrowserForPage(opts: {
   return false;
 }
 
+/**
+ * Workspace tab / Creator open must only block on Creator's own crop/inspect overlay.
+ * Collector layout-hide (`browserVisible=false` without cropOverlay) must not block.
+ */
+export function shouldBlockActivateWorkspace(opts: {
+  cropOverlayActive: boolean;
+  page: AppPage;
+  scanLocked?: boolean;
+}): { block: boolean; reason?: "crop" | "scan" } {
+  if (opts.scanLocked) return { block: true, reason: "scan" };
+  if (opts.cropOverlayActive && opts.page === "creator") return { block: true, reason: "crop" };
+  return { block: false };
+}
+
+/** Session switch / panel / case run: any active crop/freeze overlay is session-sensitive. */
+export function shouldBlockSessionSensitiveOp(opts: {
+  cropOverlayActive: boolean;
+  scanLocked?: boolean;
+}): { block: boolean; reason?: "crop" | "scan" } {
+  if (opts.scanLocked) return { block: true, reason: "scan" };
+  if (opts.cropOverlayActive) return { block: true, reason: "crop" };
+  return { block: false };
+}
+
 export function resolveBrowserViewBounds(opts: {
   page: AppPage;
   collectorHost: CollectorBrowserHost | null;

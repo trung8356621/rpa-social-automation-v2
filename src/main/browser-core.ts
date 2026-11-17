@@ -61,6 +61,11 @@ export class BrowserCore {
   zoom = 1;
   visible = true;
   /**
+   * True only while Creator/Collector crop-or-freeze overlay owns the screenshot UI.
+   * Distinct from `visible=false` used for sidebar occlusion / host detach / preview layout.
+   */
+  private cropOverlayActive = false;
+  /**
    * When true, OS mouse/wheel/keyboard to BrowserCore are preventDefault'd.
    * Does not affect programmatic sendInputEvent (Auto Scan wheel).
    */
@@ -226,11 +231,21 @@ export class BrowserCore {
     this.zoom = validateZoom(zoom);
     this.view.webContents.setZoomFactor(this.zoom);
   }
+  get isCropOverlayActive() {
+    return this.cropOverlayActive;
+  }
+
+  setCropOverlayActive(active: boolean) {
+    this.cropOverlayActive = Boolean(active);
+  }
+
   setVisible(visible: boolean) {
     // Auto Scan owns BrowserCore visibility until its input lock is released.
     // A delayed collector-host cleanup must not hide the native view mid-run.
     if (!visible && this.scanHoldVisible) return;
     this.visible = visible;
+    // Restoring the live browser always ends crop/freeze overlay ownership.
+    if (visible) this.cropOverlayActive = false;
     this.view.setVisible(visible);
     if (visible && !this.view.webContents.isDestroyed()) this.view.webContents.invalidate();
   }

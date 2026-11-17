@@ -133,7 +133,7 @@ export async function collectorReportBrowserHost(
 export async function collectorFreezeFrame(invoke: CollectorInvoke): Promise<Capture> {
   if (!isElectronBrowserCoreAvailable()) throw new Error(BROWSER_CORE_UNAVAILABLE);
   const image = await invoke<Capture>({ type: "capture" });
-  await invoke({ type: "browserVisible", visible: false });
+  await invoke({ type: "browserVisible", visible: false, cropOverlay: true });
   return image;
 }
 

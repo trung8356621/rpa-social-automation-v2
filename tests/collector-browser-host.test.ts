@@ -16,6 +16,8 @@ import {
   sameCollectorHost,
   sameRect,
   shellBoundsToCssFixed,
+  shouldBlockActivateWorkspace,
+  shouldBlockSessionSensitiveOp,
   shouldShowBrowserForPage,
 } from "../src/shared/collector-browser-host.js";
 import {
@@ -31,6 +33,60 @@ import {
   clipHostRectToVisibleArea,
   doesExpandedDrawerOverlapHost,
 } from "../src/renderer/collectors/publish-collector-host.js";
+
+test("activateWorkspace blocks Creator crop overlay but not collector layout-hide", () => {
+  assert.deepEqual(
+    shouldBlockActivateWorkspace({
+      cropOverlayActive: false,
+      page: "post-detail-collector",
+    }),
+    { block: false },
+  );
+  assert.deepEqual(
+    shouldBlockActivateWorkspace({
+      cropOverlayActive: true,
+      page: "post-detail-collector",
+    }),
+    { block: false },
+  );
+  assert.deepEqual(
+    shouldBlockActivateWorkspace({
+      cropOverlayActive: true,
+      page: "scenarios",
+    }),
+    { block: false },
+  );
+  assert.deepEqual(
+    shouldBlockActivateWorkspace({
+      cropOverlayActive: true,
+      page: "creator",
+    }),
+    { block: true, reason: "crop" },
+  );
+  assert.deepEqual(
+    shouldBlockActivateWorkspace({
+      cropOverlayActive: false,
+      page: "creator",
+      scanLocked: true,
+    }),
+    { block: true, reason: "scan" },
+  );
+});
+
+test("session-sensitive ops block any crop overlay or Auto Scan lock", () => {
+  assert.deepEqual(
+    shouldBlockSessionSensitiveOp({ cropOverlayActive: false }),
+    { block: false },
+  );
+  assert.deepEqual(
+    shouldBlockSessionSensitiveOp({ cropOverlayActive: true }),
+    { block: true, reason: "crop" },
+  );
+  assert.deepEqual(
+    shouldBlockSessionSensitiveOp({ cropOverlayActive: false, scanLocked: true }),
+    { block: true, reason: "scan" },
+  );
+});
 
 test("C2.2 browser visible only for Creator or active Collector Capture host", () => {
   assert.equal(

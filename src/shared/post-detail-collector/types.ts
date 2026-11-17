@@ -493,6 +493,19 @@ export type ActionRowLocatorV2 = {
   };
 };
 
+/** Optional Step-2 scroll restore hint for Step-3 Engagement auto-scroll (never required for Parent Match). */
+export type PostDetailEngagementScrollHint = {
+  frameIndex?: number;
+  deltaY?: number;
+  observedScrollPx?: number;
+  requestedScrollPx?: number;
+  scrollTop?: number;
+  maxScroll?: number;
+  tag?: string;
+  role?: string | null;
+  wheelPoint?: { x: number; y: number };
+};
+
 export type PostDetailParentConfig = {
   version: 1 | 2;
   platform: string;
@@ -507,6 +520,8 @@ export type PostDetailParentConfig = {
   actionRowLocator?: ActionRowLocatorV1 | ActionRowLocatorV2;
   /** V3-compatible extension. Legacy configs load with all anchors NOT_VERIFIED. */
   domAnchors?: Partial<Record<"like_anchor" | "comment_anchor" | "share_anchor", PostDetailDomAnchorRecord>>;
+  /** Best-effort Engagement scroll restore from Auto Scan; live DOM still wins. */
+  engagementScrollHint?: PostDetailEngagementScrollHint;
   updatedAt: string;
 };
 
@@ -539,8 +554,13 @@ export type PostDetailEngagementOcrResult = {
   capturedAt: string;
   status: "VERIFIED" | "NEEDS_ATTENTION" | "NO_COUNT_REGION";
   cropRect: Rect | null;
+  rowRect?: Rect;
   cropPath?: string;
   evidencePath: string;
+  /** SHA-256 of saved engagement crop PNG bytes (identity across offline/live). */
+  cropSha256?: string;
+  /** Winning engagement-only preprocess label. */
+  preprocessVariant?: string;
   rawOcrText: string;
   ocrConfidence: number;
   segments: import("../contracts.js").OcrSegment[];

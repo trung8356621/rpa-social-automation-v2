@@ -34,6 +34,18 @@ function canEnterStep2(refs: number): boolean {
   return refs > 0;
 }
 
+function isStaleEngagementPipeline(result: import("../../shared/post-detail-collector/types").PostDetailEngagementOcrResult | undefined): boolean {
+  if (!result?.runId || !result.postId) return false;
+  if (result.preprocessVariant && /icon-slots/i.test(result.preprocessVariant)) return false;
+  const diagnostics = result.diagnostics?.join(" ") || "";
+  if (/ocr_preprocess:icon-slots/i.test(diagnostics)) return false;
+  // Pre-slot pipeline required a full numeric trio — reprocess for partial Share/Comment rows.
+  if (/need 3 evidence counts for LTR/i.test(diagnostics)) return true;
+  if (result.preprocessVariant && /left-/i.test(result.preprocessVariant)) return false;
+  if (/ocr_preprocess:left-/i.test(diagnostics)) return false;
+  return /ocr_preprocess:normalize\b/i.test(diagnostics) || /overlaps an action\/icon region/i.test(diagnostics) || !result.cropSha256;
+}
+
 function locatorDiagnosticSummary(result: import("../../shared/post-detail-collector/types").PostDetailSavedParentResolution): string {
   const meta = result.diagnosticMeta || {};
   return [
@@ -102,6 +114,35 @@ export function PostDetailCollectorPage({ invoke, state: parentState }: { invoke
       return null;
     }
   }, [invoke, updateStore]);
+
+  // Refresh localStorage Engagement results that were produced by the legacy normalize pipeline.
+  useEffect(() => {
+    let cancelled = false;
+    const stale = Object.values(state.engagementResults).filter(isStaleEngagementPipeline);
+    if (!stale.length || !isElectronBrowserCoreAvailable()) return;
+    void (async () => {
+      for (const entry of stale) {
+        if (cancelled) break;
+        try {
+          const refreshed = await invoke<import("../../shared/post-detail-collector/types").PostDetailEngagementOcrResult>({
+            type: "postDetailReprocessEngagementCrop",
+            runId: entry.runId,
+            postId: entry.postId,
+          });
+          if (cancelled) break;
+          updateStore(prev => ({
+            engagementResults: { ...prev.engagementResults, [refreshed.postId]: { ...refreshed, previewDataUrl: undefined } },
+            batchConfigVersion: (prev.batchConfigVersion ?? 1) + 1,
+          }));
+        } catch {
+          /* keep cached result; UI shows stale banner until manual reprocess/recapture */
+        }
+      }
+    })();
+    return () => { cancelled = true; };
+  // Intentionally once on mount for the hydrated store snapshot.
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   // Probe only. Host clear is ownership-gated so Step remounts / sibling collectors are not wiped.
   useEffect(() => {
@@ -296,8 +337,17 @@ export function PostDetailCollectorPage({ invoke, state: parentState }: { invoke
 
   const connected = Boolean(probe?.available) && !probeError;
   const step2Ready = canEnterStep2(state.visualReferences.length);
-  const connectionUrl = probe?.url || state.browserUrl || state.sourceUrl;
-  const connectionPostId = extractPostIdentityFromUrl(connectionUrl).postId;
+  // Prefer selected/source post for the header label so Detail Review does not keep a stale BrowserCore post.
+  const selectedWorkspaceItem = state.urlItems.find(item => item.id === state.selectedUrlId);
+  const selectionPostId = selectedWorkspaceItem?.postId
+    || extractPostIdentityFromUrl(state.sourceUrl || "").postId
+    || null;
+  const liveConnectionUrl = probe?.url || state.browserUrl || "";
+  const liveConnectionPostId = extractPostIdentityFromUrl(liveConnectionUrl).postId;
+  const connectionPostId = selectionPostId || liveConnectionPostId;
+  const connectionUrl = selectionPostId && state.sourceUrl
+    ? state.sourceUrl
+    : (liveConnectionUrl || state.sourceUrl);
   const connectionLabel = connectionPostId
     ? `Post #${connectionPostId.length > 14 ? `${connectionPostId.slice(0, 7)}…${connectionPostId.slice(-5)}` : connectionPostId}`
     : connected ? "BrowserCore ready" : "BrowserCore unavailable";
@@ -658,9 +708,18 @@ export function PostDetailCollectorPage({ invoke, state: parentState }: { invoke
               updateStore((prev) => ({ variableMappings, batchConfigVersion: (prev.batchConfigVersion ?? 1) + 1 }))
             }
             onHiddenExtractedData={(hiddenExtractedData) => updateStore({ hiddenExtractedData })}
-            onReviewInStep3={(url, savedParentResolution) =>
-              updateStore({ sourceUrl: url, savedParentResolution, step: 3, majorStep: 2, processingSubstep: 3 })
-            }
+            onEngagementResult={(engagementResult) => updateStore((prev) => ({ engagementResults: { ...prev.engagementResults, [engagementResult.postId]: { ...engagementResult, previewDataUrl: undefined } }, batchConfigVersion: (prev.batchConfigVersion ?? 1) + 1 }))}
+            onReviewInStep3={(url, savedParentResolution) => {
+              const reviewItem = state.urlItems.find(item => item.originalUrl === url || item.postId && url.includes(item.postId));
+              updateStore({
+                sourceUrl: url,
+                selectedUrlId: reviewItem?.id ?? state.selectedUrlId,
+                savedParentResolution,
+                step: 3,
+                majorStep: 2,
+                processingSubstep: 3,
+              });
+            }}
             onBackToStep3={() => updateStore({ majorStep: 2, processingSubstep: 3, step: 3 })}
           />
         )}

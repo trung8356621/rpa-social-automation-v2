@@ -848,6 +848,10 @@ export function VisualRegionStep({
         String(candidate.parentLevel),
       );
       setConfirmedParentLevel(candidate.parentLevel);
+      const row = containerResult?.mainActionRow;
+      const scrollTarget = frames.find(frame => frame.frameId === row?.frameId)?.diagnostics?.scrollTarget
+        || frames.find(frame => frame.frameIndex === row?.frameIndex)?.diagnostics?.scrollTarget
+        || null;
       await onParentConfigured({
         version: 2,
         platform: parentProbe.platform || "unknown",
@@ -856,6 +860,17 @@ export function VisualRegionStep({
         actionRowSignature: parentProbe.actionRowSignature || {},
         actionRowLocator: selection.actionRowLocator,
         domAnchors: selection.domAnchors,
+        engagementScrollHint: {
+          frameIndex: row?.frameIndex,
+          deltaY: containerResult?.scrollMetadata.deltaY,
+          observedScrollPx: row?.observedScrollPx ?? containerResult?.scrollMetadata.observedScrollPx,
+          requestedScrollPx: containerResult?.scrollMetadata.requestedScrollPx,
+          scrollTop: scrollTarget?.scrollTopAfter,
+          maxScroll: scrollTarget?.maxScroll,
+          tag: scrollTarget?.tag,
+          role: scrollTarget?.role ?? null,
+          wheelPoint: containerResult?.scrollMetadata.wheelPoint,
+        },
         updatedAt: confirmedAt,
       });
       setParentConfirmed(true);

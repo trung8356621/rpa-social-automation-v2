@@ -94,6 +94,84 @@ export class PostDetailRunStorage {
     return { cropPath: input.crop ? cropPath : undefined, evidencePath };
   }
 
+  async loadEngagementCrop(runId: string, postId: string): Promise<{ dataUrl: string; cropPath: string } | null> {
+    const safePostId = postId.replace(/[^0-9A-Za-z_-]/g, "_").slice(0, 120) || "unknown";
+    const cropPath = path.join(this.getRunDir(runId), "engagement-ocr", safePostId, "engagement.png");
+    try {
+      const crop = await readFile(cropPath);
+      return crop.length ? { dataUrl: toDataUrl(crop), cropPath } : null;
+    } catch {
+      return null;
+    }
+  }
+
+  /** Best-effort Engagement scroll hint from Step 2 Auto Scan evidence (optional). */
+  async loadEngagementScrollHint(runId: string): Promise<{
+    frameIndex?: number;
+    deltaY?: number;
+    observedScrollPx?: number;
+    requestedScrollPx?: number;
+    scrollTop?: number;
+    maxScroll?: number;
+    tag?: string;
+    role?: string | null;
+    wheelPoint?: { x: number; y: number };
+  } | null> {
+    try {
+      const runDir = this.getRunDir(assertSafeRunId(runId));
+      const scrollMeta = JSON.parse(await readFile(path.join(runDir, "scroll-metadata.json"), "utf8")) as {
+        deltaY?: number;
+        requestedScrollPx?: number;
+        observedScrollPx?: number;
+        wheelPoint?: { x: number; y: number };
+      };
+      type ContainerHint = {
+        mainActionRow?: { frameIndex?: number; frameId?: string; observedScrollPx?: number };
+      };
+      let container: ContainerHint | null = null;
+      try {
+        container = JSON.parse(await readFile(path.join(runDir, "container-result.json"), "utf8")) as ContainerHint;
+      } catch {
+        container = null;
+      }
+      const frameIndex = container?.mainActionRow?.frameIndex;
+      let scrollTop: number | undefined;
+      let maxScroll: number | undefined;
+      let tag: string | undefined;
+      let role: string | null | undefined;
+      if (frameIndex != null) {
+        try {
+          const folder = `frame-${String(Math.max(1, Math.floor(frameIndex))).padStart(3, "0")}`;
+          const meta = JSON.parse(await readFile(path.join(runDir, "frames", folder, "meta.json"), "utf8")) as {
+            diagnostics?: { scrollTarget?: { tag?: string; role?: string | null; scrollTopAfter?: number; maxScroll?: number } };
+          };
+          const target = meta.diagnostics?.scrollTarget;
+          if (target) {
+            tag = target.tag;
+            role = target.role ?? null;
+            scrollTop = target.scrollTopAfter;
+            maxScroll = target.maxScroll;
+          }
+        } catch {
+          /* frame meta optional */
+        }
+      }
+      return {
+        frameIndex,
+        deltaY: scrollMeta.deltaY,
+        observedScrollPx: container?.mainActionRow?.observedScrollPx ?? scrollMeta.observedScrollPx,
+        requestedScrollPx: scrollMeta.requestedScrollPx,
+        scrollTop,
+        maxScroll,
+        tag,
+        role,
+        wheelPoint: scrollMeta.wheelPoint,
+      };
+    } catch {
+      return null;
+    }
+  }
+
   /**
    * Persist Step 2 Auto Scan evidence without writing final OCR `manifest.json`.
    * Never overwrites an existing auto-scan-manifest for the same runId.

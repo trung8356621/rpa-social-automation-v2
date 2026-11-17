@@ -500,7 +500,8 @@ export type Command =
     }
   | { type: "armTest"; stepId: string; version: number; overrideId?: string }
   | { type: "disarmTest" }
-  | { type: "browserVisible"; visible: boolean }
+  /** Hide/show BrowserCore. `cropOverlay: true` marks an active crop/freeze UI (not layout hide). */
+  | { type: "browserVisible"; visible: boolean; cropOverlay?: boolean }
   | { type: "visualMatchLabState" }
   | { type: "visualMatchLabCapture" }
   | { type: "visualMatchLabInspect"; captureId: string; webContentsId: number; point: { x: number; y: number }; parent?: boolean }
@@ -544,6 +545,8 @@ export type Command =
   | { type: "postDetailConfirmParent"; input: PostDetailParentConfirmation }
   | { type: "postDetailResolveSavedParent"; config: PostDetailParentConfig }
   | { type: "postDetailCaptureEngagement"; runId: string; postId: string; config: PostDetailParentConfig }
+  | { type: "postDetailReprocessEngagementCrop"; runId: string; postId: string }
+  | { type: "postDetailLoadEngagementCrop"; runId: string; postId: string }
   | { type: "postDetailHighlightParentNode"; path: number[] }
   | { type: "postDetailClearParentNodeHighlight" }
   | { type: "postDetailClearParentHighlight" }

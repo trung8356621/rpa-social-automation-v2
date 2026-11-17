@@ -20,6 +20,9 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import sharp from "sharp";
 import { classifyEngagementOcr } from "../shared/post-detail-collector/engagement-ocr.js";
+import { buildEngagementAutoScrollJs, type EngagementScrollHint } from "./engagement-auto-scroll.js";
+import { ENGAGEMENT_CAPTURE_GEOMETRY_JS } from "./engagement-capture-geometry.js";
+import { recognizeEngagementSlots } from "./engagement-slot-ocr.js";
 import { randomUUID } from "node:crypto";
 import { promoteScriptDemoFiles } from "./script-demo-store.js";
 import { applyAdminBackup, createAdminBackup, inspectAdminBackup } from "./admin-backup.js";
@@ -64,7 +67,11 @@ import {
   validateRect,
   validateZoom,
 } from "../shared/geometry.js";
-import { shouldShowBrowserForPage } from "../shared/collector-browser-host.js";
+import {
+  shouldBlockActivateWorkspace,
+  shouldBlockSessionSensitiveOp,
+  shouldShowBrowserForPage,
+} from "../shared/collector-browser-host.js";
 import { effectiveMatchTo, matchToLabel, matchToLogLabel } from "../shared/match-to.js";
 import { DRAFT_KEYS } from "../shared/contracts.js";
 import type {
@@ -97,6 +104,9 @@ const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const project = path.resolve(root, "..");
 const selfTest = process.argv.includes("--self-test");
 const postDetailBrowserCheck = process.argv.includes("--post-detail-browser-check");
+const engagementCaptureCheck = process.argv.includes("--engagement-capture-check");
+const creatorWorkspaceRestoreCheck = process.argv.includes("--creator-workspace-restore-check");
+const engagementOcrReplay = process.argv.includes("--engagement-ocr-replay");
 const phase =
   process.argv.find((a) => a.startsWith("--phase="))?.split("=")[1] || "first";
 // All mutable POC data stays inside new/.local; no access to old/.
@@ -119,10 +129,162 @@ const dataPath = path.join(
       : "test-session"
     : postDetailBrowserCheck
       ? `post-detail-check-${process.pid}`
+      : creatorWorkspaceRestoreCheck
+        ? `creator-workspace-restore-check-${process.pid}`
+      : engagementCaptureCheck || engagementOcrReplay
+        ? `engagement-capture-check-${process.pid}`
       : "creator",
 );
 app.setPath("userData", dataPath);
 app.setPath("sessionData", path.join(dataPath, "chromium"));
+
+type EngagementActionRect = { x: number; y: number; width: number; height: number };
+
+async function recognizeEngagementCrop(input: {
+  crop: Buffer;
+  actionRects: EngagementActionRect[];
+  cropHeight: number;
+  localOcr: { recognize: (image: Buffer) => Promise<import("../shared/contracts.js").OcrResult> };
+}) {
+  const cropMeta = await sharp(input.crop).metadata();
+  const cropW = cropMeta.width || 1;
+  const cropH = cropMeta.height || input.cropHeight;
+  const focusWidth = Math.min(cropW, Math.max(280, Math.round(cropW * 0.48)));
+  const tightWidth = Math.min(cropW, 240);
+  const preprocessVariants: Array<{ label: string; padX: number; padY: number; build: () => Promise<Buffer> }> = [
+    {
+      label: "left-focus+pad+linear",
+      padX: 10,
+      padY: 10,
+      build: () => sharp(input.crop).extract({ left: 0, top: 0, width: focusWidth, height: cropH }).extend({ top: 10, bottom: 10, left: 10, right: 10, background: "#ffffff" }).grayscale().linear(1.28, -22).png().toBuffer(),
+    },
+    {
+      label: "left-focus+pad",
+      padX: 10,
+      padY: 10,
+      build: () => sharp(input.crop).extract({ left: 0, top: 0, width: focusWidth, height: cropH }).extend({ top: 10, bottom: 10, left: 10, right: 10, background: "#ffffff" }).grayscale().png().toBuffer(),
+    },
+    {
+      label: "left-tight+contrast",
+      padX: 12,
+      padY: 12,
+      build: () => sharp(input.crop).extract({ left: 0, top: 0, width: tightWidth, height: cropH }).extend({ top: 12, bottom: 12, left: 12, right: 12, background: "#ffffff" }).grayscale().linear(1.55, -36).png().toBuffer(),
+    },
+    {
+      label: "left-tight+threshold",
+      padX: 12,
+      padY: 12,
+      build: () => sharp(input.crop).extract({ left: 0, top: 0, width: tightWidth, height: cropH }).extend({ top: 12, bottom: 12, left: 12, right: 12, background: "#ffffff" }).grayscale().linear(1.6, -40).threshold(160).png().toBuffer(),
+    },
+  ];
+  type VariantResult = {
+    label: string;
+    ocr: import("../shared/contracts.js").OcrResult;
+    classified: ReturnType<typeof classifyEngagementOcr>;
+    verified: number;
+    pureAssigned: number;
+    pureNumeric: number;
+    confidence: number;
+    trioKey: string;
+    partialKey: string;
+  };
+  const results: VariantResult[] = [];
+  const pushVariant = (label: string, ocr: import("../shared/contracts.js").OcrResult, classified: ReturnType<typeof classifyEngagementOcr>) => {
+    const verified = Object.values(classified.fields).filter(field => field.status === "verified").length;
+    const pureAssigned = Object.values(classified.fields).filter(field => field.status === "verified" && /^\s*\d{1,9}(?:[.,]\d{1,2})?[kmb]?\s*$/i.test(field.rawText)).length;
+    const pureNumeric = ocr.segments.filter(segment => /^\s*\d{1,9}(?:[.,]\d{1,2})?[kmb]?\s*$/i.test(segment.text)).length;
+    const confidence = ocr.segments.reduce((sum, segment) => sum + (segment.confidence || 0), 0) / Math.max(1, ocr.segments.length);
+    const trioKey = verified === 3
+      ? `${classified.fields.like_count.value}|${classified.fields.comment_count.value}|${classified.fields.share_count.value}`
+      : "";
+    const partialKey = verified > 0 && verified < 3
+      ? `${classified.fields.like_count.value ?? "-"}|${classified.fields.comment_count.value ?? "-"}|${classified.fields.share_count.value ?? "-"}`
+      : "";
+    results.push({ label, ocr, classified, verified, pureAssigned, pureNumeric, confidence, trioKey, partialKey });
+  };
+  // Evaluate every engagement-only variant — never stop at the first 3/3 (noisy OCR can invent a wrong trio).
+  for (const variant of preprocessVariants) {
+    const prepared = await variant.build();
+    const rawOcr = await input.localOcr.recognize(prepared);
+    const ocr = {
+      ...rawOcr,
+      segments: rawOcr.segments.map(segment => ({
+        ...segment,
+        bbox: {
+          x: segment.bbox.x - variant.padX,
+          y: segment.bbox.y - variant.padY,
+          width: segment.bbox.width,
+          height: segment.bbox.height,
+        },
+      })),
+    };
+    pushVariant(variant.label, ocr, classifyEngagementOcr({ ocr, actionRects: input.actionRects, cropHeight: input.cropHeight }));
+  }
+  // Icon-column OCR: upscale each Like/Comment/Share window so icon-only + single-digit Share works.
+  const slot = await recognizeEngagementSlots({ crop: input.crop, localOcr: input.localOcr });
+  if (slot.digits.length) {
+    type SlotField = ReturnType<typeof classifyEngagementOcr>["fields"][keyof ReturnType<typeof classifyEngagementOcr>["fields"]];
+    const empty = (field: "like_count" | "comment_count" | "share_count", failureReason: string): SlotField => ({
+      field, value: null, status: "needs_attention", sourceMethod: "visual_ocr",
+      rawText: "", confidence: null, segmentIds: [], failureReason,
+    });
+    const fields: ReturnType<typeof classifyEngagementOcr>["fields"] = {
+      like_count: empty("like_count", "ICON_ONLY_NO_COUNT"),
+      comment_count: empty("comment_count", "ICON_ONLY_NO_COUNT"),
+      share_count: empty("share_count", "ICON_ONLY_NO_COUNT"),
+    };
+    for (const digit of slot.digits) {
+      fields[digit.field] = {
+        field: digit.field,
+        value: digit.value,
+        status: "verified",
+        sourceMethod: "visual_ocr",
+        rawText: String(digit.value),
+        confidence: digit.confidence,
+        segmentIds: [`slot-${digit.field}`],
+      };
+    }
+    const classified = { fields, diagnostics: ["Assigned counts from icon-column OCR windows.", ...slot.diagnostics] };
+    pushVariant("icon-slots+upscale", slot.ocr, classified);
+  } else if (slot.diagnostics.length) {
+    // Keep diagnostics available when icons were incomplete; do not invent counts.
+    results.push({
+      label: "icon-slots+upscale",
+      ocr: slot.ocr,
+      classified: {
+        fields: {
+          like_count: { field: "like_count", value: null, status: "needs_attention", sourceMethod: "visual_ocr", rawText: "", confidence: null, segmentIds: [], failureReason: "ICON_SLOTS_INCOMPLETE" },
+          comment_count: { field: "comment_count", value: null, status: "needs_attention", sourceMethod: "visual_ocr", rawText: "", confidence: null, segmentIds: [], failureReason: "ICON_SLOTS_INCOMPLETE" },
+          share_count: { field: "share_count", value: null, status: "needs_attention", sourceMethod: "visual_ocr", rawText: "", confidence: null, segmentIds: [], failureReason: "ICON_SLOTS_INCOMPLETE" },
+        },
+        diagnostics: slot.diagnostics,
+      },
+      verified: 0,
+      pureAssigned: 0,
+      pureNumeric: 0,
+      confidence: 0,
+      trioKey: "",
+      partialKey: "",
+    });
+  }
+  const trioVotes = new Map<string, number>();
+  const partialVotes = new Map<string, number>();
+  for (const entry of results) {
+    if (entry.trioKey) trioVotes.set(entry.trioKey, (trioVotes.get(entry.trioKey) || 0) + 1);
+    if (entry.partialKey) partialVotes.set(entry.partialKey, (partialVotes.get(entry.partialKey) || 0) + 1);
+  }
+  const scoreOf = (entry: VariantResult) => {
+    const consensus = entry.trioKey ? (trioVotes.get(entry.trioKey) || 0) : 0;
+    const partialConsensus = entry.partialKey ? (partialVotes.get(entry.partialKey) || 0) : 0;
+    const thresholdBonus = entry.label.includes("threshold") ? 15 : 0;
+    const slotBonus = entry.label.startsWith("icon-slots") && entry.verified > 0 ? 120 : 0;
+    // Partial 1/3–2/3 is valid; prefer more verified roles, then consensus, then slot evidence.
+    return entry.verified * 1000 + consensus * 200 + partialConsensus * 80 + entry.pureAssigned * 50 + entry.pureNumeric * 10 + thresholdBonus + slotBonus + entry.confidence;
+  };
+  const best = results.reduce((winner, entry) => (!winner || scoreOf(entry) > scoreOf(winner) ? entry : winner), null as VariantResult | null);
+  const cropSha256 = createHash("sha256").update(input.crop).digest("hex");
+  return { best: best!, focusWidth, variantCount: preprocessVariants.length + 1, cropSha256, cropW, cropH, variantSummaries: results.map(entry => ({ label: entry.label, verified: entry.verified, trioKey: entry.trioKey, score: scoreOf(entry) })), slotDiagnostics: slot.diagnostics };
+}
 if (postDetailBrowserCheck) {
   // Isolated smoke profile — NOT .local/creator. Do not treat login/passkey prompts here as Default session loss.
   console.warn(
@@ -602,10 +764,24 @@ async function boot() {
       browserSessions: browserSessions.list(), activeBrowserSessionId: activeSessionId, sessionError,
     });
   };
+  /** Layout hide ≠ crop/freeze. Only block session-sensitive ops on a real overlay or Auto Scan lock. */
+  function assertNoCropOverlay(action: string) {
+    const gate = shouldBlockSessionSensitiveOp({
+      cropOverlayActive: browser.isCropOverlayActive,
+      scanLocked: postDetailScanLock.isLocked,
+    });
+    if (gate.reason === "crop") throw new Error(`Thoát crop/ảnh trước khi ${action}.`);
+    if (gate.reason === "scan") throw new Error(`Đợi Auto Scan kết thúc trước khi ${action}.`);
+  }
+  /** Entering Creator must recover from collector sidebar/host hide without recreating BrowserCore. */
+  function restoreBrowserForCreatorWorkspace() {
+    if (browser.isCropOverlayActive) browser.setCropOverlayActive(false);
+    if (!browser.visible) browser.setVisible(true);
+  }
   async function switchBrowserSession(id: string, workspace = false, restoreUrl = true) {
     if (!workspace) isIdle();
     if (uiPlayAllRunId) throw new Error("Đợi Play All kết thúc trước khi chuyển Session.");
-    if (!browser.visible) throw new Error("Thoát crop/ảnh trước khi chuyển Session.");
+    assertNoCropOverlay("chuyển Session");
     const target = browserSessions.get(id);
     if (id === activeSessionId) return state();
     switchingSession = true;
@@ -651,7 +827,8 @@ async function boot() {
   }
   async function runTestCase(id: string) {
     isIdle();
-    if (uiPlayAllRunId || !browser.visible) throw new Error("Đợi Play All kết thúc và thoát crop trước khi chạy Case.");
+    if (uiPlayAllRunId) throw new Error("Đợi Play All kết thúc và thoát crop trước khi chạy Case.");
+    assertNoCropOverlay("chạy Case");
     const item = testLab.get(id);
     runningTestCaseId = id;
     armedTest = undefined;
@@ -1372,7 +1549,17 @@ async function boot() {
         isIdle();
         if (event.sender !== window.webContents) throw new Error("Invalid workspace sender");
         if (uiPlayAllRunId) throw new Error("Đợi Play All kết thúc trước khi chuyển tab.");
-        if (!browser.visible) throw new Error("Thoát crop/ảnh trước khi chuyển tab.");
+        // Creator's own crop/inspect overlay must be exited explicitly (renderer still shows shot).
+        // Collector layout-hide / abandoned freeze must not block opening Creator.
+        {
+          const gate = shouldBlockActivateWorkspace({
+            cropOverlayActive: browser.isCropOverlayActive,
+            page: overlays.page,
+            scanLocked: postDetailScanLock.isLocked,
+          });
+          if (gate.reason === "crop") throw new Error("Thoát crop/ảnh trước khi chuyển tab.");
+          if (gate.reason === "scan") throw new Error("Đợi Auto Scan kết thúc trước khi chuyển tab.");
+        }
         const flow = store.flows().find(f => f.id === command.flowId);
         if (!flow) throw new Error("Không tìm thấy Scenario.");
         if (typeof command.editorExpanded !== "boolean") throw new Error("Invalid editor state");
@@ -1382,6 +1569,7 @@ async function boot() {
         switchingWorkspace = true;
         armedTest = undefined;
         try {
+          restoreBrowserForCreatorWorkspace();
           if (command.sessionId && command.sessionId !== activeSessionId)
             await switchBrowserSession(command.sessionId, true);
           if (command.url && command.url !== browser.view.webContents.getURL()) {
@@ -1396,6 +1584,7 @@ async function boot() {
           store.setSetting("currentFlow", flow.id);
           browser.setZoom(flow.zoom);
           overlays.setExpanded("editor", command.editorExpanded);
+          // Drops collectorHost; Creator fixed bounds + restored visibility show BrowserCore again.
           overlays.setPage("creator");
           window.webContents.focus();
           publishLayout();
@@ -1468,7 +1657,7 @@ async function boot() {
         )
           throw new Error("Invalid panel");
         isIdle();
-        if (!browser.visible && command.panel === "editor")
+        if (browser.isCropOverlayActive && command.panel === "editor")
           throw new Error("Thoát crop/ảnh trước khi đổi viewport.");
         overlays.setExpanded(command.panel, command.expanded);
         publishDraft(
@@ -1844,7 +2033,13 @@ async function boot() {
         return;
       case "browserVisible":
         isIdle();
-        browser.setVisible(command.visible);
+        if (command.visible) {
+          browser.setVisible(true);
+        } else {
+          // cropOverlay marks real crop/freeze UI; omitted/false = layout hide only.
+          if (command.cropOverlay === true) browser.setCropOverlayActive(true);
+          browser.setVisible(false);
+        }
         // Overlays own page-specific show/hide (Creator vs Collector Capture host).
         layoutAndSyncScanLock();
         publishLayout();
@@ -2246,39 +2441,182 @@ async function boot() {
         isIdle();
         const wc = browser.view.webContents;
         if (!wc || wc.isDestroyed()) throw new Error("BROWSER_CORE_UNAVAILABLE");
-        const liveResolution = await wc.executeJavaScript(buildResolveSavedParentJs(command.config), true) as { status: string; failureCode?: string; diagnostics?: string[] };
+        const liveResolution = await wc.executeJavaScript(buildResolveSavedParentJs(command.config), true) as { status: string; failureCode?: string; diagnostics?: string[]; diagnosticMeta?: Record<string, unknown> };
         if (liveResolution.status !== "PARENT_MATCHED") throw new Error(liveResolution.failureCode || liveResolution.diagnostics?.[0] || "PARENT_NOT_MATCHED");
-        const geometry = await wc.executeJavaScript(`(()=>{const parent=window.__rpaPdcSavedParent,row=window.__rpaPdcSavedActionRow;if(!parent?.isConnected||!row?.isConnected||!parent.contains(row))return{ok:false,reason:'PARENT_RUNTIME_MISSING'};const p=parent.getBoundingClientRect(),r=row.getBoundingClientRect(),vw=innerWidth,vh=innerHeight;if(r.bottom<=0||r.top>=vh||r.right<=0||r.left>=vw)return{ok:false,reason:'ENGAGEMENT_OUTSIDE_VIEWPORT',rowRect:{x:r.x,y:r.y,width:r.width,height:r.height}};const x=Math.max(0,Math.floor(p.left)),right=Math.min(vw,Math.ceil(p.right)),y=Math.max(0,Math.floor(Math.max(p.top,r.top-160))),bottom=Math.min(vh,Math.ceil(r.bottom+8));if(right-x<80||bottom-y<20)return{ok:false,reason:'NO_COUNT_REGION',rowRect:{x:r.x,y:r.y,width:r.width,height:r.height}};const actionRects=Array.from(row.querySelectorAll('svg,[role=img],button,[role=button]')).map(el=>el.getBoundingClientRect()).filter(b=>b.width>2&&b.height>2).map(b=>({x:b.x-x,y:b.y-y,width:b.width,height:b.height}));return{ok:true,rect:{x,y,width:right-x,height:bottom-y},actionRects,rowRect:{x:r.x-x,y:r.y-y,width:r.width,height:r.height}}})()`, true) as { ok: boolean; reason?: string; rect?: { x: number; y: number; width: number; height: number }; actionRects?: Array<{ x: number; y: number; width: number; height: number }>; rowRect?: { x: number; y: number; width: number; height: number } };
+        const livePostId = typeof liveResolution.diagnosticMeta?.postId === "string" ? liveResolution.diagnosticMeta.postId : null;
+        if (command.postId && livePostId && livePostId !== command.postId) {
+          throw new Error(`POST_IDENTITY_MISMATCH: expected #${command.postId}, resolved #${livePostId}`);
+        }
+        const configHint = (command.config as { engagementScrollHint?: EngagementScrollHint }).engagementScrollHint || null;
+        const runHint = await postDetailStorage.loadEngagementScrollHint(command.runId).catch(() => null);
+        const scrollHint: EngagementScrollHint | null = configHint || runHint;
+        const scrollResult = await wc.executeJavaScript(buildEngagementAutoScrollJs(scrollHint), true) as {
+          ok: boolean;
+          reason?: string;
+          adjustments?: number;
+          skipped?: boolean;
+          diagnostics?: string[];
+          rowRectBefore?: { x: number; y: number; width: number; height: number };
+          rowRectAfter?: { x: number; y: number; width: number; height: number };
+          scrollBefore?: { tag: string; role: string | null; scrollTop: number; maxScroll: number };
+          scrollAfter?: { tag: string; role: string | null; scrollTop: number; maxScroll: number };
+          visibility?: { fullyOutside?: boolean; comfortable?: boolean; partially?: boolean };
+        };
+        const scrollDiagnostics = [
+          `engagement_auto_scroll:${scrollResult.reason || (scrollResult.ok ? "OK" : "FAIL")}`,
+          `scroll_adjustments:${scrollResult.adjustments ?? 0}`,
+          ...(scrollResult.diagnostics || []),
+        ];
+        if (!scrollResult.ok && scrollResult.reason === "ENGAGEMENT_OUTSIDE_VIEWPORT") {
+          const capturedAt = new Date().toISOString();
+          const unavailable = (field: "like_count" | "comment_count" | "share_count") => ({ field, value: null, status: "unavailable" as const, sourceMethod: "visual_ocr" as const, rawText: "", confidence: null, segmentIds: [], failureReason: "ENGAGEMENT_OUTSIDE_VIEWPORT" });
+          const fields = { like_count: unavailable("like_count"), comment_count: unavailable("comment_count"), share_count: unavailable("share_count") };
+          const diagnostics = ["ENGAGEMENT_OUTSIDE_VIEWPORT", ...scrollDiagnostics].filter(Boolean);
+          const evidence = { postId: command.postId, runId: command.runId, captureId: "", capturedAt, status: "NO_COUNT_REGION" as const, cropRect: null, rowRect: scrollResult.rowRectAfter, rawOcrText: "", ocrConfidence: 0, segments: [], fields, diagnostics };
+          const saved = await postDetailStorage.saveEngagementOcr({ runId: command.runId, postId: command.postId, evidence });
+          return { ...evidence, evidencePath: saved.evidencePath, autoScroll: scrollResult };
+        }
+        const geometry = await wc.executeJavaScript(ENGAGEMENT_CAPTURE_GEOMETRY_JS, true) as {
+          ok: boolean;
+          reason?: string;
+          diagnostics?: string[];
+          rect?: { x: number; y: number; width: number; height: number };
+          actionRects?: Array<{ x: number; y: number; width: number; height: number }>;
+          rowRect?: { x: number; y: number; width: number; height: number };
+        };
         if (!geometry.ok || !geometry.rect) {
           const capturedAt = new Date().toISOString();
           const unavailable = (field: "like_count" | "comment_count" | "share_count") => ({ field, value: null, status: "unavailable" as const, sourceMethod: "visual_ocr" as const, rawText: "", confidence: null, segmentIds: [], failureReason: geometry.reason || "NO_COUNT_REGION" });
           const fields = { like_count: unavailable("like_count"), comment_count: unavailable("comment_count"), share_count: unavailable("share_count") };
-          const evidence = { postId: command.postId, runId: command.runId, captureId: "", capturedAt, status: "NO_COUNT_REGION", cropRect: null, rowRect: geometry.rowRect, rawOcrText: "", ocrConfidence: 0, segments: [], fields, diagnostics: [geometry.reason || "NO_COUNT_REGION"] };
+          const diagnostics = [geometry.reason || "NO_COUNT_REGION", ...(geometry.diagnostics || []), ...scrollDiagnostics].filter(Boolean);
+          const evidence = { postId: command.postId, runId: command.runId, captureId: "", capturedAt, status: "NO_COUNT_REGION" as const, cropRect: null, rowRect: geometry.rowRect, rawOcrText: "", ocrConfidence: 0, segments: [], fields, diagnostics };
           const saved = await postDetailStorage.saveEngagementOcr({ runId: command.runId, postId: command.postId, evidence });
-          return { ...evidence, evidencePath: saved.evidencePath };
+          return { ...evidence, evidencePath: saved.evidencePath, autoScroll: scrollResult };
         }
-        const capture = await visualMatchLab.capture();
-        if (capture.webContentsId !== wc.id) throw new Error("WRONG_BROWSER_INSTANCE");
+        // Step 3 already owns a measured BrowserCore host. Capturing it directly preserves
+        // that host; VisualMatchLab capture temporarily switches pages and drops collectorHost.
+        const capture = await browser.capture({ requireCanonical: false });
+        const viewport = await wc.executeJavaScript(`({width:innerWidth,height:innerHeight,scrollX,scrollY,url:location.href})`, true) as { width: number; height: number; scrollX: number; scrollY: number; url: string };
+        if (browser.view.webContents.id !== wc.id) throw new Error("WRONG_BROWSER_INSTANCE");
         const match = /^data:image\/[a-z0-9.+-]+;base64,(.+)$/iu.exec(capture.dataUrl);
         if (!match) throw new Error("CAPTURE_IMAGE_INVALID");
         const source = Buffer.from(match[1], "base64");
         const metadata = await sharp(source).metadata();
-        const scaleX = (metadata.width || capture.width) / capture.viewport.width;
-        const scaleY = (metadata.height || capture.height) / capture.viewport.height;
+        if (!viewport.width || !viewport.height) throw new Error("VIEWPORT_UNAVAILABLE");
+        const scaleX = (metadata.width || capture.width) / viewport.width;
+        const scaleY = (metadata.height || capture.height) / viewport.height;
         const cropRect = { left: Math.max(0, Math.floor(geometry.rect.x * scaleX)), top: Math.max(0, Math.floor(geometry.rect.y * scaleY)), width: Math.max(4, Math.floor(geometry.rect.width * scaleX)), height: Math.max(4, Math.floor(geometry.rect.height * scaleY)) };
         cropRect.width = Math.min(cropRect.width, (metadata.width || capture.width) - cropRect.left);
         cropRect.height = Math.min(cropRect.height, (metadata.height || capture.height) - cropRect.top);
+        if (cropRect.width < 4 || cropRect.height < 4) throw new Error("ENGAGEMENT_CROP_INVALID");
         const crop = await sharp(source).extract(cropRect).png().toBuffer();
-        const ocr = await localOcr.recognize(crop);
         const actionRects = (geometry.actionRects || []).map(rect => ({ x: rect.x * scaleX, y: rect.y * scaleY, width: rect.width * scaleX, height: rect.height * scaleY }));
-        const classified = classifyEngagementOcr({ ocr, actionRects, cropHeight: cropRect.height });
+        const recognized = await recognizeEngagementCrop({ crop, actionRects, cropHeight: cropRect.height, localOcr });
+        const ocr = recognized.best.ocr;
+        const classified = recognized.best.classified;
         const capturedAt = new Date().toISOString();
-        const verified = Object.values(classified.fields).filter(field => field.status === "verified").length;
-        const hasNumericText = ocr.segments.some(segment => /^\s*\d+(?:[.,]\d+)?\s*[kmb]?\s*$/iu.test(segment.text));
-        const status = verified === 3 ? "VERIFIED" : hasNumericText ? "NEEDS_ATTENTION" : "NO_COUNT_REGION";
-        const evidence = { postId: command.postId, runId: command.runId, captureId: capture.id, capturedAt, status, cropRect: geometry.rect, actionRects, rowRect: geometry.rowRect, ocr, fields: classified.fields, diagnostics: classified.diagnostics };
+        const verified = recognized.best.verified;
+        const cropSha256 = recognized.cropSha256;
+        const hasNumericText = ocr.segments.some(segment => /\d/.test(segment.text));
+        const status = verified === 3 ? "VERIFIED" as const : hasNumericText || verified > 0 ? "NEEDS_ATTENTION" as const : "NO_COUNT_REGION" as const;
+        const numericSegments = ocr.segments
+          .filter(segment => /\d/.test(segment.text))
+          .map(segment => `${segment.id}:${segment.text}@${Math.round(segment.bbox.x)},${Math.round(segment.bbox.y)}(c${Math.round(segment.confidence)})`);
+        const diagnostics = [
+          ...scrollDiagnostics,
+          ...classified.diagnostics,
+          ...(recognized.slotDiagnostics || []),
+          `crop_sha256:${cropSha256}`,
+          `ocr_preprocess:${recognized.best.label};focusWidth=${recognized.focusWidth};variants=${recognized.variantCount}`,
+          `variant_scores:${recognized.variantSummaries.map(entry => `${entry.label}:${entry.verified}/${entry.trioKey || "-"}@${Math.round(entry.score)}`).join("|")}`,
+          `numeric_segments:${numericSegments.join("|") || "(none)"}`,
+          `classified:like=${classified.fields.like_count.value ?? "null"},comment=${classified.fields.comment_count.value ?? "null"},share=${classified.fields.share_count.value ?? "null"}`,
+          ...Object.values(classified.fields)
+            .filter(field => field.status !== "verified")
+            .map(field => `${field.field}:${field.failureReason || "UNRESOLVED_ROLE"}`),
+        ];
+        const evidence = {
+          postId: command.postId, runId: command.runId, captureId: capture.id, capturedAt, status,
+          cropRect: geometry.rect, actionRects, rowRect: geometry.rowRect, ocr, fields: classified.fields, diagnostics,
+          cropSha256, preprocessVariant: recognized.best.label, autoScroll: scrollResult,
+        };
         const saved = await postDetailStorage.saveEngagementOcr({ runId: command.runId, postId: command.postId, crop, evidence });
-        return { postId: command.postId, runId: command.runId, captureId: capture.id, capturedAt, status, cropRect: geometry.rect, cropPath: saved.cropPath, evidencePath: saved.evidencePath, rawOcrText: ocr.text, ocrConfidence: ocr.confidence, segments: ocr.segments, fields: classified.fields, diagnostics: classified.diagnostics, previewDataUrl: `data:image/png;base64,${crop.toString("base64")}` };
+        return {
+          postId: command.postId, runId: command.runId, captureId: capture.id, capturedAt, status,
+          cropRect: geometry.rect, rowRect: geometry.rowRect, cropPath: saved.cropPath, evidencePath: saved.evidencePath,
+          cropSha256, preprocessVariant: recognized.best.label,
+          rawOcrText: ocr.text, ocrConfidence: ocr.confidence, segments: ocr.segments, fields: classified.fields, diagnostics,
+          previewDataUrl: `data:image/png;base64,${crop.toString("base64")}`,
+          autoScroll: scrollResult,
+        };
+      }
+      case "postDetailReprocessEngagementCrop": {
+        isIdle();
+        const loaded = await postDetailStorage.loadEngagementCrop(command.runId, command.postId);
+        if (!loaded) throw new Error("ENGAGEMENT_CROP_MISSING");
+        const crop = await readFile(loaded.cropPath);
+        const evidencePath = path.join(path.dirname(loaded.cropPath), "result.json");
+        let actionRects: EngagementActionRect[] = [];
+        let cropRect: { x: number; y: number; width: number; height: number } | null = null;
+        let rowRect: { x: number; y: number; width: number; height: number } | undefined;
+        try {
+          const prior = JSON.parse(await readFile(evidencePath, "utf8")) as {
+            actionRects?: EngagementActionRect[];
+            cropRect?: { x: number; y: number; width: number; height: number } | null;
+            rowRect?: { x: number; y: number; width: number; height: number };
+          };
+          actionRects = prior.actionRects || [];
+          cropRect = prior.cropRect ?? null;
+          rowRect = prior.rowRect;
+        } catch {
+          /* reprocess with empty action rects */
+        }
+        const meta = await sharp(crop).metadata();
+        const recognized = await recognizeEngagementCrop({
+          crop,
+          actionRects,
+          cropHeight: meta.height || cropRect?.height || 53,
+          localOcr,
+        });
+        const ocr = recognized.best.ocr;
+        const classified = recognized.best.classified;
+        const capturedAt = new Date().toISOString();
+        const verified = recognized.best.verified;
+        const hasNumericText = ocr.segments.some(segment => /\d/.test(segment.text));
+        const status = verified === 3 ? "VERIFIED" as const : hasNumericText || verified > 0 ? "NEEDS_ATTENTION" as const : "NO_COUNT_REGION" as const;
+        const numericSegments = ocr.segments
+          .filter(segment => /\d/.test(segment.text))
+          .map(segment => `${segment.id}:${segment.text}@${Math.round(segment.bbox.x)},${Math.round(segment.bbox.y)}(c${Math.round(segment.confidence)})`);
+        const diagnostics = [
+          ...classified.diagnostics,
+          ...(recognized.slotDiagnostics || []),
+          `crop_sha256:${recognized.cropSha256}`,
+          `ocr_preprocess:${recognized.best.label};focusWidth=${recognized.focusWidth};variants=${recognized.variantCount}`,
+          `variant_scores:${recognized.variantSummaries.map(entry => `${entry.label}:${entry.verified}/${entry.trioKey || "-"}@${Math.round(entry.score)}`).join("|")}`,
+          `numeric_segments:${numericSegments.join("|") || "(none)"}`,
+          `classified:like=${classified.fields.like_count.value ?? "null"},comment=${classified.fields.comment_count.value ?? "null"},share=${classified.fields.share_count.value ?? "null"}`,
+          "source:reprocess_saved_crop",
+          ...Object.values(classified.fields)
+            .filter(field => field.status !== "verified")
+            .map(field => `${field.field}:${field.failureReason || "UNRESOLVED_ROLE"}`),
+        ];
+        const evidence = {
+          postId: command.postId, runId: command.runId, captureId: `reprocess-${Date.now()}`, capturedAt, status,
+          cropRect, actionRects, rowRect, ocr, fields: classified.fields, diagnostics,
+          cropSha256: recognized.cropSha256, preprocessVariant: recognized.best.label,
+        };
+        const saved = await postDetailStorage.saveEngagementOcr({ runId: command.runId, postId: command.postId, crop, evidence });
+        return {
+          postId: command.postId, runId: command.runId, captureId: evidence.captureId, capturedAt, status,
+          cropRect, rowRect, cropPath: saved.cropPath, evidencePath: saved.evidencePath,
+          cropSha256: recognized.cropSha256, preprocessVariant: recognized.best.label,
+          rawOcrText: ocr.text, ocrConfidence: ocr.confidence, segments: ocr.segments, fields: classified.fields, diagnostics,
+          previewDataUrl: `data:image/png;base64,${crop.toString("base64")}`,
+        };
+      }
+      case "postDetailLoadEngagementCrop": {
+        isIdle();
+        return postDetailStorage.loadEngagementCrop(command.runId, command.postId);
       }
       case "postDetailHighlightParentNode": {
         isIdle();
@@ -3349,8 +3687,8 @@ async function boot() {
   window.show();
   const initialSession = browserSessions.get(activeSessionId);
   try {
-    if (postDetailBrowserCheck) {
-      // Isolated layout smoke: stay on local fixture — never block on Meta/network.
+    if (postDetailBrowserCheck || engagementCaptureCheck || creatorWorkspaceRestoreCheck) {
+      // Isolated layout/engagement smoke: stay on local fixture — never block on Meta/network.
       await browser.navigate(fixture.url);
     } else if (selfTest || initialSession.lastUrl || initialSession.isDefault)
       await browser.navigate(selfTest ? fixture.url : initialSession.lastUrl || fixture.url);
@@ -3361,6 +3699,84 @@ async function boot() {
     publishSessions();
   }
   window.show();
+  if (creatorWorkspaceRestoreCheck) {
+    try {
+      const outDir = path.join(project, "artifacts", "creator-workspace-restore-check");
+      await mkdir(outDir, { recursive: true });
+      const flow = store.flows()[0] ?? store.newFlow("Workspace restore check", browser.zoom);
+      const sessionBefore = activeSessionId;
+      const webContentsIdBefore = browser.view.webContents.id;
+      const urlBefore = browser.view.webContents.getURL();
+
+      // Post Detail layout-hide (sidebar/host detach) — NOT crop overlay.
+      overlays.setPage("post-detail-collector");
+      overlays.setCollectorHost({ x: 280, y: 120, width: 1024, height: 560, active: false });
+      browser.setVisible(false);
+      if (browser.isCropOverlayActive) throw new Error("layout-hide incorrectly set cropOverlay");
+      if (browser.visible) throw new Error("expected browser hidden after layout-hide");
+      if (
+        shouldBlockActivateWorkspace({
+          cropOverlayActive: browser.isCropOverlayActive,
+          page: overlays.page,
+          scanLocked: postDetailScanLock.isLocked,
+        }).block
+      ) {
+        throw new Error("layout-hide must not block activateWorkspace");
+      }
+
+      restoreBrowserForCreatorWorkspace();
+      overlays.setPage("creator");
+      layoutAndSyncScanLock();
+      if (!browser.visible) throw new Error("Creator restore did not show BrowserCore");
+      if (browser.isCropOverlayActive) throw new Error("crop overlay leaked after Creator restore");
+      if (overlays.page !== "creator") throw new Error("page was not creator");
+      if (overlays.collectorHost) throw new Error("collectorHost was not cleared for Creator");
+      if (browser.view.webContents.id !== webContentsIdBefore) throw new Error("BrowserCore webContents was replaced");
+      if (activeSessionId !== sessionBefore) throw new Error("Browser Session changed unexpectedly");
+      if (browser.view.webContents.getURL() !== urlBefore) throw new Error("URL/session navigation changed unexpectedly");
+
+      // Real Creator crop must still block tab switch.
+      browser.setCropOverlayActive(true);
+      browser.setVisible(false);
+      const cropGate = shouldBlockActivateWorkspace({
+        cropOverlayActive: browser.isCropOverlayActive,
+        page: "creator",
+        scanLocked: false,
+      });
+      if (!cropGate.block || cropGate.reason !== "crop") throw new Error("Creator crop must block activateWorkspace");
+
+      // Abandoned collector freeze may be cleared when entering Creator.
+      overlays.setPage("post-detail-collector");
+      browser.setCropOverlayActive(true);
+      browser.setVisible(false);
+      const abandonGate = shouldBlockActivateWorkspace({
+        cropOverlayActive: true,
+        page: "post-detail-collector",
+        scanLocked: false,
+      });
+      if (abandonGate.block) throw new Error("collector freeze must not block activateWorkspace");
+      restoreBrowserForCreatorWorkspace();
+      overlays.setPage("creator");
+      layoutAndSyncScanLock();
+      if (!browser.visible || browser.isCropOverlayActive) throw new Error("abandoned freeze was not cleared for Creator");
+
+      const report = {
+        status: "PASS",
+        flowId: flow.id,
+        sessionId: sessionBefore,
+        webContentsId: webContentsIdBefore,
+        url: urlBefore,
+      };
+      await writeFile(path.join(outDir, "summary.json"), JSON.stringify(report, null, 2));
+      console.info("CREATOR_WORKSPACE_RESTORE_CHECK", "PASS", JSON.stringify(report));
+      app.exit(0);
+      return;
+    } catch (error) {
+      console.error("CREATOR_WORKSPACE_RESTORE_CHECK_FAILED", error);
+      app.exit(1);
+      return;
+    }
+  }
   if (process.argv.includes("--visual-match-lab-check")) {
     try {
       await new Promise((resolve) => setTimeout(resolve, 15000));
@@ -3378,6 +3794,176 @@ async function boot() {
       return;
     } catch (error) {
       console.error("VISUAL_MATCH_LAB_CHECK_FAILED", error);
+      app.exit(1);
+      return;
+    }
+  }
+  if (engagementOcrReplay) {
+    try {
+      const cropPath = process.argv.find(arg => arg.startsWith("--crop="))?.slice("--crop=".length)
+        || path.join(project, "scratch/post-detail-runs/pd_20261116T170031Z_00up2a/engagement-ocr/29362527793432657/engagement.png");
+      const evidencePath = process.argv.find(arg => arg.startsWith("--evidence="))?.slice("--evidence=".length)
+        || path.join(project, "scratch/post-detail-runs/pd_20261116T170031Z_00up2a/engagement-ocr/29362527793432657/result.json");
+      const outDir = path.join(project, "artifacts", "engagement-ocr-replay");
+      await mkdir(outDir, { recursive: true });
+      const crop = await readFile(cropPath);
+      const prior = JSON.parse(await readFile(evidencePath, "utf8")) as {
+        actionRects?: EngagementActionRect[];
+        cropRect?: { height?: number };
+        diagnostics?: string[];
+        [key: string]: unknown;
+      };
+      const recognized = await recognizeEngagementCrop({
+        crop,
+        actionRects: prior.actionRects || [],
+        cropHeight: prior.cropRect?.height || 53,
+        localOcr,
+      });
+      const fields = Object.fromEntries(Object.entries(recognized.best.classified.fields).map(([key, value]) => [key, { value: value.value, status: value.status, reason: value.failureReason }]));
+      const out = {
+        cropPath,
+        cropSha256: recognized.cropSha256,
+        preprocessVariant: recognized.best.label,
+        verified: recognized.best.verified,
+        raw: recognized.best.ocr.text,
+        fields,
+        variantSummaries: recognized.variantSummaries,
+        diagnostics: recognized.best.classified.diagnostics,
+        priorPipeline: prior.diagnostics || [],
+      };
+      await writeFile(path.join(outDir, "replay.json"), JSON.stringify(out, null, 2));
+      if (process.argv.includes("--write-back")) {
+        const verified = recognized.best.verified;
+        const status = verified === 3 ? "VERIFIED" : verified > 0 ? "NEEDS_ATTENTION" : "NO_COUNT_REGION";
+        const updated = {
+          ...prior,
+          capturedAt: new Date().toISOString(),
+          status,
+          ocr: recognized.best.ocr,
+          fields: recognized.best.classified.fields,
+          cropSha256: recognized.cropSha256,
+          preprocessVariant: recognized.best.label,
+          diagnostics: [
+            ...recognized.best.classified.diagnostics,
+            `crop_sha256:${recognized.cropSha256}`,
+            `ocr_preprocess:${recognized.best.label};focusWidth=${recognized.focusWidth};variants=${recognized.variantCount}`,
+            `variant_scores:${recognized.variantSummaries.map(entry => `${entry.label}:${entry.verified}/${entry.trioKey || "-"}@${Math.round(entry.score)}`).join("|")}`,
+            "source:engagement_ocr_replay_write_back",
+          ],
+        };
+        await writeFile(evidencePath, JSON.stringify(updated, null, 2));
+      }
+      console.info("ENGAGEMENT_OCR_REPLAY", recognized.best.verified === 3 ? "PASS" : "FAIL", JSON.stringify({
+        cropSha256: recognized.cropSha256,
+        variant: recognized.best.label,
+        fields,
+      }));
+      await localOcr.close();
+      app.exit(recognized.best.verified === 3 ? 0 : 1);
+      return;
+    } catch (error) {
+      console.error("ENGAGEMENT_OCR_REPLAY_FAILED", error);
+      app.exit(1);
+      return;
+    }
+  }
+  if (process.argv.includes("--engagement-capture-check")) {
+    try {
+      const outDir = path.join(project, "artifacts", "engagement-capture-check");
+      await mkdir(outDir, { recursive: true });
+      overlays.setPage("post-detail-collector");
+      publishLayout();
+      await new Promise((resolve) => setTimeout(resolve, 800));
+      const host = { x: 280, y: 120, width: 1024, height: 560, active: true };
+      overlays.setCollectorHost(host);
+      browser.setVisible(true);
+      layoutAndSyncScanLock();
+      const fixtureHtml = `data:text/html;charset=utf-8,${encodeURIComponent(`<!doctype html><html><body style="margin:0;background:#1c1e21;color:#fff;font:14px Arial">
+        <div id="parent" style="margin:24px;width:520px;background:#242526;padding:12px;border-radius:8px">
+          <img id="media" alt="post photo" width="520" height="180" style="display:block;width:520px;height:180px;background:#3a3b3c;object-fit:cover" src="data:image/svg+xml,${encodeURIComponent('<svg xmlns="http://www.w3.org/2000/svg" width="520" height="180"><rect width="520" height="180" fill="#555"/><text x="20" y="96" fill="#ddd" font-size="28">POST MEDIA</text></svg>')}" />
+          <p style="margin:10px 0">Post body content that must stay out of Engagement crop.</p>
+          <div id="engagement" style="margin-top:8px">
+            <div id="summary" style="display:flex;gap:10px;align-items:center;margin:8px 0 12px">
+              <img id="icon" alt="Like" width="18" height="18" src="data:image/svg+xml,${encodeURIComponent('<svg xmlns="http://www.w3.org/2000/svg" width="18" height="18"><circle cx="9" cy="9" r="8" fill="#1877f2"/></svg>')}" />
+              <span aria-label="128 likes">128</span>
+              <span aria-label="12 comments">12 comments</span>
+              <span aria-label="3 shares">3 shares</span>
+            </div>
+            <div id="row" style="display:flex;gap:24px;padding-top:8px;border-top:1px solid #3a3b3c">
+              <button type="button" role="button"><svg width="18" height="18" role="img"><rect width="18" height="18" fill="#b0b3b8"/></svg> Like</button>
+              <button type="button" role="button"><svg width="18" height="18" role="img"><rect width="18" height="18" fill="#b0b3b8"/></svg> Comment</button>
+              <button type="button" role="button"><svg width="18" height="18" role="img"><rect width="18" height="18" fill="#b0b3b8"/></svg> Share</button>
+            </div>
+          </div>
+        </div>
+      </body></html>`)}`;
+      await browser.view.webContents.loadURL(fixtureHtml);
+      await new Promise((resolve) => setTimeout(resolve, 500));
+      await browser.view.webContents.executeJavaScript(`(() => { window.__rpaPdcSavedParent = document.getElementById('parent'); window.__rpaPdcSavedActionRow = document.getElementById('row'); return Boolean(window.__rpaPdcSavedParent && window.__rpaPdcSavedActionRow); })()`, true);
+      const before = {
+        page: overlays.page,
+        collectorHost: overlays.collectorHost ? { ...overlays.collectorHost } : null,
+        webContentsId: browser.view.webContents.id,
+        bounds: { ...browser.bounds },
+      };
+      const geometry = await browser.view.webContents.executeJavaScript(ENGAGEMENT_CAPTURE_GEOMETRY_JS, true) as { ok: boolean; reason?: string; rect?: { x: number; y: number; width: number; height: number } };
+      const capture = await browser.capture({ requireCanonical: false });
+      const after = {
+        page: overlays.page,
+        collectorHost: overlays.collectorHost ? { ...overlays.collectorHost } : null,
+        webContentsId: browser.view.webContents.id,
+        bounds: { ...browser.bounds },
+      };
+      const viewport = await browser.view.webContents.executeJavaScript(`({width:innerWidth,height:innerHeight})`, true) as { width: number; height: number };
+      const match = /^data:image\/[a-z0-9.+-]+;base64,(.+)$/iu.exec(capture.dataUrl);
+      if (!match) throw new Error("CAPTURE_IMAGE_INVALID");
+      const source = Buffer.from(match[1], "base64");
+      const metadata = await sharp(source).metadata();
+      let cropPath: string | null = null;
+      let cropRect = null as null | { left: number; top: number; width: number; height: number };
+      if (geometry.ok && geometry.rect) {
+        const scaleX = (metadata.width || capture.width) / viewport.width;
+        const scaleY = (metadata.height || capture.height) / viewport.height;
+        cropRect = {
+          left: Math.max(0, Math.floor(geometry.rect.x * scaleX)),
+          top: Math.max(0, Math.floor(geometry.rect.y * scaleY)),
+          width: Math.max(4, Math.floor(geometry.rect.width * scaleX)),
+          height: Math.max(4, Math.floor(geometry.rect.height * scaleY)),
+        };
+        cropRect.width = Math.min(cropRect.width, (metadata.width || capture.width) - cropRect.left);
+        cropRect.height = Math.min(cropRect.height, (metadata.height || capture.height) - cropRect.top);
+        const crop = await sharp(source).extract(cropRect).png().toBuffer();
+        cropPath = path.join(outDir, "engagement-crop.png");
+        await writeFile(cropPath, crop);
+      }
+      const hostPreserved =
+        before.page === after.page &&
+        before.page === "post-detail-collector" &&
+        Boolean(before.collectorHost?.active) &&
+        Boolean(after.collectorHost?.active) &&
+        before.collectorHost?.width === after.collectorHost?.width &&
+        before.collectorHost?.height === after.collectorHost?.height &&
+        before.webContentsId === after.webContentsId;
+      const cropExcludesMedia = Boolean(geometry.ok && geometry.rect && geometry.rect.y >= 200 && geometry.rect.height <= 160);
+      const summary = {
+        timestamp: new Date().toISOString(),
+        status: hostPreserved && geometry.ok && cropPath && cropExcludesMedia ? "PASS" : "FAIL",
+        hostPreserved,
+        cropExcludesMedia,
+        geometry,
+        cropRect,
+        cropPath,
+        before,
+        after,
+        capture: { id: capture.id, width: capture.width, height: capture.height },
+        viewport,
+      };
+      await writeFile(path.join(outDir, "summary.json"), JSON.stringify(summary, null, 2));
+      console.info("ENGAGEMENT_CAPTURE_CHECK", summary.status, JSON.stringify({ hostPreserved, geometryOk: geometry.ok, cropPath: Boolean(cropPath) }));
+      app.exit(summary.status === "PASS" ? 0 : 1);
+      return;
+    } catch (error) {
+      console.error("ENGAGEMENT_CAPTURE_CHECK_FAILED", error);
       app.exit(1);
       return;
     }

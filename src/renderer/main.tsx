@@ -729,7 +729,7 @@ function Creator() {
       return;
     }
     const image = await invoke<Capture>({ type: "capture" });
-    await invoke({ type: "browserVisible", visible: false });
+    await invoke({ type: "browserVisible", visible: false, cropOverlay: true });
     setShot(image);
     setRoi(undefined);
     setCropMode(true);
@@ -738,7 +738,7 @@ function Creator() {
     );
   }
   async function inspect(image: Capture) {
-    await invoke({ type: "browserVisible", visible: false });
+    await invoke({ type: "browserVisible", visible: false, cropOverlay: true });
     setShot(image);
     setCropMode(false);
   }

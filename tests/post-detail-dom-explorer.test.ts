@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import test from "node:test";
 import { executeVariableMapping, extractParentData, parseEngagementNumber } from "../src/renderer/post-detail-collector/extract-parent-data";
-import { advanceParentReadiness, canonicalPostUrl, evaluateMatchedParentDom, formatShortPostLabel, parseBatchUrls } from "../src/renderer/post-detail-collector/batch-validation";
+import { advanceParentReadiness, canonicalPostUrl, evaluateMatchedParentDom, formatShortPostLabel, parseBatchUrls, reconcileBatchEngagement } from "../src/renderer/post-detail-collector/batch-validation";
 import { getPostDetailCollectorState, setPostDetailCollectorState } from "../src/renderer/post-detail-collector/store";
 import {
   addRegistryVariable,
@@ -11,7 +11,7 @@ import {
   listRegistryVariables,
   updateRegistryVariable,
 } from "../src/renderer/post-detail-collector/variable-registry";
-import type { PostDetailDomVariableMapping } from "../src/renderer/post-detail-collector/types";
+import type { BatchValidationRow, PostDetailDomVariableMapping } from "../src/renderer/post-detail-collector/types";
 import { classifyAutoMatchGate, effectiveStrategyConfig, extractWorkspaceIdentity, legacyStrategies, mergeUrlWorkspace, rankStrategies, upsertStrategyVariation } from "../src/renderer/post-detail-collector/url-workspace";
 import { migratePostDetailState } from "../src/renderer/post-detail-collector/store";
 
@@ -40,6 +40,117 @@ test("Step 3 value detail and post selection navigation always have explicit exi
   assert.match(page, /urlItems\.some\(item => item\.id === prev\.selectedUrlId\)/);
 });
 
+test("Step 3 shows persisted Engagement crop directly and reloads file evidence", () => {
+  const source = explorer();
+  assert.match(source, /postDetailLoadEngagementCrop/);
+  assert.match(source, /<figure className="pdc-engagement-preview">/);
+  assert.doesNotMatch(source, /<details className="pdc-engagement-preview">/);
+  assert.match(source, /NO_COUNT_REGION/);
+  assert.match(source, /Action Row:/);
+  assert.match(source, /: unresolved/);
+  assert.match(source, /setEngagementError\(""\)/);
+  assert.match(source, /Source: Visual OCR|Visual OCR/);
+  assert.match(source, /Mapping Saved · OCR Pending/);
+  assert.match(source, /method: engagementOcr \? "VISUAL_OCR"/);
+  assert.match(source, /engagementVariableCompatible/);
+  assert.match(source, /Engagement OCR evidence/);
+  assert.match(source, /Raw OCR:/);
+});
+
+test("cached Validation Summary reconciles Engagement from OCR without changing other fields", () => {
+  const mappings: PostDetailDomVariableMapping[] = [
+    { collectorId: "c", variableId: "like", variableKey: "like", variableLabel: "Like", method: "DOM_TEXT_NUMBER", relativePath: [], relativeXPath: "", preview: "999", sourceSemantic: "like_count", confirmed: true, updatedAt: "2026-11-17T00:00:00Z" },
+    { collectorId: "c", variableId: "author", variableKey: "author", variableLabel: "Author", method: "DOM_TEXT", relativePath: [], relativeXPath: "", preview: "A", confirmed: true, updatedAt: "2026-11-17T00:00:00Z" },
+  ];
+  const row: BatchValidationRow = { url: "https://www.facebook.com/posts/A", resolvedUrl: "", postId: "A", parentStatus: "Matched", passedCount: 2, totalCount: 2, extractedCount: 2, missingCount: 0, needsAttentionCount: 0, status: "PASS", validatedAt: "2026-11-17T00:00:00Z", fields: [
+    { variableId: "like", variableKey: "like", variableLabel: "Like", required: false, value: "999", method: "DOM_TEXT_NUMBER", relativeXPath: "", status: "PASS", fieldStatus: "PASS" },
+    { variableId: "author", variableKey: "author", variableLabel: "Author", required: true, value: "Alice", method: "DOM_TEXT", relativeXPath: "", status: "PASS", fieldStatus: "PASS" },
+  ] };
+  const baseResult = { postId: "A", runId: "pd_test", captureId: "cap", capturedAt: "2026-11-17T00:01:00Z", cropRect: null, evidencePath: "result.json", rawOcrText: "", ocrConfidence: 0, segments: [], diagnostics: [], fields: {
+    like_count: { field: "like_count" as const, value: 7, status: "verified" as const, sourceMethod: "visual_ocr" as const, rawText: "7 likes", confidence: 90, segmentIds: ["1"] },
+    comment_count: { field: "comment_count" as const, value: null, status: "needs_attention" as const, sourceMethod: "visual_ocr" as const, rawText: "", confidence: null, segmentIds: [] },
+    share_count: { field: "share_count" as const, value: null, status: "needs_attention" as const, sourceMethod: "visual_ocr" as const, rawText: "", confidence: null, segmentIds: [] },
+  } };
+  const verified = reconcileBatchEngagement(row, mappings, { ...baseResult, status: "NEEDS_ATTENTION" });
+  assert.equal(verified.fields[0].value, "7");
+  assert.equal(verified.fields[0].method, "VISUAL_OCR");
+  assert.equal(verified.fields[1].value, "Alice");
+  const missing = reconcileBatchEngagement(row, mappings, undefined);
+  assert.equal(missing.fields[0].value, "");
+  assert.equal(missing.fields[0].reason, "unresolved");
+  const noRegion = reconcileBatchEngagement(row, mappings, { ...baseResult, status: "NO_COUNT_REGION", fields: { ...baseResult.fields, like_count: { ...baseResult.fields.like_count, value: null, status: "unavailable", failureReason: "ENGAGEMENT_OUTSIDE_VIEWPORT" } } });
+  assert.equal(noRegion.fields[0].value, "");
+  assert.equal(noRegion.fields[0].fieldStatus, "NEEDS_ATTENTION");
+  assert.equal(noRegion.fields[0].reason, "ENGAGEMENT_OUTSIDE_VIEWPORT");
+  assert.equal(reconcileBatchEngagement(row, mappings, { ...baseResult, postId: "B", status: "NEEDS_ATTENTION" }).fields[0].value, "");
+  assert.equal(reconcileBatchEngagement(row, mappings, { ...baseResult, postId: "B", status: "NEEDS_ATTENTION" }).fields[0].reason, "unresolved");
+});
+
+test("VISUAL_OCR engagement mapping persists by semantic and ignores empty relativePath", () => {
+  const mapping: PostDetailDomVariableMapping = {
+    collectorId: "c",
+    variableId: "comment",
+    variableKey: "comment_count",
+    variableLabel: "Comments",
+    method: "VISUAL_OCR",
+    relativePath: [],
+    relativeXPath: "",
+    preview: "",
+    sourceContext: "post",
+    sourceSemantic: "comment_count",
+    outputKey: "count",
+    confirmed: true,
+    updatedAt: "2026-11-17T00:00:00Z",
+  };
+  const root = { children: [] } as unknown as Element;
+  const missing = executeVariableMapping(root, mapping, { postId: "A" });
+  assert.equal(missing.status, "missing");
+  assert.equal(missing.value, "");
+  assert.equal(missing.reason, "unresolved");
+  const unresolved = executeVariableMapping(root, mapping, {
+    postId: "A",
+    engagementResult: {
+      postId: "A", runId: "r", captureId: "c", capturedAt: "2026-11-17T00:00:00Z", status: "NEEDS_ATTENTION", cropRect: null, evidencePath: "e.json",
+      rawOcrText: "", ocrConfidence: 0, segments: [], diagnostics: ["UNRESOLVED_ROLE"],
+      fields: {
+        like_count: { field: "like_count", value: null, status: "needs_attention", sourceMethod: "visual_ocr", rawText: "", confidence: null, segmentIds: [] },
+        comment_count: { field: "comment_count", value: null, status: "needs_attention", sourceMethod: "visual_ocr", rawText: "", confidence: null, segmentIds: [], failureReason: "UNRESOLVED_ROLE" },
+        share_count: { field: "share_count", value: null, status: "needs_attention", sourceMethod: "visual_ocr", rawText: "", confidence: null, segmentIds: [] },
+      },
+    },
+  });
+  assert.equal(unresolved.status, "needs_attention");
+  assert.equal(unresolved.value, "");
+  const verified = executeVariableMapping(root, mapping, {
+    postId: "A",
+    engagementResult: {
+      postId: "A", runId: "r", captureId: "c", capturedAt: "2026-11-17T00:00:00Z", status: "VERIFIED", cropRect: null, evidencePath: "e.json",
+      rawOcrText: "12", ocrConfidence: 90, segments: [], diagnostics: [],
+      fields: {
+        like_count: { field: "like_count", value: 1, status: "verified", sourceMethod: "visual_ocr", rawText: "1", confidence: 90, segmentIds: ["1"] },
+        comment_count: { field: "comment_count", value: 12, status: "verified", sourceMethod: "visual_ocr", rawText: "12", confidence: 90, segmentIds: ["2"] },
+        share_count: { field: "share_count", value: 3, status: "verified", sourceMethod: "visual_ocr", rawText: "3", confidence: 90, segmentIds: ["3"] },
+      },
+    },
+  });
+  assert.equal(verified.status, "mapped");
+  assert.equal(verified.value, "12");
+  const wrongPost = executeVariableMapping(root, mapping, {
+    postId: "A",
+    engagementResult: {
+      postId: "B", runId: "r", captureId: "c", capturedAt: "2026-11-17T00:00:00Z", status: "VERIFIED", cropRect: null, evidencePath: "e.json",
+      rawOcrText: "99", ocrConfidence: 90, segments: [], diagnostics: [],
+      fields: {
+        like_count: { field: "like_count", value: 99, status: "verified", sourceMethod: "visual_ocr", rawText: "99", confidence: 90, segmentIds: ["1"] },
+        comment_count: { field: "comment_count", value: 99, status: "verified", sourceMethod: "visual_ocr", rawText: "99", confidence: 90, segmentIds: ["2"] },
+        share_count: { field: "share_count", value: 99, status: "verified", sourceMethod: "visual_ocr", rawText: "99", confidence: 90, segmentIds: ["3"] },
+      },
+    },
+  });
+  assert.equal(wrongPost.value, "");
+  assert.notEqual(wrongPost.value, "99");
+});
+
 test("single-pass extraction emits direct text and semantic values without ancestor textContent", () => {
   const source = extraction();
   assert.match(source, /One DFS pass for generic values/);
@@ -60,7 +171,8 @@ test("semantic extraction uses post identity accessibility metadata and structur
   assert.match(source, /content_text/);
   assert.match(source, /content_html/);
   assert.match(source, /isComment/);
-  assert.doesNotMatch(source, /OCR|parent\.textContent/);
+  assert.doesNotMatch(source, /parent\.textContent/);
+  assert.doesNotMatch(source, /localOcr|recognize\(|tesseract/i);
 });
 
 test("links expose text and href outputs from one locator", () => {
@@ -1044,8 +1156,10 @@ test("Step 3 Auto Save & Step 4 Batch Validation state persistence and UI contro
   assert.match(pageSrc, /<BatchValidationStep/);
   assert.match(step4Src, /cancelRef/);
   assert.match(step4Src, /Copy JSON/);
-  assert.match(step4Src, /Open in BrowserCore/);
+  assert.doesNotMatch(step4Src, /Open in BrowserCore/);
   assert.match(step4Src, /Customize in Step 3/);
+  assert.match(step4Src, /SidebarDrawer/);
+  assert.match(step4Src, /Row Details/);
   assert.match(step4Src, /batchValidatedVersion !== batchConfigVersion/);
 });
 
@@ -1279,7 +1393,7 @@ test("URL-first Auto Match carries selected strategy anchors into Step 3 without
   assert.match(combined, /resolution\.resolvedDomAnchors/);
   assert.match(combined, /anchors: matchResult\.selectedConfig\?\.domAnchors|anchors: selectedConfig\?\.domAnchors/);
   assert.doesNotMatch(page.slice(page.indexOf("const selectUrl"), page.indexOf("return (", page.indexOf("const selectUrl"))), /runPostDetailAutoScan/);
-  assert.match(review, /Count not available/);
+  assert.match(review, /: unresolved/);
   assert.match(review, /Saved Anchor/);
   assert.match(review, /strategyId/);
 });

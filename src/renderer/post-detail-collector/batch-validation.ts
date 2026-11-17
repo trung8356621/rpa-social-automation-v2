@@ -212,22 +212,27 @@ export function evaluateMatchedParentDom(opts: {
     const varKey = `${mapping.collectorId}:${mapping.variableId}`;
     mappedVarKeys.add(varKey);
     const varMeta = varMetaById.get(varKey);
+    const engagementSemantic = mapping.sourceSemantic === "like_count" || mapping.sourceSemantic === "comment_count" || mapping.sourceSemantic === "share_count"
+      ? mapping.sourceSemantic
+      : null;
+    // Validation Summary reads Engagement only from Post-ID-scoped Visual OCR — never DOM heuristics / never invent 0.
     let executed = executeVariableMapping(rootElement, mapping, {
       postId: postId || undefined,
       currentUrl: resolvedUrl || url,
       domAnchors: opts.parentConfig?.domAnchors,
+      engagementResult: opts.engagementResult?.postId === postId ? opts.engagementResult : undefined,
     });
-    if (mapping.sourceSemantic === "like_count" || mapping.sourceSemantic === "comment_count" || mapping.sourceSemantic === "share_count") {
-      const field = opts.engagementResult?.postId === postId ? opts.engagementResult.fields[mapping.sourceSemantic] : undefined;
+    if (engagementSemantic) {
+      const field = opts.engagementResult?.postId === postId ? opts.engagementResult.fields[engagementSemantic] : undefined;
       executed = field?.status === "verified" && field.value !== null
         ? { mapping, value: String(field.value), status: "mapped" }
-        : { mapping, value: "", status: field ? "needs_attention" : "missing", reason: field?.failureReason || (opts.engagementResult ? "Engagement OCR unresolved" : "Not Extracted") };
+        : { mapping, value: "", status: field || mapping.method === "VISUAL_OCR" ? "needs_attention" : "missing", reason: field?.failureReason || (opts.engagementResult ? opts.engagementResult.diagnostics[0] || "unresolved" : "unresolved") };
     }
 
     const semanticMatch = mapping.sourceSemantic
       ? semanticItems.find((item) => item.semanticField === mapping.sourceSemantic)
       : undefined;
-    const semanticAmbiguous = semanticMatch?.extractionStatus === "needs_attention";
+    const semanticAmbiguous = !engagementSemantic && semanticMatch?.extractionStatus === "needs_attention";
 
     let parsedValues: string[] | undefined;
     let validValue = executed.value.trim().length > 0;
@@ -318,4 +323,42 @@ export function evaluateMatchedParentDom(opts: {
     fields,
     validatedAt: now,
   };
+}
+
+export function reconcileBatchEngagement(
+  row: BatchValidationRow,
+  mappings: PostDetailDomVariableMapping[],
+  result?: import("../../shared/post-detail-collector/types").PostDetailEngagementOcrResult,
+): BatchValidationRow {
+  if (!row.postId) return row;
+  const engagementByVariable = new Map(mappings.flatMap(mapping =>
+    mapping.sourceSemantic === "like_count" || mapping.sourceSemantic === "comment_count" || mapping.sourceSemantic === "share_count"
+      ? [[mapping.variableId, mapping.sourceSemantic] as const]
+      : []));
+  if (!engagementByVariable.size) return row;
+  let changed = false;
+  const fields = row.fields.map(field => {
+    const semantic = engagementByVariable.get(field.variableId);
+    if (!semantic) return field;
+    const ocrField = result?.postId === row.postId ? result.fields[semantic] : undefined;
+    const verified = ocrField?.status === "verified" && ocrField.value !== null;
+    const fieldStatus: BatchFieldResult["fieldStatus"] = verified ? "PASS" : result ? "NEEDS_ATTENTION" : "MISSING";
+    const next: BatchFieldResult = {
+      ...field,
+      value: verified ? String(ocrField.value) : "",
+      method: "VISUAL_OCR",
+      status: verified ? "PASS" : "REVIEW",
+      fieldStatus,
+      reason: verified ? undefined : result ? ocrField?.failureReason || (result.status === "NO_COUNT_REGION" ? result.diagnostics[0] || "NO_COUNT_REGION" : "unresolved") : "unresolved",
+    };
+    changed ||= next.value !== field.value || next.method !== field.method || next.fieldStatus !== field.fieldStatus || next.reason !== field.reason;
+    return next;
+  });
+  if (!changed) return row;
+  const passedCount = fields.filter(field => field.status === "PASS").length;
+  const extractedCount = fields.filter(field => field.fieldStatus === "PASS").length;
+  const missingCount = fields.filter(field => field.fieldStatus === "MISSING").length;
+  const needsAttentionCount = fields.filter(field => field.fieldStatus === "NEEDS_ATTENTION").length;
+  const status = row.parentStatus !== "Matched" ? row.status : fields.length > 0 && passedCount === fields.length ? "PASS" : "REVIEW";
+  return { ...row, fields, passedCount, extractedCount, missingCount, needsAttentionCount, status };
 }

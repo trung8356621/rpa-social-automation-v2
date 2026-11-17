@@ -1,5 +1,5 @@
 import type { PostDetailDomVariableMapping, PostDetailExtractionMethod, PostImageEntry } from "./types";
-import type { PostDetailDomAnchorRecord } from "../../shared/post-detail-collector/types";
+import type { PostDetailDomAnchorRecord, PostDetailEngagementOcrResult } from "../../shared/post-detail-collector/types";
 
 export type ExtractedDataContext = "post" | "comment" | "unknown";
 export type ExtractedDataKind = "text" | "link" | "image" | "media" | "datetime" | "content" | "engagement" | "attribute";
@@ -29,6 +29,7 @@ type ExtractionOptions = {
   postId?: string;
   currentUrl?: string;
   domAnchors?: Partial<Record<"like_anchor" | "comment_anchor" | "share_anchor", PostDetailDomAnchorRecord>>;
+  engagementResult?: PostDetailEngagementOcrResult;
 };
 const clean = (value: string | null | undefined) => (value || "").replace(/[\u034f\u200b-\u200f\u2060\ufeff]/g, "").replace(/\s+/g, " ").trim();
 const pathKey = (path: number[]) => path.join("/");
@@ -810,8 +811,33 @@ export function extractParentData(root: Element, options: ExtractionOptions = {}
 /** Re-executes a saved mapping against a resolved Parent DOM without using preview values. */
 export function executeVariableMapping(root: Element | null, mapping: PostDetailDomVariableMapping, options: ExtractionOptions = {}): ExecutedVariableMapping {
   if (!root) return { mapping, value: "", status: "missing", reason: "Parent root unavailable" };
-  if (mapping.sourceSemantic === "like_count" || mapping.sourceSemantic === "comment_count" || mapping.sourceSemantic === "share_count") {
-    const semanticItem = extractParentData(root, options).find(item => item.semanticField === mapping.sourceSemantic);
+  const engagementSemantic = mapping.sourceSemantic === "like_count" || mapping.sourceSemantic === "comment_count" || mapping.sourceSemantic === "share_count"
+    ? mapping.sourceSemantic
+    : null;
+  if (mapping.method === "VISUAL_OCR") {
+    // Semantic Visual OCR mappings never use relativePath or DOM numeric heuristics.
+    if (!engagementSemantic) {
+      return { mapping, value: "", status: "needs_attention", reason: "VISUAL_OCR mapping requires like/comment/share semantic" };
+    }
+    const ocr = options.engagementResult && (!options.postId || options.engagementResult.postId === options.postId)
+      ? options.engagementResult
+      : undefined;
+    if (!ocr) {
+      return { mapping, value: "", status: "missing", reason: "unresolved" };
+    }
+    const field = ocr.fields[engagementSemantic];
+    if (field?.status === "verified" && field.value !== null) {
+      return { mapping, value: String(field.value), status: "mapped" };
+    }
+    return {
+      mapping,
+      value: "",
+      status: "needs_attention",
+      reason: field?.failureReason || ocr.diagnostics?.[0] || "unresolved",
+    };
+  }
+  if (engagementSemantic) {
+    const semanticItem = extractParentData(root, options).find(item => item.semanticField === engagementSemantic);
     if (!semanticItem) return { mapping, value: "", status: "missing", reason: "Verified engagement source is missing" };
     if (semanticItem.extractionStatus !== "verified" || !semanticItem.value) {
       return { mapping, value: "", status: "needs_attention", reason: "Engagement source is ambiguous or lacks semantic evidence" };
