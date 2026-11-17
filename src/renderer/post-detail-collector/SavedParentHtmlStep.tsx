@@ -1,6 +1,6 @@
 import React, { useEffect, useMemo, useRef, useState } from "react";
 import { usePostProcessingToolbar } from "./PostProcessingToolbar";
-import type { PostDetailParentConfig, PostDetailSavedParentResolution } from "../../shared/post-detail-collector/types";
+import type { EngagementFieldName, PostDetailEngagementOcrResult, PostDetailParentConfig, PostDetailSavedParentResolution } from "../../shared/post-detail-collector/types";
 import type { CollectorValueType, CollectorVariable } from "../../shared/collectors/types";
 import { collectorReportBrowserHost, collectorSetBrowserVisible } from "../collectors/browser-capture";
 import { claimCollectorHostOwner, isCollectorHostOwner, releaseCollectorHostOwner } from "../collectors/collector-host-owner";
@@ -75,7 +75,7 @@ function loadVariables(): VariableOption[] {
   return listRegistryVariables();
 }
 
-export function SavedParentHtmlStep({ invoke, result, currentUrl, parentConfig, variableMappings, onVariableMappings, hiddenExtractedData, onHiddenExtractedData, onVariablesChanged, onBackToLibrary, onRematch, onRetryAutoMatch, onNextBatchValidation, reviewMode }: { invoke: Invoke; result: PostDetailSavedParentResolution | null; currentUrl: string; parentConfig?: PostDetailParentConfig; variableMappings: PostDetailDomVariableMapping[]; onVariableMappings: (mappings: PostDetailDomVariableMapping[]) => void; hiddenExtractedData: Record<string, string[]>; onHiddenExtractedData: (hidden: Record<string, string[]>) => void; onVariablesChanged?: () => void; onBackToLibrary?: () => void; onRematch: () => void; onRetryAutoMatch?: () => void; onNextBatchValidation?: () => void; reviewMode?: Step4DetailReviewProps }) {
+export function SavedParentHtmlStep({ invoke, result, currentUrl, runId, engagementResult, onEngagementResult, parentConfig, variableMappings, onVariableMappings, hiddenExtractedData, onHiddenExtractedData, onVariablesChanged, onBackToLibrary, onRematch, onRetryAutoMatch, onNextBatchValidation, reviewMode }: { invoke: Invoke; result: PostDetailSavedParentResolution | null; currentUrl: string; runId: string | null; engagementResult?: PostDetailEngagementOcrResult; onEngagementResult: (result: PostDetailEngagementOcrResult) => void; parentConfig?: PostDetailParentConfig; variableMappings: PostDetailDomVariableMapping[]; onVariableMappings: (mappings: PostDetailDomVariableMapping[]) => void; hiddenExtractedData: Record<string, string[]>; onHiddenExtractedData: (hidden: Record<string, string[]>) => void; onVariablesChanged?: () => void; onBackToLibrary?: () => void; onRematch: () => void; onRetryAutoMatch?: () => void; onNextBatchValidation?: () => void; reviewMode?: Step4DetailReviewProps }) {
   const status = result?.status || "NOT_CONFIGURED";
   const hostRef = useRef<HTMLDivElement>(null);
   const [tab, setTab] = useState<"explorer" | "raw">("explorer");
@@ -100,6 +100,9 @@ export function SavedParentHtmlStep({ invoke, result, currentUrl, parentConfig, 
   const [varError, setVarError] = useState("");
   const [failedThumbUrls, setFailedThumbUrls] = useState<Set<string>>(() => new Set());
   const [copiedThumbUrl, setCopiedThumbUrl] = useState("");
+  const [engagementBusy, setEngagementBusy] = useState(false);
+  const [engagementError, setEngagementError] = useState("");
+  const [engagementPreview, setEngagementPreview] = useState(engagementResult?.previewDataUrl || "");
   useEffect(() => {
     setSelectedDataId("");
     setSelectedOutputKey("");
@@ -180,8 +183,16 @@ export function SavedParentHtmlStep({ invoke, result, currentUrl, parentConfig, 
   const atPath = React.useCallback((path: number[]) => { let node: Element | null = parsed; for (const index of path) node = node?.children.item(index) || null; return node; }, [parsed]);
   const postId = String(result?.diagnosticMeta?.postId || currentUrl.match(/\/posts\/(\d+)/)?.[1] || "current-post");
   const extractedData = useMemo(() => {
-    return parsed ? extractParentData(parsed, { postId, currentUrl, domAnchors: parentConfig?.domAnchors }) : [];
-  }, [parsed, postId, currentUrl, parentConfig?.domAnchors]);
+    const domItems = parsed ? extractParentData(parsed, { postId, currentUrl, domAnchors: parentConfig?.domAnchors }).filter(item => item.kind !== "engagement") : [];
+    const labels: Record<EngagementFieldName, string> = { like_count: "Likes", comment_count: "Comments", share_count: "Shares" };
+    const fields: EngagementFieldName[] = ["like_count", "comment_count", "share_count"];
+    const ocrItems: ExtractedDataItem[] = fields.map(field => {
+      const evidence = engagementResult?.fields[field];
+      const value = evidence?.value == null ? "" : String(evidence.value);
+      return { id: `engagement-ocr:${postId}:${field}`, kind: "engagement", value, label: labels[field], predictedType: "number", semanticField: field, context: "post", confidence: evidence?.confidence != null && evidence.confidence >= 70 ? "high" : evidence?.confidence != null ? "medium" : "low", extractionStatus: evidence?.status === "verified" ? "verified" : "needs_attention", normalizedValue: value, outputs: [{ key: "count", label: labels[field], value, method: "VISUAL_OCR" }], sourcePaths: [], engagementEvidence: { actionAnchorStatus: result?.status === "PARENT_MATCHED" ? "VERIFIED" : "MISSING", countSourceStatus: evidence?.status === "verified" ? "VERIFIED" : "MISSING", method: "NONE", reason: evidence?.status === "verified" ? `VISUAL_OCR · ${evidence.rawText}` : evidence?.failureReason || engagementResult?.status || "NOT_EXTRACTED" } };
+    });
+    return [...ocrItems, ...domItems];
+  }, [parsed, postId, currentUrl, parentConfig?.domAnchors, engagementResult, result?.status]);
   const manuallyHidden = hiddenExtractedData[postId] || [];
   const hiddenCount = extractedData.filter(item => item.hiddenByDefault || manuallyHidden.includes(item.id)).length;
   const visibleData = showHidden ? extractedData : extractedData.filter(item => !item.hiddenByDefault && !manuallyHidden.includes(item.id));
@@ -372,6 +383,17 @@ export function SavedParentHtmlStep({ invoke, result, currentUrl, parentConfig, 
   });
   const breadcrumbs = focusPath.map((_, index) => focusPath.slice(0, index + 1));
   const rematch = () => { void invoke({ type: "postDetailClearParentNodeHighlight" }); onRematch(); };
+  const captureEngagement = async () => {
+    if (status !== "PARENT_MATCHED" || engagementBusy || !parentConfig) return;
+    setEngagementBusy(true); setEngagementError("");
+    try {
+      const activeRunId = runId || `pd_${new Date().toISOString().replace(/[-:.]/g, "").slice(0, 15)}_engagement`;
+      const captured = await invoke<PostDetailEngagementOcrResult>({ type: "postDetailCaptureEngagement", runId: activeRunId, postId, config: parentConfig });
+      setEngagementPreview(captured.previewDataUrl || "");
+      onEngagementResult(captured);
+    } catch (error) { setEngagementError(String(error)); }
+    finally { setEngagementBusy(false); }
+  };
 
   const engagementData = visibleData.filter(item => item.kind === "engagement");
   const generalData = visibleData.filter(item => item.kind !== "engagement");
@@ -524,7 +546,7 @@ export function SavedParentHtmlStep({ invoke, result, currentUrl, parentConfig, 
       {status === "PARENT_MATCHED" ? <><div className={`pdc-data-review ${selectedData ? "has-detail" : ""}`}>
         <div className="pdc-data-list" aria-label="Extracted values">
           <div className="pdc-data-list-header"><h3>Extracted values</h3><div className="pdc-btn-row"><span>{visibleData.length} shown · {hiddenCount} hidden</span><button className="pdc-btn pdc-btn-tiny" onClick={() => setShowHidden(value => !value)}>{showHidden ? "Hide Noise" : "Show Hidden"}</button><button className="pdc-btn pdc-btn-tiny" disabled={!manuallyHidden.length} onClick={restoreHidden}>Restore</button></div></div>
-          {engagementData.length > 0 && <div className="pdc-engagement-group" aria-label="Engagement"><h4>Engagement</h4><div className="pdc-engagement-tags">{engagementData.map(renderDataTag)}</div></div>}
+          {engagementData.length > 0 && <div className="pdc-engagement-group" aria-label="Engagement"><div className="pdc-data-list-header"><h4>Engagement · Visual OCR</h4><button type="button" className="pdc-btn pdc-btn-primary pdc-btn-tiny" disabled={engagementBusy || status !== "PARENT_MATCHED" || !parentConfig} onClick={() => void captureEngagement()}>{engagementBusy ? "Capturing…" : engagementResult ? "Recapture Engagement" : "Capture Engagement"}</button></div>{engagementError && <p className="pdc-alert pdc-alert-warn" role="alert">{engagementError}</p>}<div className="pdc-engagement-tags">{engagementData.map(renderDataTag)}</div>{engagementResult && <p className="pdc-panel-desc">Coverage {Object.values(engagementResult.fields).filter(field => field.status === "verified").length}/3 · {engagementResult.status} · {engagementResult.capturedAt}</p>}{engagementPreview && <details className="pdc-engagement-preview"><summary>Preview captured Engagement crop</summary><img src={engagementPreview} alt="Captured Engagement OCR region" /></details>}</div>}
           {generalData.length ? generalData.map(renderDataTag) : !engagementData.length ? <p className="pdc-panel-desc">No meaningful DOM values were extracted from this Parent.</p> : null}
         </div>
         {selectedData && <div className="pdc-extracted-detail"><div className="pdc-detail-header"><h3>Value detail</h3><button type="button" className="pdc-btn pdc-btn-secondary pdc-btn-tiny" onClick={() => { setSelectedDataId(""); setSelectedOutputKey(""); }}>← Back to Extracted Values</button></div>

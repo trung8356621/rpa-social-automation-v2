@@ -682,6 +682,7 @@ export function BrowserCaptureStep({
           className="pdc-side-panel"
         >
           <h3>Visual References</h3>
+          <p className="pdc-panel-desc"><strong>Capture order:</strong> ① Like → ② Comment → ③ Share</p>
           <p className="pdc-panel-desc">
             Confirm = lưu reference từ ROI vừa chọn rồi về Live. OCR content ROI chọn ở Step 2.
           </p>

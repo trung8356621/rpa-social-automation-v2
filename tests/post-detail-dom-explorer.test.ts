@@ -972,6 +972,14 @@ test("evaluateMatchedParentDom returns PASS, REVIEW, or FAILED without reusing p
     rootElement: root as unknown as Element,
     mappings,
     registryVariables,
+    engagementResult: {
+      postId: "100", runId: "pd_test", captureId: "capture-1", capturedAt: "2026-11-14T00:00:00.000Z", status: "NEEDS_ATTENTION", cropRect: { x: 0, y: 0, width: 500, height: 120 }, cropPath: "engagement.png", evidencePath: "result.json", rawOcrText: "9 likes", ocrConfidence: 92, segments: [], diagnostics: [],
+      fields: {
+        like_count: { field: "like_count", value: 9, status: "verified", sourceMethod: "visual_ocr", rawText: "9 likes", confidence: 92, segmentIds: ["1"] },
+        comment_count: { field: "comment_count", value: null, status: "needs_attention", sourceMethod: "visual_ocr", rawText: "", confidence: null, segmentIds: [], failureReason: "UNRESOLVED_ROLE" },
+        share_count: { field: "share_count", value: null, status: "needs_attention", sourceMethod: "visual_ocr", rawText: "", confidence: null, segmentIds: [], failureReason: "UNRESOLVED_ROLE" },
+      },
+    },
   });
   assert.equal(passRow.status, "PASS");
   const authorField = passRow.fields.find((f) => f.variableKey === "author");
@@ -979,6 +987,7 @@ test("evaluateMatchedParentDom returns PASS, REVIEW, or FAILED without reusing p
   assert.equal(authorField?.value, "Anh Tho");
   assert.notEqual(authorField?.value, "OLD_SAMPLE_PREVIEW_AUTHOR");
   assert.equal(likeField?.value, "9");
+  assert.equal(likeField?.method, "VISUAL_OCR");
 
   const failedRow = evaluateMatchedParentDom({
     url: "https://www.facebook.com/groups/g/posts/101/",

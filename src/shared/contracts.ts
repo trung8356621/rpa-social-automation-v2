@@ -543,6 +543,7 @@ export type Command =
   | { type: "postDetailSetActionDebug"; visible: boolean }
   | { type: "postDetailConfirmParent"; input: PostDetailParentConfirmation }
   | { type: "postDetailResolveSavedParent"; config: PostDetailParentConfig }
+  | { type: "postDetailCaptureEngagement"; runId: string; postId: string; config: PostDetailParentConfig }
   | { type: "postDetailHighlightParentNode"; path: number[] }
   | { type: "postDetailClearParentNodeHighlight" }
   | { type: "postDetailClearParentHighlight" }

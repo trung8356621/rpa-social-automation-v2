@@ -171,6 +171,7 @@ export function evaluateMatchedParentDom(opts: {
   mappings: PostDetailDomVariableMapping[];
   registryVariables: RegistryVariableOption[];
   parentConfig?: import("../../shared/post-detail-collector/types").PostDetailParentConfig;
+  engagementResult?: import("../../shared/post-detail-collector/types").PostDetailEngagementOcrResult;
 }): BatchValidationRow {
   const now = new Date().toISOString();
   const { url, resolvedUrl, postId, resolution, rootElement, mappings, registryVariables } = opts;
@@ -211,11 +212,17 @@ export function evaluateMatchedParentDom(opts: {
     const varKey = `${mapping.collectorId}:${mapping.variableId}`;
     mappedVarKeys.add(varKey);
     const varMeta = varMetaById.get(varKey);
-    const executed = executeVariableMapping(rootElement, mapping, {
+    let executed = executeVariableMapping(rootElement, mapping, {
       postId: postId || undefined,
       currentUrl: resolvedUrl || url,
       domAnchors: opts.parentConfig?.domAnchors,
     });
+    if (mapping.sourceSemantic === "like_count" || mapping.sourceSemantic === "comment_count" || mapping.sourceSemantic === "share_count") {
+      const field = opts.engagementResult?.postId === postId ? opts.engagementResult.fields[mapping.sourceSemantic] : undefined;
+      executed = field?.status === "verified" && field.value !== null
+        ? { mapping, value: String(field.value), status: "mapped" }
+        : { mapping, value: "", status: field ? "needs_attention" : "missing", reason: field?.failureReason || (opts.engagementResult ? "Engagement OCR unresolved" : "Not Extracted") };
+    }
 
     const semanticMatch = mapping.sourceSemantic
       ? semanticItems.find((item) => item.semanticField === mapping.sourceSemantic)
@@ -252,7 +259,7 @@ export function evaluateMatchedParentDom(opts: {
       required: Boolean(varMeta?.required),
       value: executed.value,
       values: parsedValues,
-      method: mapping.method,
+      method: mapping.sourceSemantic?.endsWith("_count") ? "VISUAL_OCR" : mapping.method,
       attribute: mapping.attribute,
       relativeXPath: mapping.relativeXPath,
       status: passed ? "PASS" : "REVIEW",

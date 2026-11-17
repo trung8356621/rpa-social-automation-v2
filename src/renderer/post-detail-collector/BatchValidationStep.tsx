@@ -3,6 +3,7 @@ import { playCompletionSound } from "../completion-sound";
 import type {
   PostDetailParentConfig,
   PostDetailSavedParentResolution,
+  PostDetailEngagementOcrResult,
 } from "../../shared/post-detail-collector/types";
 import { shouldRetrySavedParentResolution } from "./auto-resume";
 import {
@@ -266,6 +267,7 @@ export function BatchValidationStep({
   batchResults,
   batchConfigVersion,
   batchValidatedVersion,
+  engagementResults,
   onBatchUrlsText,
   onBatchResults,
   onVariableMappings,
@@ -281,6 +283,7 @@ export function BatchValidationStep({
   batchResults: BatchValidationRow[];
   batchConfigVersion: number;
   batchValidatedVersion: number | null;
+  engagementResults: Record<string, PostDetailEngagementOcrResult>;
   onBatchUrlsText: (text: string) => void;
   onBatchResults: (rows: BatchValidationRow[], validatedVersion: number) => void;
   onVariableMappings: (mappings: PostDetailDomVariableMapping[]) => void;
@@ -414,6 +417,7 @@ export function BatchValidationStep({
           mappings: variableMappings,
           registryVariables,
           parentConfig: config,
+          engagementResult: item.postId ? engagementResults[item.postId] : undefined,
         });
         collected.push(row);
         onBatchResults([...collected], runVersion);
@@ -538,6 +542,7 @@ export function BatchValidationStep({
           mappings: variableMappings,
           registryVariables: listRegistryVariables(),
           parentConfig: config,
+          engagementResult: row.postId ? engagementResults[row.postId] : undefined,
         });
         const differences = row.fields.flatMap((f) => {
           const liveF = liveEval.fields.find((lf) => lf.variableId === f.variableId);
@@ -573,6 +578,9 @@ export function BatchValidationStep({
         invoke={invoke}
         result={reviewResolution}
         currentUrl={reviewRow.resolvedUrl || reviewRow.url}
+        runId={engagementResults[reviewRow.postId || ""]?.runId || null}
+        engagementResult={engagementResults[reviewRow.postId || ""]}
+        onEngagementResult={() => { /* Detail Review consumes the persisted Step 3 snapshot. */ }}
         parentConfig={parentConfigs[extractPostIdentityFromUrl(reviewRow.resolvedUrl || reviewRow.url).platform || "facebook"]}
         variableMappings={variableMappings}
         onVariableMappings={onVariableMappings}

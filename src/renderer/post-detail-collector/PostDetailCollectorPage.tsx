@@ -620,6 +620,9 @@ export function PostDetailCollectorPage({ invoke, state: parentState }: { invoke
             invoke={invoke}
             result={state.savedParentResolution}
             currentUrl={state.sourceUrl || state.browserUrl}
+            runId={state.runId}
+            engagementResult={state.engagementResults[String(state.savedParentResolution?.diagnosticMeta?.postId || extractPostIdentityFromUrl(state.sourceUrl || state.browserUrl).postId || "current-post")]}
+            onEngagementResult={(engagementResult) => updateStore((prev) => ({ engagementResults: { ...prev.engagementResults, [engagementResult.postId]: { ...engagementResult, previewDataUrl: undefined } }, batchConfigVersion: (prev.batchConfigVersion ?? 1) + 1 }))}
             parentConfig={state.parentConfigs[extractPostIdentityFromUrl(state.sourceUrl || state.browserUrl).platform || "facebook"]}
             variableMappings={state.variableMappings}
             onVariableMappings={(variableMappings) =>
@@ -646,6 +649,7 @@ export function PostDetailCollectorPage({ invoke, state: parentState }: { invoke
             batchResults={state.batchResults}
             batchConfigVersion={state.batchConfigVersion}
             batchValidatedVersion={state.batchValidatedVersion}
+            engagementResults={state.engagementResults}
             onBatchUrlsText={(batchUrlsText) => updateStore({ batchUrlsText })}
             onBatchResults={(batchResults, batchValidatedVersion) =>
               updateStore({ batchResults, batchValidatedVersion })

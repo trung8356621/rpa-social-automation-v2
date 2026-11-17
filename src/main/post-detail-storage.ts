@@ -83,6 +83,17 @@ export class PostDetailRunStorage {
     return target;
   }
 
+  async saveEngagementOcr(input: { runId: string; postId: string; crop?: Buffer; evidence: Record<string, unknown> }): Promise<{ cropPath?: string; evidencePath: string }> {
+    const safePostId = input.postId.replace(/[^0-9A-Za-z_-]/g, "_").slice(0, 120) || "unknown";
+    const dir = path.join(this.getRunDir(input.runId), "engagement-ocr", safePostId);
+    await mkdir(dir, { recursive: true });
+    const cropPath = path.join(dir, "engagement.png");
+    const evidencePath = path.join(dir, "result.json");
+    if (input.crop) await writeFileAtomic(cropPath, input.crop);
+    await writeFileAtomic(evidencePath, JSON.stringify(input.evidence, null, 2));
+    return { cropPath: input.crop ? cropPath : undefined, evidencePath };
+  }
+
   /**
    * Persist Step 2 Auto Scan evidence without writing final OCR `manifest.json`.
    * Never overwrites an existing auto-scan-manifest for the same runId.

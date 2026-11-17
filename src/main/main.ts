@@ -19,6 +19,7 @@ import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import sharp from "sharp";
+import { classifyEngagementOcr } from "../shared/post-detail-collector/engagement-ocr.js";
 import { randomUUID } from "node:crypto";
 import { promoteScriptDemoFiles } from "./script-demo-store.js";
 import { applyAdminBackup, createAdminBackup, inspectAdminBackup } from "./admin-backup.js";
@@ -2240,6 +2241,44 @@ async function boot() {
       case "postDetailResolveSavedParent": {
         isIdle();
         return browser.view.webContents.executeJavaScript(buildResolveSavedParentJs(command.config), true);
+      }
+      case "postDetailCaptureEngagement": {
+        isIdle();
+        const wc = browser.view.webContents;
+        if (!wc || wc.isDestroyed()) throw new Error("BROWSER_CORE_UNAVAILABLE");
+        const liveResolution = await wc.executeJavaScript(buildResolveSavedParentJs(command.config), true) as { status: string; failureCode?: string; diagnostics?: string[] };
+        if (liveResolution.status !== "PARENT_MATCHED") throw new Error(liveResolution.failureCode || liveResolution.diagnostics?.[0] || "PARENT_NOT_MATCHED");
+        const geometry = await wc.executeJavaScript(`(()=>{const parent=window.__rpaPdcSavedParent,row=window.__rpaPdcSavedActionRow;if(!parent?.isConnected||!row?.isConnected||!parent.contains(row))return{ok:false,reason:'PARENT_RUNTIME_MISSING'};const p=parent.getBoundingClientRect(),r=row.getBoundingClientRect(),vw=innerWidth,vh=innerHeight;if(r.bottom<=0||r.top>=vh||r.right<=0||r.left>=vw)return{ok:false,reason:'ENGAGEMENT_OUTSIDE_VIEWPORT',rowRect:{x:r.x,y:r.y,width:r.width,height:r.height}};const x=Math.max(0,Math.floor(p.left)),right=Math.min(vw,Math.ceil(p.right)),y=Math.max(0,Math.floor(Math.max(p.top,r.top-160))),bottom=Math.min(vh,Math.ceil(r.bottom+8));if(right-x<80||bottom-y<20)return{ok:false,reason:'NO_COUNT_REGION',rowRect:{x:r.x,y:r.y,width:r.width,height:r.height}};const actionRects=Array.from(row.querySelectorAll('svg,[role=img],button,[role=button]')).map(el=>el.getBoundingClientRect()).filter(b=>b.width>2&&b.height>2).map(b=>({x:b.x-x,y:b.y-y,width:b.width,height:b.height}));return{ok:true,rect:{x,y,width:right-x,height:bottom-y},actionRects,rowRect:{x:r.x-x,y:r.y-y,width:r.width,height:r.height}}})()`, true) as { ok: boolean; reason?: string; rect?: { x: number; y: number; width: number; height: number }; actionRects?: Array<{ x: number; y: number; width: number; height: number }>; rowRect?: { x: number; y: number; width: number; height: number } };
+        if (!geometry.ok || !geometry.rect) {
+          const capturedAt = new Date().toISOString();
+          const unavailable = (field: "like_count" | "comment_count" | "share_count") => ({ field, value: null, status: "unavailable" as const, sourceMethod: "visual_ocr" as const, rawText: "", confidence: null, segmentIds: [], failureReason: geometry.reason || "NO_COUNT_REGION" });
+          const fields = { like_count: unavailable("like_count"), comment_count: unavailable("comment_count"), share_count: unavailable("share_count") };
+          const evidence = { postId: command.postId, runId: command.runId, captureId: "", capturedAt, status: "NO_COUNT_REGION", cropRect: null, rowRect: geometry.rowRect, rawOcrText: "", ocrConfidence: 0, segments: [], fields, diagnostics: [geometry.reason || "NO_COUNT_REGION"] };
+          const saved = await postDetailStorage.saveEngagementOcr({ runId: command.runId, postId: command.postId, evidence });
+          return { ...evidence, evidencePath: saved.evidencePath };
+        }
+        const capture = await visualMatchLab.capture();
+        if (capture.webContentsId !== wc.id) throw new Error("WRONG_BROWSER_INSTANCE");
+        const match = /^data:image\/[a-z0-9.+-]+;base64,(.+)$/iu.exec(capture.dataUrl);
+        if (!match) throw new Error("CAPTURE_IMAGE_INVALID");
+        const source = Buffer.from(match[1], "base64");
+        const metadata = await sharp(source).metadata();
+        const scaleX = (metadata.width || capture.width) / capture.viewport.width;
+        const scaleY = (metadata.height || capture.height) / capture.viewport.height;
+        const cropRect = { left: Math.max(0, Math.floor(geometry.rect.x * scaleX)), top: Math.max(0, Math.floor(geometry.rect.y * scaleY)), width: Math.max(4, Math.floor(geometry.rect.width * scaleX)), height: Math.max(4, Math.floor(geometry.rect.height * scaleY)) };
+        cropRect.width = Math.min(cropRect.width, (metadata.width || capture.width) - cropRect.left);
+        cropRect.height = Math.min(cropRect.height, (metadata.height || capture.height) - cropRect.top);
+        const crop = await sharp(source).extract(cropRect).png().toBuffer();
+        const ocr = await localOcr.recognize(crop);
+        const actionRects = (geometry.actionRects || []).map(rect => ({ x: rect.x * scaleX, y: rect.y * scaleY, width: rect.width * scaleX, height: rect.height * scaleY }));
+        const classified = classifyEngagementOcr({ ocr, actionRects, cropHeight: cropRect.height });
+        const capturedAt = new Date().toISOString();
+        const verified = Object.values(classified.fields).filter(field => field.status === "verified").length;
+        const hasNumericText = ocr.segments.some(segment => /^\s*\d+(?:[.,]\d+)?\s*[kmb]?\s*$/iu.test(segment.text));
+        const status = verified === 3 ? "VERIFIED" : hasNumericText ? "NEEDS_ATTENTION" : "NO_COUNT_REGION";
+        const evidence = { postId: command.postId, runId: command.runId, captureId: capture.id, capturedAt, status, cropRect: geometry.rect, actionRects, rowRect: geometry.rowRect, ocr, fields: classified.fields, diagnostics: classified.diagnostics };
+        const saved = await postDetailStorage.saveEngagementOcr({ runId: command.runId, postId: command.postId, crop, evidence });
+        return { postId: command.postId, runId: command.runId, captureId: capture.id, capturedAt, status, cropRect: geometry.rect, cropPath: saved.cropPath, evidencePath: saved.evidencePath, rawOcrText: ocr.text, ocrConfidence: ocr.confidence, segments: ocr.segments, fields: classified.fields, diagnostics: classified.diagnostics, previewDataUrl: `data:image/png;base64,${crop.toString("base64")}` };
       }
       case "postDetailHighlightParentNode": {
         isIdle();

@@ -520,3 +520,32 @@ export type PostDetailSavedParentResolution = {
   resolvedDomAnchors?: PostDetailParentConfig["domAnchors"];
   diagnostics: string[];
 };
+
+export type EngagementFieldName = "like_count" | "comment_count" | "share_count";
+export type EngagementOcrField = {
+  field: EngagementFieldName;
+  value: number | null;
+  status: "verified" | "needs_attention" | "unavailable";
+  sourceMethod: "visual_ocr";
+  rawText: string;
+  confidence: number | null;
+  segmentIds: string[];
+  failureReason?: string;
+};
+export type PostDetailEngagementOcrResult = {
+  postId: string;
+  runId: string;
+  captureId: string;
+  capturedAt: string;
+  status: "VERIFIED" | "NEEDS_ATTENTION" | "NO_COUNT_REGION";
+  cropRect: Rect | null;
+  cropPath?: string;
+  evidencePath: string;
+  rawOcrText: string;
+  ocrConfidence: number;
+  segments: import("../contracts.js").OcrSegment[];
+  fields: Record<EngagementFieldName, EngagementOcrField>;
+  diagnostics: string[];
+  /** Transient renderer preview; never persisted in localStorage. */
+  previewDataUrl?: string;
+};

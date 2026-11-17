@@ -7,6 +7,7 @@ import type {
   PostDetailParentConfig,
   PostDetailDomAnchorRecord,
   PostDetailSavedParentResolution,
+  PostDetailEngagementOcrResult,
   PostDetailScanFrame,
   PostDetailStep,
   VisualReferenceSample,
@@ -81,6 +82,7 @@ export type PostDetailCollectorState = {
   htmlExtraction: PostDetailHtmlExtractionResult | null;
   parentConfigs: Record<string, PostDetailParentConfig>;
   savedParentResolution: PostDetailSavedParentResolution | null;
+  engagementResults: Record<string, PostDetailEngagementOcrResult>;
   variableMappings: PostDetailDomVariableMapping[];
   hiddenExtractedData: Record<string, string[]>;
   batchUrlsText: string;
@@ -124,6 +126,7 @@ export type BatchValidationRow = {
 };
 
 export type PostDetailExtractionMethod =
+  | "VISUAL_OCR"
   | "DOM_TEXT"
   | "DOM_ATTRIBUTE"
   | "DOM_ATTRIBUTE_REF_TEXT"
