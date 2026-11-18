@@ -1,7 +1,12 @@
-import React, { useEffect, useState } from "react";
+import React, { useEffect, useRef, useState } from "react";
 import { UiPopover } from "./ui-popover";
 import type { AppPage, Command, Flow, State } from "../shared/contracts";
 import type { ScriptSyncRow } from "../shared/sync-status";
+import {
+  applyActionTagsToState,
+  formatActionTagsRefreshStatus,
+  refreshActionTagsFromSeoOps,
+} from "./action-tags-refresh";
 import { SeoOpsSyncControls, scriptVersionLabel, type SeoOpsSessionState } from "./seo-ops-panel";
 import { ScriptHealthPanel } from "./script-health-panel";
 
@@ -98,11 +103,39 @@ export function ScenariosPage({ state, name, setName, locked, open, create, quic
   const [importResult, setImportResult] = useState<{ status: string; token?: string; message?: string;
     counts?: BackupResult["counts"]; hasExistingData?: boolean; rollbackPath?: string }>();
   const [syncRows, setSyncRows] = useState<ScriptSyncRow[]>([]);
+  const [tagRefreshStatus, setTagRefreshStatus] = useState("");
+  const [tagRefreshing, setTagRefreshing] = useState(false);
+  const tagRefreshGen = useRef(0);
+  const selectedTagKeyRef = useRef(selectedTagKey);
+  selectedTagKeyRef.current = selectedTagKey;
   const disabled = locked || working;
 
   const actionTags = state?.actionTags ?? [];
   const flows = state?.flows ?? [];
   const activeScriptsByTag = state?.activeScriptsByTag ?? {};
+
+  async function refreshTags(force = false) {
+    if (!invoke || !onState) return;
+    const gen = ++tagRefreshGen.current;
+    setTagRefreshing(true);
+    try {
+      const result = await refreshActionTagsFromSeoOps(invoke, { force });
+      if (gen !== tagRefreshGen.current) return;
+      const next = applyActionTagsToState(state, result.tags, result.state);
+      if (next) onState(next);
+      // Keep create-dialog selection if the tag still exists.
+      const keep = selectedTagKeyRef.current;
+      if (keep && !result.tags.some(t => t.tag_key === keep)) {
+        /* leave selection; option may reappear after later refresh */
+      }
+      setTagRefreshStatus(formatActionTagsRefreshStatus(result));
+    } catch (e) {
+      if (gen !== tagRefreshGen.current) return;
+      setTagRefreshStatus(`Không làm mới được Tag: ${String((e as Error).message || e)}`);
+    } finally {
+      if (gen === tagRefreshGen.current) setTagRefreshing(false);
+    }
+  }
 
   useEffect(() => {
     if (!invoke) return;
@@ -110,6 +143,12 @@ export function ScenariosPage({ state, name, setName, locked, open, create, quic
       .then((r) => setSyncRows(r.rows))
       .catch(() => undefined);
   }, [invoke, seoOpsSession?.authenticated, state?.flows]);
+
+  useEffect(() => {
+    if (!invoke || !seoOpsSession?.authenticated) return;
+    void refreshTags(false);
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- refresh when Scripts page mounts / auth flips
+  }, [invoke, seoOpsSession?.authenticated]);
 
   async function apply(command: Command, close = false) {
     if (disabled) return;
@@ -219,6 +258,14 @@ export function ScenariosPage({ state, name, setName, locked, open, create, quic
 
     <div className="scenario-toolbar">
       <button className="primary" disabled={disabled} onClick={() => handleStartCreate()}>+ Script</button>
+      <button
+        type="button"
+        disabled={disabled || tagRefreshing || !invoke}
+        title="Làm mới Action Tags từ SEO-OPS (không sync Script)"
+        onClick={() => void refreshTags(true)}
+      >
+        {tagRefreshing ? "Đang làm mới Tags…" : "↻ Tags"}
+      </button>
       <button className="primary" disabled={disabled || !invoke} onClick={() => {
         if (!invoke) return; setWorking(true); setBackupResult({ status: "working", message: "Đang đóng gói và xác minh Full Backup…" });
         void invoke<BackupResult>({ type: "exportFullBackup" })
@@ -233,6 +280,7 @@ export function ScenariosPage({ state, name, setName, locked, open, create, quic
           .finally(() => setWorking(false));
       }}>Import Full Backup (.zip)</button>
       {sessionControl}
+      {tagRefreshStatus && <small role="status" style={{ color: "#8c9ba8" }}>{tagRefreshStatus}</small>}
       {invoke && (
         <SeoOpsSyncControls
           locked={disabled}
@@ -518,22 +566,37 @@ export function ScenariosPage({ state, name, setName, locked, open, create, quic
                 <code style={{ color: "#68d6a6", fontSize: 13 }}>{dialog.tagKey}</code>
               </div>
             </div>
-          ) : actionTags.length > 0 ? (
-            <label>
-              Action Tag
-              <select
-                disabled={working}
-                value={selectedTagKey}
-                onChange={e => setSelectedTagKey(e.target.value)}
-                style={{ width: "100%", marginTop: 4 }}
-              >
-                {actionTags.map(t => (
-                  <option key={t.tag_key} value={t.tag_key}>{t.tag_key} {t.name ? `(${t.name})` : ""}</option>
-                ))}
-              </select>
-            </label>
           ) : (
-            <p className="hint">Chưa có Tag từ SEO-OPS. Script sẽ được tạo ở trạng thái Chưa gắn Tag.</p>
+            <label>
+              <span style={{ display: "inline-flex", alignItems: "center", gap: 8 }}>
+                Action Tag
+                <button
+                  type="button"
+                  disabled={working || tagRefreshing || !invoke}
+                  title="Làm mới Tag từ SEO-OPS"
+                  onClick={() => void refreshTags(true)}
+                  style={{ fontSize: 11, padding: "1px 6px" }}
+                >
+                  {tagRefreshing ? "…" : "↻"}
+                </button>
+              </span>
+              {actionTags.length > 0 ? (
+                <select
+                  disabled={working}
+                  value={selectedTagKey}
+                  onFocus={() => { if (seoOpsSession?.authenticated) void refreshTags(false); }}
+                  onChange={e => setSelectedTagKey(e.target.value)}
+                  style={{ width: "100%", marginTop: 4 }}
+                >
+                  {actionTags.map(t => (
+                    <option key={t.tag_key} value={t.tag_key}>{t.tag_key} {t.name ? `(${t.name})` : ""}</option>
+                  ))}
+                </select>
+              ) : (
+                <p className="hint">Chưa có Tag từ SEO-OPS. Bấm ↻ để làm mới, hoặc tạo Script chưa gắn Tag.</p>
+              )}
+              {tagRefreshStatus && <small role="status" style={{ color: "#8c9ba8" }}>{tagRefreshStatus}</small>}
+            </label>
           )}
 
           <label>

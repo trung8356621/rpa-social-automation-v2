@@ -30,31 +30,67 @@ import {
 } from "../shared/geometry.js";
 import { validateVisualEnvironment } from "../shared/visual-environment.js";
 import { defaultNetworkSettings, validateNetworkSettings, type NetworkSettings } from "../shared/network-mode.js";
-export function validatePayload(p: Payload) {
-  if (
-    !p ||
-    ![
-      "CLICK_TARGET",
-      "CLICK_AND_TYPE",
-      "UPLOAD_FILE",
-      "QUICK_TAG",
-      "TYPE_ONLY",
-      "WAIT_VERIFY",
-      "SCROLL",
-      "SLEEP",
-    ].includes(p.action)
-  )
+const SUPPORTED_ACTIONS = [
+  "CLICK_TARGET",
+  "CLICK_AND_TYPE",
+  "UPLOAD_FILE",
+  "QUICK_TAG",
+  "TYPE_ONLY",
+  "WAIT_VERIFY",
+  "SCROLL",
+  "SLEEP",
+] as const;
+
+const TARGET_ACTIONS = [
+  "CLICK_TARGET",
+  "CLICK_AND_TYPE",
+  "UPLOAD_FILE",
+  "WAIT_VERIFY",
+  "QUICK_TAG",
+] as const;
+
+function validatePayloadInternal(p: Payload, allowDraft: boolean) {
+  if (!p || !(SUPPORTED_ACTIONS as readonly string[]).includes(p.action))
     throw new Error("Action không hỗ trợ.");
   if (p.action === "SLEEP" && p.target)
     throw new Error("SLEEP không dùng target.");
-  if (p.action === "QUICK_TAG" && (!p.variableId || !Number.isInteger(p.quickTagRows) || p.quickTagRows! < 1 || p.quickTagRows! > 20 || p.target?.ocr || !p.target?.environment || ![undefined, "none"].includes(p.target.matchTo)))
-    throw new Error("QUICK_TAG cần Variable Integer, ROI mới không OCR/scroll và số hàng 1–20.");
-  if (p.action === "UPLOAD_FILE" && !p.variableId)
+  if (p.action === "QUICK_TAG") {
+    if (!allowDraft) {
+      if (
+        !p.variableId ||
+        !Number.isInteger(p.quickTagRows) ||
+        p.quickTagRows! < 1 ||
+        p.quickTagRows! > 20 ||
+        p.target?.ocr ||
+        !p.target?.environment ||
+        ![undefined, "none"].includes(p.target.matchTo)
+      )
+        throw new Error(
+          "QUICK_TAG cần Variable Integer, ROI mới không OCR/scroll và số hàng 1–20.",
+        );
+    } else {
+      if (
+        p.quickTagRows !== undefined &&
+        (!Number.isInteger(p.quickTagRows) ||
+          p.quickTagRows < 1 ||
+          p.quickTagRows > 20)
+      )
+        throw new Error("QUICK_TAG cần số hàng 1–20.");
+      if (
+        p.target &&
+        (p.target.ocr ||
+          !p.target.environment ||
+          ![undefined, "none"].includes(p.target.matchTo))
+      )
+        throw new Error("QUICK_TAG cần ROI mới không OCR/scroll.");
+    }
+  }
+  if (p.action === "UPLOAD_FILE" && !p.variableId && (!allowDraft || p.files !== undefined))
     validateUploadFileList(p.files);
   if (
     ["TYPE_ONLY", "CLICK_AND_TYPE"].includes(p.action) &&
     !p.variableId &&
-    (!p.text || p.text.length > 20000)
+    (!allowDraft ? !p.text || p.text.length > 20000 : p.text !== undefined && p.text.length > 20000)
   )
     throw new Error("Action nhập liệu cần text, tối đa 20.000 ký tự.");
   if (
@@ -63,25 +99,27 @@ export function validatePayload(p: Payload) {
       !["keyboard", "clipboard"].includes(p.inputMethod))
   )
     throw new Error("Phương thức nhập không hợp lệ.");
+  const needsTarget = (TARGET_ACTIONS as readonly string[]).includes(p.action);
   if (
-    ["CLICK_TARGET", "CLICK_AND_TYPE", "UPLOAD_FILE", "WAIT_VERIFY", "QUICK_TAG"].includes(
-      p.action,
-    ) &&
+    needsTarget &&
+    !allowDraft &&
     (!p.target || !/^[a-f0-9-]+\.png$/.test(p.target.asset))
   )
     throw new Error("Action cần ảnh target được crop.");
-  if (
-    ["CLICK_TARGET", "CLICK_AND_TYPE", "UPLOAD_FILE", "WAIT_VERIFY", "QUICK_TAG"].includes(
-      p.action,
-    )
-  ) {
-    if (p.target!.environment) validateVisualEnvironment(p.target!.environment);
+  if (needsTarget && p.target) {
+    if (!/^[a-f0-9-]+\.png$/.test(p.target.asset))
+      throw new Error("Action cần ảnh target được crop.");
+    if (p.target.environment) validateVisualEnvironment(p.target.environment);
     validateRect(
-      p.target!.roi,
-      p.target!.environment?.width ?? WEB_WIDTH,
-      p.target!.environment?.height ?? WEB_HEIGHT,
+      p.target.roi,
+      p.target.environment?.width ?? WEB_WIDTH,
+      p.target.environment?.height ?? WEB_HEIGHT,
     );
-    if (p.action === "QUICK_TAG" && (p.target!.roi.width < 40 || p.target!.roi.height / p.quickTagRows! < 16))
+    if (
+      p.action === "QUICK_TAG" &&
+      p.quickTagRows &&
+      (p.target.roi.width < 40 || p.target.roi.height / p.quickTagRows < 16)
+    )
       throw new Error("QUICK_TAG: ROI rộng ít nhất 40px và mỗi hàng cao ít nhất 16px.");
   }
   if (p.method !== undefined && !["auto", "image", "ocr"].includes(p.method))
@@ -116,6 +154,7 @@ export function validatePayload(p: Payload) {
   }
   if (
     p.method === "ocr" &&
+    (!allowDraft || p.target) &&
     (!["CLICK_TARGET", "CLICK_AND_TYPE", "UPLOAD_FILE", "WAIT_VERIFY"].includes(
       p.action,
     ) ||
@@ -137,6 +176,15 @@ export function validatePayload(p: Payload) {
     (!Number.isFinite(p.threshold) || p.threshold < 0.8 || p.threshold > 1)
   )
     throw new Error("Threshold cần từ 0.8 đến 1.");
+}
+
+export function validatePayload(p: Payload) {
+  validatePayloadInternal(p, false);
+}
+
+/** Structural validation for Step drafts; incomplete target/variable is allowed and flagged in invalidSteps. */
+export function validateDraftPayload(p: Payload) {
+  validatePayloadInternal(p, true);
 }
 export class Store {
   readonly db: DatabaseSync;
@@ -270,7 +318,7 @@ export class Store {
           t.action_key ?? null,
           t.platform,
           t.target,
-          t.action,
+          t.action ?? "",
           t.name,
           t.description ?? null,
           t.base_url ?? null,
@@ -420,14 +468,16 @@ export class Store {
     }
     this.invalidStepRefs = found;
   }
-  private importLegacy(payload: Payload, f: Flow): Payload {
+  private importLegacy(payload: Payload, f: Flow, allowIncompleteDraft = false): Payload {
     const p = { ...payload };
     if (!["TYPE_ONLY", "CLICK_AND_TYPE", "UPLOAD_FILE"].includes(p.action))
       return p;
     if (!p.variableId) {
       const value = p.action === "UPLOAD_FILE" ? p.files : p.text;
-      if (value === undefined)
+      if (value === undefined) {
+        if (allowIncompleteDraft) return p;
         throw new Error("Legacy action missing text/files; migration aborted");
+      }
       const vars = (f.variables ??= []);
       let n = vars.length + 1;
       while (vars.some((v) => v.key === `legacy_${n}`)) n++;
@@ -735,11 +785,10 @@ export class Store {
     return JSON.parse(r.payload);
   }
   saveStep(name: string, payload: Payload, id?: string): Step {
-    validatePayload(payload);
+    validateDraftPayload(payload);
     const f = this.flow();
     if (!f) throw new Error("Tạo flow trước.");
-    payload = this.importLegacy(payload, f);
-    resolvePayload(payload, f);
+    payload = this.importLegacy(payload, f, true);
     if (id && !f.steps.some((s) => s.id === id))
       throw new Error("Step không thuộc flow đang mở.");
     const version = id

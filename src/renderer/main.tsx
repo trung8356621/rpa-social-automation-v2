@@ -17,6 +17,11 @@ import { PostDetailCollectorPage } from "./post-detail-collector/PostDetailColle
 import type { CollectorEditorHandle } from "./collectors/CollectorEditor";
 import { Variables, Groups } from "./flow-controls";
 import { SeoOpsAuthPanel, scriptVersionLabel, syncBadge, type SeoOpsSessionState } from "./seo-ops-panel";
+import {
+  applyActionTagsToState,
+  formatActionTagsRefreshStatus,
+  refreshActionTagsFromSeoOps,
+} from "./action-tags-refresh";
 import type { ScriptSyncRow } from "../shared/sync-status";
 import React, { useCallback, useEffect, useRef, useState } from "react";
 import { createRoot } from "react-dom/client";
@@ -216,12 +221,44 @@ function Creator() {
   useEffect(() => {
     if (["scenarios", "browser-sessions", "test-lab", "visual-match-lab", "settings", "variations", "widget-registry", "workflows", "builds-releases", "collectors", "collector-test-lab", "feed-item-collector", "post-detail-collector"].includes(appPage)) setMainPage(appPage as MainPage);
   }, [appPage]);
+  const [tagRefreshStatus, setTagRefreshStatus] = useState("");
+  const [tagRefreshing, setTagRefreshing] = useState(false);
+  const tagRefreshGen = useRef(0);
+
+  const refreshCreatorActionTags = useCallback(async (force = false) => {
+    if (!shell) return;
+    const gen = ++tagRefreshGen.current;
+    setTagRefreshing(true);
+    try {
+      const result = await refreshActionTagsFromSeoOps(
+        <T,>(command: Command) => window.creator.invoke(command) as Promise<T>,
+        { force },
+      );
+      if (gen !== tagRefreshGen.current) return;
+      setState((prev) => applyActionTagsToState(prev, result.tags, result.state) ?? prev);
+      setTagRefreshStatus(formatActionTagsRefreshStatus(result));
+      if (!result.ok && result.authRequired) {
+        setSeoOpsAuthenticated(false);
+      }
+    } catch (e) {
+      if (gen !== tagRefreshGen.current) return;
+      setTagRefreshStatus(`Không làm mới được Tag: ${String((e as Error).message || e)}`);
+    } finally {
+      if (gen === tagRefreshGen.current) setTagRefreshing(false);
+    }
+  }, [shell, setState]);
+
   useEffect(() => {
     if (!shell || !creatorVisible) return;
     void window.creator.invoke({ type: "seoOpsSyncStatus" })
       .then(result => setScriptSyncRows((result as { rows: ScriptSyncRow[] }).rows))
       .catch(() => undefined);
   }, [creatorVisible, seoOpsAuthenticated, state?.flow?.id, state?.flow?.steps]);
+
+  useEffect(() => {
+    if (!shell || !creatorVisible || !seoOpsAuthenticated) return;
+    void refreshCreatorActionTags(false);
+  }, [shell, creatorVisible, seoOpsAuthenticated, refreshCreatorActionTags]);
   useEffect(() => {
     if (!shell) return;
     void window.creator.invoke({ type: "seoOpsGetSession" }).then((session) => {
@@ -1151,13 +1188,62 @@ function Creator() {
     await loadStep(
       next.steps.find((s) => s.id === ref.id && s.version === ref.version)!, false,
     );
-    setMessage(`Đã lưu Base v${ref.version}; version cũ vẫn được giữ.`);
+    const isDraft = (next.invalidSteps ?? []).some(
+      (r) => r.stepId === ref.id && r.version === ref.version,
+    );
+    setMessage(
+      isDraft
+        ? `Đã lưu Draft v${ref.version} (chưa hoàn chỉnh — cần cấu hình đủ trước khi chạy).`
+        : `Đã lưu Base v${ref.version}; version cũ vẫn được giữ.`,
+    );
   }
   const expanded = shell ? editorExpanded : debugExpanded;
   const activePayload = overrideId
     ? state?.overrides.find((o) => o.id === overrideId)?.segment[0]
     : selectedBase?.payload;
-  function editableConfig(p: Payload) { return JSON.stringify(p); }
+  function normalizePayloadForCompare(p: Payload): Payload {
+    const copy: Payload = { action: p.action };
+    if (p.action === "SLEEP") {
+      if (p.sleepMs !== undefined) copy.sleepMs = p.sleepMs;
+      return copy;
+    }
+    if (p.action === "SCROLL") {
+      copy.deltaY = p.deltaY ?? -400;
+      return copy;
+    }
+    if (p.action === "TYPE_ONLY") {
+      if (p.variableId) copy.variableId = p.variableId;
+      else if (p.text !== undefined) copy.text = p.text;
+      copy.inputMethod = p.inputMethod ?? "keyboard";
+      return copy;
+    }
+    if (p.action === "QUICK_TAG") {
+      if (p.variableId) copy.variableId = p.variableId;
+      copy.quickTagRows = p.quickTagRows ?? 5;
+      if (p.target) copy.target = { ...p.target, ocr: undefined, matchTo: "none" };
+      return copy;
+    }
+    if (p.action === "UPLOAD_FILE") {
+      if (p.variableId) copy.variableId = p.variableId;
+      else if (p.files !== undefined) copy.files = p.files;
+      if (p.target) copy.target = { ...p.target, matchTo: effectiveMatchTo({ target: p.target }) };
+      copy.method = p.method ?? "auto";
+      copy.threshold = p.threshold ?? 0.96;
+      copy.timeoutMs = p.timeoutMs ?? 3000;
+      return copy;
+    }
+    if (p.action === "CLICK_AND_TYPE") {
+      if (p.variableId) copy.variableId = p.variableId;
+      else if (p.text !== undefined) copy.text = p.text;
+      copy.inputMethod = p.inputMethod ?? "keyboard";
+    }
+    if (p.target) copy.target = { ...p.target, matchTo: effectiveMatchTo({ target: p.target }) };
+    copy.method = p.method ?? "auto";
+    copy.threshold = p.threshold ?? 0.96;
+    copy.timeoutMs = p.timeoutMs ?? 3000;
+    return copy;
+  }
+  function editableConfig(p: Payload) { return JSON.stringify(normalizePayloadForCompare(p)); }
   const editorDirty = (ocrEdit !== undefined && ocrEdit.trim() !== target?.ocr?.text) || (selected
     ? name !== selectedBase?.name || editableConfig(payload()) !== editableConfig(selectedBase!.payload)
     : name !== "" || editableConfig(payload()) !== editableConfig({ action: "CLICK_TARGET" }));
@@ -1434,6 +1520,7 @@ function Creator() {
                     <select
                       value={state.flow.actionTagKey ?? ""}
                       disabled={locked}
+                      onFocus={() => { if (seoOpsAuthenticated) void refreshCreatorActionTags(false); }}
                       onChange={async (e) => {
                         const nextTag = e.target.value || undefined;
                         setState(await invoke<State>({
@@ -1454,6 +1541,20 @@ function Creator() {
                     </select>
                   ) : (
                     <code style={{ color: "#68d6a6" }}>{state.flow.actionTagKey || "Chưa gắn"}</code>
+                  )}
+                  <button
+                    type="button"
+                    disabled={locked || tagRefreshing}
+                    title="Làm mới Action Tags từ SEO-OPS (không sync Script)"
+                    onClick={() => void refreshCreatorActionTags(true)}
+                    style={{ fontSize: 11, padding: "0 5px", lineHeight: 1.4, border: "1px solid #444", borderRadius: 4, background: "transparent", color: "inherit", cursor: tagRefreshing ? "wait" : "pointer" }}
+                  >
+                    {tagRefreshing ? "…" : "↻"}
+                  </button>
+                  {tagRefreshStatus && (
+                    <span role="status" style={{ color: "#8b949e", maxWidth: 220, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }} title={tagRefreshStatus}>
+                      {tagRefreshStatus}
+                    </span>
                   )}
                 </span>
                 <span style={{ display: "inline-flex", alignItems: "center", gap: 4 }}>
@@ -1509,15 +1610,7 @@ function Creator() {
             <SessionSelector state={state} locked={locked || stepPlayback[activeStepId]?.status === "running"} select={selectSession} />
             <button
               className="primary"
-              disabled={
-                locked ||
-                !state?.flow ||
-                (needsTarget && !target) ||
-                (["UPLOAD_FILE", "TYPE_ONLY", "CLICK_AND_TYPE", "QUICK_TAG"].includes(
-                  action,
-                ) &&
-                  !variableId)
-              }
+              disabled={locked || !state?.flow}
               onClick={() => void task(saveBase)}
             >
               Save step
@@ -1897,6 +1990,8 @@ function Creator() {
                         setTargetImage("");
                         setOcrResult(undefined);
                         setOcrError("");
+                        setConfirmError("");
+                        setMessage("");
                       }}
                     >
                       <option>CLICK_TARGET</option>
@@ -2180,15 +2275,7 @@ function Creator() {
                     )}
                   <button
                     className="primary"
-                    disabled={
-                      locked ||
-                      !state?.flow ||
-                      (needsTarget && !target) ||
-                      (["UPLOAD_FILE", "TYPE_ONLY", "CLICK_AND_TYPE", "QUICK_TAG"].includes(
-                        action,
-                      ) &&
-                        !variableId)
-                    }
+                    disabled={locked || !state?.flow}
                     onClick={() => void task(saveBase)}
                   >
                     {selected

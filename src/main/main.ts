@@ -107,6 +107,7 @@ const postDetailBrowserCheck = process.argv.includes("--post-detail-browser-chec
 const engagementCaptureCheck = process.argv.includes("--engagement-capture-check");
 const creatorWorkspaceRestoreCheck = process.argv.includes("--creator-workspace-restore-check");
 const engagementOcrReplay = process.argv.includes("--engagement-ocr-replay");
+const qaIsolated = process.argv.includes("--qa-isolated");
 const phase =
   process.argv.find((a) => a.startsWith("--phase="))?.split("=")[1] || "first";
 // All mutable POC data stays inside new/.local; no access to old/.
@@ -133,6 +134,8 @@ const dataPath = path.join(
         ? `creator-workspace-restore-check-${process.pid}`
       : engagementCaptureCheck || engagementOcrReplay
         ? `engagement-capture-check-${process.pid}`
+      : qaIsolated
+        ? `qa-isolated-${process.pid}`
       : "creator",
 );
 app.setPath("userData", dataPath);
@@ -403,7 +406,9 @@ async function boot() {
                 : 47832
       : postDetailBrowserCheck
         ? 47838
-        : 47831,
+        : qaIsolated
+          ? 47841
+          : 47831,
   );
   const window = new BrowserWindow({
     useContentSize: true,
@@ -724,7 +729,8 @@ async function boot() {
       collectorHostActive: Boolean(overlays.collectorHost?.active),
     }),
     dataPath,
-    actionTags: store.actionTags().length > 0 ? store.actionTags() : seoOpsSync.getCachedActionTags(),
+    // SQLite + Script-Request gaps (so new tags appear even when /action-tags is rate-limited).
+    actionTags: seoOpsSync.getEffectiveActionTags(),
     scriptRequests: seoOpsSync.getCachedScriptRequests(),
     activeScriptsByTag: (() => {
       try { return JSON.parse(store.setting("activeScriptsByTag") || "{}"); }
@@ -1755,15 +1761,32 @@ async function boot() {
         return state();
       }
       case "seoOpsSyncActionTags": {
+        // Legacy IPC name: tag metadata only (no active-script / package sync).
         isIdle();
-        const syncResult = await seoOpsSync.syncActionTags();
+        const syncResult = await seoOpsSync.refreshActionTags({ force: true });
         return {
-          ...syncResult,
+          ok: syncResult.ok,
+          tags: syncResult.tags,
+          count: syncResult.count,
+          source: syncResult.source,
+          error: syncResult.ok ? undefined : syncResult.error,
+          authRequired: syncResult.ok ? undefined : syncResult.authRequired,
+          scriptsCount: 0,
           state: state(),
         };
       }
       case "seoOpsGetActionTags": {
-        return await seoOpsSync.fetchActionTags();
+        const result = await seoOpsSync.refreshActionTags({ force: true });
+        return result.tags;
+      }
+      case "seoOpsRefreshActionTags": {
+        const result = await seoOpsSync.refreshActionTags({
+          force: Boolean(command.force),
+        });
+        return {
+          ...result,
+          state: state(),
+        };
       }
       case "seoOpsGetScriptRequests": {
         return await seoOpsSync.fetchScriptRequests();

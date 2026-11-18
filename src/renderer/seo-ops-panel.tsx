@@ -22,6 +22,10 @@ export function seoOpsSyncAvailability(session: SeoOpsSessionState | undefined, 
   if (!session.authenticated) return { enabled: false, message: session.error
     ? mapSeoOpsAuthError(session.error)
     : "Chưa đăng nhập SEO-OPS. Mở Settings để kết nối." };
+  // Soft warnings (429 etc.) must not disable Sync / Làm mới Tags.
+  if (session.error && /giới hạn|rate.?limit|429|timeout|không kết nối/i.test(session.error)) {
+    return { enabled: true, message: session.error };
+  }
   return { enabled: true, message: "Đã kết nối SEO-OPS." };
 }
 
@@ -194,31 +198,38 @@ export function SeoOpsSyncControls({
     setBusy(true);
     setMessage("");
     try {
+      // Tag metadata only — never runs Script sync / active-script package download.
       const res = await invoke<{
         ok: boolean;
         count?: number;
         tags?: ActionTag[];
-        scriptsCount?: number;
+        source?: string;
         error?: string;
+        authRequired?: boolean;
         state?: State;
-      }>({ type: "seoOpsSyncActionTags" });
+      }>({ type: "seoOpsRefreshActionTags", force: true });
 
       if (res.ok) {
         const count = res.count ?? res.tags?.length ?? 0;
-        const scriptsCount = res.scriptsCount ?? 0;
-        const scriptMsg = scriptsCount > 0 ? `, ${scriptsCount} Active Script${scriptsCount > 1 ? "s" : ""}` : "";
-        setMessage(`Đồng bộ thành công: ${count} Action Tag${count > 1 ? "s" : ""}${scriptMsg}`);
+        setMessage(`Đã làm mới ${count} Action Tag từ SEO-OPS (chỉ metadata, không sync Script).`);
         if (res.tags && onSyncComplete) {
           onSyncComplete(res.tags, res.state);
         }
       } else {
-        setMessage(`Đồng bộ thất bại: ${res.error || "Không thể lấy Action Tags"}`);
-        if (/hết hạn|phiên|unauthenticated|token/i.test(res.error || "")) {
+        const viaRequests = (res.tags?.length ?? 0) > 0
+          ? ` — vẫn có ${res.tags!.length} Tag từ cache/Script Requests.`
+          : "";
+        setMessage(`Làm mới Tag thất bại: ${res.error || "Không thể lấy Action Tags"}${viaRequests}`);
+        // Always push enriched tags so Creator/Scripts update even under 429.
+        if (res.tags && onSyncComplete) {
+          onSyncComplete(res.tags, res.state);
+        }
+        if (res.authRequired) {
           await refreshSession().catch(() => undefined);
         }
       }
     } catch (e) {
-      setMessage(`Đồng bộ thất bại: ${mapSeoOpsAuthError(String((e as Error).message || e))}`);
+      setMessage(`Làm mới Tag thất bại: ${mapSeoOpsAuthError(String((e as Error).message || e))}`);
     } finally {
       setBusy(false);
     }
@@ -246,9 +257,13 @@ export function SeoOpsSyncControls({
       const prefix = s && (s.blocked > 0 || s.failed > 0) ? "Sync Scripts hoàn tất một phần" : "Sync Scripts hoàn tất";
       setMessage(s ? `${prefix}: ${s.published} published, ${s.downloaded} pulled, ${s.unchanged} unchanged, ${s.blocked} blocked, ${s.failed} failed`
         : `Sync Scripts xong: ${result.results.length} mục`);
+      // syncAll already warmed tags; force:false avoids a second /action-tags hit (429).
       if (onSyncComplete) {
-        const tags = await invoke<ActionTag[]>({ type: "seoOpsGetActionTags" }).catch(() => undefined);
-        if (Array.isArray(tags)) onSyncComplete(tags);
+        const tagRefresh = await invoke<{ tags?: ActionTag[]; state?: State }>({
+          type: "seoOpsRefreshActionTags",
+          force: false,
+        }).catch(() => undefined);
+        if (Array.isArray(tagRefresh?.tags)) onSyncComplete(tagRefresh.tags, tagRefresh.state);
       }
     } catch (e) {
       setMessage(mapSeoOpsAuthError(String((e as Error).message || e)));
@@ -286,14 +301,17 @@ export function SeoOpsSyncControls({
       </button>
       <button
         disabled={!availability.enabled || busy}
-        title={availability.enabled ? "Đồng bộ Action Tags từ SEO-OPS" : availability.message}
+        title={availability.enabled ? "Làm mới danh sách Action Tags từ SEO-OPS (không sync Script)" : availability.message}
         onClick={() => void runTagSync()}
       >
-        {busy ? "Đang đồng bộ…" : "Đồng bộ Tags"}
+        {busy ? "Đang làm mới Tags…" : "Làm mới Tags"}
       </button>
       {!availability.enabled && <small role="status">{availability.message} {reconnect && !locked && !busy &&
         <button type="button" onClick={currentSession?.error && !/expired|hết hạn|unauthenticated/i.test(currentSession.error)
           ? () => void refreshSession() : reconnect}>{currentSession?.error ? "Kết nối lại" : "Mở Settings"}</button>}</small>}
+      {availability.enabled && currentSession?.error && /giới hạn|rate.?limit|429/i.test(currentSession.error) && (
+        <small role="status">{currentSession.error}</small>
+      )}
       {message && <small role="status">{message}</small>}
       {rows.length > 0 && (
         <details className="seo-ops-sync-summary">

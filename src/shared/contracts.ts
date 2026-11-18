@@ -175,9 +175,11 @@ export type ActionTag = {
   tag_key: string;
   site_key?: string;
   path_key?: string;
-  action_key?: string;
+  /** Null/omitted for two-part tags such as mayhopphat.login. */
+  action_key?: string | null;
   platform: string;
   target: string;
+  /** Empty string allowed for two-part tags that have no third segment. */
   action: string;
   name: string;
   description?: string;
@@ -468,6 +470,8 @@ export type Command =
   | { type: "createScriptFromRequest"; requestId: string }
   | { type: "seoOpsSyncActionTags" }
   | { type: "seoOpsGetActionTags" }
+  /** Tag-only refresh from SEO-OPS (no script package / active-script sync). */
+  | { type: "seoOpsRefreshActionTags"; force?: boolean }
   | { type: "seoOpsGetScriptRequests" }
   | { type: "openFlow"; id: string }
   | { type: "targetImage"; asset: string }

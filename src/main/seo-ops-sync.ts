@@ -3,6 +3,14 @@ import { existsSync } from "node:fs";
 import { access, mkdir, readFile, rename, unlink, writeFile } from "node:fs/promises";
 import path from "node:path";
 import type { Flow, Step, ActionTag, ScriptRequest } from "../shared/contracts.js";
+import {
+  ACTION_TAGS_RATE_LIMIT_COOLDOWN_MS,
+  ACTION_TAGS_STALE_MS,
+  mergeActionTagsWithRequests,
+  normalizeActionTag,
+  normalizeActionTags,
+  type ActionTagsRefreshResult,
+} from "../shared/action-tags.js";
 import { slugify } from "../shared/flow-model.js";
 import {
   buildScriptCatalogSnapshot,
@@ -46,7 +54,9 @@ import {
   mapSeoOpsApiError,
   mapSeoOpsApiErrors,
   readSeoOpsJson,
+  retryAfterSeconds,
   seoOpsFetch,
+  SeoOpsHttpError,
   SEO_OPS_DEFAULT_BASE_URL,
 } from "../shared/seo-ops-http.js";
 import { isLegacyPublishedScriptVersion, parsePublishedScriptVersion } from "../shared/script-version.js";
@@ -119,6 +129,7 @@ export function createSeoOpsSyncService(options: {
   const testRunsDir = options.testRunsDir || (dataPath ? path.join(dataPath, "test-runs") : undefined);
   const installationId = store.setting("seoOpsInstallationId") || randomUUID();
   if (!store.setting("seoOpsInstallationId")) store.setSetting("seoOpsInstallationId", installationId);
+  let actionTagsRefreshInFlight: Promise<ActionTagsRefreshResult> | null = null;
 
   function config(): SeoOpsConfig {
     const raw = store.setting("seoOpsBaseUrl");
@@ -306,9 +317,10 @@ export function createSeoOpsSyncService(options: {
       if (!body || !Array.isArray((body as { action_tags?: unknown[] }).action_tags)) {
         return { ok: false, error: "Dữ liệu trả về từ SEO-OPS không có danh sách Action Tags." };
       }
-      const tags = (body as { action_tags: ActionTag[] }).action_tags;
+      const tags = normalizeActionTags((body as { action_tags: unknown[] }).action_tags);
       store.upsertActionTags(tags);
       store.setSetting("seoOpsActionTags", JSON.stringify(tags));
+      store.setSetting("seoOpsActionTagsFetchedAt", new Date().toISOString());
 
       let activeScripts: Array<Record<string, unknown>> = [];
       try {
@@ -600,44 +612,15 @@ export function createSeoOpsSyncService(options: {
     }
   }
 
-  async function fetchActionTags(): Promise<ActionTag[]> {
-    try {
-      const body = await adminApi("/action-tags");
-      if (body && Array.isArray((body as { action_tags?: unknown[] }).action_tags)) {
-        const tags = (body as { action_tags: ActionTag[] }).action_tags;
-        store.upsertActionTags(tags);
-        store.setSetting("seoOpsActionTags", JSON.stringify(tags));
-        return tags;
-      }
-    } catch {
-      /* offline / unauthenticated fallback */
-    }
-    return getCachedActionTags();
-  }
-
   function getCachedActionTags(): ActionTag[] {
     try {
       const dbTags = store.actionTags();
       if (dbTags.length > 0) return dbTags;
-      return JSON.parse(store.setting("seoOpsActionTags") || "[]") as ActionTag[];
+      const fromSettings = JSON.parse(store.setting("seoOpsActionTags") || "[]") as unknown[];
+      return normalizeActionTags(Array.isArray(fromSettings) ? fromSettings : []);
     } catch {
       return [];
     }
-  }
-
-  async function fetchScriptRequests(status?: string): Promise<ScriptRequest[]> {
-    try {
-      const q = status ? `?status=${encodeURIComponent(status)}` : "";
-      const body = await adminApi(`/script-requests${q}`);
-      if (body && Array.isArray((body as { script_requests?: unknown[] }).script_requests)) {
-        const requests = (body as { script_requests: ScriptRequest[] }).script_requests;
-        store.setSetting("seoOpsScriptRequests", JSON.stringify(requests));
-        return requests;
-      }
-    } catch {
-      /* offline / unauthenticated fallback */
-    }
-    return getCachedScriptRequests();
   }
 
   function getCachedScriptRequests(): ScriptRequest[] {
@@ -648,6 +631,214 @@ export function createSeoOpsSyncService(options: {
     }
   }
 
+  /** SQLite tags + gaps filled from Script Requests (so Creator sees mayhopphat.login etc.). */
+  function getEffectiveActionTags(): ActionTag[] {
+    return mergeActionTagsWithRequests(getCachedActionTags(), getCachedScriptRequests());
+  }
+
+  function actionTagsFetchedAt(): number {
+    const raw = store.setting("seoOpsActionTagsFetchedAt");
+    if (!raw) return 0;
+    const ms = Date.parse(raw);
+    return Number.isFinite(ms) ? ms : 0;
+  }
+
+  function areActionTagsStale(maxAgeMs = ACTION_TAGS_STALE_MS): boolean {
+    const fetched = actionTagsFetchedAt();
+    if (!fetched) return true;
+    return Date.now() - fetched > maxAgeMs;
+  }
+
+  function rateLimitUntilMs(): number {
+    const raw = store.setting("seoOpsActionTagsRateLimitedUntil");
+    if (!raw) return 0;
+    const ms = Date.parse(raw);
+    return Number.isFinite(ms) ? ms : 0;
+  }
+
+  function markActionTagsRateLimited(retrySec?: number): void {
+    const waitMs = Math.max(
+      ACTION_TAGS_RATE_LIMIT_COOLDOWN_MS,
+      (typeof retrySec === "number" && retrySec > 0 ? retrySec : 60) * 1000,
+    );
+    store.setSetting("seoOpsActionTagsRateLimitedUntil", new Date(Date.now() + waitMs).toISOString());
+  }
+
+  function clearActionTagsRateLimit(): void {
+    store.setSetting("seoOpsActionTagsRateLimitedUntil", "");
+  }
+
+  function persistActionTags(tags: ActionTag[]): void {
+    store.upsertActionTags(tags);
+    store.setSetting("seoOpsActionTags", JSON.stringify(tags));
+    store.setSetting("seoOpsActionTagsFetchedAt", new Date().toISOString());
+    clearActionTagsRateLimit();
+  }
+
+  /** Persist only request tags that carry a real SEO-OPS action_tag_id (never synthetic ids). */
+  function upsertTagsFromScriptRequests(requests: ScriptRequest[]): number {
+    const existingKeys = new Set(getCachedActionTags().map((t) => t.tag_key));
+    const toUpsert: ActionTag[] = [];
+    for (const req of requests) {
+      const tagKey = String(req.action_tag_key ?? "").trim();
+      if (!tagKey || existingKeys.has(tagKey)) continue;
+      if (typeof req.action_tag_id !== "number" || !Number.isFinite(req.action_tag_id)) continue;
+      if (store.actionTag(req.action_tag_id)) continue;
+      const tag = normalizeActionTag({
+        id: req.action_tag_id,
+        tag_key: tagKey,
+        site_key: req.site_key,
+        path_key: req.path_key,
+        action_key: req.action_key ?? null,
+        base_url: req.site_base_url,
+        url_pattern: req.url_pattern,
+        path_inputs: req.path_inputs,
+        name: tagKey,
+      });
+      if (!tag) continue;
+      toUpsert.push(tag);
+      existingKeys.add(tagKey);
+    }
+    if (toUpsert.length) {
+      store.upsertActionTags(toUpsert);
+      store.setSetting("seoOpsActionTags", JSON.stringify(getCachedActionTags()));
+    }
+    return toUpsert.length;
+  }
+
+  function enrichedTagsResult(base: {
+    ok: boolean;
+    source: "api" | "cache" | "requests";
+    error?: string;
+    authRequired?: boolean;
+    rateLimited?: boolean;
+    retryAfterSeconds?: number;
+  }): ActionTagsRefreshResult {
+    const tags = getEffectiveActionTags();
+    const fromRequests = tags.length > getCachedActionTags().length;
+    if (base.ok) {
+      return {
+        ok: true,
+        tags,
+        count: tags.length,
+        source: fromRequests && base.source === "cache" ? "requests" : base.source,
+        fetchedAt: store.setting("seoOpsActionTagsFetchedAt") || undefined,
+      };
+    }
+    return {
+      ok: false,
+      error: base.error || "Không làm mới được Action Tags.",
+      tags,
+      count: tags.length,
+      source: fromRequests ? "requests" : "cache",
+      authRequired: base.authRequired,
+      rateLimited: base.rateLimited,
+      retryAfterSeconds: base.retryAfterSeconds,
+    };
+  }
+
+  async function refreshActionTags(options?: { force?: boolean }): Promise<ActionTagsRefreshResult> {
+    if (actionTagsRefreshInFlight) return actionTagsRefreshInFlight;
+
+    const run = async (): Promise<ActionTagsRefreshResult> => {
+      // Always surface request-derived tags even before hitting the API.
+      upsertTagsFromScriptRequests(getCachedScriptRequests());
+      const effective = getEffectiveActionTags();
+
+      if (!options?.force && !areActionTagsStale() && effective.length > 0) {
+        return enrichedTagsResult({ ok: true, source: "cache" });
+      }
+
+      const limitedUntil = rateLimitUntilMs();
+      if (limitedUntil > Date.now()) {
+        const retryAfterSeconds = Math.ceil((limitedUntil - Date.now()) / 1000);
+        return enrichedTagsResult({
+          ok: false,
+          source: "cache",
+          error: `SEO-OPS đang giới hạn yêu cầu. Thử lại sau ${retryAfterSeconds} giây.`,
+          rateLimited: true,
+          retryAfterSeconds,
+        });
+      }
+
+      const token = tokenStore.getToken();
+      if (!token) {
+        return enrichedTagsResult({
+          ok: false,
+          source: "cache",
+          error: "Cần đăng nhập SEO-OPS tại Settings trước khi làm mới Action Tags.",
+          authRequired: true,
+        });
+      }
+
+      try {
+        const body = await adminApi("/action-tags");
+        if (!body || !Array.isArray((body as { action_tags?: unknown[] }).action_tags)) {
+          return enrichedTagsResult({
+            ok: false,
+            source: "cache",
+            error: "Dữ liệu trả về từ SEO-OPS không có danh sách Action Tags.",
+          });
+        }
+        const tags = normalizeActionTags((body as { action_tags: unknown[] }).action_tags);
+        persistActionTags(tags);
+        return {
+          ok: true,
+          tags: getEffectiveActionTags(),
+          count: getEffectiveActionTags().length,
+          source: "api",
+          fetchedAt: store.setting("seoOpsActionTagsFetchedAt") || undefined,
+        };
+      } catch (e) {
+        const raw = e instanceof Error ? e.message : String(e);
+        const error = mapSeoOpsAuthError(raw);
+        const rateLimited =
+          (e instanceof SeoOpsHttpError && e.diagnostic.category === "rate_limited")
+          || /category=rate_limited|\b429\b|giới hạn yêu cầu/i.test(raw + " " + error);
+        if (rateLimited) {
+          markActionTagsRateLimited(retryAfterSeconds(e));
+        }
+        const authRequired = /unauthenticated|hết hạn|phiên|đăng nhập|401/i.test(raw + " " + error)
+          && !rateLimited;
+        return enrichedTagsResult({
+          ok: false,
+          source: "cache",
+          error,
+          authRequired,
+          rateLimited,
+          retryAfterSeconds: rateLimited ? (retryAfterSeconds(e) ?? 60) : undefined,
+        });
+      }
+    };
+
+    actionTagsRefreshInFlight = run().finally(() => {
+      actionTagsRefreshInFlight = null;
+    });
+    return actionTagsRefreshInFlight;
+  }
+
+  /** Best-effort tag pull used by Script sync; prefers API, falls back to effective cache. */
+  async function fetchActionTags(): Promise<ActionTag[]> {
+    const result = await refreshActionTags({ force: true });
+    return result.tags;
+  }
+
+  async function fetchScriptRequests(status?: string): Promise<ScriptRequest[]> {
+    try {
+      const q = status ? `?status=${encodeURIComponent(status)}` : "";
+      const body = await adminApi(`/script-requests${q}`);
+      if (body && Array.isArray((body as { script_requests?: unknown[] }).script_requests)) {
+        const requests = (body as { script_requests: ScriptRequest[] }).script_requests;
+        store.setSetting("seoOpsScriptRequests", JSON.stringify(requests));
+        upsertTagsFromScriptRequests(requests);
+        return requests;
+      }
+    } catch {
+      /* offline / unauthenticated fallback */
+    }
+    return getCachedScriptRequests();
+  }
+
   async function createScriptFromRequest(requestId: string): Promise<Flow> {
     const requests = getCachedScriptRequests();
     const req = requests.find((r) => r.request_id === requestId);
@@ -655,7 +846,7 @@ export function createSeoOpsSyncService(options: {
       throw new Error(`Không tìm thấy Script Request: ${requestId}`);
     }
 
-    const tags = getCachedActionTags();
+    const tags = getEffectiveActionTags();
     const tag = tags.find((t) => t.tag_key === req.action_tag_key);
 
     const baseName = tag?.name || req.action_tag_key.split(".").map(s => s.charAt(0).toUpperCase() + s.slice(1)).join(" ");
@@ -957,8 +1148,28 @@ export function createSeoOpsSyncService(options: {
     }
     const result = await authClient().session();
     if (!result.ok) {
-      if (result.errors.some(error => /^(?:unauthenticated|session_expired|token_expired)$/i.test(error))) {
+      const joined = result.errors.join(" ");
+      const authLost = result.errors.some(error =>
+        /^(?:unauthenticated|session_expired|token_expired)$/i.test(error),
+      );
+      const transient = /category=rate_limited|\b429\b|network_error|timeout|category=timeout|category=service_unavailable|\b503\b/i.test(joined);
+      if (authLost) {
         tokenStore.setToken(null);
+        return {
+          configured: true,
+          baseUrl,
+          authenticated: false,
+          error: mapSeoOpsAuthErrors(result.errors),
+        };
+      }
+      // 429 / network blip: keep session usable so Tag refresh / Sync stay clickable.
+      if (transient) {
+        return {
+          configured: true,
+          baseUrl,
+          authenticated: true,
+          error: mapSeoOpsApiError(joined),
+        };
       }
       return {
         configured: true,
@@ -986,6 +1197,8 @@ export function createSeoOpsSyncService(options: {
       tokenStore.setToken(null);
       return { ok: false as const, errors: ["role_staff_forbidden"] };
     }
+    // Warm Action Tag cache after login (tag metadata only).
+    void refreshActionTags({ force: true }).catch(() => undefined);
     return result;
   }
 
@@ -1466,8 +1679,11 @@ export function createSeoOpsSyncService(options: {
     backupInfo,
     downloadBackup,
     fetchActionTags,
+    refreshActionTags,
+    areActionTagsStale,
     syncActionTags,
     getCachedActionTags,
+    getEffectiveActionTags,
     fetchScriptRequests,
     getCachedScriptRequests,
     createScriptFromRequest,
