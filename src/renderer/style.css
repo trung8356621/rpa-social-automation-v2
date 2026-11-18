@@ -54,7 +54,7 @@ body {
     13px "Segoe UI",
     sans-serif;
   width: 1344px;
-  height: calc(var(--web-height) + 88px);
+  height: calc(var(--web-height) + 128px);
   overflow: hidden;
 }
 button,
@@ -112,6 +112,130 @@ header {
   border-bottom: 1px solid #2a3b52;
   background: #142238;
 }
+header.creator-chrome {
+  height: 128px;
+  display: flex;
+  flex-direction: column;
+  align-items: stretch;
+  justify-content: flex-start;
+  padding: 0;
+  gap: 0;
+}
+.creator-tabs-row {
+  height: 36px;
+  min-height: 36px;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 0 14px;
+  border-bottom: 1px solid #2a3b52;
+  overflow-x: auto;
+  overflow-y: hidden;
+}
+.creator-settings-row {
+  height: 40px;
+  min-height: 40px;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 0 14px;
+  border-bottom: 1px solid #2a3b52;
+  background: #121f33;
+  overflow-x: auto;
+  overflow-y: hidden;
+  flex-wrap: nowrap;
+  scrollbar-width: thin;
+}
+.creator-settings-row .script-setting,
+.creator-settings-row .environment,
+.creator-settings-row .variables,
+.creator-settings-row .session-selector {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  flex: 0 0 auto;
+  white-space: nowrap;
+}
+.script-setting-label {
+  color: #8b949e;
+  font-weight: 600;
+  font-size: 11px;
+}
+.script-setting-code { color: #68d6a6; font-size: 11px; }
+.script-setting-icon-btn {
+  font-size: 11px;
+  padding: 0 5px;
+  line-height: 1.4;
+  border: 1px solid #444;
+  border-radius: 4px;
+  background: transparent;
+  color: inherit;
+  cursor: pointer;
+}
+.script-setting-status {
+  color: #8b949e;
+  max-width: 180px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 11px;
+}
+.script-setting-start-url input[type="url"] {
+  font-size: 11px;
+  padding: 2px 8px;
+  width: min(280px, 36vw);
+  min-width: 160px;
+  background: transparent;
+  color: inherit;
+  border: 1px solid #444;
+  border-radius: 4px;
+}
+.script-setting-start-url input[readonly],
+.script-setting-start-url input:disabled {
+  opacity: 0.9;
+  cursor: default;
+  border-color: #3a5a4a;
+}
+.start-url-mode-badge {
+  font-size: 10px;
+  color: #68d6a6;
+  border: 1px solid #3a5a4a;
+  border-radius: 4px;
+  padding: 1px 6px;
+}
+.start-url-required { color: #e3b341; font-size: 11px; }
+.creator-settings-row select {
+  font-size: 11px;
+  padding: 2px 4px;
+  width: auto;
+  min-width: 88px;
+  background: transparent;
+  color: inherit;
+  border: 1px solid #444;
+  border-radius: 4px;
+}
+.creator-nav-row,
+header.creator-chrome > nav {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex: 0 0 52px;
+  height: 52px;
+  min-height: 52px;
+  margin: 0;
+  padding: 6px 14px;
+  border-bottom: 0;
+  background: #17263b;
+  box-sizing: border-box;
+  width: 100%;
+}
+.creator-nav-row > input[aria-label="URL"],
+header.creator-chrome > nav > input[aria-label="URL"] {
+  flex: 1 1 auto;
+  min-width: 140px;
+  width: auto;
+  max-width: none;
+}
 .brand {
   font-size: 15px;
 }
@@ -156,7 +280,7 @@ nav select {
 }
 aside {
   position: absolute;
-  top: 88px;
+  top: 128px;
   left: 0;
   width: 320px;
   height: var(--web-height);
@@ -398,7 +522,7 @@ aside > button {
 .snapshot {
   position: absolute;
   left: 320px;
-  top: 88px;
+  top: 128px;
   width: 1024px;
   height: var(--web-height);
   overflow: hidden;
@@ -597,7 +721,7 @@ body[data-panel="debug"] .review-actions {
 .editor-column {
   position: absolute;
   left: 320px;
-  top: 88px;
+  top: 128px;
   width: 352px;
   height: var(--web-height);
   border-radius: 0;
@@ -678,7 +802,7 @@ body[data-panel="shell"] aside {
   flex-direction: column;
   padding: 12px;
   overflow: hidden;
-  height: calc(100vh - 88px);
+  height: calc(100vh - 128px);
   min-height: 300px;
 }
 .step-heading {
@@ -953,18 +1077,18 @@ body[data-panel="shell"] .editor-column .panel-heading span {
 
 /* Full-height control surfaces; the native browser keeps its own fixed bounds. */
 body[data-panel="shell"] .editor-column {
-  top: 88px;
+  top: 128px;
   bottom: 0;
-  height: calc(100vh - 88px);
+  height: calc(100vh - 128px);
 }
 .ui-drawer {
   position: fixed;
-  top: 88px;
+  top: 128px;
   bottom: 0;
   right: 0;
   z-index: 1001;
   width: min(700px, 100vw);
-  height: calc(100vh - 88px);
+  height: calc(100vh - 128px);
   padding: 18px;
   border-left: 1px solid #3c536e;
   background: #142238;
@@ -1256,15 +1380,37 @@ body[data-panel="shell"] .app-shell > nav {
   margin-left: var(--app-nav-width); width: calc(100% - var(--app-nav-width));
   padding-left: 8px; padding-right: 8px; gap: 8px;
 }
-body[data-panel="shell"] .app-shell > header { height: 36px; }
-body[data-panel="shell"] .app-shell > nav { height: 52px; padding-top: 6px; padding-bottom: 6px; }
+body[data-panel="shell"] .app-shell > header.creator-chrome {
+  height: 128px;
+  padding: 0;
+  gap: 0;
+  box-sizing: border-box;
+}
+body[data-panel="shell"] .app-shell > header.creator-chrome > nav,
+body[data-panel="shell"] .app-shell > header.creator-chrome .creator-nav-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex: 0 0 52px;
+  height: 52px;
+  margin-left: 0;
+  width: 100%;
+  padding: 6px 14px;
+  box-sizing: border-box;
+}
+body[data-panel="shell"] .app-shell > header.creator-chrome .creator-tabs-row,
+body[data-panel="shell"] .app-shell > header.creator-chrome .creator-settings-row {
+  margin: 0;
+  width: 100%;
+  box-sizing: border-box;
+}
 .creator-back { position: sticky; left: 8px; z-index: 21; }
 body[data-panel="shell"] .app-shell > aside.creator-steps {
-  left: var(--steps-left); top: 88px; width: 320px; height: var(--workspace-height, calc(100vh - 88px));
+  left: var(--steps-left); top: 128px; width: 320px; height: var(--workspace-height, calc(100vh - 128px));
   padding: 10px 8px; border-right: 0; border-left: 1px solid #3c4b63;
 }
 body[data-panel="shell"] .app-shell > .editor-column {
-  left: var(--editor-left); width: var(--editor-width); top: 88px; height: var(--web-height);
+  left: var(--editor-left); width: var(--editor-width); top: 128px; height: var(--web-height);
 }
 body[data-panel="shell"] .app-shell[data-editor-overlay="true"] > aside.creator-steps { visibility: hidden; }
 .session-selector { display: flex; align-items: center; gap: 7px; margin: 0; white-space: nowrap; }
@@ -1291,7 +1437,7 @@ body[data-panel="shell"] .app-shell[data-editor-overlay="true"] > aside.creator-
 
 .step-label > small { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 
-/* Tabs occupy the existing 36px header; the native Browser still starts at y=88. */
+/* Creator chrome is 3 rows (tabs/settings/nav); native Browser starts at y=128. */
 .workspace-page-strip { margin-left: var(--app-nav-width); height: 36px; background: #142238; border-bottom: 1px solid #304359; }
 .workspace-page-strip ~ .app-page { height: calc(100vh - 36px); }
 .workspace-tabs { display: flex; align-items: stretch; height: 36px; min-width: 150px; flex: 1; overflow: hidden; }

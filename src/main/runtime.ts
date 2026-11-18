@@ -51,8 +51,10 @@ export class Runtime {
   }
   endPlayAllLog(runId: string, failed = false) {
     if (!this.batch || this.batch.runId !== runId) throw new Error("Play All log runId không khớp.");
-    if (this.busy) throw new Error("Step đang chạy; chưa kết thúc Play All.");
+    // Always release batch ownership — a stuck busy flag must not block Run Again after BLOCKED.
     const batch = this.batch;
+    const busyDuringEnd = this.busy;
+    this.busy = false;
     this.batch = undefined;
     this.batchFlow = undefined;
     this.batchSteps = undefined;
@@ -62,9 +64,24 @@ export class Runtime {
         ? "COMPLETED"
         : batch.status;
     try {
-      logTestBoundary(this.runDir, "END", { ...batch, label: "Play All", status });
+      logTestBoundary(this.runDir, "END", {
+        ...batch,
+        label: "Play All",
+        status,
+        ...(busyDuringEnd ? { recoveredBusy: true } : {}),
+      });
     } finally {
       endTestRunLog(runId);
+    }
+  }
+
+  /** Defensive cleanup when a Test Case / Play All ends abnormally. */
+  releaseExecutionLock(batchRunId?: string) {
+    this.busy = false;
+    if (!batchRunId || this.batch?.runId === batchRunId) {
+      this.batch = undefined;
+      this.batchFlow = undefined;
+      this.batchSteps = undefined;
     }
   }
   playAllNetwork(runId: string): NetworkRunSettings {

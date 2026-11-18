@@ -31,7 +31,8 @@ import {
   refreshActionTagsFromSeoOps,
 } from "./action-tags-refresh";
 import { ActionTagCombobox } from "./action-tag-combobox";
-import { resolveUrlFromActionTag } from "../shared/action-tag-url";
+import { actionTagStartUrlMode, resolveUrlFromActionTag } from "../shared/action-tag-url";
+import { isSameStartPage, parseHttpStartUrl } from "../shared/start-url";
 import type { ScriptSyncRow } from "../shared/sync-status";
 import React, { useCallback, useEffect, useRef, useState } from "react";
 import { createRoot } from "react-dom/client";
@@ -61,7 +62,7 @@ import { errorDestination } from "../shared/error-navigation";
 import "./style.css";
 import { useDraft, captureEditorDraft, restoreEditorDraft, type EditorDraft } from "./draft";
 import { targetEnvironment } from "../shared/visual-environment";
-import { WEB_WIDTH, WEB_HEIGHT, workspaceLayout, APP_NAV_COLLAPSED, APP_NAV_EXPANDED } from "../shared/geometry";
+import { WEB_WIDTH, WEB_HEIGHT, TOP_HEIGHT, workspaceLayout, APP_NAV_COLLAPSED, APP_NAV_EXPANDED } from "../shared/geometry";
 import { defaultNetworkSettings, NETWORK_LABELS } from "../shared/network-mode";
 import { installAdminUiZoomShortcuts } from "./ui-zoom";
 document.documentElement.style.setProperty("--web-height", `${WEB_HEIGHT}px`);
@@ -981,8 +982,14 @@ function Creator() {
         return;
       }
       const saved = tabDrafts.current.get(tab.id);
-      const next = await invoke<State>({ type: "activateWorkspace", flowId: tab.flowId,
+      let next = await invoke<State>({ type: "activateWorkspace", flowId: tab.flowId,
         sessionId: tab.sessionId, url: tab.url, editorExpanded: saved?.editor.editorExpanded === true });
+      // Script Start URL owns the browser when configured — sync address bar + navigate (not lastUrl).
+      const startUrl = next.flow?.startUrl?.trim() ?? "";
+      const parsedStart = parseHttpStartUrl(startUrl);
+      if (parsedStart && !saved?.urlDirty && !isSameStartPage(next.url, parsedStart.href)) {
+        next = await invoke<State>({ type: "navigate", url: parsedStart.href });
+      }
       unstable_batchedUpdates(() => {
         setState(next);
         restoreEditorDraft(saved?.editor);
@@ -996,13 +1003,11 @@ function Creator() {
         listRunIds.current.clear();
         setTargetModal(false);
         browserUrl.current = next.url;
-        const startUrl = next.flow?.startUrl?.trim();
-        const preferStart = Boolean(startUrl) && !saved?.urlDirty;
         urlEdit.current = {
-          dirty: saved?.urlDirty ?? preferStart,
+          dirty: saved?.urlDirty ?? false,
           revision: urlEdit.current.revision + 1,
         };
-        setUrl(saved?.urlDirty ? saved.urlInput : (preferStart ? startUrl! : next.url));
+        setUrl(saved?.urlDirty ? saved.urlInput : next.url);
         const updated = { ...tab, sessionId: next.activeBrowserSessionId, url: next.url };
         updateTabs(tabsRef.current.some(t => t.id === tab.id)
           ? tabsRef.current.map(t => t.id === tab.id ? updated : t) : [...tabsRef.current, updated]);
@@ -1064,9 +1069,20 @@ function Creator() {
     return !tab || !caseEditors.current.get(tab.id)?.dirty;
   }
   function runCase(id: string) {
-    if (busy || shot || ocrLoading || workspaceLock.current || pendingNavigationRef.current || !state || !canRunCase(id)) return;
+    if (busy || shot || ocrLoading || workspaceLock.current || pendingNavigationRef.current || !state) {
+      setMessage("Đang bận hoặc đang chuyển tab — đợi xong rồi Run Again.");
+      return;
+    }
+    if (!canRunCase(id)) {
+      setMessage("Lưu hoặc bỏ draft Test Case trước khi Run Again.");
+      return;
+    }
     const item = state.testLab?.cases.find(item => item.id === id);
     if (!item) return;
+    if (!item.startUrl?.trim()) {
+      setMessage("START_URL_REQUIRED — mở Case, nhập Start URL (hoặc cấu hình Script Start URL), Lưu, rồi Run.");
+      return;
+    }
     if (!window.confirm(`Chạy “${item.name}” có thể thực hiện hành động thật trên mạng xã hội. Tiếp tục?`)) return;
     const tab: WorkspaceTab = tabsRef.current.find(tab => tab.kind === "test-case" && tab.caseId === id)
       ?? { id: crypto.randomUUID(), kind: "test-case", caseId: id, flowId: item.flowId, sessionId: item.sessionId };
@@ -1619,15 +1635,24 @@ function Creator() {
       {shell && !creatorVisible && pageError && <p className="app-page-error" role="alert">{pageError}</p>}
       {shell && creatorVisible && (
         <>
-          <header>
-            {workspaceTabs}
-            {state?.flow && <span className="script-version" aria-label="Script version" title={scriptSyncRows.find(row => row.flow_id === state.flow?.id || row.script_id === state.flow?.id)?.message || syncBadge(scriptSyncRows, state.flow.id)}>
-              {scriptVersionLabel(scriptSyncRows, state.flow.id)}
-            </span>}
-            {state?.flow && (
-              <div className="script-metadata-bar" style={{ display: "inline-flex", alignItems: "center", gap: 8, fontSize: 11, padding: "2px 8px", background: "var(--card-bg, #202428)", borderRadius: 6, border: "1px solid var(--border, #3a3f45)" }}>
-                <span title="Action Tag được SEO-OPS giao" style={{ display: "inline-flex", alignItems: "center", gap: 4, flexWrap: "wrap" }}>
-                  <span style={{ color: "#8b949e", fontWeight: 600 }}>Tag:</span>
+          <header className="creator-chrome">
+            <div className="creator-tabs-row">
+              {workspaceTabs}
+              {state?.flow && <span className="script-version" aria-label="Script version" title={scriptSyncRows.find(row => row.flow_id === state.flow?.id || row.script_id === state.flow?.id)?.message || syncBadge(scriptSyncRows, state.flow.id)}>
+                {scriptVersionLabel(scriptSyncRows, state.flow.id)}
+              </span>}
+              {activeCaseTab && <button disabled={navigationLocked} onClick={() => navigateApp("test-case")}>Cấu hình Case</button>}
+            </div>
+            {state?.flow && (() => {
+              const activeTag = state.flow.actionTagKey
+                ? state.actionTags?.find(t => t.tag_key === state.flow?.actionTagKey)
+                : undefined;
+              const startMode = actionTagStartUrlMode(activeTag);
+              const autoStart = startMode === "auto";
+              return (
+              <div className="creator-settings-row script-metadata-bar" aria-label="Script settings">
+                <span className="script-setting" title="Action Tag được SEO-OPS giao">
+                  <span className="script-setting-label">Tag</span>
                   {state.actionTags && state.actionTags.length > 0 ? (
                     <ActionTagCombobox
                       tags={state.actionTags}
@@ -1644,44 +1669,99 @@ function Creator() {
                             pathInputValues: nextTag ? {} : undefined,
                           });
                           setState(next);
-                          const preview = next.flow?.startUrl?.trim();
                           const tag = nextTag
                             ? next.actionTags?.find(t => t.tag_key === nextTag)
                             : undefined;
-                          const resolved = resolveUrlFromActionTag(tag, next.flow?.pathInputValues);
-                          if (preview) {
-                            urlEdit.current = { dirty: false, revision: urlEdit.current.revision + 1 };
-                            setUrl(preview);
-                            // Tag đã resolve đủ URL → navigate BrowserCore ngay.
-                            const snapshot = await invoke<State>({ type: "navigate", url: preview });
+                          const resolved = resolveUrlFromActionTag(tag, {});
+                          const mode = actionTagStartUrlMode(tag);
+                          urlEdit.current = { dirty: false, revision: urlEdit.current.revision + 1 };
+                          if (mode === "auto" && resolved.ok) {
+                            setUrl(resolved.url);
+                            setMessage(`Đang điều hướng Start URL (Auto from Tag): ${resolved.url}`);
+                            const snapshot = await invoke<State>({ type: "navigate", url: resolved.url });
                             setState(snapshot);
                             setUrl(snapshot.url);
-                          } else if (nextTag && !resolved.ok) {
-                            setMessage(resolved.message);
+                            setMessage(`Start URL sẵn sàng (Auto from Tag): ${resolved.url}`);
+                          } else {
+                            // Static / failed resolve: Start URL field comes from cleared flow.startUrl.
+                            // Address bar keeps Browser location only — never treat lastUrl as Start URL.
+                            setUrl(next.flow?.startUrl?.trim() || next.url);
+                            if (!nextTag) setMessage("Đã gỡ Action Tag.");
+                            else if (!resolved.ok) setMessage(`${resolved.message} — START_URL_REQUIRED: nhập Start URL thủ công (Static Tag).`);
+                            else setMessage("START_URL_REQUIRED — nhập Start URL thủ công (Static Tag).");
                           }
                         });
                       }}
                     />
                   ) : (
-                    <code style={{ color: "#68d6a6" }}>{state.flow.actionTagKey || "Chưa gắn"}</code>
+                    <code className="script-setting-code">{state.flow.actionTagKey || "Chưa gắn"}</code>
                   )}
                   <button
                     type="button"
                     disabled={locked || tagRefreshing}
                     title="Làm mới Action Tags từ SEO-OPS (không sync Script)"
                     onClick={() => void refreshCreatorActionTags(true)}
-                    style={{ fontSize: 11, padding: "0 5px", lineHeight: 1.4, border: "1px solid #444", borderRadius: 4, background: "transparent", color: "inherit", cursor: tagRefreshing ? "wait" : "pointer" }}
+                    className="script-setting-icon-btn"
                   >
                     {tagRefreshing ? "…" : "↻"}
                   </button>
                   {tagRefreshStatus && (
-                    <span role="status" style={{ color: "#8b949e", maxWidth: 220, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }} title={tagRefreshStatus}>
+                    <span role="status" className="script-setting-status" title={tagRefreshStatus}>
                       {tagRefreshStatus}
                     </span>
                   )}
                 </span>
-                <span style={{ display: "inline-flex", alignItems: "center", gap: 4 }}>
-                  <span style={{ color: "#8b949e", fontWeight: 600 }}>Result:</span>
+                <span className="script-setting script-setting-start-url">
+                  <span className="script-setting-label">Start URL</span>
+                  {autoStart && <span className="start-url-mode-badge" title="Resolved from Tag base_url + url_pattern">Auto from Tag</span>}
+                  <input
+                    type="url"
+                    aria-label="Script Start URL"
+                    placeholder="https://..."
+                    value={state.flow.startUrl ?? ""}
+                    readOnly={autoStart}
+                    disabled={locked || autoStart}
+                    title={autoStart
+                      ? `Auto from Tag: ${state.flow.startUrl || ""}`
+                      : (state.flow.startUrl?.trim() ? state.flow.startUrl : "START_URL_REQUIRED — nhập URL bắt đầu của Script này")}
+                    onChange={(e) => {
+                      if (autoStart) return;
+                      const value = e.target.value;
+                      void task(async () => {
+                        const next = await invoke<State>({
+                          type: "updateFlowMetadata",
+                          actionTagKey: state.flow?.actionTagKey,
+                          resultType: state.flow?.resultType ?? "status",
+                          collectionType: state.flow?.collectionType,
+                          pathInputValues: state.flow?.pathInputValues,
+                          startUrl: value,
+                        });
+                        setState(next);
+                        urlEdit.current = { dirty: false, revision: urlEdit.current.revision + 1 };
+                        setUrl(parseHttpStartUrl(value)?.href || value.trim() || next.url);
+                        if (!value.trim()) setMessage("START_URL_REQUIRED — nhập Start URL cho Script này.");
+                      });
+                    }}
+                    onBlur={() => {
+                      if (autoStart || locked) return;
+                      const parsed = parseHttpStartUrl(state.flow?.startUrl);
+                      if (!parsed || isSameStartPage(browserUrl.current || url, parsed.href)) return;
+                      void task(async () => {
+                        setUrl(parsed.href);
+                        setMessage(`Đang mở Start URL: ${parsed.href}`);
+                        const snapshot = await invoke<State>({ type: "navigate", url: parsed.href });
+                        setState(snapshot);
+                        setUrl(snapshot.url);
+                        setMessage(`Start URL sẵn sàng: ${parsed.href}`);
+                      });
+                    }}
+                  />
+                  {!state.flow.startUrl?.trim() && (
+                    <span role="status" className="start-url-required">START_URL_REQUIRED</span>
+                  )}
+                </span>
+                <span className="script-setting">
+                  <span className="script-setting-label">Result</span>
                   <select
                     value={state.flow.resultType ?? "status"}
                     disabled={locked}
@@ -1694,15 +1774,14 @@ function Creator() {
                         collectionType: state.flow?.collectionType,
                       }));
                     }}
-                    style={{ fontSize: 11, padding: "1px 4px", background: "transparent", color: "inherit", border: "1px solid #444", borderRadius: 4 }}
                   >
                     <option value="status">status</option>
                     <option value="collection">collection</option>
                   </select>
                 </span>
                 {state.flow.resultType === "collection" && (
-                  <span style={{ display: "inline-flex", alignItems: "center", gap: 4 }}>
-                    <span style={{ color: "#8b949e", fontWeight: 600 }}>Collection Type:</span>
+                  <span className="script-setting">
+                    <span className="script-setting-label">Collection Type</span>
                     <input
                       type="text"
                       placeholder="e.g. facebook.group.posts"
@@ -1717,26 +1796,23 @@ function Creator() {
                           collectionType: val,
                         }));
                       }}
-                      style={{ fontSize: 11, padding: "1px 6px", width: 140, background: "transparent", color: "inherit", border: "1px solid #444", borderRadius: 4 }}
                     />
                   </span>
                 )}
                 {(() => {
-                  const tag = state.flow.actionTagKey
-                    ? state.actionTags?.find(t => t.tag_key === state.flow?.actionTagKey)
-                    : undefined;
                   const pathInputs = (state.flow.pathInputs?.length
                     ? state.flow.pathInputs
-                    : tag?.path_inputs) ?? [];
-                  if (!pathInputs.length) return null;
+                    : activeTag?.path_inputs) ?? [];
+                  if (!pathInputs.length || autoStart) return null;
                   const resolved = resolveUrlFromActionTag(
-                    tag ? { ...tag, path_inputs: pathInputs } : tag,
+                    activeTag ? { ...activeTag, path_inputs: pathInputs } : activeTag,
                     state.flow.pathInputValues,
                   );
-                  const missing = !resolved.ok && resolved.reason === "missing_inputs";
+                  const hasManualStart = Boolean(state.flow.startUrl?.trim());
+                  const missing = !hasManualStart && !resolved.ok && resolved.reason === "missing_inputs";
                   return (
-                    <span className="action-tag-url-inputs" title="Path Inputs từ SEO-OPS để dựng URL đích">
-                      <span style={{ color: "#8b949e", fontWeight: 600 }}>URL Inputs:</span>
+                    <span className="script-setting action-tag-url-inputs" title="Path Inputs từ SEO-OPS (Static Tag)">
+                      <span className="script-setting-label">URL Inputs</span>
                       {pathInputs.map((p) => (
                         <label key={p.key}>
                           {p.key}{p.required ? "*" : ""}
@@ -1759,15 +1835,19 @@ function Creator() {
                                   pathInputValues: values,
                                 });
                                 setState(next);
-                                if (next.flow?.startUrl) {
-                                  urlEdit.current = { dirty: false, revision: urlEdit.current.revision + 1 };
-                                  setUrl(next.flow.startUrl);
-                                  const snapshot = await invoke<State>({
-                                    type: "navigate",
-                                    url: next.flow.startUrl,
-                                  });
-                                  setState(snapshot);
-                                  setUrl(snapshot.url);
+                                const parsed = parseHttpStartUrl(next.flow?.startUrl);
+                                urlEdit.current = { dirty: false, revision: urlEdit.current.revision + 1 };
+                                if (parsed) {
+                                  setUrl(parsed.href);
+                                  if (!isSameStartPage(next.url, parsed.href)) {
+                                    setMessage(`Đang mở Start URL: ${parsed.href}`);
+                                    const snapshot = await invoke<State>({ type: "navigate", url: parsed.href });
+                                    setState(snapshot);
+                                    setUrl(snapshot.url);
+                                    setMessage(`Start URL sẵn sàng: ${parsed.href}`);
+                                  }
+                                } else {
+                                  setMessage("START_URL_REQUIRED — điền đủ URL Inputs hoặc nhập Start URL thủ công.");
                                 }
                               });
                             }}
@@ -1782,45 +1862,69 @@ function Creator() {
                     </span>
                   );
                 })()}
+                <SessionSelector state={state} locked={locked || stepPlayback[activeStepId]?.status === "running"} select={selectSession} />
+                <button
+                  className="primary"
+                  disabled={locked || !state?.flow || Boolean(selected && !editorDirty)}
+                  title={selected && !editorDirty ? `Đã lưu Base v${selected.version}` : undefined}
+                  onClick={() => void task(saveBase)}
+                >
+                  Save step
+                </button>
+                <Variables
+                  state={state}
+                  locked={locked}
+                  focusVariableId={focusVariableId}
+                  onFocusHandled={() => setFocusVariableId(undefined)}
+                  update={async (c) => setState(await invoke<State>(c))}
+                />
+                <div className="environment">
+                  ONE SESSION <i />
+                  {state?.browserBounds.width ?? WEB_WIDTH} × {state?.browserBounds.height ?? WEB_HEIGHT} DIP ·{" "}
+                  {Math.round((state?.zoom || 1) * 100)}% zoom
+                </div>
+              </div>
+              );
+            })()}
+            {!state?.flow && (
+              <div className="creator-settings-row" aria-label="Script settings">
+                <SessionSelector state={state} locked={locked || stepPlayback[activeStepId]?.status === "running"} select={selectSession} />
+                <button
+                  className="primary"
+                  disabled={locked || !state?.flow || Boolean(selected && !editorDirty)}
+                  title={selected && !editorDirty ? `Đã lưu Base v${selected.version}` : undefined}
+                  onClick={() => void task(saveBase)}
+                >
+                  Save step
+                </button>
+                {state && (
+                  <Variables
+                    state={state}
+                    locked={locked}
+                    focusVariableId={focusVariableId}
+                    onFocusHandled={() => setFocusVariableId(undefined)}
+                    update={async (c) => setState(await invoke<State>(c))}
+                  />
+                )}
+                <div className="environment">
+                  ONE SESSION <i />
+                  {state?.browserBounds.width ?? WEB_WIDTH} × {state?.browserBounds.height ?? WEB_HEIGHT} DIP ·{" "}
+                  {Math.round((state?.zoom || 1) * 100)}% zoom
+                </div>
               </div>
             )}
-            {activeCaseTab && <button disabled={navigationLocked} onClick={() => navigateApp("test-case")}>Cấu hình Case</button>}
-            <SessionSelector state={state} locked={locked || stepPlayback[activeStepId]?.status === "running"} select={selectSession} />
-            <button
-              className="primary"
-              disabled={locked || !state?.flow || Boolean(selected && !editorDirty)}
-              title={selected && !editorDirty ? `Đã lưu Base v${selected.version}` : undefined}
-              onClick={() => void task(saveBase)}
-            >
-              Save step
-            </button>
-            <div className="environment">
-              ONE SESSION <i />
-              {state?.browserBounds.width ?? WEB_WIDTH} × {state?.browserBounds.height ?? WEB_HEIGHT} DIP ·{" "}
-              {Math.round((state?.zoom || 1) * 100)}% zoom
-            </div>
-            {state && (
-              <Variables
-                state={state}
-                locked={locked}
-                focusVariableId={focusVariableId}
-                onFocusHandled={() => setFocusVariableId(undefined)}
-                update={async (c) => setState(await invoke<State>(c))}
-              />
-            )}
-          </header>
-          <nav>
+          <nav className="creator-nav-row" aria-label="Browser toolbar">
             <div className="workspace-scroll" aria-label="Workspace scrolling">
               <button
-                title="Scroll workspace left"
-                aria-label="Workspace left"
+                title="Back · scroll workspace left"
+                aria-label="Back"
                 onClick={() => window.scrollBy({ left: -240 })}
               >
                 ←
               </button>
               <button
-                title="Scroll workspace right"
-                aria-label="Workspace right"
+                title="Forward · scroll workspace right"
+                aria-label="Forward"
                 onClick={() => window.scrollBy({ left: 240 })}
               >
                 →
@@ -1929,6 +2033,7 @@ function Creator() {
               </>
             )}
           </nav>
+          </header>
           <aside className="creator-steps" aria-label="Script sidebar">
             {!activeCaseTab && <div className="creator-sidebar-tabs" role="tablist">
               <button role="tab" aria-selected={creatorSidebarTab === "steps"} onClick={() => setCreatorSidebarTab("steps")}>Steps</button>
@@ -2048,7 +2153,7 @@ function Creator() {
                 left:
                   (shot.bounds?.x ?? 320 + WEB_WIDTH - shot.width) +
                   window.scrollX,
-                top: shot.bounds?.y ?? 88,
+                top: shot.bounds?.y ?? TOP_HEIGHT,
                 width: shot.width,
                 height: shot.height,
               }}

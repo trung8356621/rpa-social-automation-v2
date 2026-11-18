@@ -3,7 +3,11 @@ export const EXECUTION_VIEWPORT = Object.freeze({ width: 1024, height: 560 });
 export const WEB_WIDTH = EXECUTION_VIEWPORT.width;
 export const WEB_HEIGHT = EXECUTION_VIEWPORT.height;
 export const SIDE_WIDTH = 320;
-export const TOP_HEIGHT = 88;
+/** Creator chrome: tabs row + script settings row + browser toolbar. */
+export const CREATOR_TABS_HEIGHT = 36;
+export const CREATOR_SETTINGS_HEIGHT = 40;
+export const CREATOR_NAV_HEIGHT = 52;
+export const TOP_HEIGHT = CREATOR_TABS_HEIGHT + CREATOR_SETTINGS_HEIGHT + CREATOR_NAV_HEIGHT;
 export function validateZoom(value: number) {
   if (![1, 0.9, 0.8].includes(value))
     throw new Error("Zoom hỗ trợ: 100%, 90%, 80%.");

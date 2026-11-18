@@ -1,6 +1,11 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { resolveActionTagUrl, resolveUrlFromActionTag } from "../src/shared/action-tag-url.js";
+import {
+  actionTagStartUrlMode,
+  isAutoTagStartUrl,
+  resolveActionTagUrl,
+  resolveUrlFromActionTag,
+} from "../src/shared/action-tag-url.js";
 import type { ActionTag } from "../src/shared/contracts.js";
 
 test("resolve mayhopphat.login from site base + path pattern", () => {
@@ -61,4 +66,43 @@ test("absolute pattern wins over base join", () => {
   });
   assert.equal(result.ok, true);
   if (result.ok) assert.equal(result.url, "https://mayhopphat.com/wp-admin/");
+});
+
+test("Start URL mode uses resolve contract only — never tag_key / domain heuristics", () => {
+  const wp: ActionTag = {
+    id: 1,
+    tag_key: "mayhopphat.login",
+    platform: "mayhopphat",
+    target: "login",
+    action: "",
+    name: "WP Login",
+    base_url: "https://mayhopphat.com",
+    url_pattern: "/wp-login.php",
+    path_inputs: [],
+  };
+  const fb: ActionTag = {
+    id: 2,
+    tag_key: "facebook.group.post",
+    platform: "facebook",
+    target: "group",
+    action: "post",
+    name: "FB Group Post",
+    base_url: "https://www.facebook.com",
+    url_pattern: "/groups/{group_id}",
+    path_inputs: [{ key: "group_id", type: "string", required: true }],
+  };
+  const namedOnly: ActionTag = {
+    id: 3,
+    tag_key: "mayhopphat.login",
+    platform: "mayhopphat",
+    target: "login",
+    action: "",
+    name: "Looks dynamic by name only",
+  };
+  assert.equal(actionTagStartUrlMode(wp), "auto");
+  assert.equal(isAutoTagStartUrl(wp), true);
+  assert.equal(actionTagStartUrlMode(fb), "manual");
+  assert.equal(isAutoTagStartUrl(fb), false);
+  assert.equal(actionTagStartUrlMode(namedOnly), "manual");
+  assert.equal(actionTagStartUrlMode(undefined), "manual");
 });

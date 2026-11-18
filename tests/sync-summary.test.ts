@@ -26,6 +26,8 @@ test("empty SEO-OPS catalog reports distinct publish blockers, never unchanged",
         return Response.json({ ok: true, plan: { push_to_remote: [], pull_to_local: [], skip: [], conflicts: [] } });
       }
       if (address.includes("/execution-reports")) return Response.json({ ok: true, reports: [], next_after_id: 0 });
+      if (address.includes("/script-requests")) return Response.json({ ok: true, script_requests: [] });
+      if (address.includes("/action-tags")) return Response.json({ ok: true, action_tags: [] });
       throw new Error(`Unexpected test URL: ${address}`);
     };
     const service = createSeoOpsSyncService({ store, assetDir: assets, dataPath: root,
@@ -71,6 +73,9 @@ test("valid isolated v1 publishes to an empty catalog and second sync is idempot
       }
       if (address.endsWith("/scripts/video-demo")) return Response.json({ ok: true });
       if (address.includes("/execution-reports")) return Response.json({ ok: true, reports: [], next_after_id: 0 });
+      if (address.includes("/script-requests")) return Response.json({ ok: true, script_requests: [] });
+      if (address.includes("/action-tags")) return Response.json({ ok: true, action_tags: [] });
+      if (address.endsWith("/scripts/asset")) return Response.json({ ok: true });
       throw new Error(`Unexpected test URL: ${address}`);
     };
     const service = createSeoOpsSyncService({ store, assetDir: assets, testRunsDir: evidence, dataPath: root,

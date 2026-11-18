@@ -99,6 +99,7 @@ import { createSeoOpsTokenStore } from "./seo-ops-token-store.js";
 import { createSeoOpsBackupScheduler } from "./seo-ops-backup-scheduler.js";
 import { collectScriptAssets, createSeoOpsSyncService } from "./seo-ops-sync.js";
 import { resolveUrlFromActionTag } from "../shared/action-tag-url.js";
+import { isSameStartPage, parseHttpStartUrl, START_URL_REQUIRED } from "../shared/start-url.js";
 import { createHash } from "node:crypto";
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
@@ -421,7 +422,7 @@ async function boot() {
       : Math.min(required.height, area.height - 40),
     resizable: true,
     minWidth: 640,
-    minHeight: 648,
+    minHeight: TOP_HEIGHT + WEB_HEIGHT,
     maximizable: true,
     fullscreenable: true,
     show: false,
@@ -763,6 +764,8 @@ async function boot() {
     if (runningStudio || studioCommandBusy) throw new Error("Studio execution in progress.");
     if (runningTestCaseId) throw new Error("Đang chạy Test Case; vui lòng đợi.");
     if (switchingWorkspace) throw new Error("Đang chuyển tab; vui lòng đợi.");
+    // Stale Play All batch without an active Case/UI Play All would permanently block Run Again.
+    if (runtime.busy && !uiPlayAllRunId) runtime.releaseExecutionLock();
     if (runtime.busy) throw new Error("Đang test; đợi tác vụ kết thúc.");
     if (switchingSession) throw new Error("Đang chuyển Browser Session; vui lòng đợi.");
   };
@@ -837,6 +840,8 @@ async function boot() {
     if (uiPlayAllRunId) throw new Error("Đợi Play All kết thúc và thoát crop trước khi chạy Case.");
     assertNoCropOverlay("chạy Case");
     const item = testLab.get(id);
+    const start = parseHttpStartUrl(item.startUrl);
+    if (!start) throw new Error(START_URL_REQUIRED);
     runningTestCaseId = id;
     armedTest = undefined;
     const restoreViewport = overlays.enterExecutionMode();
@@ -849,7 +854,7 @@ async function boot() {
     let contextReady = false, screenshotAttempted = false;
     let outcome: CaseResult = { runId, caseId: id, caseName: item.name,
       flowId: item.flowId, scenarioName: savedFlow?.name ?? item.flowId,
-      sessionId: item.sessionId, sessionName: session?.name ?? item.sessionId, startUrl: item.startUrl,
+      sessionId: item.sessionId, sessionName: session?.name ?? item.sessionId, startUrl: start.href,
       status: "RUNNING", startedAt, finishedAt: startedAt, message: "Chuẩn bị Test Run.", steps: [] };
     const publish = () => {
       testLab.result(id, outcome);
@@ -868,7 +873,7 @@ async function boot() {
     try {
       await settleViewport();
       publish();
-      const flow = structuredClone(testLab.validate(item, false));
+      const flow = structuredClone(testLab.validate({ ...item, startUrl: start.href }, false));
       flow.defaultPattern = { values: structuredClone(item.values) };
       const steps = flow.steps.map(ref => store.step(ref.id, ref.version));
       outcome.steps = steps.map(step => ({ stepId: step.id, name: step.name, version: step.version,
@@ -917,8 +922,13 @@ async function boot() {
       wc.on("did-fail-load", failed); wc.on("did-navigate", response);
       let timer: ReturnType<typeof setTimeout> | undefined;
       try {
+        const currentUrl = browser.view.webContents.getURL?.() ?? "";
+        if (!isSameStartPage(currentUrl, start.href)) {
+          outcome.message = `Đang điều hướng về Start URL trước khi chạy Step 1: ${start.href}`;
+          publish();
+        }
         await Promise.race([
-          browser.navigate(item.startUrl),
+          browser.navigate(start.href),
           new Promise<never>((_, reject) => {
             timer = setTimeout(() => { reject(new Error("Start URL chưa tải xong sau 30 giây; Case chưa gửi thao tác.")); wc.stop(); }, 30000);
           }),
@@ -964,7 +974,7 @@ async function boot() {
           : "Đã gửi thao tác; cần kiểm tra website. Chưa xác nhận hoàn tất nghiệp vụ." });
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
-      Object.assign(outcome, { status: /variable|Default Pattern|type mismatch|Viewport|Zoom|không thuộc flow|không hợp lệ|Invalid Step|Match To|Ghim version|orphan Variable|thiếu OCR|→ Step /i.test(message) || !contextReady ? "BLOCKED" : "ERROR",
+      Object.assign(outcome, { status: /START_URL_REQUIRED|variable|Default Pattern|type mismatch|Viewport|Zoom|không thuộc flow|không hợp lệ|Invalid Step|Match To|Ghim version|orphan Variable|thiếu OCR|→ Step |Start URL/i.test(message) || !contextReady ? "BLOCKED" : "ERROR",
         message, stepId: currentStep?.id, stepName: currentStep?.name, version: currentStep?.version });
       if (currentStep) {
         const entry = outcome.steps?.find(entry => entry.stepId === currentStep!.id);
@@ -986,6 +996,10 @@ async function boot() {
         } catch (error) {
           outcome.recordingError = `Recording failed to finalize: ${error instanceof Error ? error.message : String(error)}`;
         }
+        if (outcome.status === "RUNNING") {
+          outcome.status = "ERROR";
+          outcome.message = outcome.message || "Test Run dừng bất thường trước khi ghi nhận kết quả.";
+        }
         outcome.finishedAt = new Date().toISOString();
         try { await testEvidence.metadata(id, outcome); }
         catch (error) { outcome.evidenceError = `Không lưu được metadata ảnh: ${String(error)}`; }
@@ -1002,8 +1016,13 @@ async function boot() {
         try { await testEvidence.prune(id, runId); }
         catch (error) { outcome.evidenceError = [outcome.evidenceError, `Chưa dọn được ảnh cũ: ${String(error)}`].filter(Boolean).join(" "); testLab.result(id, outcome); }
       } finally {
-        try { if (batchId) runtime.endPlayAllLog(batchId, !["PASS", "ACTION_SENT", "SKIPPED"].includes(outcome.status)); }
-        finally {
+        try {
+          if (batchId) runtime.endPlayAllLog(batchId, !["PASS", "ACTION_SENT", "SKIPPED"].includes(outcome.status));
+        } catch (error) {
+          runtime.releaseExecutionLock(batchId);
+          logMainError(runDir, "test-case-batch-cleanup", error, { runId, batchRunId: batchId, caseId: id });
+        } finally {
+          runtime.releaseExecutionLock(batchId);
           runningTestCaseId = undefined; armedTest = undefined;
           restoreViewport();
           overlays.setPage(contextReady ? "creator" : "test-case");
@@ -1755,7 +1774,11 @@ async function boot() {
           let startUrl = command.startUrl;
           if (startUrl === undefined && (tagKeyChanged || command.pathInputValues)) {
             const resolved = resolveUrlFromActionTag(tag ?? undefined, pathInputValues);
+            // Auto tags write the resolved URL. Manual/static tags clear on tag change —
+            // never keep the previous Script's URL as if it were still valid.
             startUrl = resolved.ok ? resolved.url : "";
+          } else if (startUrl === undefined && !tagKeyChanged) {
+            startUrl = current.startUrl ?? "";
           }
           store.updateFlowMeta(current.id, {
             actionTagKey,
@@ -1768,7 +1791,7 @@ async function boot() {
                   pathInputs: tag?.path_inputs ?? [],
                   urlPattern: tag?.url_pattern ?? "",
                   pathInputValues,
-                  startUrl: startUrl ?? current.startUrl ?? "",
+                  startUrl: startUrl ?? "",
                 }),
           });
         }

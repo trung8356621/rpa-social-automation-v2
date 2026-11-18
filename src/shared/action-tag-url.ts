@@ -90,3 +90,20 @@ export function resolveUrlFromActionTag(
     values,
   });
 }
+
+/**
+ * Dynamic / Auto-from-Tag: Site Base URL + Path Pattern resolve with empty path values.
+ * Static / Manual: required path_inputs or missing metadata — Start URL is entered by hand.
+ * Classification uses Action Tag URL contract fields only (never tag_key / domain heuristics).
+ */
+export type ActionTagStartUrlMode = "auto" | "manual";
+
+export function actionTagStartUrlMode(
+  tag: ActionTag | null | undefined,
+): ActionTagStartUrlMode {
+  return resolveUrlFromActionTag(tag, {}).ok ? "auto" : "manual";
+}
+
+export function isAutoTagStartUrl(tag: ActionTag | null | undefined): boolean {
+  return actionTagStartUrlMode(tag) === "auto";
+}

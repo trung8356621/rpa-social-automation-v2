@@ -12,6 +12,7 @@ test("Scenario Test Cases snapshot pins and Quick Acceptance is idempotent", asy
   const store = new Store(path.join(root, "creator.sqlite"));
   try {
     const flow = store.newFlow("Publish draft", 1);
+    store.updateFlowMeta(flow.id, { startUrl: "https://www.facebook.com/" });
     const firstStep = store.saveStep("Wait", { action: "SLEEP", sleepMs: 10 });
     const lab = new TestLab(store, new BrowserSessions(store));
     const first = lab.ensureForScenario(flow.id, true);

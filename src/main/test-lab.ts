@@ -1,6 +1,7 @@
 import { randomUUID } from "node:crypto";
 import type { CaseResult, Flow, TestCase, TestCaseConfig, TestLabState } from "../shared/contracts.js";
 import { validateVariables } from "../shared/flow-model.js";
+import { parseHttpStartUrl, START_URL_REQUIRED } from "../shared/start-url.js";
 import type { Store } from "./storage.js";
 import type { BrowserSessions } from "./browser-sessions.js";
 
@@ -45,9 +46,8 @@ export class TestLab {
     const flow = this.store.flows().find(f => f.id === config.flowId);
     if (!flow) throw new Error("Scenario không còn tồn tại.");
     this.sessions.get(config.sessionId);
-    let url: URL;
-    try { url = new URL(config.startUrl); } catch { throw new Error("Start URL cần là HTTP/HTTPS hợp lệ."); }
-    if (!["http:", "https:"].includes(url.protocol)) throw new Error("Start URL chỉ hỗ trợ HTTP/HTTPS.");
+    const url = parseHttpStartUrl(config.startUrl);
+    if (!url) throw new Error(START_URL_REQUIRED);
     if (!config.values || typeof config.values !== "object" || Array.isArray(config.values)) throw new Error("Values không hợp lệ.");
     if (checkValues) validateVariables(flow.variables ?? [], config.values);
     const pins = config.stepVersions !== undefined ? config.stepVersions : flow.steps;
@@ -87,7 +87,8 @@ export class TestLab {
     }
     const session = this.sessions.list().find(item => item.id === this.sessions.activeId()) ?? this.sessions.list()[0];
     if (!session) throw new Error("Cần tạo Browser Session trước khi tạo Test Case.");
-    const startUrl = session.lastUrl && /^https?:/i.test(session.lastUrl) ? session.lastUrl : "https://www.facebook.com/";
+    // Script-owned Start URL only — never copy the live Browser Session URL from another Script.
+    const startUrl = parseHttpStartUrl(flow.startUrl)?.href ?? "";
     const item: TestCase = {
       id: randomUUID(), name: defaultAcceptance ? `Nghiệm thu · ${flow.name}` : `Test · ${flow.name}`,
       flowId, sessionId: session.id, startUrl, recording: true,

@@ -5,6 +5,9 @@ import {
   WEB_WIDTH,
   WEB_HEIGHT,
   TOP_HEIGHT,
+  CREATOR_TABS_HEIGHT,
+  CREATOR_SETTINGS_HEIGHT,
+  CREATOR_NAV_HEIGHT,
   EDITOR_WIDTH,
   EXECUTION_VIEWPORT,
   assertCanonicalScreenshot,
@@ -22,6 +25,13 @@ const target = {
   roi: { x: 120, y: 120, width: 300, height: 64 },
   environment: env,
 };
+test("Creator chrome is 3 rows totaling TOP_HEIGHT 128", () => {
+  assert.equal(CREATOR_TABS_HEIGHT, 36);
+  assert.equal(CREATOR_SETTINGS_HEIGHT, 40);
+  assert.equal(CREATOR_NAV_HEIGHT, 52);
+  assert.equal(TOP_HEIGHT, 128);
+});
+
 test("common desktop sizes fill Creator height while execution stays canonical", () => {
   for (const editor of [true, false])
     for (const debug of [true, false])
@@ -29,7 +39,8 @@ test("common desktop sizes fill Creator height while execution stays canonical",
         [1366, 768],
         [1920, 1080],
         [2560, 1440],
-        [1344, 648],
+        [1344, TOP_HEIGHT + WEB_HEIGHT],
+        [1024, TOP_HEIGHT + WEB_HEIGHT],
       ]) {
         const layout = workspaceLayout(
           editor,

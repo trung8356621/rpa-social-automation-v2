@@ -228,9 +228,9 @@ export async function runSelfTest({
   const editor = await shell.executeJavaScript(
     `(()=>{const r=document.querySelector('.editor-column').getBoundingClientRect();return{top:r.top,bottom:r.bottom,height:r.height,viewport:innerHeight}})()`,
   );
-  assert.equal(editor.top, 88);
+  assert.equal(editor.top, 128);
   assert.equal(editor.bottom, editor.viewport);
-  assert.equal(editor.height, editor.viewport - 88);
+  assert.equal(editor.height, editor.viewport - 128);
   assert.equal(browser.bounds.height, 560);
   await evidence("ui-controls-editor-full-height.png");
   await click(".editor-column .panel-heading button");
@@ -245,7 +245,7 @@ export async function runSelfTest({
   const drawer = await shell.executeJavaScript(
     `(()=>{const d=document.querySelector('.variables-drawer'),r=d.getBoundingClientRect(),footer=d.querySelector('.popover-footer').getBoundingClientRect(),body=d.querySelector('.variable-table-body');return{top:r.top,right:r.right,bottom:r.bottom,viewport:innerHeight,width:innerWidth,footerBottom:footer.bottom,scroll:body.scrollHeight>body.clientHeight}})()`,
   );
-  assert.equal(drawer.top, 88);
+  assert.equal(drawer.top, 128);
   assert.equal(drawer.right, drawer.width);
   assert.equal(drawer.bottom, drawer.viewport);
   assert.ok(drawer.footerBottom <= drawer.viewport);

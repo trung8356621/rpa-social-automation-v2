@@ -163,7 +163,7 @@ export async function runSelfTest({
   const exit = await evaluate(
     `(()=>{const b=[...document.querySelectorAll('nav button')].find(b=>b.textContent.includes('Quay lại'));const r=b.getBoundingClientRect();return{top:r.top,bottom:r.bottom,disabled:b.disabled}})()`,
   );
-  assert.ok(exit.top >= 36 && exit.bottom <= 88);
+  assert.ok(exit.top >= 76 && exit.bottom <= 128);
   assert.equal(exit.disabled, false);
   await escape();
   passed("crop-exit-always-visible-and-escape-works-with-no-roi");

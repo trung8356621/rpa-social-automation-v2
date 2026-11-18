@@ -26,7 +26,7 @@ export function ExecutionErrorView({ error, stepName, onFix }: {
 function initial(state: State): TestCaseConfig {
   const flow = state.flows[0], session = state.browserSessions?.find(s => s.id === state.activeBrowserSessionId);
   const initialValues = structuredClone(flow?.placeholders && Object.keys(flow.placeholders).length > 0 ? flow.placeholders : flow?.defaultPattern?.values ?? {});
-  return { name: "", flowId: flow?.id ?? "", sessionId: session?.id ?? "", startUrl: session?.lastUrl ?? "",
+  return { name: "", flowId: flow?.id ?? "", sessionId: session?.id ?? "", startUrl: flow?.startUrl?.trim() || "",
     values: initialValues, recording: true, stepVersions: structuredClone(flow?.steps ?? []) };
 }
 export function TestCaseEditor({ tabId, item, state, locked, report, saved, saving, run, fix, back }: {
@@ -87,11 +87,21 @@ export function TestCaseEditor({ tabId, item, state, locked, report, saved, savi
         <label>Name<input disabled={disabled} maxLength={120} value={config.name} onChange={e => setConfig({ ...config, name: e.target.value })} /></label>
         <label>Script<select disabled={disabled || !!item} value={config.flowId} onChange={e => {
           const chosen = state.flows.find(f => f.id === e.target.value);
-          setConfig({ ...config, flowId: e.target.value, values: structuredClone(chosen?.defaultPattern?.values ?? {}), stepVersions: structuredClone(chosen?.steps ?? []) });
+          setConfig({
+            ...config,
+            flowId: e.target.value,
+            startUrl: chosen?.startUrl?.trim() || "",
+            values: structuredClone(chosen?.defaultPattern?.values ?? {}),
+            stepVersions: structuredClone(chosen?.steps ?? []),
+          });
         }}><option value="" disabled>Chọn Script</option>{state.flows.map(f => <option key={f.id} value={f.id}>{f.name}</option>)}</select></label>
         <label>Browser Session<select disabled={disabled} value={config.sessionId} onChange={e => setConfig({ ...config, sessionId: e.target.value })}>
           <option value="" disabled>Chọn Session</option>{state.browserSessions?.map(s => <option key={s.id} value={s.id}>{s.name}</option>)}</select></label>
         <label>Start URL<input disabled={disabled} type="url" value={config.startUrl} placeholder="https://..." onChange={e => setConfig({ ...config, startUrl: e.target.value })} /></label>
+        {!config.startUrl.trim() && <p className="hint" role="status">START_URL_REQUIRED — nhập Start URL của Script/Case (không lấy URL Browser đang mở của Script khác).</p>}
+        {flow?.startUrl && config.startUrl.trim() && config.startUrl.trim() !== flow.startUrl.trim() && (
+          <p className="hint">Script Start URL: <code>{flow.startUrl}</code> — Case đang dùng URL riêng.</p>
+        )}
         <p className="hint">Browser video được quay tự động mỗi lần Run (không desktop, không audio).</p>
         {flow && <>
           <h2>Steps sẽ chạy</h2>
@@ -183,7 +193,7 @@ export function CaseResultView({ item, state, locked = false, runAgain, compact 
   const demoOk = canUseAsScriptDemo(result).ok;
   if (compact) return <section className="case-result case-result-compact" aria-label="Last Result">
     <div className="case-result-heading"><b>Last Result</b><span className="case-run-status" data-status={status}>{status}</span>
-      {runAgain && <button disabled={locked || result.status === "RUNNING"} onClick={runAgain}>Run Again</button>}</div>
+      {runAgain && <button disabled={locked || (result.status === "RUNNING" && state?.runningTestCaseId === item.id)} onClick={runAgain}>Run Again</button>}</div>
     <p>{result.message}</p>{result.error && <ExecutionErrorView error={result.error} stepName={result.stepName} onFix={onFix} />}
   </section>;
   return <section className="case-result" aria-label="Last Result">
@@ -193,7 +203,7 @@ export function CaseResultView({ item, state, locked = false, runAgain, compact 
     <div className="case-result-actions">
       {back && <button onClick={back}>← Danh sách Test Cases</button>}
       {edit && <button onClick={edit}>Edit Configuration</button>}
-      {runAgain && <button className="primary" disabled={locked || result.status === "RUNNING"} onClick={runAgain}>Run Again</button>}
+      {runAgain && <button className="primary" disabled={locked || (result.status === "RUNNING" && state?.runningTestCaseId === item.id)} onClick={runAgain}>Run Again</button>}
     </div>
     <section className="case-result-media" aria-label="Test media">
       <div className="case-media-tabs" role="tablist">
