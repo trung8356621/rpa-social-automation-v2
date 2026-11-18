@@ -1,4 +1,4 @@
-import type { OcrResult, OcrSegment } from "../shared/contracts.js";
+import type { OcrResult, OcrSegment, Rect } from "../shared/contracts.js";
 
 // Exact normalized tokens only: retain accents, digits, +, #, /, _ and hyphens.
 export function normalizeOcrText(text: string) {
@@ -7,8 +7,57 @@ export function normalizeOcrText(text: string) {
     .replace(/(^|\s)@(?=[\p{L}\p{N}\s]|$)/gu, "$1").trim().replace(/\s+/gu, " ");
 }
 
+/**
+ * When punctuation-normalized matching yields multiple hits (e.g. "Password" vs
+ * "password?" in "Lost your password?"), prefer the rawer text form and — if
+ * still tied — the bbox closest in size to the saved selection. Never invent a
+ * click when two forms stay equally plausible.
+ */
+export function refineOcrCandidates(
+  matches: OcrSegment[],
+  selection: { text: string; kind?: "line" | "word" | "block"; bbox?: Rect },
+): OcrSegment[] {
+  if (matches.length <= 1) return matches;
+  const expected = selection.text.normalize("NFKC").trim();
+  const expectedFold = expected.toLocaleLowerCase("vi");
+  const scored = matches.map((match) => {
+    const raw = match.text.normalize("NFKC").trim();
+    const fold = raw.toLocaleLowerCase("vi");
+    let rank = 2;
+    if (raw === expected) rank = 4;
+    else if (fold === expectedFold) rank = 3;
+    else if (fold.replace(/[?.!,;:]+$/gu, "") === expectedFold && fold !== expectedFold)
+      rank = 1; // matched only after stripping trailing punctuation
+    let geo = Number.POSITIVE_INFINITY;
+    if (selection.bbox) {
+      const dw =
+        Math.abs(match.bbox.width - selection.bbox.width)
+        / Math.max(1, selection.bbox.width);
+      const dh =
+        Math.abs(match.bbox.height - selection.bbox.height)
+        / Math.max(1, selection.bbox.height);
+      geo = dw + dh;
+    }
+    return { match, rank, geo };
+  });
+  const bestRank = Math.max(...scored.map((row) => row.rank));
+  let kept = scored.filter((row) => row.rank === bestRank);
+  if (kept.length > 1 && selection.bbox && kept.every((row) => Number.isFinite(row.geo))) {
+    const bestGeo = Math.min(...kept.map((row) => row.geo));
+    const winners = kept.filter((row) => Math.abs(row.geo - bestGeo) < 1e-9);
+    if (winners.length === 1) {
+      const second = Math.min(
+        ...kept.filter((row) => row !== winners[0]).map((row) => row.geo),
+      );
+      // Require a clear size gap so two near-identical labels still BLOCK.
+      if (second - bestGeo >= 0.12) kept = winners;
+    }
+  }
+  return kept.map((row) => row.match);
+}
+
 /** Merge only geometrically adjacent, ordered segments; never skip a token. */
-export function findOcrCandidates(result: OcrResult, selection: { text: string; kind?: "line" | "word" | "block" }): OcrSegment[] {
+export function findOcrCandidates(result: OcrResult, selection: { text: string; kind?: "line" | "word" | "block"; bbox?: Rect }): OcrSegment[] {
   const expected = normalizeOcrText(selection.text);
   if (!expected) return [];
   const matches: OcrSegment[] = [];
@@ -90,5 +139,5 @@ export function findOcrCandidates(result: OcrResult, selection: { text: string; 
       }
     }
   }
-  return matches;
+  return refineOcrCandidates(matches, selection);
 }
