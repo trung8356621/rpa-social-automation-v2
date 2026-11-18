@@ -288,15 +288,57 @@ aside > button {
   text-align: left;
   width: 100%;
   margin: 5px 0;
+  border: 1px solid #3c536e;
+  background: #0f1a27;
+}
+.ocr-candidate:hover,
+.ocr-candidate:focus-visible {
+  /* Hover/focus ≠ confirmed selection */
+  border-color: #64748b;
+  background: #1e293b;
 }
 .ocr-candidate small {
   display: block;
   color: #a6c2dd;
   margin-top: 4px;
 }
-.ocr-candidate[aria-pressed="true"] {
-  border-color: #64d9c0;
-  background: #184b48;
+.ocr-candidate.is-focused {
+  border-color: #eab308;
+  background: #3b2f14;
+}
+.ocr-candidate[aria-pressed="true"],
+.ocr-candidate.is-selected {
+  border-color: #22c55e;
+  background: #14532d;
+  box-shadow: inset 0 0 0 1px #22c55e;
+}
+.ocr-candidate[aria-pressed="true"]:hover,
+.ocr-candidate.is-selected:hover {
+  background: #166534;
+  border-color: #22c55e;
+}
+.ocr-status {
+  margin: 8px 0;
+  padding: 8px 10px;
+  border-radius: 4px;
+  font-size: 12px;
+  line-height: 1.4;
+}
+.ocr-status.saved {
+  background: #173d39;
+  border-left: 3px solid #64d9c0;
+}
+.ocr-status.pending-mode {
+  background: #3b2f14;
+  border-left: 3px solid #eab308;
+}
+.ocr-status.dirty {
+  background: #3b1d14;
+  border-left: 3px solid #f97316;
+}
+.ocr-status.none {
+  background: #1e293b;
+  border-left: 3px solid #64748b;
 }
 .ocr-confirmed {
   margin: 8px 0;

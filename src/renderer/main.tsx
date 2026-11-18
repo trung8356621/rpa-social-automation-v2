@@ -4,6 +4,8 @@ import { suggestBelowLabelOffset } from "../shared/click-anchor";
 import {
   confirmedOcrFromSegment,
   ocrKindFromTarget,
+  ocrModalStatus,
+  sameOcrSelection,
   type OcrKind,
 } from "../shared/ocr-target-draft";
 import { effectiveMatchTo, matchToLabel } from "../shared/match-to";
@@ -339,6 +341,8 @@ function Creator() {
   const [ocrLoading, setOcrLoading] = useDraft("ocrLoading", false);
   const [ocrEdit, setOcrEdit] = useState<string>();
   const [ocrKind, setOcrKind] = useState<"none" | "line" | "word" | "block">("none");
+  /** Candidate focused for Done-commit when mode is set but draft OCR not yet confirmed. */
+  const [ocrFocusSegment, setOcrFocusSegment] = useState<OcrSegment>();
   const [selected, setSelected] = useDraft<Step>("selected");
   const [overrideId, setOverrideId] = useDraft("overrideId", "");
   const [targetModal, setTargetModal] = useState(false);
@@ -866,6 +870,7 @@ function Creator() {
   function clearTargetOcr() {
     setOcrKind("none");
     setOcrEdit(undefined);
+    setOcrFocusSegment(undefined);
     setTarget((previous) => {
       if (!previous) return previous;
       const { ocr, matchTo, clickOffset, ...rest } = previous;
@@ -883,11 +888,23 @@ function Creator() {
   }
   function closeTargetModal() {
     commitOcrEdit();
-    // Read live draft — React closure `target` can lag confirmOcr's writeDraft.
-    const latest = window.creator.readDraft("target", undefined).value as
+    let latest = window.creator.readDraft("target", undefined).value as
       | Payload["target"]
       | undefined;
+    // Mode alone is not confirmation. If a candidate is focused, Xong commits it into draft.
+    if (
+      ocrKind !== "none"
+      && !latest?.ocr?.confirmed
+      && ocrFocusSegment
+      && (ocrFocusSegment.kind === ocrKind || !ocrFocusSegment.kind)
+    ) {
+      confirmOcr(ocrFocusSegment);
+      latest = window.creator.readDraft("target", undefined).value as
+        | Payload["target"]
+        | undefined;
+    }
     setOcrKind(ocrKindFromTarget(latest));
+    setOcrFocusSegment(undefined);
     setTargetModal(false);
   }
   function confirmOcr(segment: OcrSegment) {
@@ -899,13 +916,18 @@ function Creator() {
     if (!previous) return;
     const ocr = confirmedOcrFromSegment(segment, previous.roi, fallback);
     setOcrKind(ocr.kind);
+    setOcrFocusSegment(segment);
     setTarget({
       ...previous,
       ocr,
       clickOffset: previous.clickOffset ?? { x: 0, y: 0 },
     });
+    const savedOcr = selectedBase?.payload.target?.ocr;
+    const dirtyPick = !sameOcrSelection(ocr, savedOcr?.confirmed ? savedOcr : undefined);
     setMessage(
-      `Đã xác nhận chữ “${segment.text}” · ${ocr.kind}. Có thay đổi chưa lưu — bấm Lưu redesign.`,
+      dirtyPick
+        ? `OCR thay đổi chưa lưu: “${segment.text}”. Bấm Lưu redesign để tạo version mới.`
+        : `OCR đã khớp bản đã lưu: “${segment.text}”.`,
     );
   }
   function goToFlow() {
@@ -2183,7 +2205,12 @@ function Creator() {
                     <button className="target-open" disabled={locked} aria-haspopup="dialog"
                       onClick={() => {
                         setOcrKind(ocrKindFromTarget(target));
+                        setOcrFocusSegment(undefined);
                         setTargetModal(true);
+                        // Reload scan so saved confirmation can show selected segment state.
+                        if (target?.ocr?.confirmed && target.asset && !ocrLoading) {
+                          void task(() => readOcr(target.asset));
+                        }
                       }}>{target ? "Xem target" : "Thêm target"} <span>↗</span></button>
                     {target && action !== "QUICK_TAG" && <>
                       {field("Match To",
@@ -2208,9 +2235,21 @@ function Creator() {
                     crop={() => { setTargetModal(false); void task(capture); }}
                     confirmed={action !== "QUICK_TAG" && target && <>
                       <div className="eyebrow">OCR LOCAL · VIỆT + ANH</div>
-                      {target.ocr ? (
+                      {(() => {
+                        const status = ocrModalStatus({
+                          ocrKind: ocrKind === "block" ? "line" : ocrKind,
+                          draftOcr: target.ocr,
+                          savedOcr: selectedBase?.payload.target?.ocr,
+                        });
+                        return (
+                          <div className={`ocr-status ${status.code}`} role="status">
+                            {status.label}
+                          </div>
+                        );
+                      })()}
+                      {target.ocr?.confirmed ? (
                         <div className="ocr-confirmed">
-                          <small>OCR đã xác nhận</small>
+                          <small>Segment đã xác nhận trong draft</small>
                           {ocrEdit !== undefined ? (
                             <input
                               aria-label="Chỉnh sửa OCR đã xác nhận"
@@ -2266,9 +2305,11 @@ function Creator() {
                             if (kind === "none") {
                               // Clears draft OCR immediately so Save persists "none".
                               clearTargetOcr();
+                              setOcrFocusSegment(undefined);
                               return;
                             }
                             setOcrKind(kind);
+                            setOcrFocusSegment(undefined);
                             // Switching line↔word drops confirmation until user re-picks a segment.
                             if (target.ocr?.confirmed && target.ocr.kind !== kind) {
                               setTarget((previous) => {
@@ -2287,9 +2328,9 @@ function Creator() {
                           <option value="word">Từng từ</option>
                         </select>
                       </label>
-                      {ocrKind === "none" && <p className="hint">Nhận diện bằng ảnh</p>}
-                      {ocrKind !== "none" && !target.ocr && !ocrResult && !ocrLoading &&
-                        <p className="hint">Đọc lại OCR rồi chọn chữ để xác nhận.</p>}
+                      {ocrKind === "none" && <p className="hint">Nhận diện bằng ảnh — kết quả OCR scan (nếu có) không phải selection đã lưu.</p>}
+                      {ocrKind !== "none" && !target.ocr?.confirmed && !ocrResult && !ocrLoading &&
+                        <p className="hint">Đọc lại OCR rồi bấm một đoạn chữ để xác nhận. Chỉ chọn mode chưa đủ để Save.</p>}
 
                       {ocrLoading && <p role="note">Đang đọc OCR trên máy…</p>}
                       {ocrError && (
@@ -2306,33 +2347,39 @@ function Creator() {
                       {ocrKind !== "none" && ocrResult && ocrResult.segments.length > 0 && (
                         <>
                           <p className="hint">
-                            {target.ocr
-                              ? "Bấm dòng/từ khác để đổi chữ đã xác nhận."
-                              : "Không tự chọn chữ. Bấm một dòng/từ bên dưới để xác nhận target."}
+                            {target.ocr?.confirmed
+                              ? "Đoạn xanh đậm = đã xác nhận trong draft. Bấm đoạn khác để đổi (cần Save)."
+                              : "Scan bên dưới chưa phải selection đã lưu. Bấm một đoạn để xác nhận vào draft."}
                           </p>
                           <div className="ocr-candidates">
                             {ocrResult.segments
                               .filter((s) => s.kind === ocrKind)
-                              .map((s) => (
+                              .map((s) => {
+                                const confirmed = sameOcrSelection(
+                                  target.ocr?.confirmed ? target.ocr : undefined,
+                                  s,
+                                );
+                                const focused =
+                                  !confirmed && sameOcrSelection(ocrFocusSegment, s);
+                                return (
                                 <button
                                   key={s.id}
-                                  className="ocr-candidate"
+                                  type="button"
+                                  className={`ocr-candidate${confirmed ? " is-selected" : ""}${focused ? " is-focused" : ""}`}
                                   disabled={locked}
-                                  aria-pressed={
-                                    target.ocr?.text === s.text &&
-                                    target.ocr.kind === s.kind &&
-                                    target.ocr.bbox.x === s.bbox.x &&
-                                    target.ocr.bbox.y === s.bbox.y
-                                  }
+                                  aria-pressed={confirmed}
+                                  onMouseEnter={() => setOcrFocusSegment(s)}
+                                  onFocus={() => setOcrFocusSegment(s)}
                                   onClick={() => confirmOcr(s)}
                                 >
                                   <b>{s.text}</b>
                                   <small>
                                     {s.confidence.toFixed(1)}% · bbox {s.bbox.x}
                                     ,{s.bbox.y} · {s.bbox.width}×{s.bbox.height}
+                                    {confirmed ? " · đã xác nhận" : focused ? " · đang chọn (Xong để commit)" : ""}
                                   </small>
                                 </button>
-                              ))}
+                              );})}
                           </div>
                         </>
                       )}
@@ -2536,6 +2583,14 @@ function Creator() {
                         >
                           {saveLabel}
                         </button>
+                        {selected && !editorDirty && (
+                          <p className="hint" role="status">
+                            Save tắt vì draft trùng Base v{selected.version}
+                            {selectedBase?.payload.target?.ocr?.confirmed
+                              ? ` (OCR đã lưu: ${selectedBase.payload.target.ocr.kind} — ${selectedBase.payload.target.ocr.text}).`
+                              : " (chưa có OCR confirmed trong payload — chọn mode OCR scan ≠ đã lưu)."}
+                          </p>
+                        )}
                       </>
                     );
                   })()}

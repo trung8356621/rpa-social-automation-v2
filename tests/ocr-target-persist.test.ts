@@ -7,6 +7,8 @@ import { Store } from "../src/main/storage.js";
 import {
   confirmedOcrFromSegment,
   ocrKindFromTarget,
+  ocrModalStatus,
+  sameOcrSelection,
 } from "../src/shared/ocr-target-draft.js";
 import { effectiveMatchTo } from "../src/shared/match-to.js";
 import type { Payload, Step } from "../src/shared/contracts.js";
@@ -142,6 +144,39 @@ test("OCR confirm → saveStep → flow pin → reopen keeps kind/confirmed (v6�
     store.close();
     rmSync(root, { recursive: true, force: true });
   }
+});
+
+test("modal status distinguishes saved vs pending mode vs dirty (scan ≠ saved)", () => {
+  const saved = confirmedOcrFromSegment(
+    {
+      id: "0",
+      text: "Username or Email Address",
+      kind: "line",
+      confidence: 91,
+      bbox: { x: 2, y: 2, width: 169, height: 11 },
+    },
+    { x: 0, y: 0, width: 276, height: 63 },
+    "line",
+  );
+  assert.equal(
+    ocrModalStatus({ ocrKind: "none", draftOcr: undefined, savedOcr: undefined }).code,
+    "none",
+  );
+  assert.equal(
+    ocrModalStatus({ ocrKind: "line", draftOcr: undefined, savedOcr: undefined }).code,
+    "pending-mode",
+  );
+  assert.equal(
+    ocrModalStatus({ ocrKind: "line", draftOcr: saved, savedOcr: saved }).code,
+    "saved",
+  );
+  const dirty = { ...saved, text: "Password" };
+  assert.equal(
+    ocrModalStatus({ ocrKind: "line", draftOcr: dirty, savedOcr: saved }).code,
+    "dirty",
+  );
+  assert.equal(sameOcrSelection(saved, saved), true);
+  assert.equal(sameOcrSelection(saved, dirty), false);
 });
 
 test("clamp keeps oversized OCR bbox inside ROI so save validation passes", () => {
