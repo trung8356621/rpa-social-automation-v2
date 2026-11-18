@@ -1,6 +1,11 @@
 import { AdminStudioPage, type StudioEditorHandle } from "./admin-studio";
 import { installBrowserRecording } from "./browser-recording";
 import { suggestBelowLabelOffset } from "../shared/click-anchor";
+import {
+  confirmedOcrFromSegment,
+  ocrKindFromTarget,
+  type OcrKind,
+} from "../shared/ocr-target-draft";
 import { effectiveMatchTo, matchToLabel } from "../shared/match-to";
 import { playSequential, playbackResult, type StepPlayback } from "./playback";
 import { StepList } from "./step-list";
@@ -345,8 +350,12 @@ function Creator() {
   const allowUnload = useRef(false);
   const leaveHandler = useRef<() => void>(() => {});
   const reloadHandler = useRef<() => void>(() => {});
-  useEffect(() => { if (!workspaceRestoring.current) setOcrKind(target?.ocr?.kind ?? "none"); },
-    [target?.asset, target?.ocr?.kind, selected?.id, selected?.version, overrideId]);
+  // Sync mode from persisted/draft target. Do not gate on workspaceRestoring —
+  // that flag stays true until restoreRevision commits, which skipped this sync
+  // and left the select stuck on "Không dùng chữ" after loadStep/reopen.
+  useEffect(() => {
+    setOcrKind(ocrKindFromTarget(target));
+  }, [target?.asset, target?.ocr?.kind, target?.ocr?.confirmed, selected?.id, selected?.version, overrideId, restoreRevision]);
   useEffect(() => setTargetModal(false), [selected?.id, selected?.version, action, state?.flow?.id, overrideId]);
   useEffect(() => { if (!workspaceRestoring.current) setOcrEdit(undefined); }, [target?.asset, target?.ocr?.text,
     selected?.id, selected?.version, overrideId]);
@@ -658,6 +667,8 @@ function Creator() {
     setDelta(step.payload.deltaY ?? -400);
     setQuickTagRows(step.payload.quickTagRows ?? 5);
     setTarget(step.payload.target);
+    setOcrKind(ocrKindFromTarget(step.payload.target));
+    setOcrEdit(undefined);
     setOcrResult(undefined);
     setOcrError("");
     setOverrideId("");
@@ -872,31 +883,29 @@ function Creator() {
   }
   function closeTargetModal() {
     commitOcrEdit();
-    // Mode-only (line/word without confirmed segment) must not stick across reopen.
-    setOcrKind(target?.ocr?.kind ?? "none");
+    // Read live draft — React closure `target` can lag confirmOcr's writeDraft.
+    const latest = window.creator.readDraft("target", undefined).value as
+      | Payload["target"]
+      | undefined;
+    setOcrKind(ocrKindFromTarget(latest));
     setTargetModal(false);
   }
   function confirmOcr(segment: OcrSegment) {
-    setOcrKind(segment.kind ?? "none");
-    setTarget((previous) =>
-      previous
-        ? {
-            ...previous,
-            ocr: {
-              text: segment.text,
-              bbox: segment.bbox,
-              confidence: segment.confidence,
-              kind: segment.kind,
-              language: "vie+eng",
-              confirmed: true,
-            },
-            // Keep existing offset if any; otherwise start at label center.
-            clickOffset: previous.clickOffset ?? { x: 0, y: 0 },
-          }
-        : previous,
-    );
+    const fallback: OcrKind =
+      ocrKind === "line" || ocrKind === "word" || ocrKind === "block" ? ocrKind : "line";
+    const previous = window.creator.readDraft("target", undefined).value as
+      | Payload["target"]
+      | undefined;
+    if (!previous) return;
+    const ocr = confirmedOcrFromSegment(segment, previous.roi, fallback);
+    setOcrKind(ocr.kind);
+    setTarget({
+      ...previous,
+      ocr,
+      clickOffset: previous.clickOffset ?? { x: 0, y: 0 },
+    });
     setMessage(
-      `Đã xác nhận chữ “${segment.text}” để AUTO dùng khi cần. Lưu target để áp dụng.`,
+      `Đã xác nhận chữ “${segment.text}” · ${ocr.kind}. Có thay đổi chưa lưu — bấm Lưu redesign.`,
     );
   }
   function goToFlow() {
@@ -1225,33 +1234,57 @@ function Creator() {
     return result.message;
   }
   async function saveBase() {
-    if (selected && !editorDirty) {
+    // Prefer live draft target so Save cannot drop a just-confirmed OCR due to a stale render.
+    const liveTarget = window.creator.readDraft("target", undefined).value as
+      | Payload["target"]
+      | undefined;
+    if (liveTarget !== undefined) setTarget(liveTarget);
+    const draftPayload = payload();
+    if (liveTarget !== undefined && draftPayload.target !== undefined)
+      draftPayload.target = {
+        ...draftPayload.target,
+        ...liveTarget,
+        matchTo: effectiveMatchTo({ target: liveTarget }),
+      };
+    if (ocrEdit !== undefined && draftPayload.target?.ocr)
+      draftPayload.target = { ...draftPayload.target, ocr: { ...draftPayload.target.ocr, text: ocrEdit.trim() } };
+    const liveDirty = selected
+      ? name !== selectedBase?.name || editableConfig(draftPayload) !== editableConfig(selectedBase!.payload)
+      : true;
+    if (selected && !liveDirty && !editorDirty) {
       setMessage(`Không có thay đổi so với Base v${selected.version} — chưa tạo version mới.`);
       return;
     }
-    const draftPayload = payload();
-    if (ocrEdit !== undefined && draftPayload.target?.ocr)
-      draftPayload.target = { ...draftPayload.target, ocr: { ...draftPayload.target.ocr, text: ocrEdit.trim() } };
-    const next = await invoke<State>({
-      type: "saveStep",
-      id: selected?.id,
-      name,
-      payload: draftPayload,
-    });
+    let next: State;
+    try {
+      next = await invoke<State>({
+        type: "saveStep",
+        id: selected?.id,
+        name,
+        payload: draftPayload,
+      });
+    } catch (error) {
+      setMessage(`Lưu thất bại: ${(error as Error).message}`);
+      throw error;
+    }
     setState(next);
     const ref = selected
       ? next.flow!.steps.find((s) => s.id === selected.id)!
       : next.flow!.steps.at(-1)!;
-    await loadStep(
-      next.steps.find((s) => s.id === ref.id && s.version === ref.version)!, false,
-    );
+    const saved = next.steps.find((s) => s.id === ref.id && s.version === ref.version);
+    if (!saved) {
+      setMessage("Lưu thất bại: không tìm thấy version vừa ghi trong state.");
+      throw new Error("Saved step version missing from state.");
+    }
+    await loadStep(saved, false);
     const isDraft = (next.invalidSteps ?? []).some(
       (r) => r.stepId === ref.id && r.version === ref.version,
     );
+    const ocr = saved.payload.target?.ocr;
     setMessage(
       isDraft
         ? `Đã lưu Draft v${ref.version} (chưa hoàn chỉnh — cần cấu hình đủ trước khi chạy).`
-        : `Đã lưu Base v${ref.version}; version cũ vẫn được giữ.`,
+        : `Đã lưu Base v${ref.version}${ocr?.confirmed ? ` · OCR ${ocr.kind} confirmed` : " · OCR none"}; version cũ vẫn được giữ.`,
     );
   }
   const expanded = shell ? editorExpanded : debugExpanded;
@@ -1958,15 +1991,24 @@ function Creator() {
                 }}
                 select={(s) =>
                   requestNavigation(async () => {
-                    const current = window.creator.readDraft("selected", undefined).value as Step | undefined;
-                    await loadStep(s.id === selected?.id && current?.id === s.id ? current : s, false);
+                    // Always load the saved Step from state — never reload the frozen
+                    // selected.payload draft (that wiped unsaved target.ocr back to image-only).
+                    const pinned = state?.steps.find(
+                      (step) => step.id === s.id && step.version === s.version,
+                    ) ?? s;
+                    await loadStep(pinned, false);
                     await setEditorOpen(false);
                     setResults([]);
                   })
                 }
                 edit={(s) => {
-                  if (s.id === selected?.id && s.version === selected.version) showEditor();
-                  else requestNavigation(() => loadStep(s));
+                  if (s.id === selected?.id && s.version === selected.version) {
+                    setOcrKind(ocrKindFromTarget(
+                      window.creator.readDraft("target", undefined).value as Payload["target"] | undefined
+                      ?? target,
+                    ));
+                    showEditor();
+                  } else requestNavigation(() => loadStep(s));
                 }}
               />
             )}
@@ -2139,7 +2181,10 @@ function Creator() {
                   )}
                   {needsTarget && <>
                     <button className="target-open" disabled={locked} aria-haspopup="dialog"
-                      onClick={() => setTargetModal(true)}>{target ? "Xem target" : "Thêm target"} <span>↗</span></button>
+                      onClick={() => {
+                        setOcrKind(ocrKindFromTarget(target));
+                        setTargetModal(true);
+                      }}>{target ? "Xem target" : "Thêm target"} <span>↗</span></button>
                     {target && action !== "QUICK_TAG" && <>
                       {field("Match To",
                         <select aria-label="Match To" disabled={locked || !target.ocr?.confirmed}
@@ -2219,12 +2264,13 @@ function Creator() {
                           onChange={(e) => {
                             const kind = e.target.value as "none" | "line" | "word";
                             if (kind === "none") {
+                              // Clears draft OCR immediately so Save persists "none".
                               clearTargetOcr();
                               return;
                             }
                             setOcrKind(kind);
-                            // Switching line↔word clears stale confirmation so Save persists the new kind only after re-select.
-                            if (target.ocr && target.ocr.kind !== kind) {
+                            // Switching line↔word drops confirmation until user re-picks a segment.
+                            if (target.ocr?.confirmed && target.ocr.kind !== kind) {
                               setTarget((previous) => {
                                 if (!previous) return previous;
                                 const { ocr, matchTo, clickOffset, ...rest } = previous;

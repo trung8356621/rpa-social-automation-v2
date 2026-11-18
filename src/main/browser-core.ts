@@ -23,10 +23,30 @@ import {
   imageToInput,
   assertCanonicalScreenshot,
 } from "../shared/geometry.js";
+import {
+  BODY_FOCUS,
+  shouldAcceptFocusSettle,
+  type ActiveElementMeta,
+} from "../shared/click-type-settle.js";
 export class InputNotReady extends Error {
   constructor(readonly focus: ReturnType<BrowserCore["inputFocus"]>) {
     super(
       `TYPE_ONLY: focus đang ở sidebar/cửa sổ khác hoặc chưa có tương tác browser (browser=${focus.browser}, editor=${focus.editor}, route=${focus.route}; caret=unknown). Click thủ công ô nhập rồi dùng phím tắt, hoặc test cặp CLICK → TYPE. Native focus không chứng minh caret sẵn sàng.`,
+    );
+  }
+}
+/** Click landed but associated control did not take focus before typing. */
+export class InputFocusNotSettled extends Error {
+  constructor(
+    readonly detail: {
+      settled: false;
+      changed: boolean;
+      tag?: string;
+      elapsedMs: number;
+    },
+  ) {
+    super(
+      "CLICK_AND_TYPE: click chưa chuyển focus vào ô nhập trước khi gõ. Không gửi nội dung.",
     );
   }
 }
@@ -428,6 +448,80 @@ export class BrowserCore {
       button: "left",
       clickCount: 1,
     });
+  }
+  /**
+   * Read activeElement identity only (tag/id/name). Never returns values.
+   * Used to wait for htmlFor label → input focus transfer after click().
+   */
+  async activeElementMeta(): Promise<ActiveElementMeta> {
+    const wc = this.view.webContents;
+    if (wc.isDestroyed()) return { ...BODY_FOCUS };
+    try {
+      const meta = await wc.executeJavaScript(
+        `(() => {
+          const el = document.activeElement;
+          if (!el || el === document.body || el === document.documentElement)
+            return { editable: false, key: "body", tag: "body" };
+          const tag = (el.tagName || "").toLowerCase();
+          const type = (el.getAttribute("type") || "text").toLowerCase();
+          const editable = tag === "textarea" || el.isContentEditable === true
+            || (tag === "input" && !/^(button|submit|checkbox|radio|file|reset|image|hidden)$/i.test(type));
+          const key = tag + "#" + (el.id || "") + "[" + (el.getAttribute("name") || "") + "]";
+          return { editable: !!editable, key, tag };
+        })()`,
+        true,
+      );
+      if (!meta || typeof meta.key !== "string") return { ...BODY_FOCUS };
+      return {
+        editable: Boolean(meta.editable),
+        key: meta.key,
+        tag: typeof meta.tag === "string" ? meta.tag : "unknown",
+      };
+    } catch {
+      return { ...BODY_FOCUS };
+    }
+  }
+  /**
+   * After click(), wait until focus is an editable control ready for typeOnly.
+   * Does not call focus()/click() or pick another input via selectors.
+   */
+  async settleFocusAfterClickForType(
+    before: ActiveElementMeta,
+    timeoutMs = 400,
+  ): Promise<{ settled: boolean; changed: boolean; tag?: string; elapsedMs: number }> {
+    const wc = this.view.webContents;
+    if (!wc.isDestroyed()) {
+      try {
+        await wc.executeJavaScript(
+          "new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve)))",
+          true,
+        );
+      } catch {
+        /* ignore */
+      }
+    }
+    const t0 = Date.now();
+    let after = before;
+    while (Date.now() - t0 < timeoutMs) {
+      after = await this.activeElementMeta();
+      const elapsedMs = Date.now() - t0;
+      if (shouldAcceptFocusSettle(before, after, elapsedMs)) {
+        return {
+          settled: true,
+          changed: after.key !== before.key || (!before.editable && after.editable),
+          tag: after.tag,
+          elapsedMs,
+        };
+      }
+      await new Promise((r) => setTimeout(r, 16));
+    }
+    const elapsedMs = Date.now() - t0;
+    return {
+      settled: false,
+      changed: after.key !== before.key,
+      tag: after.tag,
+      elapsedMs,
+    };
   }
   inputFocus() {
     return {

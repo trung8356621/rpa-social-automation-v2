@@ -11,7 +11,7 @@ import path from "node:path";
 import { readFile, writeFile } from "node:fs/promises";
 import { randomUUID } from "node:crypto";
 import type { Flow, Payload, Result, ExecutionStart, ExecutionDetails, Rect, Step } from "../shared/contracts.js";
-import { BrowserCore, InputNotReady } from "./browser-core.js";
+import { BrowserCore, InputFocusNotSettled, InputNotReady } from "./browser-core.js";
 import { Store } from "./storage.js";
 import { localOcr, type OcrEngine } from "./ocr.js";
 import { advanceOcrSearch, clearOcrSearch } from "./ocr-match-scroll.js";
@@ -576,14 +576,38 @@ export class Runtime {
           ["CLICK_TARGET", "CLICK_AND_TYPE"].includes(payload.action)
         ) {
           logMainEvent(this.runDir, "click", { ...execution, x: match.x, y: match.y });
+          // Snapshot focus identity before click so label→input transfer can be awaited.
+          // Never log field values — meta is tag/id/name only.
+          const focusBefore =
+            payload.action === "CLICK_AND_TYPE"
+              ? await this.browser.activeElementMeta()
+              : undefined;
           this.browser.click(match.x, match.y);
           this.onClick?.(match.x, match.y);
           clickSent = true;
-          if (payload.action === "CLICK_AND_TYPE")
+          if (payload.action === "CLICK_AND_TYPE") {
+            const settle = await this.browser.settleFocusAfterClickForType(
+              focusBefore!,
+            );
+            logMainEvent(this.runDir, "click-type-settle", {
+              ...execution,
+              settled: settle.settled,
+              changed: settle.changed,
+              tag: settle.tag,
+              elapsedMs: settle.elapsedMs,
+            });
+            if (!settle.settled)
+              throw new InputFocusNotSettled({
+                settled: false,
+                changed: settle.changed,
+                tag: settle.tag,
+                elapsedMs: settle.elapsedMs,
+              });
             input = await this.browser.typeOnly(
               payload.text!,
               payload.inputMethod,
             );
+          }
           status = "ACTION_SENT";
         } else status = "VERIFIED";
         message =
@@ -608,7 +632,9 @@ export class Runtime {
       });
       status = ocrFailure ? "FAILED" :
         e instanceof TargetNotConfident ||
-        e instanceof InputNotReady || e instanceof QuickTagBlocked ||
+        e instanceof InputNotReady ||
+        e instanceof InputFocusNotSettled ||
+        e instanceof QuickTagBlocked ||
         (e instanceof UploadError && !clickSent)
           ? "BLOCKED"
           : "FAILED";

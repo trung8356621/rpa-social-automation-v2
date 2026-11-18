@@ -76,6 +76,31 @@ export async function startFixture(port: number) {
       window.typingRead=()=>({text:editor.innerText.replace(/\\r/g,''),active:document.activeElement.id,...typingProbe});</script>`);
       return;
     }
+    // WordPress-like login: labels linked via for/id. Used to prove CLICK_AND_TYPE order settle.
+    if (req.url?.startsWith("/wp-login")) {
+      res.end(`<!doctype html><meta charset="utf-8"><title>WP login fixture</title>
+<style>body{margin:40px;font:16px Arial;background:#f0f0f1;color:#1d2327}
+label{display:block;margin:12px 0 4px;font-weight:600}
+input[type=text],input[type=password]{display:block;width:320px;height:40px;padding:0 8px;border:1px solid #8c8f94;border-radius:4px;font:16px Arial}
+button{margin-top:16px;height:40px;padding:0 16px;background:#2271b1;color:#fff;border:0;border-radius:4px;font:16px Arial}</style>
+<label id="user_label" for="user_login">Username or Email Address</label>
+<input type="text" id="user_login" name="log" autocomplete="off">
+<label id="pass_label" for="user_pass">Password</label>
+<input type="password" id="user_pass" name="pwd" autocomplete="off">
+<button type="button" id="wp-submit">Log In</button>
+<script>
+window.wpLoginRead=()=>({
+  userLen: document.querySelector('#user_login').value.length,
+  passLen: document.querySelector('#user_pass').value.length,
+  user: document.querySelector('#user_login').value,
+  pass: document.querySelector('#user_pass').value,
+  active: document.activeElement && document.activeElement.id,
+  userLabel: (()=>{const r=document.querySelector('#user_label').getBoundingClientRect();return{x:Math.round(r.x+r.width/2),y:Math.round(r.y+r.height/2)}})(),
+  passLabel: (()=>{const r=document.querySelector('#pass_label').getBoundingClientRect();return{x:Math.round(r.x+r.width/2),y:Math.round(r.y+r.height/2)}})(),
+});
+</script>`);
+      return;
+    }
     if (req.url?.startsWith("/ocr")) {
       res.end(`<!doctype html><html><head><meta charset="utf-8"><title>OCR fixture</title><style>
       body{margin:0;background:#f4f6f9;font:18px Arial}button{position:absolute;left:100px;width:360px;height:64px;background:white;color:#111;border:2px solid #333;font:32px Arial}#vi{top:110px}#en{top:260px}#icon{left:550px;top:110px;width:80px;height:80px;background:#173d82;border:0}#icon:before{content:'';position:absolute;left:20px;top:20px;width:36px;height:36px;border:6px solid white;border-radius:50%}#output{position:absolute;top:420px;left:100px}</style></head><body>

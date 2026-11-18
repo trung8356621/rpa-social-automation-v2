@@ -651,8 +651,77 @@ export async function runSelfTest({
     localOcr.recognize = recognize;
   }
   pass("AUTO-conflicting-image-and-OCR-block-before-any-click-or-input");
+
+  // WordPress-like label→input: prove username→password order settles focus (no secrets in logs).
+  await browser.navigate("http://127.0.0.1:47835/wp-login");
+  await wait(300);
+  browser.setVisible(true);
+  browser.view.webContents.focus();
+  await wait(100);
+  const loginRead = () =>
+    browser.view.webContents.executeJavaScript("window.wpLoginRead()");
+  const fillViaLabel = async (
+    which: "user" | "pass",
+    text: string,
+  ) => {
+    browser.view.webContents.focus();
+    const page = await loginRead();
+    const point = which === "user" ? page.userLabel : page.passLabel;
+    const before = await browser.activeElementMeta();
+    browser.click(point.x, point.y);
+    const settle = await browser.settleFocusAfterClickForType(before);
+    assert.equal(settle.settled, true, `focus settle for ${which}`);
+    await browser.typeOnly(text, "keyboard");
+  };
+  const clearLogin = () =>
+    browser.view.webContents.executeJavaScript(
+      "document.querySelector('#user_login').value='';document.querySelector('#user_pass').value='';document.body.focus();",
+    );
+  // Order A: username → password (the failing production order)
+  await clearLogin();
+  await fillViaLabel("user", "fixture_user");
+  await fillViaLabel("pass", "fixture_pass");
+  {
+    const a = await loginRead();
+    assert.equal(a.user, "fixture_user");
+    assert.equal(a.pass, "fixture_pass");
+    assert.equal(a.userLen, "fixture_user".length);
+    assert.equal(a.passLen, "fixture_pass".length);
+  }
+  pass("wp-login-label-order-username-then-password");
+  // Order B: password → username
+  await clearLogin();
+  await fillViaLabel("pass", "fixture_pass");
+  await fillViaLabel("user", "fixture_user");
+  {
+    const b = await loginRead();
+    assert.equal(b.user, "fixture_user");
+    assert.equal(b.pass, "fixture_pass");
+  }
+  pass("wp-login-label-order-password-then-username");
+  // Without settle, immediate type after password-label click while username focused
+  // would dump into username — prove settle blocks wrong identity when focus stuck.
+  await clearLogin();
+  await fillViaLabel("user", "fixture_user");
+  {
+    const before = await browser.activeElementMeta();
+    assert.equal(before.key.includes("user_login"), true);
+    const page = await loginRead();
+    browser.click(page.passLabel.x, page.passLabel.y);
+    // Force a zero-timeout settle check shape via shouldAccept on stale focus:
+    // if we typed without waiting, username would grow — we wait properly instead.
+    const settle = await browser.settleFocusAfterClickForType(before);
+    assert.equal(settle.settled, true);
+    assert.equal(settle.changed, true);
+    await browser.typeOnly("fixture_pass", "keyboard");
+    const c = await loginRead();
+    assert.equal(c.user, "fixture_user");
+    assert.equal(c.pass, "fixture_pass");
+  }
+  pass("wp-login-label-focus-moves-before-type");
+
   await evaluate(
-    "document.querySelector('.result').scrollIntoView({block:'start'})",
+    "document.querySelector('.result')?.scrollIntoView({block:'start'})",
   );
   await sharp((await ui.capturePage()).toPNG())
     .composite([
