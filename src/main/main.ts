@@ -863,10 +863,9 @@ async function boot() {
     const screenshot = async () => {
       if (screenshotAttempted) return;
       screenshotAttempted = true;
-      if (!contextReady) {
-        outcome.screenshotError = "Chưa mở được đúng Browser Session của Case; không chụp Browser của workspace khác.";
-        return;
-      }
+      // Preflight/setup can fail before Case Session is opened. Do not invent a Session
+      // ownership error — outcome.message already carries the real BLOCKED reason.
+      if (!contextReady) return;
       try { Object.assign(outcome, await testEvidence.capture(browser, id, runId)); }
       catch (error) { outcome.screenshotError = error instanceof Error ? error.message : String(error); }
     };

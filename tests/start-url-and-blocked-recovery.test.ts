@@ -151,6 +151,52 @@ test("tag change clears prior Script Start URL when Static Tag cannot resolve", 
   }
 });
 
+test("assertFlowExecutable blocks Play All / Test Lab when pinned CLICK_TARGET lacks ROI", async () => {
+  const root = await mkdtemp(path.join(os.tmpdir(), "preflight-missing-roi-"));
+  const store = new Store(path.join(root, "creator.sqlite"));
+  try {
+    store.newFlow("FB POC", 1);
+    store.updateFlowMeta(store.flow()!.id, {
+      startUrl: "https://www.facebook.com/groups/demo",
+    });
+    store.saveStep("Wait", { action: "SLEEP", sleepMs: 10 });
+    const broken = store.saveStep("Click Login", { action: "CLICK_TARGET" });
+    const flow = store.flow()!;
+    assert.ok(flow.steps.some((r) => r.id === broken.id && r.version === broken.version));
+    assert.throws(
+      () => store.assertFlowExecutable(flow),
+      /Step thiếu ảnh ROI target đã crop|→ Step /,
+    );
+    assert.throws(
+      () => store.assertStepExecutable(broken.id, broken.version, flow),
+      /Click Login|thiếu ảnh ROI|Ghim version/i,
+    );
+  } finally {
+    store.close();
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test("Test Lab Case Start URL stays on Script Start URL — never Browser lastUrl", async () => {
+  const root = await mkdtemp(path.join(os.tmpdir(), "case-start-url-owner-"));
+  const store = new Store(path.join(root, "creator.sqlite"));
+  try {
+    const sessions = new BrowserSessions(store);
+    sessions.recordVisit(sessions.activeId(), "https://mayhopphat.com/wp-admin/");
+    const flow = store.newFlow("Facebook script", 1);
+    store.updateFlowMeta(flow.id, {
+      startUrl: "https://www.facebook.com/groups/314158368669766",
+    });
+    const lab = new TestLab(store, sessions);
+    const item = lab.ensureForScenario(flow.id, true);
+    assert.equal(item.startUrl, "https://www.facebook.com/groups/314158368669766");
+    assert.notEqual(item.startUrl, "https://mayhopphat.com/wp-admin/");
+  } finally {
+    store.close();
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
 test("interrupted RUNNING case recovers so Run Again is not stuck on RUNNING", async () => {
   const root = await mkdtemp(path.join(os.tmpdir(), "blocked-running-"));
   const store = new Store(path.join(root, "creator.sqlite"));

@@ -32,7 +32,7 @@ import {
 } from "./action-tags-refresh";
 import { ActionTagCombobox } from "./action-tag-combobox";
 import { actionTagStartUrlMode, resolveUrlFromActionTag } from "../shared/action-tag-url";
-import { isSameStartPage, parseHttpStartUrl } from "../shared/start-url";
+import { isSameStartPage, parseHttpStartUrl, START_URL_REQUIRED } from "../shared/start-url";
 import type { ScriptSyncRow } from "../shared/sync-status";
 import React, { useCallback, useEffect, useRef, useState } from "react";
 import { createRoot } from "react-dom/client";
@@ -748,7 +748,21 @@ function Creator() {
     let batchRunId: string | undefined;
     let failed = false;
     try {
-      if (all) batchRunId = await invoke<string>({ type: "startPlayAllLog" });
+      if (all) {
+        const snap = window.creator.readDraft("state", state).value as State;
+        const start = parseHttpStartUrl(snap.flow?.startUrl);
+        if (!start) throw new Error(START_URL_REQUIRED);
+        // Assert pinned Base versions before browser work (same gate as Test Lab).
+        batchRunId = await invoke<string>({ type: "startPlayAllLog" });
+        // Match Test Lab contract: navigate to Script Start URL before Step 1.
+        if (!isSameStartPage(snap.url, start.href)) {
+          setMessage(`Đang điều hướng Start URL trước Play All: ${start.href}`);
+          const navigated = await invoke<State>({ type: "navigate", url: start.href });
+          setState(navigated);
+          urlEdit.current = { dirty: false, revision: urlEdit.current.revision + 1 };
+          setUrl(navigated.url);
+        }
+      }
       await setEditorOpen(false);
       await playSequential(
         steps,
@@ -783,7 +797,20 @@ function Creator() {
       );
     } catch (error) {
       failed = true;
-      setMessage(String(error));
+      const message = error instanceof Error ? error.message : String(error);
+      setMessage(message);
+      // Surface preflight failures on the first pinned Step that assert named (→ Step N).
+      const match = message.match(/→ Step (\d+):/);
+      const snap = window.creator.readDraft("state", state).value as State;
+      const order = match ? Number(match[1]) : 0;
+      const ref = order > 0 ? snap.flow?.steps[order - 1] : undefined;
+      if (ref) {
+        setActiveStepId(ref.id);
+        setStepPlayback((previous) => ({
+          ...previous,
+          [ref.id]: { status: "blocked", message },
+        }));
+      }
     } finally {
       if (batchRunId) {
         try { await invoke({ type: "endPlayAllLog", runId: batchRunId, failed }); }
