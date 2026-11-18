@@ -98,6 +98,7 @@ import {
 import { createSeoOpsTokenStore } from "./seo-ops-token-store.js";
 import { createSeoOpsBackupScheduler } from "./seo-ops-backup-scheduler.js";
 import { collectScriptAssets, createSeoOpsSyncService } from "./seo-ops-sync.js";
+import { resolveUrlFromActionTag } from "../shared/action-tag-url.js";
 import { createHash } from "node:crypto";
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
@@ -1739,15 +1740,36 @@ async function boot() {
         if (store.flow()) {
           let actionTagId = command.actionTagId;
           let actionTagKey = command.actionTagKey;
+          const current = store.flow()!;
           if (actionTagKey && actionTagId === undefined) {
-            const tag = store.actionTag(actionTagKey);
+            const tag = store.actionTag(actionTagKey) || seoOpsSync.getEffectiveActionTags().find(t => t.tag_key === actionTagKey);
             if (tag) actionTagId = tag.id;
           }
-          store.updateFlowMeta(store.flow()!.id, {
+          const tagKeyChanged = actionTagKey !== undefined && actionTagKey !== current.actionTagKey;
+          const tag = actionTagKey
+            ? (store.actionTag(actionTagKey) || seoOpsSync.getEffectiveActionTags().find(t => t.tag_key === actionTagKey) || null)
+            : null;
+          const pathInputValues = command.pathInputValues
+            ?? (tagKeyChanged ? {} : current.pathInputValues)
+            ?? {};
+          let startUrl = command.startUrl;
+          if (startUrl === undefined && (tagKeyChanged || command.pathInputValues)) {
+            const resolved = resolveUrlFromActionTag(tag ?? undefined, pathInputValues);
+            startUrl = resolved.ok ? resolved.url : "";
+          }
+          store.updateFlowMeta(current.id, {
             actionTagKey,
-            actionTagId,
+            actionTagId: actionTagKey ? actionTagId : undefined,
             resultType: command.resultType,
             collectionType: command.collectionType,
+            ...(actionTagKey === undefined || actionTagKey === ""
+              ? { clearTagUrlMeta: true }
+              : {
+                  pathInputs: tag?.path_inputs ?? [],
+                  urlPattern: tag?.url_pattern ?? "",
+                  pathInputValues,
+                  startUrl: startUrl ?? current.startUrl ?? "",
+                }),
           });
         }
         return state();
@@ -1761,7 +1783,7 @@ async function boot() {
         return state();
       }
       case "seoOpsSyncActionTags": {
-        // Legacy IPC name: tag metadata only (no active-script / package sync).
+        // Legacy IPC name: tag metadata only. Manual sync may force once; still gated.
         isIdle();
         const syncResult = await seoOpsSync.refreshActionTags({ force: true });
         return {
@@ -1776,7 +1798,8 @@ async function boot() {
         };
       }
       case "seoOpsGetActionTags": {
-        const result = await seoOpsSync.refreshActionTags({ force: true });
+        // Never force — render/get paths must not bypass TTL.
+        const result = await seoOpsSync.refreshActionTags({ force: false });
         return result.tags;
       }
       case "seoOpsRefreshActionTags": {
@@ -1804,10 +1827,30 @@ async function boot() {
           const tag = store.actionTag(actionTagId);
           if (tag) actionTagKey = tag.tag_key;
         }
-        store.newFlow(command.name, browser.zoom, {
+        const tag = actionTagKey
+          ? (store.actionTag(actionTagKey) || seoOpsSync.getEffectiveActionTags().find(t => t.tag_key === actionTagKey) || null)
+          : null;
+        let startUrl: string | undefined;
+        let pathInputs = tag?.path_inputs;
+        let urlPattern = tag?.url_pattern;
+        if (tag) {
+          const resolved = resolveUrlFromActionTag(tag, {});
+          if (resolved.ok) startUrl = resolved.url;
+        }
+        const created = store.newFlow(command.name, browser.zoom, {
           actionTagKey,
           actionTagId,
+          pathInputs,
+          urlPattern,
         });
+        if (startUrl || pathInputs || urlPattern) {
+          store.updateFlowMeta(created.id, {
+            pathInputs: pathInputs ?? [],
+            urlPattern: urlPattern ?? "",
+            pathInputValues: {},
+            startUrl: startUrl ?? "",
+          });
+        }
         return state();
       }
       case "openFlow": {

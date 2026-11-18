@@ -152,6 +152,17 @@ function validatePayloadInternal(p: Payload, allowDraft: boolean) {
     )
       throw new Error("Chữ OCR xác nhận/bounding box không hợp lệ.");
   }
+  if (p.target?.clickOffset) {
+    const { x, y } = p.target.clickOffset;
+    if (
+      !p.target.ocr?.confirmed
+      || !Number.isFinite(x)
+      || !Number.isFinite(y)
+      || Math.abs(x) > 2000
+      || Math.abs(y) > 2000
+    )
+      throw new Error("Click offset cần OCR đã xác nhận và tọa độ hợp lệ.");
+  }
   if (
     p.method === "ocr" &&
     (!allowDraft || p.target) &&
@@ -728,14 +739,38 @@ export class Store {
       actionTagKey?: string;
       resultType?: "status" | "collection";
       collectionType?: string;
+      pathInputs?: PathInput[];
+      urlPattern?: string;
+      pathInputValues?: Record<string, string>;
+      startUrl?: string;
+      clearTagUrlMeta?: boolean;
     },
   ): Flow {
     const f = this.flows().find((flow) => flow.id === id);
     if (!f) throw new Error("Không tìm thấy Script.");
-    if (meta.actionTagId !== undefined) f.actionTagId = meta.actionTagId;
-    if (meta.actionTagKey !== undefined) f.actionTagKey = meta.actionTagKey || undefined;
+    if (meta.actionTagKey !== undefined) {
+      f.actionTagKey = meta.actionTagKey || undefined;
+      if (!meta.actionTagKey) {
+        delete f.actionTagId;
+      } else if (meta.actionTagId !== undefined) {
+        f.actionTagId = meta.actionTagId;
+      }
+    } else if (meta.actionTagId !== undefined) {
+      f.actionTagId = meta.actionTagId;
+    }
     if (meta.resultType !== undefined) f.resultType = meta.resultType;
     if (meta.collectionType !== undefined) f.collectionType = meta.collectionType || undefined;
+    if (meta.clearTagUrlMeta) {
+      delete f.pathInputs;
+      delete f.urlPattern;
+      delete f.pathInputValues;
+      delete f.startUrl;
+    } else {
+      if (meta.pathInputs !== undefined) f.pathInputs = meta.pathInputs;
+      if (meta.urlPattern !== undefined) f.urlPattern = meta.urlPattern || undefined;
+      if (meta.pathInputValues !== undefined) f.pathInputValues = meta.pathInputValues;
+      if (meta.startUrl !== undefined) f.startUrl = meta.startUrl || undefined;
+    }
     this.saveFlow(f);
     return f;
   }

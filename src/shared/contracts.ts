@@ -115,6 +115,12 @@ export type VisualTarget = {
   asset: string;
   roi: Rect;
   ocr?: Omit<OcrSegment, "id"> & { confirmed: true; language: "vie+eng" };
+  /**
+   * Offset from confirmed OCR bbox center (target-asset pixels) applied when
+   * AUTO selects the OCR path. Use to click a textbox under a label without
+   * hardcoding page coordinates. Cleared when OCR is cleared.
+   */
+  clickOffset?: { x: number; y: number };
 };
 export type Payload = {
   action: Action;
@@ -225,6 +231,10 @@ export type Flow = {
   collectionType?: string;
   pathInputs?: PathInput[];
   urlPattern?: string;
+  /** Values for path URL placeholders such as {group_id}. */
+  pathInputValues?: Record<string, string>;
+  /** Last resolved Site+Path URL preview persisted with the Script. */
+  startUrl?: string;
 };
 export type Capture = {
   id: string;
@@ -466,7 +476,15 @@ export type Command =
   | { type: "toggleFullscreen" }
   | { type: "environment"; zoom: number }
   | { type: "newFlow"; name: string; actionTagKey?: string; actionTagId?: number }
-  | { type: "updateFlowMetadata"; actionTagKey?: string; actionTagId?: number; resultType?: "status" | "collection"; collectionType?: string }
+  | {
+      type: "updateFlowMetadata";
+      actionTagKey?: string;
+      actionTagId?: number;
+      resultType?: "status" | "collection";
+      collectionType?: string;
+      pathInputValues?: Record<string, string>;
+      startUrl?: string;
+    }
   | { type: "createScriptFromRequest"; requestId: string }
   | { type: "seoOpsSyncActionTags" }
   | { type: "seoOpsGetActionTags" }

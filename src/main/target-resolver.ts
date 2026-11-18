@@ -7,6 +7,7 @@ import type {
   ResolutionTrace,
 } from "../shared/contracts.js";
 import type { OcrEngine } from "./ocr.js";
+import { applyOcrClickOffset } from "../shared/click-anchor.js";
 import { effectiveMatchTo } from "../shared/match-to.js";
 import { findOcrCandidates, normalizeOcrText } from "./ocr-candidates.js";
 import { confirmOcrContext } from "./ocr-context.js";
@@ -72,9 +73,18 @@ export function resolveOcrText(
     text: found.text,
     confidence: found.confidence,
     score: found.confidence / 100,
+    // Identity click (label center). target.clickOffset applied via withClickOffset.
     x: offset.x + found.bbox.x + found.bbox.width / 2,
     y: offset.y + found.bbox.y + found.bbox.height / 2,
   };
+}
+
+function withClickOffset(
+  match: NonNullable<Result["match"]>,
+  target: NonNullable<Payload["target"]>,
+): NonNullable<Result["match"]> {
+  const point = applyOcrClickOffset(match.x, match.y, target.clickOffset);
+  return { ...match, x: point.x, y: point.y };
 }
 export async function resolveVisualTarget(
   frame: Buffer,
@@ -132,13 +142,13 @@ export async function resolveVisualTarget(
     if (confirmed.length > 1) throw new TargetNotConfident("CONTEXT_AMBIGUOUS: nhiều mục tiêu cùng chữ/ngữ cảnh; không click.", trace, true);
     if (confirmed.length === 1) {
       trace.selectedMethod = "ocr";
-      return { ...confirmed[0], resolution: trace };
+      return { ...withClickOffset(confirmed[0], target), resolution: trace };
     }
     // Context is a discriminator, not a second mandatory match. A single exact,
     // confident OCR target is safe; duplicated targets still require context.
     if (confident.length === 1) {
       trace.selectedMethod = "ocr";
-      return { ...confident[0], resolution: trace };
+      return { ...withClickOffset(confident[0], target), resolution: trace };
     }
     if (confident.length > 1)
       throw new TargetNotConfident("CONTEXT_AMBIGUOUS: nhiều mục tiêu cùng chữ nhưng context không phân biệt được; không click.", trace, true);
@@ -190,9 +200,12 @@ export async function resolveVisualTarget(
       reason: imageReason,
     });
   }
-  if (image?.ambiguous)
+  // Ambiguous image alone must not guess. Confirmed OCR may still disambiguate
+  // (e.g. Username vs Password fields that look alike) — fall through to OCR.
+  if (image?.ambiguous && !target.ocr?.confirmed)
     block("Target ảnh có nhiều vị trí; không click đoán. Crop lại target.");
-  const imageGood = image !== undefined && image.score >= threshold;
+  const imageGood =
+    image !== undefined && !image.ambiguous && image.score >= threshold;
   if (!imageGood) trace.fallbackReason = imageReason;
   let textMatch: NonNullable<Result["match"]> | undefined;
   let viewportOcr: OcrResult | undefined;
@@ -253,8 +266,9 @@ export async function resolveVisualTarget(
       outcome: "unavailable",
       reason: "Chưa có chữ OCR được xác nhận.",
     });
-  if (image && textMatch && image.score >= 0.94 && target.ocr) {
+  if (image && !image.ambiguous && textMatch && image.score >= 0.94 && target.ocr) {
     // Compare the saved text anchor translated by image displacement, not ROI center.
+    // clickOffset is ignored here — agreement is about identity (label), not the typed field.
     const anchor = target.ocr.bbox;
     const expectedX =
       image.x - target.roi.width / 2 + anchor.x + anchor.width / 2;
@@ -300,7 +314,7 @@ export async function resolveVisualTarget(
       throw new TargetNotConfident(`CONTEXT_REJECTED: ${context.reason}`, trace);
     }
     trace.selectedMethod = "ocr";
-    return { ...textMatch, resolution: trace };
+    return { ...withClickOffset(textMatch, target), resolution: trace };
   }
   if (ocrRejection) {
     trace.blockedReason = ocrRejection.message;

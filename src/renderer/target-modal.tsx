@@ -1,5 +1,6 @@
 import React from "react";
 import type { Payload } from "../shared/contracts";
+import { predictedClickInAsset } from "../shared/click-anchor";
 import { UiPopover } from "./ui-popover";
 
 export function TargetModal({
@@ -25,6 +26,7 @@ export function TargetModal({
   close: () => void;
   quickTagRows?: number;
 }) {
+  const predicted = target ? predictedClickInAsset(target) : undefined;
   return (
     <UiPopover
       variant="modal"
@@ -61,13 +63,54 @@ export function TargetModal({
                 title={`Click (${(target.roi.x + target.roi.width / 2).toFixed(1)}, ${(target.roi.y + target.roi.height / quickTagRows / 2).toFixed(1)}) DIP`}
                 style={{ position: "absolute", left: "50%", top: `${50 / quickTagRows}%`, width: 12, height: 12,
                   borderRadius: "50%", background: "#ef4444", border: "2px solid white", transform: "translate(-50%, -50%)", pointerEvents: "none" }} />}
+              {quickTagRows === undefined && predicted && (
+                <>
+                  <span
+                    className="target-click-marker image"
+                    aria-label="Điểm click ảnh (tâm ROI)"
+                    title={`Ảnh · tâm ROI (${predicted.imageCenter.x.toFixed(0)}, ${predicted.imageCenter.y.toFixed(0)})`}
+                    style={{
+                      left: `${(predicted.imageCenter.x / target.roi.width) * 100}%`,
+                      top: `${(predicted.imageCenter.y / target.roi.height) * 100}%`,
+                    }}
+                  />
+                  {predicted.ocrCenter && (
+                    <span
+                      className="target-click-marker ocr"
+                      aria-label="Tâm chữ OCR"
+                      title={`OCR · tâm nhãn (${predicted.ocrCenter.x.toFixed(0)}, ${predicted.ocrCenter.y.toFixed(0)})`}
+                      style={{
+                        left: `${(predicted.ocrCenter.x / target.roi.width) * 100}%`,
+                        top: `${(predicted.ocrCenter.y / target.roi.height) * 100}%`,
+                      }}
+                    />
+                  )}
+                  {target.ocr?.confirmed && (
+                    <span
+                      className="target-click-marker click"
+                      aria-label="Điểm click dự kiến khi dùng OCR"
+                      title={`Click OCR path (${predicted.clickPoint.x.toFixed(0)}, ${predicted.clickPoint.y.toFixed(0)}) · ${predicted.via}`}
+                      style={{
+                        left: `${(predicted.clickPoint.x / target.roi.width) * 100}%`,
+                        top: `${(predicted.clickPoint.y / target.roi.height) * 100}%`,
+                      }}
+                    />
+                  )}
+                </>
+              )}
             </div>
           ) : (
             <div className="target-empty">
               Chụp và crop để chọn target cho step này.
             </div>
           )}
-          <figcaption>{quickTagRows !== undefined ? "QUICK_TAG · chấm đỏ là tâm hàng đầu. Chọn theo vị trí, không xác minh danh tính." : "Ảnh crop đang chọn"}</figcaption>
+          <figcaption>
+            {quickTagRows !== undefined
+              ? "QUICK_TAG · chấm đỏ là tâm hàng đầu. Chọn theo vị trí, không xác minh danh tính."
+              : predicted?.ocrCenter
+                ? "Xanh dương = tâm ảnh · Vàng = tâm OCR · Đỏ = click OCR (+ offset nếu có). AUTO ưu tiên ảnh khi khớp duy nhất."
+                : "Ảnh crop đang chọn · chấm xanh = tâm ROI (click ảnh)"}
+          </figcaption>
         </figure>
         <div className="target-confirmed">{confirmed}</div>
         <div className="target-ocr-controls">{target && ocrControls}</div>

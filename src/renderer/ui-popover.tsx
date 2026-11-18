@@ -65,31 +65,53 @@ export function UiPopover({
       if (returnFocus.current?.isConnected) returnFocus.current.focus();
     };
   }, []);
+  const anchorLeft = anchor?.left;
+  const anchorTop = anchor?.top;
+  const anchorBottom = anchor?.bottom;
   useLayoutEffect(() => {
-    if (!host) return;
+    if (
+      !host
+      || variant !== "popover"
+      || anchorLeft == null
+      || anchorTop == null
+      || anchorBottom == null
+    ) return;
     const place = () => {
-      if (variant !== "popover" || !anchor) return;
-      const r = ref.current!.getBoundingClientRect();
-      setPosition({
-        left: Math.max(8, Math.min(anchor.left, host.innerWidth - r.width - 8)),
-        top: Math.max(
-          8,
-          Math.min(anchor.bottom + 6, host.innerHeight - r.height - 8),
-        ),
-      });
+      if (!ref.current) return;
+      const r = ref.current.getBoundingClientRect();
+      const width = Math.max(r.width, 1);
+      const height = Math.max(r.height, 1);
+      const left = Math.max(8, Math.min(anchorLeft, host.innerWidth - width - 8));
+      const below = anchorBottom + 6;
+      const above = anchorTop - height - 6;
+      const top =
+        below + height <= host.innerHeight - 8
+          ? below
+          : above >= 8
+            ? above
+            : Math.max(8, Math.min(below, host.innerHeight - height - 8));
+      setPosition({ left, top });
     };
     place();
+    // Re-measure after paint when content (search/list) finishes layout.
+    const raf = host.requestAnimationFrame(() => place());
     const observer = new ResizeObserver(place);
     observer.observe(ref.current!);
     host.addEventListener("resize", place);
+    return () => {
+      host.cancelAnimationFrame(raf);
+      observer.disconnect();
+      host.removeEventListener("resize", place);
+    };
+    // Geometry primitives — avoid re-running when callers pass a fresh DOMRect each render.
+  }, [host, variant, anchorLeft, anchorTop, anchorBottom]);
+  // Focus once when the overlay host mounts — never on content re-renders (typing).
+  useLayoutEffect(() => {
+    if (!host) return;
     const firstField =
       ref.current?.querySelector<HTMLElement>("input,textarea,select") ??
       ref.current?.querySelector<HTMLElement>("button:not(:disabled)");
     firstField?.focus();
-    return () => {
-      observer.disconnect();
-      host.removeEventListener("resize", place);
-    };
   }, [host]);
   useEffect(() => {
     if (!host) return;

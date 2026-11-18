@@ -157,19 +157,54 @@ test("AUTO blocks both failures, unconfirmed OCR, low confidence and duplicate O
     /nhiều/,
   );
 });
-test("AUTO rejects image ambiguity before OCR and rejects credible image/OCR disagreement", async () => {
+test("AUTO rejects image ambiguity before OCR when OCR is not confirmed", async () => {
   const { template, frame } = await pixels(true);
   let calls = 0;
   await assert.rejects(
-    resolveVisualTarget(frame, template, payload, {
-      recognize: async () => {
-        calls++;
-        return ocr();
+    resolveVisualTarget(
+      frame,
+      template,
+      { ...payload, target: { ...payload.target!, ocr: undefined } },
+      {
+        recognize: async () => {
+          calls++;
+          return ocr();
+        },
       },
-    }),
+    ),
     /nhiều/,
   );
   assert.equal(calls, 0);
+});
+test("AUTO uses unique confirmed OCR when image is ambiguous (no arbitrary first click)", async () => {
+  const { template, frame } = await pixels(true);
+  const result = await resolveVisualTarget(frame, template, payload, {
+    recognize: async () => ocr(),
+  });
+  assert.equal(result.method, "ocr");
+  assert.equal(result.resolution.attempts[0].outcome, "ambiguous");
+  assert.equal(result.resolution.selectedMethod, "ocr");
+});
+test("OCR click applies configured clickOffset from label center", async () => {
+  const { template, weak } = await pixels();
+  const result = await resolveVisualTarget(
+    weak,
+    template,
+    {
+      ...payload,
+      target: {
+        ...payload.target!,
+        clickOffset: { x: 4, y: 18 },
+      },
+    },
+    { recognize: async () => ocr() },
+  );
+  assert.equal(result.method, "ocr");
+  assert.equal(result.x, 48 + 4);
+  assert.equal(result.y, 40 + 18);
+});
+test("AUTO rejects credible image/OCR disagreement", async () => {
+  const { template } = await pixels();
   const single = await pixels();
   await assert.rejects(
     resolveVisualTarget(single.frame, template, payload, {

@@ -13,12 +13,16 @@ export async function refreshActionTagsFromSeoOps(
   });
 }
 
+/**
+ * Patch tags only — never replace the full State snapshot from IPC.
+ * Replacing state() on every refresh recreates flows/steps array refs and
+ * re-triggers Creator/Scripts effects → API request storms.
+ */
 export function applyActionTagsToState(
   state: State | undefined,
   tags: ActionTag[],
-  nextState?: State,
+  _nextState?: State,
 ): State | undefined {
-  if (nextState) return nextState;
   if (!state) return state;
   return { ...state, actionTags: tags };
 }

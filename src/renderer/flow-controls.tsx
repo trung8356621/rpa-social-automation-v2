@@ -48,9 +48,6 @@ export function Variables({ state, update, locked, focusVariableId, onFocusHandl
       </button>
       {open && (
         <UiPopover
-          anchor={document
-            .querySelector(".variables > button")!
-            .getBoundingClientRect()}
           variant="drawer"
           label="Variables"
           close={() => setOpen(false)}

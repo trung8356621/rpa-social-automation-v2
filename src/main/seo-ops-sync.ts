@@ -59,6 +59,8 @@ import {
   SeoOpsHttpError,
   SEO_OPS_DEFAULT_BASE_URL,
 } from "../shared/seo-ops-http.js";
+import { createSeoOpsMetadataGate } from "../shared/seo-ops-metadata-gate.js";
+import { resolveActionTagUrl } from "../shared/action-tag-url.js";
 import { isLegacyPublishedScriptVersion, parsePublishedScriptVersion } from "../shared/script-version.js";
 import { resolveScriptReleaseState, type StoredScriptRelease } from "../shared/script-release-state.js";
 
@@ -130,6 +132,20 @@ export function createSeoOpsSyncService(options: {
   const installationId = store.setting("seoOpsInstallationId") || randomUUID();
   if (!store.setting("seoOpsInstallationId")) store.setSetting("seoOpsInstallationId", installationId);
   let actionTagsRefreshInFlight: Promise<ActionTagsRefreshResult> | null = null;
+  let scriptRequestsInFlight: Promise<ScriptRequest[]> | null = null;
+  let statusRowsInFlight: Promise<ScriptSyncRow[]> | null = null;
+  let statusRowsCached: ScriptSyncRow[] | null = null;
+  let statusRowsCachedAt = 0;
+  const metadataGate = createSeoOpsMetadataGate({
+    onBlock: (info) => {
+      if (info.reason === "budget" || info.reason === "backoff") {
+        console.warn(
+          `[seo-ops-metadata-gate] blocked ${info.endpoint} reason=${info.reason}`
+          + (info.retryAfterMs != null ? ` retryAfterMs=${Math.round(info.retryAfterMs)}` : ""),
+        );
+      }
+    },
+  });
 
   function config(): SeoOpsConfig {
     const raw = store.setting("seoOpsBaseUrl");
@@ -772,7 +788,29 @@ export function createSeoOpsSyncService(options: {
       }
 
       try {
-        const body = await adminApi("/action-tags");
+        const gated = await metadataGate.run(
+          "action-tags",
+          async () => adminApi("/action-tags"),
+          { force: Boolean(options?.force) },
+        );
+        if (!gated.fromNetwork) {
+          const retryAfterSeconds = gated.blocked.retryAfterMs
+            ? Math.ceil(gated.blocked.retryAfterMs / 1000)
+            : undefined;
+          if (gated.blocked.reason === "ttl") {
+            return enrichedTagsResult({ ok: true, source: "cache" });
+          }
+          return enrichedTagsResult({
+            ok: false,
+            source: "cache",
+            error: gated.blocked.reason === "budget"
+              ? "RPA Client đã chặn burst Action Tags (request budget). Thử lại sau."
+              : `SEO-OPS Action Tags đang cooldown. Thử lại sau ${retryAfterSeconds ?? 60} giây.`,
+            rateLimited: true,
+            retryAfterSeconds,
+          });
+        }
+        const body = gated.value;
         if (!body || !Array.isArray((body as { action_tags?: unknown[] }).action_tags)) {
           return enrichedTagsResult({
             ok: false,
@@ -817,26 +855,41 @@ export function createSeoOpsSyncService(options: {
     return actionTagsRefreshInFlight;
   }
 
-  /** Best-effort tag pull used by Script sync; prefers API, falls back to effective cache. */
+  /** Best-effort tag pull used by Script sync; respects TTL unless caller needs a warm cache. */
   async function fetchActionTags(): Promise<ActionTag[]> {
-    const result = await refreshActionTags({ force: true });
+    const result = await refreshActionTags({ force: false });
     return result.tags;
   }
 
-  async function fetchScriptRequests(status?: string): Promise<ScriptRequest[]> {
-    try {
-      const q = status ? `?status=${encodeURIComponent(status)}` : "";
-      const body = await adminApi(`/script-requests${q}`);
-      if (body && Array.isArray((body as { script_requests?: unknown[] }).script_requests)) {
-        const requests = (body as { script_requests: ScriptRequest[] }).script_requests;
-        store.setSetting("seoOpsScriptRequests", JSON.stringify(requests));
-        upsertTagsFromScriptRequests(requests);
-        return requests;
+  async function fetchScriptRequests(status?: string, options?: { force?: boolean }): Promise<ScriptRequest[]> {
+    if (scriptRequestsInFlight) return scriptRequestsInFlight;
+    const run = async (): Promise<ScriptRequest[]> => {
+      const cached = getCachedScriptRequests();
+      const gated = await metadataGate.run(
+        "script-requests",
+        async () => {
+          const q = status ? `?status=${encodeURIComponent(status)}` : "";
+          return adminApi(`/script-requests${q}`);
+        },
+        { force: Boolean(options?.force) },
+      );
+      if (!gated.fromNetwork) return cached;
+      try {
+        const body = gated.value;
+        if (body && Array.isArray((body as { script_requests?: unknown[] }).script_requests)) {
+          const requests = (body as { script_requests: ScriptRequest[] }).script_requests;
+          store.setSetting("seoOpsScriptRequests", JSON.stringify(requests));
+          upsertTagsFromScriptRequests(requests);
+          metadataGate.markSuccess("script-requests");
+          return requests;
+        }
+      } catch {
+        /* offline / unauthenticated fallback */
       }
-    } catch {
-      /* offline / unauthenticated fallback */
-    }
-    return getCachedScriptRequests();
+      return cached;
+    };
+    scriptRequestsInFlight = run().finally(() => { scriptRequestsInFlight = null; });
+    return scriptRequestsInFlight;
   }
 
   async function createScriptFromRequest(requestId: string): Promise<Flow> {
@@ -860,10 +913,23 @@ export function createSeoOpsSyncService(options: {
     const flow = store.newFlow(baseName, 1, {
       id: scriptId,
       actionTagKey: req.action_tag_key,
+      actionTagId: typeof req.action_tag_id === "number" ? req.action_tag_id : tag?.id,
       scriptRequestId: req.request_id,
       resultType: "status",
-      pathInputs: req.path_inputs,
-      urlPattern: req.url_pattern,
+      pathInputs: req.path_inputs ?? tag?.path_inputs,
+      urlPattern: req.url_pattern ?? tag?.url_pattern,
+    });
+    const resolved = resolveActionTagUrl({
+      baseUrl: tag?.base_url ?? req.site_base_url,
+      urlPattern: req.url_pattern ?? tag?.url_pattern,
+      pathInputs: req.path_inputs ?? tag?.path_inputs,
+      values: {},
+    });
+    store.updateFlowMeta(flow.id, {
+      pathInputs: req.path_inputs ?? tag?.path_inputs ?? [],
+      urlPattern: req.url_pattern ?? tag?.url_pattern ?? "",
+      pathInputValues: {},
+      startUrl: resolved.ok ? resolved.url : "",
     });
 
     req.status = "developing";
@@ -1206,14 +1272,34 @@ export function createSeoOpsSyncService(options: {
     return authClient().logout();
   }
 
-  async function refreshStatusRows(options?: { offlinePending?: boolean }): Promise<ScriptSyncRow[]> {
+  async function refreshStatusRows(options?: {
+    offlinePending?: boolean;
+    force?: boolean;
+  }): Promise<ScriptSyncRow[]> {
+    const STATUS_TTL_MS = metadataGate.ttlMs["scripts-catalog"];
+    if (
+      !options?.force
+      && statusRowsCached
+      && Date.now() - statusRowsCachedAt < STATUS_TTL_MS
+    ) {
+      return statusRowsCached;
+    }
+    if (statusRowsInFlight) return statusRowsInFlight;
+
+    const runStatus = async (): Promise<ScriptSyncRow[]> => {
     const meta = loadMeta();
     let remote: LocalScriptRow[] = [];
     let plan: SyncPlan | null = null;
     let error: string | undefined;
     if (tokenStore.getToken()) {
       try {
-        remote = await syncClient().catalog();
+        const gated = await metadataGate.run(
+          "scripts-catalog",
+          () => syncClient().catalog(),
+          { force: Boolean(options?.force) },
+        );
+        if (gated.fromNetwork) remote = gated.value;
+        else if (statusRowsCached) return statusRowsCached;
       } catch (e) {
         error = String((e as Error).message || e);
       }
@@ -1222,9 +1308,17 @@ export function createSeoOpsSyncService(options: {
     const local = await buildLocalCatalog(remoteMap);
     // Plan/catalog use publishable rows only so incomplete Scripts never hit publish validation.
     const planLocal = local.filter((r) => !r.incomplete && r.publish_body);
-    if (!error && tokenStore.getToken()) {
-      try { plan = await syncClient().plan(planLocal.map(toPlanRow)); }
-      catch (e) { error = String((e as Error).message || e); }
+    if (!error && tokenStore.getToken() && planLocal.length > 0) {
+      try {
+        const gatedPlan = await metadataGate.run(
+          "scripts-plan",
+          () => syncClient().plan(planLocal.map(toPlanRow)),
+          { force: Boolean(options?.force) },
+        );
+        if (gatedPlan.fromNetwork) plan = gatedPlan.value;
+      } catch (e) {
+        error = String((e as Error).message || e);
+      }
     }
     plan ??= planScriptSync(planLocal, remote);
 
@@ -1285,7 +1379,13 @@ export function createSeoOpsSyncService(options: {
 
     meta.rows = Object.fromEntries(rows.map((r) => [r.script_id, r]));
     saveMeta(meta);
+    statusRowsCached = rows;
+    statusRowsCachedAt = Date.now();
     return rows;
+    };
+
+    statusRowsInFlight = runStatus().finally(() => { statusRowsInFlight = null; });
+    return statusRowsInFlight;
   }
 
   async function materializeImport(release: Record<string, unknown>): Promise<{
@@ -1687,6 +1787,12 @@ export function createSeoOpsSyncService(options: {
     fetchScriptRequests,
     getCachedScriptRequests,
     createScriptFromRequest,
+    metadataGateStats: () => metadataGate.stats(),
+    resetMetadataGateForTests: () => {
+      metadataGate.resetForTests();
+      statusRowsCached = null;
+      statusRowsCachedAt = 0;
+    },
   };
 }
 

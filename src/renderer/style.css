@@ -1137,6 +1137,22 @@ body[data-panel="ui-overlay"] .ui-backdrop { background: rgb(6 13 23 / 14%); }
 .target-hero { margin: 0; padding: 20px; min-height: 150px; max-height: 42vh; overflow: auto; border-radius: 10px; border: 1px solid #3c536e; background: #0c1524; }
 .target-image-frame { position: relative; max-width: 100%; margin: auto; }
 .target-image-frame img { display: block; width: 100%; height: auto; border-radius: 5px; }
+.target-click-marker {
+  position: absolute;
+  width: 12px;
+  height: 12px;
+  border-radius: 50%;
+  border: 2px solid #fff;
+  transform: translate(-50%, -50%);
+  pointer-events: none;
+  box-shadow: 0 0 0 1px #0008;
+}
+.target-click-marker.image { background: #38bdf8; }
+.target-click-marker.ocr { background: #eab308; width: 10px; height: 10px; }
+.target-click-marker.click { background: #ef4444; width: 14px; height: 14px; z-index: 1; }
+.ocr-click-offset { margin-top: 8px; display: grid; gap: 6px; }
+.ocr-click-offset .row { display: flex; flex-wrap: wrap; gap: 8px; align-items: end; }
+.ocr-click-offset input { width: 88px; }
 .target-hero figcaption { margin-top: 12px; font-size: 12px; text-align: center; color: #a9bed6; }
 .target-empty { padding: 28px 12px; color: #a9bed6; text-align: center; }
 .target-confirmed .ocr-confirmed { margin: 16px 0 22px; }
@@ -4217,6 +4233,137 @@ body[data-panel="shell"] .collector-capture-split > aside.collector-capture-tool
   border: 1px solid #254a6e;
   color: #7dd3fc;
   font-size: 10px;
+}
+
+/* Creator Action Tag combobox — stays in toolbar (above BrowserCore native view). */
+.action-tag-combobox-trigger {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  max-width: 260px;
+  font-size: 11px;
+  padding: 2px 8px;
+  background: #0f172a;
+  color: #e2e8f0;
+  border: 1px solid #44505f;
+  border-radius: 4px;
+  cursor: pointer;
+}
+.action-tag-combobox-trigger:disabled {
+  opacity: 0.55;
+  cursor: default;
+}
+.action-tag-combobox-trigger code {
+  color: #68d6a6;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.action-tag-combobox-trigger span {
+  color: #94a3b8;
+  font-size: 10px;
+}
+.action-tag-combobox-overlay.ui-popover {
+  box-sizing: border-box;
+  width: 300px !important;
+  min-width: 300px !important;
+  max-width: 300px !important;
+  height: auto !important;
+  min-height: 0 !important;
+  max-height: 280px !important;
+  padding: 6px !important;
+  overflow: hidden !important;
+  background: #0d1520 !important;
+  border: 1px solid #334155 !important;
+  border-radius: 6px !important;
+  box-shadow: 0 10px 28px rgba(0, 0, 0, 0.55) !important;
+}
+.action-tag-combobox-menu {
+  display: grid;
+  gap: 4px;
+  width: 100%;
+  min-height: 0;
+}
+.action-tag-combobox-search {
+  width: 100%;
+  box-sizing: border-box;
+  height: 28px;
+  font-size: 11px;
+  padding: 4px 8px;
+  margin: 0;
+  background: #090e17;
+  color: #e2e8f0;
+  border: 1px solid #334155;
+  border-radius: 4px;
+}
+.action-tag-combobox-search:focus {
+  outline: none;
+  border-color: #38bdf8;
+}
+.action-tag-combobox-list {
+  max-height: 220px;
+  overflow: auto;
+  min-height: 0;
+}
+.action-tag-combobox-option {
+  display: grid;
+  gap: 2px;
+  padding: 6px 8px;
+  border-radius: 4px;
+  cursor: pointer;
+  color: #e2e8f0;
+}
+.action-tag-combobox-option code {
+  color: #68d6a6;
+  font-size: 11px;
+}
+.action-tag-combobox-option small {
+  color: #94a3b8;
+  font-size: 10px;
+}
+.action-tag-combobox-option.highlight {
+  background: #1e293b;
+}
+.action-tag-combobox-option.selected {
+  background: #172554;
+}
+.action-tag-combobox-option.selected.highlight {
+  background: #1d4ed8;
+}
+.action-tag-combobox-empty {
+  padding: 10px 8px;
+  color: #94a3b8;
+  font-size: 11px;
+}
+.action-tag-url-inputs {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  flex-wrap: wrap;
+}
+.action-tag-url-inputs label {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  color: #8b949e;
+  font-size: 11px;
+}
+.action-tag-url-inputs input {
+  width: 110px;
+  font-size: 11px;
+  padding: 1px 6px;
+  background: #0f172a;
+  color: #e2e8f0;
+  border: 1px solid #44505f;
+  border-radius: 4px;
+}
+.action-tag-url-status {
+  color: #fbbf24;
+  font-size: 11px;
+  max-width: 220px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 /* C2.11 Group Tag Combobox & Region Quick Fill */

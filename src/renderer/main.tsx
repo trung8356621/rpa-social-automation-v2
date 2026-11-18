@@ -1,5 +1,6 @@
 import { AdminStudioPage, type StudioEditorHandle } from "./admin-studio";
 import { installBrowserRecording } from "./browser-recording";
+import { suggestBelowLabelOffset } from "../shared/click-anchor";
 import { effectiveMatchTo, matchToLabel } from "../shared/match-to";
 import { playSequential, playbackResult, type StepPlayback } from "./playback";
 import { StepList } from "./step-list";
@@ -22,6 +23,8 @@ import {
   formatActionTagsRefreshStatus,
   refreshActionTagsFromSeoOps,
 } from "./action-tags-refresh";
+import { ActionTagCombobox } from "./action-tag-combobox";
+import { resolveUrlFromActionTag } from "../shared/action-tag-url";
 import type { ScriptSyncRow } from "../shared/sync-status";
 import React, { useCallback, useEffect, useRef, useState } from "react";
 import { createRoot } from "react-dom/client";
@@ -224,6 +227,10 @@ function Creator() {
   const [tagRefreshStatus, setTagRefreshStatus] = useState("");
   const [tagRefreshing, setTagRefreshing] = useState(false);
   const tagRefreshGen = useRef(0);
+  const setStateRef = useRef(setState);
+  setStateRef.current = setState;
+  const creatorTagRefreshOnceRef = useRef<string>("");
+  const flowStepsSig = `${state?.flow?.id ?? ""}:${state?.flow?.steps?.length ?? 0}`;
 
   const refreshCreatorActionTags = useCallback(async (force = false) => {
     if (!shell) return;
@@ -235,7 +242,8 @@ function Creator() {
         { force },
       );
       if (gen !== tagRefreshGen.current) return;
-      setState((prev) => applyActionTagsToState(prev, result.tags, result.state) ?? prev);
+      // Patch actionTags only — never adopt full IPC state (breaks effect deps).
+      setStateRef.current((prev) => applyActionTagsToState(prev, result.tags) ?? prev);
       setTagRefreshStatus(formatActionTagsRefreshStatus(result));
       if (!result.ok && result.authRequired) {
         setSeoOpsAuthenticated(false);
@@ -246,31 +254,54 @@ function Creator() {
     } finally {
       if (gen === tagRefreshGen.current) setTagRefreshing(false);
     }
-  }, [shell, setState]);
+  }, [shell]);
 
   useEffect(() => {
     if (!shell || !creatorVisible) return;
+    let cancelled = false;
     void window.creator.invoke({ type: "seoOpsSyncStatus" })
-      .then(result => setScriptSyncRows((result as { rows: ScriptSyncRow[] }).rows))
+      .then(result => {
+        if (!cancelled) setScriptSyncRows((result as { rows: ScriptSyncRow[] }).rows);
+      })
       .catch(() => undefined);
-  }, [creatorVisible, seoOpsAuthenticated, state?.flow?.id, state?.flow?.steps]);
+    return () => { cancelled = true; };
+    // Stable signature — not steps array identity (state() republishes new arrays).
+  }, [creatorVisible, seoOpsAuthenticated, flowStepsSig]);
 
   useEffect(() => {
-    if (!shell || !creatorVisible || !seoOpsAuthenticated) return;
-    void refreshCreatorActionTags(false);
-  }, [shell, creatorVisible, seoOpsAuthenticated, refreshCreatorActionTags]);
+    if (!creatorVisible) {
+      creatorTagRefreshOnceRef.current = "";
+      return;
+    }
+    if (!shell || !seoOpsAuthenticated) return;
+    const key = `${state?.flow?.id ?? "none"}`;
+    // One auto-refresh per Creator flow open; manual ↻ / focus still allowed.
+    if (creatorTagRefreshOnceRef.current === key) return;
+    creatorTagRefreshOnceRef.current = key;
+    let cancelled = false;
+    void (async () => {
+      if (cancelled) return;
+      await refreshCreatorActionTags(false);
+    })();
+    return () => { cancelled = true; };
+  }, [shell, creatorVisible, seoOpsAuthenticated, state?.flow?.id, refreshCreatorActionTags]);
+
   useEffect(() => {
     if (!shell) return;
+    let cancelled = false;
     void window.creator.invoke({ type: "seoOpsGetSession" }).then((session) => {
+      if (cancelled) return;
       const s = session as { authenticated?: boolean; autoSyncEnabled?: boolean };
       setSeoOpsAuthenticated(Boolean(s.authenticated));
       setSeoOpsAutoSyncEnabled(Boolean(s.autoSyncEnabled));
       setSeoOpsSession(session as SeoOpsSessionState);
     }).catch(error => {
+      if (cancelled) return;
       setSeoOpsAuthenticated(false);
       setSeoOpsSession({ configured: true, baseUrl: "", authenticated: false, autoSyncEnabled: false,
         error: String((error as Error).message || error) });
     });
+    return () => { cancelled = true; };
   }, [appPage]);
   const sidebarCollapsed = state?.sidebarCollapsed ?? false;
   const networkSettings = state?.networkSettings ?? defaultNetworkSettings();
@@ -444,6 +475,7 @@ function Creator() {
     setDelta(-400);
     setInputMethod("keyboard");
     setOcrEdit(undefined);
+    setOcrKind("none");
   }
   function newStep() {
     requestNavigation(async () => {
@@ -646,7 +678,7 @@ function Creator() {
     if (action === "TYPE_ONLY") return { action, variableId: variableId || undefined,
       ...(!variableId && base?.text ? { text: base.text } : {}), inputMethod };
     if (action === "QUICK_TAG") return { action, variableId, quickTagRows,
-      target: target ? { ...target, ocr: undefined, matchTo: "none" } : undefined };
+      target: target ? { ...target, ocr: undefined, matchTo: "none", clickOffset: undefined } : undefined };
     if (action === "UPLOAD_FILE") return { action, variableId: variableId || undefined,
       ...(!variableId && base?.files ? { files: base.files } : {}), target,
       method: base?.method ?? "auto", threshold: base?.threshold ?? 0.96, timeoutMs: base?.timeoutMs ?? 3000 };
@@ -825,9 +857,24 @@ function Creator() {
     setOcrEdit(undefined);
     setTarget((previous) => {
       if (!previous) return previous;
-      const { ocr, matchTo, ...rest } = previous;
+      const { ocr, matchTo, clickOffset, ...rest } = previous;
       return rest;
     });
+  }
+  function commitOcrEdit() {
+    if (ocrEdit === undefined) return;
+    const text = ocrEdit.trim();
+    if (!text) return;
+    setTarget((previous) =>
+      previous?.ocr ? { ...previous, ocr: { ...previous.ocr, text } } : previous,
+    );
+    setOcrEdit(undefined);
+  }
+  function closeTargetModal() {
+    commitOcrEdit();
+    // Mode-only (line/word without confirmed segment) must not stick across reopen.
+    setOcrKind(target?.ocr?.kind ?? "none");
+    setTargetModal(false);
   }
   function confirmOcr(segment: OcrSegment) {
     setOcrKind(segment.kind ?? "none");
@@ -843,6 +890,8 @@ function Creator() {
               language: "vie+eng",
               confirmed: true,
             },
+            // Keep existing offset if any; otherwise start at label center.
+            clickOffset: previous.clickOffset ?? { x: 0, y: 0 },
           }
         : previous,
     );
@@ -916,8 +965,13 @@ function Creator() {
         listRunIds.current.clear();
         setTargetModal(false);
         browserUrl.current = next.url;
-        urlEdit.current = { dirty: saved?.urlDirty ?? false, revision: urlEdit.current.revision + 1 };
-        setUrl(saved?.urlDirty ? saved.urlInput : next.url);
+        const startUrl = next.flow?.startUrl?.trim();
+        const preferStart = Boolean(startUrl) && !saved?.urlDirty;
+        urlEdit.current = {
+          dirty: saved?.urlDirty ?? preferStart,
+          revision: urlEdit.current.revision + 1,
+        };
+        setUrl(saved?.urlDirty ? saved.urlInput : (preferStart ? startUrl! : next.url));
         const updated = { ...tab, sessionId: next.activeBrowserSessionId, url: next.url };
         updateTabs(tabsRef.current.some(t => t.id === tab.id)
           ? tabsRef.current.map(t => t.id === tab.id ? updated : t) : [...tabsRef.current, updated]);
@@ -1171,7 +1225,10 @@ function Creator() {
     return result.message;
   }
   async function saveBase() {
-    if (selected && !editorDirty) return;
+    if (selected && !editorDirty) {
+      setMessage(`Không có thay đổi so với Base v${selected.version} — chưa tạo version mới.`);
+      return;
+    }
     const draftPayload = payload();
     if (ocrEdit !== undefined && draftPayload.target?.ocr)
       draftPayload.target = { ...draftPayload.target, ocr: { ...draftPayload.target.ocr, text: ocrEdit.trim() } };
@@ -1220,7 +1277,7 @@ function Creator() {
     if (p.action === "QUICK_TAG") {
       if (p.variableId) copy.variableId = p.variableId;
       copy.quickTagRows = p.quickTagRows ?? 5;
-      if (p.target) copy.target = { ...p.target, ocr: undefined, matchTo: "none" };
+      if (p.target) copy.target = { ...p.target, ocr: undefined, matchTo: "none", clickOffset: undefined };
       return copy;
     }
     if (p.action === "UPLOAD_FILE") {
@@ -1514,31 +1571,42 @@ function Creator() {
             </span>}
             {state?.flow && (
               <div className="script-metadata-bar" style={{ display: "inline-flex", alignItems: "center", gap: 8, fontSize: 11, padding: "2px 8px", background: "var(--card-bg, #202428)", borderRadius: 6, border: "1px solid var(--border, #3a3f45)" }}>
-                <span title="Action Tag được SEO-OPS giao" style={{ display: "inline-flex", alignItems: "center", gap: 4 }}>
+                <span title="Action Tag được SEO-OPS giao" style={{ display: "inline-flex", alignItems: "center", gap: 4, flexWrap: "wrap" }}>
                   <span style={{ color: "#8b949e", fontWeight: 600 }}>Tag:</span>
                   {state.actionTags && state.actionTags.length > 0 ? (
-                    <select
-                      value={state.flow.actionTagKey ?? ""}
+                    <ActionTagCombobox
+                      tags={state.actionTags}
+                      value={state.flow.actionTagKey}
                       disabled={locked}
-                      onFocus={() => { if (seoOpsAuthenticated) void refreshCreatorActionTags(false); }}
-                      onChange={async (e) => {
-                        const nextTag = e.target.value || undefined;
-                        setState(await invoke<State>({
-                          type: "updateFlowMetadata",
-                          actionTagKey: nextTag,
-                          resultType: state.flow?.resultType ?? "status",
-                          collectionType: state.flow?.collectionType,
-                        }));
+                      onOpen={() => { if (seoOpsAuthenticated) void refreshCreatorActionTags(false); }}
+                      onChange={(nextTag) => {
+                        void task(async () => {
+                          const next = await invoke<State>({
+                            type: "updateFlowMetadata",
+                            actionTagKey: nextTag,
+                            resultType: state.flow?.resultType ?? "status",
+                            collectionType: state.flow?.collectionType,
+                            pathInputValues: nextTag ? {} : undefined,
+                          });
+                          setState(next);
+                          const preview = next.flow?.startUrl?.trim();
+                          const tag = nextTag
+                            ? next.actionTags?.find(t => t.tag_key === nextTag)
+                            : undefined;
+                          const resolved = resolveUrlFromActionTag(tag, next.flow?.pathInputValues);
+                          if (preview) {
+                            urlEdit.current = { dirty: false, revision: urlEdit.current.revision + 1 };
+                            setUrl(preview);
+                            // Tag đã resolve đủ URL → navigate BrowserCore ngay.
+                            const snapshot = await invoke<State>({ type: "navigate", url: preview });
+                            setState(snapshot);
+                            setUrl(snapshot.url);
+                          } else if (nextTag && !resolved.ok) {
+                            setMessage(resolved.message);
+                          }
+                        });
                       }}
-                      style={{ fontSize: 11, padding: "1px 4px", background: "transparent", color: "inherit", border: "1px solid #444", borderRadius: 4 }}
-                    >
-                      <option value="">— Chưa gắn Tag —</option>
-                      {state.actionTags.map((t) => (
-                        <option key={t.tag_key} value={t.tag_key}>
-                          {t.tag_key}
-                        </option>
-                      ))}
-                    </select>
+                    />
                   ) : (
                     <code style={{ color: "#68d6a6" }}>{state.flow.actionTagKey || "Chưa gắn"}</code>
                   )}
@@ -1598,19 +1666,75 @@ function Creator() {
                     />
                   </span>
                 )}
-                {state.flow.pathInputs && state.flow.pathInputs.length > 0 && (
-                  <span title="Path Inputs được kế thừa từ SEO-OPS để dựng URL đích" style={{ display: "inline-flex", alignItems: "center", gap: 4, color: "#68d6a6" }}>
-                    <span style={{ color: "#8b949e", fontWeight: 600 }}>URL Inputs:</span>
-                    <code>{state.flow.pathInputs.map(p => `{${p.key}}`).join(" ")}</code>
-                  </span>
-                )}
+                {(() => {
+                  const tag = state.flow.actionTagKey
+                    ? state.actionTags?.find(t => t.tag_key === state.flow?.actionTagKey)
+                    : undefined;
+                  const pathInputs = (state.flow.pathInputs?.length
+                    ? state.flow.pathInputs
+                    : tag?.path_inputs) ?? [];
+                  if (!pathInputs.length) return null;
+                  const resolved = resolveUrlFromActionTag(
+                    tag ? { ...tag, path_inputs: pathInputs } : tag,
+                    state.flow.pathInputValues,
+                  );
+                  const missing = !resolved.ok && resolved.reason === "missing_inputs";
+                  return (
+                    <span className="action-tag-url-inputs" title="Path Inputs từ SEO-OPS để dựng URL đích">
+                      <span style={{ color: "#8b949e", fontWeight: 600 }}>URL Inputs:</span>
+                      {pathInputs.map((p) => (
+                        <label key={p.key}>
+                          {p.key}{p.required ? "*" : ""}
+                          <input
+                            disabled={locked}
+                            value={state.flow?.pathInputValues?.[p.key] ?? ""}
+                            placeholder={`{${p.key}}`}
+                            onChange={(e) => {
+                              const value = e.target.value;
+                              void task(async () => {
+                                const values = {
+                                  ...(state.flow?.pathInputValues ?? {}),
+                                  [p.key]: value,
+                                };
+                                const next = await invoke<State>({
+                                  type: "updateFlowMetadata",
+                                  actionTagKey: state.flow?.actionTagKey,
+                                  resultType: state.flow?.resultType ?? "status",
+                                  collectionType: state.flow?.collectionType,
+                                  pathInputValues: values,
+                                });
+                                setState(next);
+                                if (next.flow?.startUrl) {
+                                  urlEdit.current = { dirty: false, revision: urlEdit.current.revision + 1 };
+                                  setUrl(next.flow.startUrl);
+                                  const snapshot = await invoke<State>({
+                                    type: "navigate",
+                                    url: next.flow.startUrl,
+                                  });
+                                  setState(snapshot);
+                                  setUrl(snapshot.url);
+                                }
+                              });
+                            }}
+                          />
+                        </label>
+                      ))}
+                      {missing && (
+                        <span className="action-tag-url-status" role="status" title={resolved.message}>
+                          {resolved.message}
+                        </span>
+                      )}
+                    </span>
+                  );
+                })()}
               </div>
             )}
             {activeCaseTab && <button disabled={navigationLocked} onClick={() => navigateApp("test-case")}>Cấu hình Case</button>}
             <SessionSelector state={state} locked={locked || stepPlayback[activeStepId]?.status === "running"} select={selectSession} />
             <button
               className="primary"
-              disabled={locked || !state?.flow}
+              disabled={locked || !state?.flow || Boolean(selected && !editorDirty)}
+              title={selected && !editorDirty ? `Đã lưu Base v${selected.version}` : undefined}
               onClick={() => void task(saveBase)}
             >
               Save step
@@ -2035,7 +2159,7 @@ function Creator() {
                     name={name} target={target} image={targetImage}
                     quickTagRows={action === "QUICK_TAG" ? quickTagRows : undefined}
                     locked={locked} canCapture={!!state?.flow}
-                    close={() => { setOcrEdit(undefined); setTargetModal(false); }}
+                    close={closeTargetModal}
                     crop={() => { setTargetModal(false); void task(capture); }}
                     confirmed={action !== "QUICK_TAG" && target && <>
                       <div className="eyebrow">OCR LOCAL · VIỆT + ANH</div>
@@ -2060,12 +2184,7 @@ function Creator() {
                                 } else if (e.key === "Enter") {
                                   e.preventDefault();
                                   e.stopPropagation();
-                                  const text = ocrEdit.trim();
-                                  if (!text) return;
-                                  setTarget((previous) => previous?.ocr
-                                    ? { ...previous, ocr: { ...previous.ocr, text } }
-                                    : previous);
-                                  setOcrEdit(undefined);
+                                  commitOcrEdit();
                                 }
                               }}
                             />
@@ -2077,6 +2196,7 @@ function Creator() {
                           )}
                           <p className="hint">
                             {Math.round(target.ocr.confidence)}% confidence
+                            {target.ocr.kind ? ` · ${target.ocr.kind}` : ""}
                           </p>
                           <button
                             aria-label="Clear confirmed OCR"
@@ -2098,8 +2218,23 @@ function Creator() {
                         <select aria-label="Chọn chữ nhận diện" value={ocrKind} disabled={locked}
                           onChange={(e) => {
                             const kind = e.target.value as "none" | "line" | "word";
-                            if (kind === "none") clearTargetOcr();
-                            else setOcrKind(kind);
+                            if (kind === "none") {
+                              clearTargetOcr();
+                              return;
+                            }
+                            setOcrKind(kind);
+                            // Switching line↔word clears stale confirmation so Save persists the new kind only after re-select.
+                            if (target.ocr && target.ocr.kind !== kind) {
+                              setTarget((previous) => {
+                                if (!previous) return previous;
+                                const { ocr, matchTo, clickOffset, ...rest } = previous;
+                                return rest;
+                              });
+                              setOcrEdit(undefined);
+                            }
+                            if (!ocrResult && !ocrLoading && target.asset) {
+                              void task(() => readOcr(target.asset));
+                            }
                           }}>
                           <option value="none">Không dùng chữ</option>
                           <option value="line">Cả dòng chữ</option>
@@ -2154,6 +2289,64 @@ function Creator() {
                               ))}
                           </div>
                         </>
+                      )}
+                      {target.ocr?.confirmed && (
+                        <div className="ocr-click-offset" aria-label="Click offset từ OCR">
+                          <p className="hint">
+                            OCR nhận nhãn ≠ điểm click textbox. Offset (px từ tâm chữ) áp dụng khi AUTO dùng đường OCR.
+                          </p>
+                          <div className="row">
+                            <label>
+                              Offset X
+                              <input
+                                aria-label="Click offset X"
+                                type="number"
+                                disabled={locked}
+                                value={target.clickOffset?.x ?? 0}
+                                onChange={(e) =>
+                                  setTarget({
+                                    ...target,
+                                    clickOffset: {
+                                      x: Number(e.target.value) || 0,
+                                      y: target.clickOffset?.y ?? 0,
+                                    },
+                                  })
+                                }
+                              />
+                            </label>
+                            <label>
+                              Offset Y
+                              <input
+                                aria-label="Click offset Y"
+                                type="number"
+                                disabled={locked}
+                                value={target.clickOffset?.y ?? 0}
+                                onChange={(e) =>
+                                  setTarget({
+                                    ...target,
+                                    clickOffset: {
+                                      x: target.clickOffset?.x ?? 0,
+                                      y: Number(e.target.value) || 0,
+                                    },
+                                  })
+                                }
+                              />
+                            </label>
+                            <button
+                              type="button"
+                              disabled={locked}
+                              title="Đặt click dưới nhãn (vào vùng textbox ước lượng)"
+                              onClick={() =>
+                                setTarget({
+                                  ...target,
+                                  clickOffset: suggestBelowLabelOffset(target.ocr!.bbox),
+                                })
+                              }
+                            >
+                              Dưới nhãn
+                            </button>
+                          </div>
+                        </div>
                       )}
                       <button
                         disabled={locked}
@@ -2273,15 +2466,33 @@ function Creator() {
                         onChange={(e) => setDelta(Number(e.target.value))}
                       />,
                     )}
-                  <button
-                    className="primary"
-                    disabled={locked || !state?.flow}
-                    onClick={() => void task(saveBase)}
-                  >
-                    {selected
-                      ? `Lưu redesign → v${Math.max(...(state?.steps.filter((s) => s.id === selected.id).map((s) => s.version) || [1])) + 1}`
-                      : "Lưu Base v1"}
-                  </button>
+                  {(() => {
+                    const versions = state?.steps.filter((s) => s.id === selected?.id).map((s) => s.version) ?? [];
+                    const latestVersion = versions.length ? Math.max(...versions) : 0;
+                    const nextVersion = selected ? latestVersion + 1 : 1;
+                    const saveLabel = !selected
+                      ? "Lưu Base v1"
+                      : editorDirty
+                        ? `Lưu redesign → v${nextVersion}`
+                        : `Đã lưu · Base v${selected.version}`;
+                    return (
+                      <>
+                        {selected && latestVersion > selected.version && (
+                          <p className="hint" role="status">
+                            Đang mở Base v{selected.version}; latest là v{latestVersion}
+                            {editorDirty ? ` — Save sẽ tạo v${nextVersion}.` : "."}
+                          </p>
+                        )}
+                        <button
+                          className="primary"
+                          disabled={locked || !state?.flow || Boolean(selected && !editorDirty)}
+                          onClick={() => void task(saveBase)}
+                        >
+                          {saveLabel}
+                        </button>
+                      </>
+                    );
+                  })()}
                   {selected && (
                     <details className="advanced">
                       <summary>Version & Override</summary>

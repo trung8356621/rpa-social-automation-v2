@@ -114,20 +114,22 @@ export function ScenariosPage({ state, name, setName, locked, open, create, quic
   const flows = state?.flows ?? [];
   const activeScriptsByTag = state?.activeScriptsByTag ?? {};
 
+  const stateRef = useRef(state);
+  stateRef.current = state;
+  const onStateRef = useRef(onState);
+  onStateRef.current = onState;
+  const scriptsMountedRefreshRef = useRef(false);
+  const flowsSig = (state?.flows ?? []).map(f => f.id).join(",");
+
   async function refreshTags(force = false) {
-    if (!invoke || !onState) return;
+    if (!invoke || !onStateRef.current) return;
     const gen = ++tagRefreshGen.current;
     setTagRefreshing(true);
     try {
       const result = await refreshActionTagsFromSeoOps(invoke, { force });
       if (gen !== tagRefreshGen.current) return;
-      const next = applyActionTagsToState(state, result.tags, result.state);
-      if (next) onState(next);
-      // Keep create-dialog selection if the tag still exists.
-      const keep = selectedTagKeyRef.current;
-      if (keep && !result.tags.some(t => t.tag_key === keep)) {
-        /* leave selection; option may reappear after later refresh */
-      }
+      const next = applyActionTagsToState(stateRef.current, result.tags);
+      if (next) onStateRef.current(next);
       setTagRefreshStatus(formatActionTagsRefreshStatus(result));
     } catch (e) {
       if (gen !== tagRefreshGen.current) return;
@@ -139,15 +141,25 @@ export function ScenariosPage({ state, name, setName, locked, open, create, quic
 
   useEffect(() => {
     if (!invoke) return;
+    let cancelled = false;
     void invoke<{ rows: ScriptSyncRow[] }>({ type: "seoOpsSyncStatus" })
-      .then((r) => setSyncRows(r.rows))
+      .then((r) => { if (!cancelled) setSyncRows(r.rows); })
       .catch(() => undefined);
-  }, [invoke, seoOpsSession?.authenticated, state?.flows]);
+    return () => { cancelled = true; };
+    // flowsSig (ids) — not flows array identity from state republish.
+  }, [invoke, seoOpsSession?.authenticated, flowsSig]);
 
   useEffect(() => {
     if (!invoke || !seoOpsSession?.authenticated) return;
-    void refreshTags(false);
-    // eslint-disable-next-line react-hooks/exhaustive-deps -- refresh when Scripts page mounts / auth flips
+    if (scriptsMountedRefreshRef.current) return;
+    scriptsMountedRefreshRef.current = true;
+    let cancelled = false;
+    void (async () => {
+      if (cancelled) return;
+      await refreshTags(false);
+    })();
+    return () => { cancelled = true; };
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- once per Scripts mount while authenticated
   }, [invoke, seoOpsSession?.authenticated]);
 
   async function apply(command: Command, close = false) {
@@ -290,12 +302,10 @@ export function ScenariosPage({ state, name, setName, locked, open, create, quic
           onRows={setSyncRows}
           onSession={onSeoOpsSession}
           reconnect={reconnectSeoOps}
-          onSyncComplete={(tags, nextState) => {
-            if (nextState && onState) {
-              onState(nextState);
-            } else if (onState && state) {
-              onState({ ...state, actionTags: tags });
-            }
+          onSyncComplete={(tags) => {
+            if (!onState || !stateRef.current) return;
+            const next = applyActionTagsToState(stateRef.current, tags);
+            if (next) onState(next);
           }}
         />
       )}
