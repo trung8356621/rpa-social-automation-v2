@@ -1,7 +1,13 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { readFile } from "node:fs/promises";
-import { initialResultMedia, initialTestCaseMode, stepStatusLabel } from "../src/shared/test-lab-view.js";
+import {
+  initialResultMedia,
+  initialTestCaseMode,
+  screenshotMediaMessage,
+  stepStatusLabel,
+  videoMediaMessage,
+} from "../src/shared/test-lab-view.js";
 import type { CaseResult } from "../src/shared/contracts.js";
 
 const result = (extra: Partial<CaseResult> = {}): CaseResult => ({
@@ -21,6 +27,40 @@ test("video is primary when ready or preparing; unavailable video falls back to 
   assert.equal(initialResultMedia(result()), "screenshot");
 });
 
+test("screenshot placeholder respects terminal status — no infinite loading after run ends", () => {
+  assert.equal(screenshotMediaMessage(result({ status: "RUNNING" })), "Đang chuẩn bị ảnh cuối cùng");
+  assert.equal(
+    screenshotMediaMessage(result({ status: "BLOCKED", message: "Step 8 thiếu ROI" })),
+    "Lượt chạy dừng trước khi có ảnh cuối cùng",
+  );
+  assert.equal(
+    screenshotMediaMessage(result({ status: "ERROR" })),
+    "Lượt chạy dừng trước khi có ảnh cuối cùng",
+  );
+  assert.equal(
+    screenshotMediaMessage(result({ status: "PASS" })),
+    "Không có ảnh cuối cùng cho lượt chạy này",
+  );
+  assert.equal(
+    screenshotMediaMessage(result({ status: "ACTION_SENT" })),
+    "Không có ảnh cuối cùng cho lượt chạy này",
+  );
+  assert.equal(
+    screenshotMediaMessage(result({ status: "BLOCKED", screenshotError: "capture failed" })),
+    "capture failed",
+  );
+});
+
+test("terminal result without recording shows no-video, not preparing", () => {
+  assert.equal(videoMediaMessage(result({ status: "BLOCKED" })), "Không có video cho lượt chạy này");
+  assert.equal(videoMediaMessage(result({ status: "ACTION_SENT" })), "Không có video cho lượt chạy này");
+  assert.equal(videoMediaMessage(result({ status: "RUNNING" })), "Đang chuẩn bị video");
+  assert.equal(
+    videoMediaMessage(result({ status: "BLOCKED", recordingError: "Recording produced no file." })),
+    "Recording produced no file.",
+  );
+});
+
 test("status labels never promote ACTION_SENT and distinguish success/failure", () => {
   assert.equal(stepStatusLabel("ACTION_SENT"), "ACTION_SENT");
   assert.equal(stepStatusLabel("PASS"), "SUCCESS");
@@ -31,7 +71,18 @@ test("status labels never promote ACTION_SENT and distinguish success/failure", 
 test("result media is responsive without horizontal overflow", async () => {
   const css = await readFile(new URL("../src/renderer/style.css", import.meta.url), "utf8");
   assert.match(css, /\.case-result-media[^}]*width:\s*min\(1180px, 100%\)/);
+  assert.match(css, /\.case-result-outcome/);
   assert.match(css, /\.case-video-player[^}]*width:\s*100%/);
   assert.match(css, /\.case-video-player[^}]*object-fit:\s*contain/);
   assert.match(css, /@media \(max-width: 720px\)/);
+});
+
+test("CaseResultView surfaces outcome above media and uses media helpers", async () => {
+  const source = await readFile(new URL("../src/renderer/test-lab.tsx", import.meta.url), "utf8");
+  assert.match(source, /case-result-outcome/);
+  assert.match(source, /screenshotMediaMessage\(result/);
+  assert.match(source, /videoMediaMessage\(result/);
+  const outcomeIdx = source.indexOf("case-result-outcome");
+  const mediaIdx = source.indexOf("case-result-media");
+  assert.ok(outcomeIdx > 0 && mediaIdx > outcomeIdx, "outcome banner must render above media");
 });

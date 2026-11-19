@@ -398,6 +398,55 @@ export class Store {
   assertFlowExecutable(flow: Flow) {
     for (const ref of flow.steps) this.assertStepExecutable(ref.id, ref.version, flow);
   }
+  /**
+   * Collect every invalid pinned Step (does not throw). Used by Play All UX so
+   * the operator sees the full repair list — validation rules are unchanged.
+   */
+  listFlowExecutableIssues(flow: Flow): Array<{
+    stepId: string;
+    version: number;
+    name: string;
+    flatOrder: number;
+    reason: string;
+    reasonCode: ScriptHealthIssue["reasonCode"];
+    technical: string;
+  }> {
+    const found: Array<{
+      stepId: string;
+      version: number;
+      name: string;
+      flatOrder: number;
+      reason: string;
+      reasonCode: ScriptHealthIssue["reasonCode"];
+      technical: string;
+    }> = [];
+    flow.steps.forEach((ref, index) => {
+      const step = this.step(ref.id, ref.version);
+      const issue = this.stepIssue(step.payload, flow);
+      if (!issue) return;
+      const flatOrder = index + 1;
+      const formatted = formatHumanStepError({
+        scenarioName: flow.name ?? "Scenario",
+        flowId: flow.id,
+        stepId: step.id,
+        order: flatOrder,
+        stepName: step.name,
+        version: step.version,
+        issue,
+        payload: step.payload,
+      });
+      found.push({
+        stepId: step.id,
+        version: step.version,
+        name: step.name,
+        flatOrder,
+        reason: formatted.reason,
+        reasonCode: issue.reasonCode,
+        technical: formatted.technical,
+      });
+    });
+    return found;
+  }
   private flowOwningStep(stepId: string): Flow | null {
     return (
       this.flows().find((f) => f.steps.some((r) => r.id === stepId)) ?? null

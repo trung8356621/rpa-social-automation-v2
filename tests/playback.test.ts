@@ -96,3 +96,57 @@ test("UI pass preserves ACTION_SENT and never upgrades it to VERIFIED", () => {
   assert.equal(state.resultStatus, "ACTION_SENT");
   assert.deepEqual(sent, before);
 });
+
+test("playbackResult stamps runId/source so UI can tell which run a chip belongs to", () => {
+  const state = playbackResult([result(steps[0])], {
+    runId: "b1d17b74-738f-45f8-9370-ba9563fdafcc",
+    at: "2026-11-18T09:50:43.753Z",
+    source: "test-lab",
+  });
+  assert.equal(state.runId, "b1d17b74-738f-45f8-9370-ba9563fdafcc");
+  assert.equal(state.source, "test-lab");
+  assert.equal(state.at, "2026-11-18T09:50:43.753Z");
+});
+
+test("Play All keeps Group children in pinned flow order and stops on later BLOCKED", async () => {
+  // Flat flow.steps order is the Play All contract — Group is UI organization only.
+  const ordered = [
+    { id: "outside", version: 1, name: "Open", createdAt: "f", payload: { action: "CLICK_TARGET" as const } },
+    { id: "g-child-a", version: 2, name: "Tag A", createdAt: "f", payload: { action: "CLICK_TARGET" as const } },
+    { id: "g-child-b", version: 1, name: "Sleep", createdAt: "f", payload: { action: "SLEEP" as const, sleepMs: 10 } },
+    { id: "after", version: 1, name: "Broken", createdAt: "f", payload: { action: "CLICK_TARGET" as const } },
+  ];
+  const calls: string[] = [];
+  const events: string[] = [];
+  await playSequential(
+    ordered,
+    async (s) => {
+      calls.push(s.id);
+      return [result(s, s.id === "after" ? "BLOCKED" : "ACTION_SENT")];
+    },
+    (s, state) => events.push(`${s.id}:${state.status}:${state.resultStatus ?? ""}`),
+  );
+  assert.deepEqual(calls, ["outside", "g-child-a", "g-child-b", "after"]);
+  assert.equal(events.at(-1), "after:blocked:BLOCKED");
+  assert.ok(!calls.includes("never"), "must not continue past BLOCKED");
+  // Steps 1–3 ACTION_SENT remain pass/ACTION_SENT — not upgraded to VERIFIED.
+  assert.equal(events[1], "outside:pass:ACTION_SENT");
+  assert.equal(events[3], "g-child-a:pass:ACTION_SENT");
+});
+
+test("blockedSteps memory skip does not execute step and continues to next", async () => {
+  const blocked = new Set(["s2"]);
+  const calls: string[] = [];
+  const events: string[] = [];
+  await playSequential(
+    steps,
+    async (s) => {
+      calls.push(s.id);
+      return [result(s)];
+    },
+    (s, state) => events.push(`${s.id}:${state.status}`),
+    async (s) => blocked.has(s.id),
+  );
+  assert.deepEqual(calls, ["s1", "s3"]);
+  assert.ok(events.includes("s2:skipped"));
+});

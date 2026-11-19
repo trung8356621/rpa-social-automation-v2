@@ -292,18 +292,30 @@ export function StepList({
             {text && text !== title && <span className="step-target-text">{text}</span>}
             {sleepText && customName && <span className="step-target-text">{sleepText}</span>}
             <small>{s.payload.action} · v{s.version} · {matchToLabel(effectiveMatchTo(s.payload))}{(state.invalidSteps ?? []).some(r => r.stepId === s.id && r.version === s.version) && <span className="step-block-flag" title={(state.invalidSteps ?? []).find(r => r.stepId === s.id && r.version === s.version)?.detail}> · Invalid</span>}{blockedSteps.has(s.id) && <span className="step-block-flag"> · BLOCKED (All)</span>}</small>
-            {playback[s.id] && (
+            {playback[s.id] && (() => {
+              const chip = playback[s.id]!;
+              return (
               <small
-                className={`step-status ${playback[s.id].status}`}
-                title={`${playback[s.id].resultStatus ?? ""} ${playback[s.id].message}`}
+                className={`step-status ${chip.status}`}
+                title={[
+                  chip.resultStatus,
+                  chip.source,
+                  chip.runId && `run ${chip.runId}`,
+                  chip.at,
+                  chip.message,
+                ].filter(Boolean).join(" · ")}
               >
-                {playback[s.id].status === "skipped" ? "SKIPPED" : playback[s.id].status}
-                {playback[s.id].status === "pass" &&
-                playback[s.id].resultStatus === "ACTION_SENT"
-                  ? " · sent"
-                  : ""}
+                {chip.status === "skipped" ? "SKIPPED"
+                  : chip.status === "invalid" ? "INVALID"
+                  : chip.status}
+                {chip.status === "pass" && chip.resultStatus === "ACTION_SENT" ? " · sent" : ""}
+                {chip.status === "invalid" && chip.uiNumber ? ` · UI ${chip.uiNumber}` : ""}
+                {chip.runId && (
+                  <span className="step-run-id"> · {chip.runId.slice(0, 8)}</span>
+                )}
               </small>
-            )}
+              );
+            })()}
           </span>
         </button>
         <button

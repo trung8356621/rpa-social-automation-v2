@@ -4,7 +4,15 @@ import { validateVariables } from "../shared/flow-model";
 import { canUseAsScriptDemo } from "../shared/video-demo-policy";
 import { UiPopover } from "./ui-popover";
 import { FileValidation, validateFileValues } from "./file-validation";
-import { initialResultMedia, initialTestCaseMode, stepStatusLabel, type ResultMedia, type TestCaseViewMode } from "../shared/test-lab-view";
+import {
+  initialResultMedia,
+  initialTestCaseMode,
+  screenshotMediaMessage,
+  stepStatusLabel,
+  videoMediaMessage,
+  type ResultMedia,
+  type TestCaseViewMode,
+} from "../shared/test-lab-view";
 
 export type CaseEditorHandle = {
   dirty: boolean; name: string; flowId: string; sessionId: string;
@@ -205,6 +213,11 @@ export function CaseResultView({ item, state, locked = false, runAgain, compact 
       {edit && <button onClick={edit}>Edit Configuration</button>}
       {runAgain && <button className="primary" disabled={locked || (result.status === "RUNNING" && state?.runningTestCaseId === item.id)} onClick={runAgain}>Run Again</button>}
     </div>
+    <section className="case-result-outcome" aria-label="Kết quả chạy" role={["BLOCKED", "ERROR", "FAILED"].includes(result.status) ? "alert" : "status"}>
+      <p className="case-result-message">{result.message}</p>
+      {result.stepId && <p className="case-result-stop-step">Step dừng: {result.stepName ?? result.stepId} · v{result.version}</p>}
+      {result.error && <ExecutionErrorView error={result.error} stepName={result.stepName} onFix={onFix} />}
+    </section>
     <section className="case-result-media" aria-label="Test media">
       <div className="case-media-tabs" role="tablist">
         <button role="tab" aria-selected={media === "video"} onClick={() => setMedia("video")}>Video quá trình</button>
@@ -213,13 +226,15 @@ export function CaseResultView({ item, state, locked = false, runAgain, compact 
       {media === "video" ? videoSource
         ? <video className="case-video-player" controls preload="metadata" src={videoSource} />
         : <div className="case-media-state" role={videoError || result.recordingError ? "alert" : "status"}>
-            {videoError || result.recordingError || (result.status === "RUNNING" || result.recordingPath ? "Đang chuẩn bị video" : "Không có video cho lượt chạy này.")}
+            {videoMediaMessage(result, videoError)}
             {(videoError || result.recordingError) && screenshot && <button onClick={() => setMedia("screenshot")}>Xem ảnh cuối cùng</button>}
           </div>
         : screenshot ? <button className="case-screenshot case-screenshot-primary" onClick={() => setLarge(true)} title="Xem ảnh lớn">
             <img src={screenshot} alt={`Screenshot cuối của ${result.caseName ?? item.name}`} /><span>Xem ảnh lớn · {result.screenshotAt && new Date(result.screenshotAt).toLocaleString()}</span>
           </button>
-        : <div className="case-media-state" role={result.screenshotError || imageError ? "alert" : "status"}>{result.screenshotError || imageError || "Đang chuẩn bị ảnh cuối cùng"}</div>}
+        : <div className="case-media-state" role={result.screenshotError || imageError || result.status !== "RUNNING" ? "alert" : "status"}>
+            {screenshotMediaMessage(result, imageError)}
+          </div>}
       <div className="case-media-tools"><button disabled={locked || attaching || !demoOk || !videoSource}
         title={demoOk ? "Gắn recording này làm Script Demo" : "Chỉ Run thành công + recording hoàn chỉnh mới làm được Script Demo"}
         onClick={() => {
@@ -234,7 +249,7 @@ export function CaseResultView({ item, state, locked = false, runAgain, compact 
                 : `Không lưu được demo: ${message.replace(/^.*VIDEO_DEMO:\s*/i, "")}`);
             }).finally(() => setAttaching(false));
         }}>{attaching ? "Đang lưu demo…" : "Use as Script Demo"}</button>
-        {!demoOk && <span className="hint">{canUseAsScriptDemo(result).reason?.replace(/^VIDEO_DEMO:\s*/, "")}</span>}
+        {!demoOk && <span className="hint">{canUseAsScriptDemo(result).reason?.replace(/^VIDEO_DEMO:\s*/i, "")}</span>}
         {attachMsg && <span role={attachMsg === "Demo saved" ? "status" : "alert"}>{attachMsg}</span>}</div>
     </section>
     <section className="case-step-results"><h2>Step Results</h2>

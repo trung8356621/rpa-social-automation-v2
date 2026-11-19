@@ -50,11 +50,18 @@ import { validateVariables, resolvePayload } from "../shared/flow-model.js";
 import { ScenarioGroups } from "./scenario-groups.js";
 import { Store } from "./storage.js";
 import {
+  beginTestRunLog,
+  endTestRunLog,
   initializeMainFileLogging,
   logMainError,
   logMainEvent,
   logTestBoundary,
 } from "./main-error-log.js";
+import { flowUiStepNumbers } from "../shared/flow-step-numbers.js";
+import {
+  formatPlayAllPreflightBlocked,
+  type PlayAllBeginResult,
+} from "../shared/play-all-preflight.js";
 import { Runtime } from "./runtime.js";
 import { startFixture } from "./fixture.js";
 import { localOcr } from "./ocr.js";
@@ -2073,16 +2080,83 @@ async function boot() {
       case "startPlayAllLog": {
         isIdle();
         const flow = store.flow();
-        if (flow) store.assertFlowExecutable(flow);
+        const attemptId = randomUUID();
+        // Always open an attempt log — even when preflight rejects before any Step runs.
+        beginTestRunLog(attemptId, "Play All");
+        logTestBoundary(runDir, "START", {
+          runId: attemptId,
+          label: "Play All",
+          status: "STARTED",
+        });
+        const issues = flow ? store.listFlowExecutableIssues(flow) : [];
+        if (issues.length) {
+          const uiNumbers = flow ? flowUiStepNumbers(flow) : new Map<string, string>();
+          const invalidSteps = issues.map((issue) => ({
+            stepId: issue.stepId,
+            version: issue.version,
+            name: issue.name,
+            flatOrder: issue.flatOrder,
+            uiNumber: uiNumbers.get(issue.stepId) ?? String(issue.flatOrder).padStart(2, "0"),
+            reason: issue.reason,
+            reasonCode: issue.reasonCode,
+          }));
+          const message = formatPlayAllPreflightBlocked(invalidSteps);
+          logMainEvent(runDir, "play-all-preflight-blocked", {
+            runId: attemptId,
+            attemptId,
+            code: "PLAY_ALL_PREFLIGHT_BLOCKED",
+            executedSteps: [],
+            invalidSteps,
+          });
+          logTestBoundary(runDir, "END", {
+            runId: attemptId,
+            label: "Play All",
+            status: "PLAY_ALL_PREFLIGHT_BLOCKED",
+            ocrPasses: 0,
+            scrolls: 0,
+          });
+          endTestRunLog(attemptId);
+          const blocked: PlayAllBeginResult = {
+            ok: false,
+            attemptId,
+            code: "PLAY_ALL_PREFLIGHT_BLOCKED",
+            message,
+            invalidSteps,
+          };
+          return blocked;
+        }
+        logMainEvent(runDir, "play-all-preflight-passed", {
+          runId: attemptId,
+          attemptId,
+          stepCount: flow?.steps.length ?? 0,
+        });
         uiPlayAllViewportRestore = overlays.enterExecutionMode();
         publishLayout();
         try {
           await settleViewport();
-          uiPlayAllRunId = runtime.startPlayAllLog();
-          return uiPlayAllRunId;
+          // Reuse attemptId as batchRunId so execution Steps share one correlation id.
+          uiPlayAllRunId = runtime.startPlayAllLog(undefined, undefined, {
+            runId: attemptId,
+            openLog: false,
+          });
+          const started: PlayAllBeginResult = {
+            ok: true,
+            attemptId,
+            batchRunId: uiPlayAllRunId,
+          };
+          return started;
         } catch (error) {
           uiPlayAllViewportRestore(); uiPlayAllViewportRestore = undefined;
           publishLayout();
+          logMainError(runDir, "play-all-batch-start", error, { runId: attemptId, attemptId });
+          logTestBoundary(runDir, "END", {
+            runId: attemptId,
+            label: "Play All",
+            status: "FAILED",
+            ocrPasses: 0,
+            scrolls: 0,
+          });
+          endTestRunLog(attemptId);
           throw error;
         }
       }

@@ -34,19 +34,26 @@ export class Runtime {
     if (!step) throw new Error("Snapshot Step/version not found.");
     return step;
   }
-  startPlayAllLog(flow?: Flow, snapshotSteps?: Step[]) {
+  startPlayAllLog(
+    flow?: Flow,
+    snapshotSteps?: Step[],
+    options?: { runId?: string; openLog?: boolean },
+  ) {
     if (this.busy || this.batch) throw new Error("Đang có lượt chạy.");
-    const runId = randomUUID();
-    beginTestRunLog(runId, "Play All");
+    const runId = options?.runId ?? randomUUID();
+    const openLog = options?.openLog !== false;
+    if (openLog) {
+      beginTestRunLog(runId, "Play All");
+      logTestBoundary(this.runDir, "START", {
+        runId,
+        label: "Play All",
+        status: "STARTED",
+      });
+    }
     this.batch = { runId, ocrPasses: 0, scrolls: 0, status: "STARTED",
       network: snapshotNetworkSettings(this.store.networkSettings()) };
     this.batchSteps = snapshotSteps ? structuredClone(snapshotSteps) : undefined;
     this.batchFlow = flow ? structuredClone(flow) : undefined;
-    logTestBoundary(this.runDir, "START", {
-      runId: this.batch.runId,
-      label: "Play All",
-      status: "STARTED",
-    });
     return this.batch.runId;
   }
   endPlayAllLog(runId: string, failed = false) {

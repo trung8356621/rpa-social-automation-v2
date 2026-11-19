@@ -1,1 +1,7 @@
-export { playSequential, playbackResult, type StepPlayback } from "../shared/playback";
+export {
+  playSequential,
+  playbackMeta,
+  playbackResult,
+  type PlaybackMeta,
+  type StepPlayback,
+} from "../shared/playback";

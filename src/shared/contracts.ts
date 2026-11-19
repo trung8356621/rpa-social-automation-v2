@@ -513,6 +513,7 @@ export type Command =
   | { type: "playAllTransition"; batchRunId: string; previousStepId: string; previousVersion: number; nextStepId: string; nextVersion: number }
   | { type: "startPlayAllLog" }
   | { type: "endPlayAllLog"; runId: string; failed?: boolean }
+  // startPlayAllLog returns PlayAllBeginResult (shared/play-all-preflight.ts)
   | { type: "testPair"; firstId: string; secondId: string; delayMs: number }
   | {
       type: "reviewTest";
