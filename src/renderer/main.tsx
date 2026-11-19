@@ -1114,11 +1114,11 @@ function Creator() {
   }
   function runCase(id: string) {
     if (busy || shot || ocrLoading || workspaceLock.current || pendingNavigationRef.current || !state) {
-      setMessage("Đang bận hoặc đang chuyển tab — đợi xong rồi Run Again.");
+      setMessage("Đang bận hoặc đang chuyển tab — đợi xong rồi Run.");
       return;
     }
     if (!canRunCase(id)) {
-      setMessage("Lưu hoặc bỏ draft Test Case trước khi Run Again.");
+      setMessage("Lưu hoặc bỏ draft Test Case trước khi Run.");
       return;
     }
     const item = state.testLab?.cases.find(item => item.id === id);
@@ -1138,6 +1138,112 @@ function Creator() {
         setState(await invoke<State>({ type: "appPage", page: "test-case" }));
       } catch (error) { setState(await invoke<State>({ type: "state" })); throw error; }
       finally { workspaceLock.current = false; }
+    });
+  }
+  /** Run Again: open Case Session/Script for manual Browser prep — no Test Run until Play All. */
+  function prepareCaseRerun(id: string) {
+    if (busy || shot || ocrLoading || workspaceLock.current || pendingNavigationRef.current || !state) {
+      setMessage("Đang bận hoặc đang chuyển tab — đợi xong rồi Run Again.");
+      return;
+    }
+    if (!canRunCase(id)) {
+      setMessage("Lưu hoặc bỏ draft Test Case trước khi Run Again.");
+      return;
+    }
+    const item = state.testLab?.cases.find((entry) => entry.id === id);
+    if (!item) return;
+    if (!item.startUrl?.trim()) {
+      setMessage("START_URL_REQUIRED — mở Case, nhập Start URL (hoặc cấu hình Script Start URL), Lưu, rồi Run Again.");
+      return;
+    }
+    workspaceLock.current = true;
+    void task(async () => {
+      try {
+        captureActiveTab();
+        const next = await invoke<State>({ type: "prepareTestCaseRerun", id });
+        const prep = next.testCaseRerunPrep;
+        const flowId = prep?.flowId ?? item.flowId;
+        const existing = tabsRef.current.find((tab) => tab.kind === "creator" && tab.flowId === flowId);
+        const tab: WorkspaceTab = existing ?? {
+          id: crypto.randomUUID(),
+          kind: "creator",
+          flowId,
+          sessionId: prep?.sessionId ?? item.sessionId,
+          url: next.url || undefined,
+        };
+        // Do not call activateTab — it would force Script Start URL navigation.
+        // Mark urlDirty so a later tab restore also skips auto Start URL reload.
+        if (existing) {
+          const prior = tabDrafts.current.get(existing.id);
+          if (prior) tabDrafts.current.set(existing.id, { ...prior, urlDirty: true, urlInput: next.url });
+        }
+        unstable_batchedUpdates(() => {
+          setState(next);
+          browserUrl.current = next.url;
+          urlEdit.current = { dirty: false, revision: urlEdit.current.revision + 1 };
+          setUrl(next.url);
+          updateTabs(
+            tabsRef.current.some((t) => t.id === tab.id)
+              ? tabsRef.current.map((t) => (t.id === tab.id
+                ? { ...t, sessionId: next.activeBrowserSessionId, url: next.url }
+                : t))
+              : [...tabsRef.current, { ...tab, sessionId: next.activeBrowserSessionId, url: next.url }],
+          );
+          setActiveTabId(tab.id);
+          setCreatorSidebarTab("steps");
+          setMessage("Chuẩn bị Browser trước khi chạy lại");
+          setPageError("");
+        });
+      } catch (error) {
+        setState(await invoke<State>({ type: "state" }));
+        throw error;
+      } finally {
+        workspaceLock.current = false;
+      }
+    });
+  }
+  function cancelCaseRerunPrep() {
+    if (busy || workspaceLock.current) return;
+    workspaceLock.current = true;
+    void task(async () => {
+      try {
+        setState(await invoke<State>({ type: "cancelTestCaseRerunPrep" }));
+        setMessage("Đã hủy chuẩn bị chạy lại — kết quả trước vẫn giữ.");
+      } finally {
+        workspaceLock.current = false;
+      }
+    });
+  }
+  /** Prep Play All → Test Lab runner (recording + Case pins), not Creator Play All. */
+  function playAllFromRerunPrep() {
+    const prep = state?.testCaseRerunPrep;
+    if (!prep || busy || shot || ocrLoading || workspaceLock.current || pendingNavigationRef.current) return;
+    if (!canRunCase(prep.caseId)) {
+      setMessage("Lưu hoặc bỏ draft Test Case trước khi Play All.");
+      return;
+    }
+    const item = state?.testLab?.cases.find((entry) => entry.id === prep.caseId);
+    if (!item) return;
+    if (!window.confirm(
+      `Play All “${item.name}” sẽ chạy lại các Step đã ghim của Test Case (có recording). Có thể thao tác thật trên mạng xã hội. Tiếp tục?`,
+    )) return;
+    const resultTab: WorkspaceTab = tabsRef.current.find((tab) => tab.kind === "test-case" && tab.caseId === prep.caseId)
+      ?? { id: crypto.randomUUID(), kind: "test-case", caseId: prep.caseId, flowId: item.flowId, sessionId: item.sessionId };
+    workspaceLock.current = true;
+    void task(async () => {
+      try {
+        await invoke<State>({ type: "runTestCase", id: prep.caseId });
+        if (!tabsRef.current.some((t) => t.id === resultTab.id)) {
+          updateTabs([...tabsRef.current, resultTab]);
+        }
+        setActiveTabId(resultTab.id);
+        setState(await invoke<State>({ type: "appPage", page: "test-case" }));
+      } catch (error) {
+        setState(await invoke<State>({ type: "state" }));
+        throw error;
+      } finally {
+        workspaceLock.current = false;
+      }
     });
   }
   function ensureScenarioCase(flowId: string, defaultAcceptance = false) {
@@ -1646,6 +1752,7 @@ function Creator() {
         hidden={tab.id !== activeTabId || appPage !== "test-case"}>
         <TestCaseEditor tabId={tab.id} item={state.testLab?.cases.find(c => c.id === tab.caseId)} state={state}
           locked={navigationLocked} report={reportCase} saved={caseSaved} saving={setBusy} run={runCase}
+          runAgain={prepareCaseRerun}
           fix={error => fixExecutionError(error, tab.flowId)} back={() => navigateApp("test-lab")} />
       </div>)}
       {shell && state && <AdminStudioPage report={reportStudio} page={appPage} state={state} locked={navigationLocked}
@@ -2114,15 +2221,31 @@ function Creator() {
               <p>{state?.runningTestCaseId ? "Đang chạy, vui lòng đợi." : "Đã kết thúc. Kiểm tra website hoặc mở Cấu hình Case để chạy lại."}</p>
               {!state?.runningTestCaseId && state?.testLab?.cases.find(c => c.id === activeCaseTab.caseId)?.lastResult &&
                 <CaseResultView item={state.testLab.cases.find(c => c.id === activeCaseTab.caseId)!} state={state}
-                  locked={navigationLocked || !canRunCase(activeCaseTab.caseId!)} runAgain={() => runCase(activeCaseTab.caseId!)}
+                  locked={navigationLocked || !canRunCase(activeCaseTab.caseId!)} runAgain={() => prepareCaseRerun(activeCaseTab.caseId!)}
                   compact onFix={error => fixExecutionError(error, activeCaseTab.flowId)} />}</>}
             {state?.sessionError && <p className="network-failure-hint" role="alert">{state.sessionError}</p>}
             {results.filter(result => result.networkHint).map(result =>
               <p key={result.id} className="network-failure-hint" role="alert">{result.networkHint}</p>)}
+            {state?.testCaseRerunPrep && !state.runningTestCaseId && (
+              <div className="test-lab-rerun-prep" role="status" aria-label="Chuẩn bị chạy lại Test Case">
+                <b>Chuẩn bị Browser trước khi chạy lại</b>
+                <p>
+                  Case “{state.testCaseRerunPrep.caseName}”. Tự chỉnh website (reload, đóng modal, xóa draft)
+                  — không tự xóa cookie/localStorage. Bấm Play All khi sẵn sàng để chạy lại qua Test Lab (có recording).
+                </p>
+                <div className="case-result-actions">
+                  <button type="button" disabled={locked} onClick={cancelCaseRerunPrep}>Hủy</button>
+                  <button type="button" className="primary" disabled={locked || !canRunCase(state.testCaseRerunPrep.caseId)}
+                    onClick={playAllFromRerunPrep}>Play All</button>
+                </div>
+              </div>
+            )}
             <div className="execution-summary" role="status" aria-label="Lượt chạy hiện tại">
               {execution ? <><b>Bản đã chạy: {executionLabel(execution)}</b>
                 <p>{stepPlayback[execution.stepId]?.status ?? "running"} · {stepPlayback[execution.stepId]?.message}</p>
-              </> : <small>Play dùng version Base đã ghim trong danh sách; không dùng bản nháp Editor. Play All validate từng Step khi tới lượt.</small>}
+              </> : state?.testCaseRerunPrep
+                ? <small>Đang chuẩn bị chạy lại Test Case — Play All bên trên dùng pipeline Test Lab, không phải Creator Play All.</small>
+                : <small>Play dùng version Base đã ghim trong danh sách; không dùng bản nháp Editor. Play All validate từng Step khi tới lượt.</small>}
               {results.map(result => <p key={result.id}>
                 v{result.version} · {result.status} · {matchToLabel(result.execution?.matchTo)}
                 {result.execution && <> · OCR {result.execution.ocrPasses} / scroll {result.execution.scrolls} · {result.execution.stopReason}</>}
@@ -2134,7 +2257,7 @@ function Creator() {
             {state && !activeCaseTab && (
               <Groups
                 newStep={newStep}
-                playAll={() => playSavedSteps()}
+                playAll={() => state.testCaseRerunPrep ? playAllFromRerunPrep() : playSavedSteps()}
                 state={state}
                 locked={locked}
                 update={async (c) => setState(await invoke<State>(c))}
@@ -2153,9 +2276,18 @@ function Creator() {
                 update={async (c) => {
                   setBusy(true);
                   try {
-                    setState(await invoke<State>(c));
+                    const next = await invoke<State>(c);
+                    setState(next);
+                    if (
+                      c.type === "deleteFlowStep" &&
+                      selected?.id === c.stepId
+                    ) {
+                      setSelected(undefined);
+                      setMessage(`Đã xóa Step khỏi Flow.`);
+                    }
                   } catch (e) {
                     setMessage(String(e));
+                    throw e;
                   } finally {
                     setBusy(false);
                   }

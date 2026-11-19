@@ -45,6 +45,8 @@ import type { NormalizedRegionGeometry } from "../shared/collectors/types.js";
 import { BrowserRecording } from "./browser-recording.js";
 import { TestRunEvidence } from "./test-run-evidence.js";
 import { TestLab } from "./test-lab.js";
+import { ensureTestLabStartUrl } from "./test-lab-start-nav.js";
+import { buildTestCaseRerunPrep } from "../shared/test-lab-rerun-prep.js";
 import { playSequential } from "../shared/playback.js";
 import { validateVariables, resolvePayload } from "../shared/flow-model.js";
 import { ScenarioGroups } from "./scenario-groups.js";
@@ -85,6 +87,7 @@ import type {
   Rect,
   BrowserCoreNavigationEvent,
   BrowserCoreNavigationResult,
+  TestCaseRerunPrep,
 } from "../shared/contracts.js";
 import { executeManualSync } from "../shared/sync-ipc.js";
 import {
@@ -392,6 +395,7 @@ async function boot() {
   let studioCommandBusy = false;
   const testEvidence = new TestRunEvidence(path.join(dataPath, "test-runs"));
   let runningTestCaseId: string | undefined;
+  let testCaseRerunPrep: TestCaseRerunPrep | undefined;
   let switchingWorkspace = false;
   let activeSessionId = browserSessions.activeId();
   let switchingSession = false;
@@ -711,6 +715,7 @@ async function boot() {
   }));
   const state = (): State => ({
     runningStudio, testLab: testLab.read(), runningTestCaseId,
+    testCaseRerunPrep,
     scenarioOrganization: scenarioGroups.read(),
     scenarioDemos: scenarioDemos(),
     browserSessions: browserSessions.list(),
@@ -845,6 +850,8 @@ async function boot() {
     const item = testLab.get(id);
     const start = parseHttpStartUrl(item.startUrl);
     if (!start) throw new Error(START_URL_REQUIRED);
+    // Explicit Play All from Run Again prep (or initial Run) — leave prep mode.
+    testCaseRerunPrep = undefined;
     runningTestCaseId = id;
     armedTest = undefined;
     const restoreViewport = overlays.enterExecutionMode();
@@ -896,29 +903,28 @@ async function boot() {
       catch (error) {
         outcome.recordingError = `Recording failed to start: ${error instanceof Error ? error.message : String(error)}`;
       }
-      // loadURL awaits main-frame load completion. No DOM/login inspection or retries.
-      let failedLoad = false;
-      const wc = browser.view.webContents;
-      const failed = (_event: unknown, _code: number, _description: string, _url: string, main: boolean) => { if (main) failedLoad = true; };
-      const response = (_event: unknown, _url: string, status: number) => { if (status >= 400) failedLoad = true; };
-      wc.on("did-fail-load", failed); wc.on("did-navigate", response);
-      let timer: ReturnType<typeof setTimeout> | undefined;
-      try {
+      // Start URL: skip reload when already ready; ERR_ABORTED (-3) needs final-URL verify (not auto-fail).
+      {
         const currentUrl = browser.view.webContents.getURL?.() ?? "";
         if (!isSameStartPage(currentUrl, start.href)) {
           outcome.message = `Đang điều hướng về Start URL trước khi chạy Step 1: ${start.href}`;
           publish();
+        } else {
+          outcome.message = `Browser đã ở Start URL — không reload trước Step 1: ${start.href}`;
+          publish();
         }
-        await Promise.race([
-          browser.navigate(start.href),
-          new Promise<never>((_, reject) => {
-            timer = setTimeout(() => { reject(new Error("Start URL chưa tải xong sau 30 giây; Case chưa gửi thao tác.")); wc.stop(); }, 30000);
-          }),
-        ]);
-        if (failedLoad) throw new Error("Start URL chưa tải thành công; Case chưa gửi thao tác.");
-      } finally {
-        if (timer) clearTimeout(timer);
-        wc.removeListener("did-fail-load", failed); wc.removeListener("did-navigate", response);
+        const nav = await ensureTestLabStartUrl({
+          wc: browser.view.webContents as unknown as import("./test-lab-start-nav.js").TestLabNavWebContents,
+          startHref: start.href,
+          navigate: (url) => browser.navigate(url),
+        });
+        logMainEvent(runDir, "test-lab-start-nav", {
+          runId, caseId: id, skipped: nav.skipped, finalUrl: nav.finalUrl, events: nav.events,
+        });
+        outcome.message = nav.skipped
+          ? `Start URL sẵn sàng (không reload): ${nav.finalUrl}`
+          : `Start URL sẵn sàng: ${nav.finalUrl}`;
+        publish();
       }
       // Values are checked in the Case's Browser, before any Step sends input.
       validateVariables(flow.variables ?? [], item.values);
@@ -977,6 +983,14 @@ async function boot() {
           else if (!outcome.recordingError) outcome.recordingError = "Recording produced no file.";
         } catch (error) {
           outcome.recordingError = `Recording failed to finalize: ${error instanceof Error ? error.message : String(error)}`;
+        }
+        // Navigation/setup failure is primary; missing frames are secondary evidence only.
+        if (
+          !outcome.recordingPath &&
+          outcome.recordingError &&
+          /Start URL|ERR_ABORTED|NAVIGATION|tải thất bại|chưa tới đích/i.test(outcome.message ?? "")
+        ) {
+          outcome.message = `${outcome.message} — Recording (phụ): ${outcome.recordingError}`;
         }
         if (outcome.status === "RUNNING") {
           outcome.status = "ERROR";
@@ -1505,6 +1519,35 @@ async function boot() {
       case "runTestCase":
         if (event.sender !== window.webContents) throw new Error("Invalid Test Case sender");
         return runTestCase(command.id);
+      case "prepareTestCaseRerun": {
+        // Run Again only: open Case Session/Script for manual prep. Do not start a Test Run.
+        if (event.sender !== window.webContents) throw new Error("Invalid Test Case sender");
+        isIdle();
+        if (uiPlayAllRunId) throw new Error("Đợi Play All kết thúc trước khi chuẩn bị chạy lại Case.");
+        assertNoCropOverlay("chuẩn bị chạy lại Case");
+        const item = testLab.get(command.id);
+        if (!parseHttpStartUrl(item.startUrl)) throw new Error(START_URL_REQUIRED);
+        const flow = store.flows().find((f) => f.id === item.flowId);
+        if (!flow) throw new Error("Scenario không còn tồn tại.");
+        browserSessions.get(item.sessionId);
+        restoreBrowserForCreatorWorkspace();
+        await switchBrowserSession(item.sessionId, true, false);
+        store.setSetting("currentFlow", flow.id);
+        browser.setZoom(flow.zoom);
+        overlays.setExpanded("editor", false);
+        overlays.setPage("creator");
+        browser.setVisible(true);
+        publishLayout();
+        testCaseRerunPrep = buildTestCaseRerunPrep(item);
+        window.webContents.focus();
+        return state();
+      }
+      case "cancelTestCaseRerunPrep": {
+        isIdle();
+        // Cancel must not write lastResult / create a failed run.
+        testCaseRerunPrep = undefined;
+        return state();
+      }
       case "saveTestCase":
         isIdle(); testLab.save(command.id, command.config); return state();
       case "ensureScenarioTestCase": {
@@ -2012,9 +2055,18 @@ async function boot() {
               "Chọn gỡ pin khỏi Case rồi xóa khỏi Flow, hoặc hủy. Version lịch sử trong SQLite vẫn giữ.",
           );
         }
-        if (refs.length && command.detachFromTestCases)
-          testLab.detachStepFromCases(flow.id, command.stepId);
+        // Snapshot before mutate. Remove Flow first; detach pins second. If detach
+        // fails, restore Flow so pins and Scenario cannot diverge.
+        const flowBefore = structuredClone(flow);
         store.removeFlowStep(command.stepId);
+        if (refs.length && command.detachFromTestCases) {
+          try {
+            testLab.detachStepFromCases(flow.id, command.stepId);
+          } catch (error) {
+            store.saveFlow(flowBefore);
+            throw error;
+          }
+        }
         return state();
       }
       case "deleteFlowGroup": {

@@ -37,10 +37,12 @@ function initial(state: State): TestCaseConfig {
   return { name: "", flowId: flow?.id ?? "", sessionId: session?.id ?? "", startUrl: flow?.startUrl?.trim() || "",
     values: initialValues, recording: true, stepVersions: structuredClone(flow?.steps ?? []) };
 }
-export function TestCaseEditor({ tabId, item, state, locked, report, saved, saving, run, fix, back }: {
+export function TestCaseEditor({ tabId, item, state, locked, report, saved, saving, run, runAgain, fix, back }: {
   tabId: string; item?: TestCase; state: State; locked: boolean;
   report: (id: string, handle: CaseEditorHandle) => void;
   saved: (tabId: string, item: TestCase, state: State) => void; run: (id: string) => void;
+  /** Run Again enters Browser prep; defaults to run if omitted (should not bypass prep in production). */
+  runAgain?: (id: string) => void;
   saving: (value: boolean) => void;
   fix?: (error: ExecutionError) => void;
   back: () => void;
@@ -84,7 +86,8 @@ export function TestCaseEditor({ tabId, item, state, locked, report, saved, savi
   const disabled = locked || working;
   function values(next: VariableValues) { setConfig(previous => ({ ...previous, values: next })); }
   if (mode === "result" && item?.lastResult) return <section className="app-page test-case-result-page" aria-label="Test Case Result">
-    <CaseResultView item={item} state={state} locked={disabled || dirty} runAgain={() => run(item.id)}
+    <CaseResultView item={item} state={state} locked={disabled || dirty}
+      runAgain={() => (runAgain ?? run)(item.id)}
       edit={() => setMode("configure")} back={back} onFix={fix} />
   </section>;
   return <section className="app-page test-case-editor" aria-label="Test Case Configure">

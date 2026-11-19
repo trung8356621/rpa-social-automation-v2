@@ -1221,6 +1221,16 @@ body[data-panel="ui-overlay"] .variables-drawer {
 .ocr-confirmed > b, .ocr-confirmed > small { display: block; padding-right: 20px; }
 
 
+.test-lab-rerun-prep {
+  flex-shrink: 0;
+  margin: 8px 0 10px;
+  padding: 10px 12px;
+  border: 1px solid #c4cdd5;
+  background: #f6f8fa;
+  border-radius: 6px;
+}
+.test-lab-rerun-prep p { margin: 6px 0 10px; font-size: 13px; line-height: 1.4; }
+.test-lab-rerun-prep .case-result-actions { margin-bottom: 0; }
 .execution-summary, .editor-save-state {
   padding: 8px; background: #192c41; border-bottom: 1px solid #3c536e;
   font-size: 11px; overflow-wrap: anywhere;

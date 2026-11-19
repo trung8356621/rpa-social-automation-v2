@@ -360,10 +360,20 @@ export type InvalidStepRef = {
   variableId?: string;
   detail: string;
 };
+/** In-memory only: Run Again preparation before explicit Play All (Test Lab runner). */
+export type TestCaseRerunPrep = {
+  caseId: string;
+  caseName: string;
+  flowId: string;
+  sessionId: string;
+  previousRunId?: string;
+};
 export type State = {
   runningStudio?: boolean;
   testLab?: TestLabState;
   runningTestCaseId?: string;
+  /** Set by prepareTestCaseRerun; cleared on Play All (runTestCase) or cancel. Not persisted. */
+  testCaseRerunPrep?: TestCaseRerunPrep;
   scenarioOrganization?: ScenarioOrganization;
   scenarioDemos?: Record<string, { caseId: string; runId: string; selectedAt?: string; status: "ready" | "outdated" }>;
   browserSessions?: BrowserSession[];
@@ -442,6 +452,8 @@ export type Command =
   | { type: "deleteTestCase"; id: string; confirmed: boolean }
   | { type: "moveTestCase"; id: string; groupId?: string }
   | { type: "runTestCase"; id: string }
+  | { type: "prepareTestCaseRerun"; id: string }
+  | { type: "cancelTestCaseRerunPrep" }
   | { type: "createScenarioGroup"; name: string }
   | { type: "updateScenarioGroup"; id: string; name?: string; collapsed?: boolean }
   | { type: "deleteScenarioGroup"; id: string; confirmed: boolean }

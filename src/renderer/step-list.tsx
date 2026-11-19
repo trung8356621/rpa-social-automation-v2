@@ -490,28 +490,28 @@ export function StepList({
                 disabled={locked}
                 onClick={() => {
                   const step = menu.step!;
-                  if (!window.confirm(`Xóa Step “${step.name}” khỏi Flow?\n\nVersion lịch sử vẫn giữ trong SQLite. Chỉ gỡ khỏi Scenario hiện tại.`))
-                    return;
-                  void update({
-                    type: "deleteFlowStep",
-                    stepId: step.id,
-                    confirmed: true,
-                  }).then(() => popup.close()).catch((error) => {
-                    const message = String((error as Error).message || error);
-                    if (!/STEP_REFERENCED_BY_TEST_CASES/i.test(message)) {
-                      window.alert(message);
+                  const flowId = state.flow?.id;
+                  const refs = (state.testLab?.cases ?? []).filter(
+                    (item) =>
+                      item.flowId === flowId &&
+                      (item.stepVersions ?? []).some((ref) => ref.id === step.id),
+                  );
+                  // Close overlay first so native confirm is not swallowed by the popup window.
+                  void popup.close().then(() => {
+                    const detail = refs.length
+                      ? `Step đang được ghim bởi ${refs.length} Test Case (${refs.map((c) => c.name).join(", ")}).\n` +
+                        `Xác nhận sẽ gỡ pin khỏi Case rồi xóa Step khỏi Flow.\n` +
+                        `Version lịch sử và kết quả Test Run cũ vẫn giữ trong SQLite.`
+                      : `Version lịch sử vẫn giữ trong SQLite. Chỉ gỡ khỏi Scenario hiện tại.`;
+                    if (!window.confirm(`Xóa Step “${step.name}” khỏi Flow?\n\n${detail}`))
                       return;
-                    }
-                    if (!window.confirm(
-                      `${message.replace(/^STEP_REFERENCED_BY_TEST_CASES:\s*/i, "")}\n\nGỡ pin khỏi Test Case rồi xóa Step khỏi Flow?`,
-                    )) return;
                     void update({
                       type: "deleteFlowStep",
                       stepId: step.id,
                       confirmed: true,
-                      detachFromTestCases: true,
-                    }).then(() => popup.close()).catch((retryError) => {
-                      window.alert(String((retryError as Error).message || retryError));
+                      ...(refs.length ? { detachFromTestCases: true } : {}),
+                    }).catch((error) => {
+                      window.alert(String((error as Error).message || error));
                     });
                   });
                 }}
