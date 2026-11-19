@@ -26,6 +26,8 @@ export const SYNC_STATUS_LABEL: Record<SyncStatusCode, string> = {
   unknown: "—",
 };
 
+export type ScriptHealthStatus = "valid" | "warnings" | "invalid_steps";
+
 export type ScriptSyncRow = {
   script_id: string;
   flow_id?: string;
@@ -42,6 +44,9 @@ export type ScriptSyncRow = {
   incomplete?: boolean;
   demo_status?: "ready" | "missing" | "outdated" | "error";
   demo_reason?: string;
+  /** Independent of Demo / Sync — Step configuration diagnostics. */
+  health_status?: ScriptHealthStatus;
+  health_warnings?: string[];
   published_version?: string;
   draft_status?: "new" | "unchanged" | "changed" | "blocked";
   draft_version?: string;
@@ -56,8 +61,9 @@ export function publishBlockerMessage(reasons: string[]): string {
     if (reason === "missing_demo") return "Missing demo — mở Test Lab, Run, rồi Use as Script Demo";
     if (reason === "steps_required") return "No Steps — thêm ít nhất một Step hợp lệ";
     if (reason === "SCRIPT_VERSION_METADATA_INCOMPLETE")
-      return "Legacy release metadata incomplete — cần khôi phục digest/version metadata đã xác minh";
-    if (reason === "SCRIPT_VERSION_CONFLICT") return "Version conflict — local và SEO-OPS không cùng release history";
+      return "Thiếu metadata version cũ — Sync lại để Creator tự căn theo SEO-OPS";
+    if (reason === "SCRIPT_VERSION_CONFLICT")
+      return "Version local lệch SEO-OPS — Creator lấy remote làm chuẩn khi Sync";
     if (reason === "invalid_variable_ref") return "Invalid Script — sửa Variable reference trong Step";
     if (reason.startsWith("invalid_step:")) {
       const detail = reason.slice("invalid_step:".length);

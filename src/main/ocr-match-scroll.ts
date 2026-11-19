@@ -11,7 +11,16 @@ export async function clearOcrSearch(contents: WebContents) {
 }
 export async function advanceOcrSearch(
   contents: WebContents, matchTo: "top" | "middle" | "bottom", zoom: number, start = false, inspect = false, recenterY?: number,
-): Promise<{ moved: boolean; reached: boolean; reason?: string; searchRegion?: Rect; deltaYDip?: number }> {
+): Promise<{
+  moved: boolean;
+  reached: boolean;
+  reason?: string;
+  searchRegion?: Rect;
+  deltaYDip?: number;
+  scrollTop?: number;
+  scrollHeight?: number;
+  goal?: number;
+}> {
   const progress = await contents.executeJavaScriptInIsolatedWorld(WORLD, [{ code: `(() => {
     const visible = el => {
       const r = el.getBoundingClientRect(), style = getComputedStyle(el);

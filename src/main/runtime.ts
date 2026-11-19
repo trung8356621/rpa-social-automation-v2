@@ -461,12 +461,16 @@ export class Runtime {
         let searchRegion: Rect | undefined;
         let lastSearchTrace: Result["resolution"];
         let current = before!;
+        // Match To: OCR the live viewport first. Only reset+scroll when that miss.
+        let pendingScanReset = false;
         if (matchTo) await clearOcrSearch(this.browser.view.webContents);
         try {
           if (matchTo) {
-            const reset = await advanceOcrSearch(this.browser.view.webContents, matchTo, this.browser.zoom, true);
-            if (reset.moved) resetScrolls = 1;
-            execution.scrolls = resetScrolls;
+            const scope = await advanceOcrSearch(this.browser.view.webContents, matchTo, this.browser.zoom, false, true);
+            searchRegion = scope.searchRegion;
+            if (!searchRegion?.width || !searchRegion.height)
+              throw new TargetNotConfident("SCAN_RANGE_EMPTY: phạm vi quét không còn hiển thị.");
+            pendingScanReset = true;
             logMainEvent(this.runDir, "ocr-scan-start", {
               ...execution,
               viewport: {
@@ -474,10 +478,16 @@ export class Runtime {
                 height: this.browser.bounds.height,
                 zoom: this.browser.zoom,
               },
-              initialScroll: reset,
+              initialScroll: {
+                moved: false,
+                reached: false,
+                reason: "VIEWPORT_FIRST",
+                scrollTop: scope.scrollTop,
+                scrollHeight: scope.scrollHeight,
+                goal: scope.goal,
+                searchRegion,
+              },
             });
-            await new Promise(resolve => setTimeout(resolve, 250));
-            current = await this.browser.capture();
           }
           do {
             try {
@@ -560,6 +570,19 @@ export class Runtime {
                   await new Promise(resolve => setTimeout(resolve,250));
                   current = await this.browser.capture();
                   continue;
+                }
+                if (pendingScanReset) {
+                  pendingScanReset = false;
+                  const reset = await advanceOcrSearch(this.browser.view.webContents, matchTo, this.browser.zoom, true);
+                  if (reset.moved) resetScrolls = 1;
+                  execution.scrolls = resetScrolls + scrolls + recoveryScrolls;
+                  logMainEvent(this.runDir, "ocr-scan-reset", { ...execution, initialScroll: reset });
+                  if (reset.moved) {
+                    await new Promise(resolve => setTimeout(resolve, 250));
+                    current = await this.browser.capture();
+                    continue;
+                  }
+                  // Already at scan origin — fall through to forward Match To scroll.
                 }
               } else {
                 if (!(error instanceof TargetNotConfident) || Date.now() >= deadline) throw error;

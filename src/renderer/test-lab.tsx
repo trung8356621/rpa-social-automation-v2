@@ -2,6 +2,8 @@ import React, { useEffect, useRef, useState } from "react";
 import type { AppPage, Command, ExecutionError, State, TestCase, TestCaseConfig, VariableValues } from "../shared/contracts";
 import { validateVariables } from "../shared/flow-model";
 import { canUseAsScriptDemo } from "../shared/video-demo-policy";
+import { formatAttachDemoSyncMessage, interpretSyncForFlow } from "../shared/attach-demo-sync";
+import type { ManualSyncResponse } from "../shared/sync-ipc";
 import { UiPopover } from "./ui-popover";
 import { FileValidation, validateFileValues } from "./file-validation";
 import {
@@ -276,31 +278,8 @@ export function CaseResultView({ item, state, locked = false, runAgain, compact 
               setAttachMsg("Demo saved → Syncing...");
               void window.creator.invoke({ type: "seoOpsSyncFlow", flowId: item.flowId })
                 .then((value) => {
-                  const sync = value as { ok?: boolean; results?: Array<{ script_id: string; action: string; ok: boolean; message?: string }>; error?: { message?: string; category?: string } };
-                  if (!sync?.ok) {
-                    const cat = sync?.error?.category;
-                    setAttachMsg(
-                      cat === "network" || cat === "timeout" || cat === "service_unavailable"
-                        ? "Demo saved → Connection failed: Retry Sync"
-                        : `Demo saved → Sync blocked: ${sync?.error?.message || "sync failed"}`,
-                    );
-                    return;
-                  }
-                  const row = sync.results?.find((entry) => entry.script_id === item.flowId);
-                  if (!row) { setAttachMsg("Demo saved → Sync blocked: No sync result for Script"); return; }
-                  if (row.action === "publish_blocked") {
-                    setAttachMsg(`Demo saved → Sync blocked: ${row.message || "incomplete"}`);
-                    return;
-                  }
-                  if (row.action === "unchanged" || /same_digest|idempotent/i.test(row.message || "")) {
-                    setAttachMsg("Demo saved → Already synchronized");
-                    return;
-                  }
-                  if (row.ok && (row.action === "push" || /pushed/i.test(row.message || ""))) {
-                    setAttachMsg(`Demo saved → Published`);
-                    return;
-                  }
-                  setAttachMsg(`Demo saved → Sync blocked: ${row.message || row.action}`);
+                  const outcome = interpretSyncForFlow(item.flowId, value as ManualSyncResponse);
+                  setAttachMsg(formatAttachDemoSyncMessage(outcome));
                 })
                 .catch((error) => {
                   setAttachMsg(`Demo saved → Sync blocked: ${String((error as Error).message || error)}`);

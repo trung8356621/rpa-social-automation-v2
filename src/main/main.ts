@@ -1045,8 +1045,8 @@ async function boot() {
     // block selecting a playable recording. Sync still enforces execution integrity.
     const steps = flow.steps.map((ref) => store.step(ref.id, ref.version));
     const scriptVersion = requestedVersion || store.setting(`seoOpsVersion:${flow.id}`) || "1";
-    const { assets, complete, missing } = await collectScriptAssets(flow, steps, assetDir);
-    if (!complete) throw new Error(`VIDEO_DEMO: OCR assets missing — ${missing.join(", ")}`);
+    // Demo attach ships available ROI assets only — never invent missing files / never block on Step health.
+    const { assets } = await collectScriptAssets(flow, steps, assetDir);
     const executionDigest = buildScriptCatalogSnapshot({ flow, steps, version: scriptVersion, assets, videoDemo: undefined }).execution_digest;
     const recordingAbs = path.join(dataPath, "test-runs", caseId, runId, "recording.webm");
     const thumbAbs = path.join(dataPath, "test-runs", caseId, runId, "recording-thumb.jpg");

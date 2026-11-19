@@ -32,8 +32,8 @@ test("digest JSON matches Laravel associative decode for empty objects", () => {
 });
 
 test("publish/sync API error codes map to safe Vietnamese copy without secrets", () => {
-  assert.match(mapSeoOpsApiError("version_digest_conflict"), /Xung đột phiên bản/);
-  assert.match(mapSeoOpsApiError("script_version_sequence_conflict"), /Thứ tự version/);
+  assert.match(mapSeoOpsApiError("version_digest_conflict"), /Cùng version nhưng nội dung khác/i);
+  assert.match(mapSeoOpsApiError("script_version_sequence_conflict"), /tự chọn version kế tiếp/i);
   assert.match(mapSeoOpsApiErrors(["script_content_unchanged"]), /không đổi/);
   assert.doesNotMatch(mapSeoOpsApiError("Bearer abcdefghijklmnopqrstuvwxyz012345"), /abcdefghijklmnopqrstuvwxyz/);
   assert.equal(SEO_OPS_PRODUCTION_BASE_URL, "https://seo-ops.duckdns.org");

@@ -51,24 +51,42 @@ test("legacy 1.0.0 recovers as generation 1 and advances to integer 2", () => {
   assert.equal(recovered.draftVersion, "1.1");
 });
 
-test("version/digest conflicts and unknown legacy formats are rejected", () => {
-  const conflict = resolveScriptReleaseState({ local: {
-    version: "2", contentDigest: "local", executionDigest: "exec-2",
-  }, remote: { version: "2", content_digest: "remote", execution_digest: "exec-2" }, currentExecutionDigest: "exec-2" });
-  assert.deepEqual(conflict.ok, false);
-  if (!conflict.ok) assert.equal(conflict.error, "SCRIPT_VERSION_CONFLICT");
+test("remote is source of truth — digest mismatch adopts remote instead of conflict block", () => {
+  const adopted = resolveScriptReleaseState({
+    local: { version: "2", contentDigest: "local", executionDigest: "exec-2" },
+    remote: { version: "2", content_digest: "remote", execution_digest: "exec-2" },
+    currentExecutionDigest: "exec-2",
+  });
+  assert.equal(adopted.ok, true);
+  if (!adopted.ok) return;
+  assert.equal(adopted.local.contentDigest, "remote");
+  assert.equal(adopted.targetVersion, "2");
+  assert.equal(adopted.draftStatus, "unchanged");
+
+  const bumpFromRemote = resolveScriptReleaseState({
+    local: { version: "1", contentDigest: "stale", executionDigest: "old" },
+    remote: { version: "3", content_digest: "r3", execution_digest: "e3" },
+    currentExecutionDigest: "new-exec",
+  });
+  assert.equal(bumpFromRemote.ok, true);
+  if (!bumpFromRemote.ok) return;
+  assert.equal(bumpFromRemote.local.version, "3");
+  assert.equal(bumpFromRemote.targetVersion, "4");
+
   assert.throws(() => resolveScriptReleaseState({ local: {}, remote: {
     version: "1.2.3", content_digest: "x", execution_digest: "x",
   }, currentExecutionDigest: "x" }), /SCRIPT_VERSION_UNSUPPORTED/);
 });
 
-test("legacy 1.0.0 without execution digest requires verified evidence or reports incomplete", () => {
-  const unverified = resolveScriptReleaseState({
+test("legacy 1.0.0 without execution digest soft-recovers instead of blocking", () => {
+  const soft = resolveScriptReleaseState({
     local: { version: "1.0.0" },
     currentExecutionDigest: "digest-1",
   });
-  assert.equal(unverified.ok, false);
-  if (!unverified.ok) assert.equal(unverified.error, "SCRIPT_VERSION_METADATA_INCOMPLETE");
+  assert.equal(soft.ok, true);
+  if (!soft.ok) return;
+  assert.equal(soft.local.version, "1");
+  assert.equal(soft.targetVersion, "2");
 
   const verified = resolveScriptReleaseState({
     local: { version: "1.0.0" },

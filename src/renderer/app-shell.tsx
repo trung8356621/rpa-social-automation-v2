@@ -436,9 +436,25 @@ export function ScenariosPage({ state, name, setName, locked, open, create, quic
                 const isActive = Boolean(activeFlow && flow.id === activeFlow.id);
                 const demo = state?.scenarioDemos?.[flow.id];
                 const syncRow = syncRows.find(r => r.flow_id === flow.id || r.script_id === flow.id);
-                const isMissingDemo = syncRow?.status === "missing_demo" || !demo || demo.status !== "ready";
+                const demoLabel = syncRow?.demo_status === "error"
+                  ? "File Error"
+                  : syncRow?.demo_status === "ready" || demo?.status === "ready"
+                    ? "Selected"
+                    : "Missing";
                 const invalidPinned = flow.steps.filter(ref =>
                   (state?.invalidSteps ?? []).some(r => r.stepId === ref.id && r.version === ref.version));
+                const healthLabel = syncRow?.health_status === "invalid_steps" || invalidPinned.length
+                  ? "Invalid Steps"
+                  : syncRow?.health_status === "warnings"
+                    ? "Warnings"
+                    : "Valid";
+                const syncLabel = syncRow?.status === "synced"
+                  ? "Published"
+                  : syncRow?.status === "missing_demo" || syncRow?.incomplete
+                    ? "Blocked"
+                    : syncRow?.status === "sync_error"
+                      ? "Failed"
+                      : "Pending";
 
                 return <div className="scenario-item" key={flow.id}>
                   <div className="scenario-title-cell">
@@ -450,17 +466,25 @@ export function ScenariosPage({ state, name, setName, locked, open, create, quic
                     ) : (
                       <span className="script-badge badge-draft" title="Script Draft">Draft</span>
                     )}
-                    {isMissingDemo && (
-                      <span className="script-badge badge-missing-demo" title="Chưa có Script Demo hợp lệ">Missing demo</span>
-                    )}
+                    <span
+                      className={`script-badge ${demoLabel === "Selected" ? "badge-demo-ok" : "badge-missing-demo"}`}
+                      title={syncRow?.demo_reason || `Demo: ${demoLabel}`}
+                    >
+                      Demo: {demoLabel}
+                    </span>
                   </div>
                   <small>{flow.steps.length} Step</small>
                   <ScenarioDemo flowId={flow.id} state={state} invoke={invoke} />
-                  {invalidPinned.length > 0 && (
-                    <small className="hint" title={`${invalidPinned.length} pinned version lỗi — mở Script Health Check`}>
-                      {invalidPinned.length} Step cần sửa
-                    </small>
-                  )}
+                  <small
+                    className="hint"
+                    title={(syncRow?.health_warnings ?? []).join("; ") || `Script Health: ${healthLabel}`}
+                  >
+                    Health: {healthLabel}
+                    {invalidPinned.length > 0 ? ` (${invalidPinned.length})` : ""}
+                  </small>
+                  <small className="hint" title={syncRow?.message || `Sync: ${syncLabel}`}>
+                    Sync: {syncLabel}
+                  </small>
                   <small className="script-version" aria-label={`Version ${flow.name}`}>{scriptVersionLabel(syncRows, flow.id)}</small>
                   {!isActive && (
                     <button
@@ -513,17 +537,50 @@ export function ScenariosPage({ state, name, setName, locked, open, create, quic
               {unassignedFlows.map(flow => {
                 const demo = state?.scenarioDemos?.[flow.id];
                 const syncRow = syncRows.find(r => r.flow_id === flow.id || r.script_id === flow.id);
-                const isMissingDemo = syncRow?.status === "missing_demo" || !demo || demo.status !== "ready";
+                const demoLabel = syncRow?.demo_status === "error"
+                  ? "File Error"
+                  : syncRow?.demo_status === "ready" || demo?.status === "ready"
+                    ? "Selected"
+                    : "Missing";
+                const invalidPinned = flow.steps.filter(ref =>
+                  (state?.invalidSteps ?? []).some(r => r.stepId === ref.id && r.version === ref.version));
+                const healthLabel = syncRow?.health_status === "invalid_steps" || invalidPinned.length
+                  ? "Invalid Steps"
+                  : syncRow?.health_status === "warnings"
+                    ? "Warnings"
+                    : "Valid";
+                const syncLabel = syncRow?.status === "synced"
+                  ? "Published"
+                  : syncRow?.status === "missing_demo" || syncRow?.incomplete
+                    ? "Blocked"
+                    : syncRow?.status === "sync_error"
+                      ? "Failed"
+                      : "Pending";
                 return <div className="scenario-item" key={flow.id}>
                   <div className="scenario-title-cell">
                     <button className="scenario-title" disabled={disabled} onClick={() => open(flow.id)} title={flow.name}>
                       {flow.name}
                     </button>
                     <span className="script-badge badge-draft">Draft</span>
-                    {isMissingDemo && <span className="script-badge badge-missing-demo">Missing demo</span>}
+                    <span
+                      className={`script-badge ${demoLabel === "Selected" ? "badge-demo-ok" : "badge-missing-demo"}`}
+                      title={syncRow?.demo_reason || `Demo: ${demoLabel}`}
+                    >
+                      Demo: {demoLabel}
+                    </span>
                   </div>
                   <small>{flow.steps.length} Step</small>
                   <ScenarioDemo flowId={flow.id} state={state} invoke={invoke} />
+                  <small
+                    className="hint"
+                    title={(syncRow?.health_warnings ?? []).join("; ") || `Script Health: ${healthLabel}`}
+                  >
+                    Health: {healthLabel}
+                    {invalidPinned.length > 0 ? ` (${invalidPinned.length})` : ""}
+                  </small>
+                  <small className="hint" title={syncRow?.message || `Sync: ${syncLabel}`}>
+                    Sync: {syncLabel}
+                  </small>
                   <small className="script-version">{scriptVersionLabel(syncRows, flow.id)}</small>
                   <button disabled={disabled} onClick={() => open(flow.id)}>Mở Creator</button>
                   <button className="scenario-acceptance" disabled={disabled} onClick={() => quickAcceptance(flow.id)}>Nghiệm thu</button>

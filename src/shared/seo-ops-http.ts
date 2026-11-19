@@ -117,11 +117,11 @@ export function mapSeoOpsApiError(codeOrMessage: string): string {
   const code = raw.split(/[,\s/:]+/)[0]?.toLowerCase() || "";
   switch (code) {
     case "version_digest_conflict":
-      return "Xung đột phiên bản: cùng version nhưng nội dung khác trên SEO-OPS.";
+      return "Cùng version nhưng nội dung khác trên SEO-OPS — Sync lại để publish version mới.";
     case "script_version_sequence_conflict":
-      return "Thứ tự version không hợp lệ. Publish đúng version kế tiếp theo contract.";
+      return "SEO-OPS từ chối version — Creator tự chọn version kế tiếp khi Sync lại.";
     case "script_content_unchanged":
-      return "Nội dung Script không đổi so với bản đã publish — không tạo version mới.";
+      return "Nội dung Script không đổi so với bản đã publish.";
     case "package_kind_conflict":
       return "package_key đã tồn tại với loại khác (không phải Script).";
     case "removed_on_server":

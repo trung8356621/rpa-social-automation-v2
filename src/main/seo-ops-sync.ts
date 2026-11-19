@@ -14,6 +14,7 @@ import {
 import { slugify } from "../shared/flow-model.js";
 import {
   buildScriptCatalogSnapshot,
+  isScriptHealthWarningReason,
   type ScriptVideoDemo,
 } from "../shared/script-release.js";
 import { materializeScriptRelease } from "../shared/script-materialize.js";
@@ -61,7 +62,11 @@ import {
 } from "../shared/seo-ops-http.js";
 import { createSeoOpsMetadataGate } from "../shared/seo-ops-metadata-gate.js";
 import { resolveActionTagUrl } from "../shared/action-tag-url.js";
-import { isLegacyPublishedScriptVersion, parsePublishedScriptVersion } from "../shared/script-version.js";
+import {
+  isLegacyPublishedScriptVersion,
+  nextPublishedScriptVersion,
+  parsePublishedScriptVersion,
+} from "../shared/script-version.js";
 import { resolveScriptReleaseState, type StoredScriptRelease } from "../shared/script-release-state.js";
 
 export type SeoOpsConfig = {
@@ -78,6 +83,8 @@ type LocalCatalogRow = LocalScriptRow & {
   name: string;
   incomplete: boolean;
   incomplete_reasons: string[];
+  health_warnings: string[];
+  health_status: ScriptSyncRow["health_status"];
   flow_id: string;
   video_attachment?: VideoDemoAttachment;
   demo_status?: ScriptSyncRow["demo_status"];
@@ -1016,70 +1023,90 @@ export function createSeoOpsSyncService(options: {
     version: string,
     executionDigest: string,
     legacyExecutionDigest?: string,
-  ): Promise<{ demo?: ScriptVideoDemo; attachment?: VideoDemoAttachment; errors: string[] }> {
+  ): Promise<{ demo?: ScriptVideoDemo; attachment?: VideoDemoAttachment; errors: string[]; warnings: string[] }> {
     const errors: string[] = [];
+    const warnings: string[] = [];
     const raw = store.setting(`videoDemo:${flow.id}`) || store.setting(`videoDemo:${flow.id}:${version}`);
-    if (!raw) return { errors: [MISSING_DEMO_REASON] };
+    if (!raw) return { errors: [MISSING_DEMO_REASON], warnings };
     let attachment: VideoDemoAttachment;
     try {
       attachment = JSON.parse(raw) as VideoDemoAttachment;
     } catch {
-      return { errors: ["VIDEO_DEMO: metadata is invalid JSON"] };
+      return { errors: ["VIDEO_DEMO: metadata is invalid JSON"], warnings };
     }
     try {
       assertDemoBelongsToScript(attachment, flow.id);
-      try { assertExecutionDigestMatches(attachment, executionDigest); }
-      catch (error) {
-        // Creator versions before asset-aware attachment computed the same
-        // execution manifest with an empty asset catalog. Accept only that exact
-        // legacy digest; Step pins are still checked below.
-        if (!legacyExecutionDigest || attachment.executionDigest?.toLowerCase() !== legacyExecutionDigest.toLowerCase()) throw error;
-      }
       if (attachment.scriptVersion) parsePublishedScriptVersion(attachment.scriptVersion);
-      const expected = flow.steps.map(ref => `${ref.id}:${ref.version}`).sort();
-      const actual = (attachment.stepVersions ?? []).map(ref => `${ref.id}:${ref.version}`).sort();
-      if (expected.length !== actual.length || expected.some((ref, index) => ref !== actual[index]))
-        throw new Error("VIDEO_DEMO: pinned Step versions changed — run Test Lab again");
     } catch (e) {
-      return { errors: [String((e as Error).message || e)] };
+      return { errors: [String((e as Error).message || e)], warnings };
+    }
+    // Digest / historical pins are advisory — Demo is user-selected media, not a pass certificate.
+    try {
+      assertExecutionDigestMatches(attachment, executionDigest);
+    } catch {
+      if (
+        legacyExecutionDigest &&
+        attachment.executionDigest?.toLowerCase() === legacyExecutionDigest.toLowerCase()
+      ) {
+        // legacy empty-asset digest still accepted silently
+      } else {
+        warnings.push(
+          "VIDEO_DEMO: execution digest differs from current Script — user-selected media kept",
+        );
+      }
+    }
+    const expected = flow.steps.map((ref) => `${ref.id}:${ref.version}`).sort();
+    const actual = (attachment.stepVersions ?? []).map((ref) => `${ref.id}:${ref.version}`).sort();
+    if (expected.length !== actual.length || expected.some((ref, index) => ref !== actual[index])) {
+      warnings.push(
+        "VIDEO_DEMO: Demo metadata Step pins differ from current Script — release uses current flow.steps only",
+      );
+      // Do not restore historical pins into the Script; keep attachment as media metadata.
     }
     if (!testRunsDir) {
       errors.push("VIDEO_DEMO: test-runs directory unavailable");
-      return { errors };
+      return { errors, warnings };
     }
     const videoAbs = path.join(testRunsDir, attachment.artifactRef);
     try {
       await access(videoAbs);
       const buf = await readFile(videoAbs);
-      if (!buf.length) return { errors: ["VIDEO_DEMO: video file empty"] };
+      if (!buf.length) return { errors: ["VIDEO_DEMO: video file empty"], warnings };
       if (!attachment.sha256) {
         attachment.sha256 = createHash("sha256").update(buf).digest("hex");
       }
     } catch {
-      return { errors: ["VIDEO_DEMO: video file missing or unreadable"] };
+      return { errors: ["VIDEO_DEMO: video file missing or unreadable"], warnings };
     }
     if (attachment.thumbnailRef) {
       try {
         const thumb = await readFile(path.join(testRunsDir, attachment.thumbnailRef));
-        if (!thumb.length) return { errors: ["VIDEO_DEMO: thumbnail empty"] };
+        if (!thumb.length) return { errors: ["VIDEO_DEMO: thumbnail empty"], warnings };
       } catch {
-        return { errors: ["VIDEO_DEMO: thumbnail missing"] };
+        return { errors: ["VIDEO_DEMO: thumbnail missing"], warnings };
       }
     } else {
-      return { errors: ["VIDEO_DEMO: thumbnail required"] };
+      return { errors: ["VIDEO_DEMO: thumbnail required"], warnings };
     }
     if (!attachment.reviewed) {
-      return { errors: ["VIDEO_DEMO: demo must be reviewed via Use as Script Demo"] };
+      return { errors: ["VIDEO_DEMO: demo must be reviewed via Use as Script Demo"], warnings };
     }
     try {
-      const demo = toScriptVideoDemo({ ...attachment, scriptVersion: version });
-      return { demo, attachment, errors: [] };
+      // Associate release Demo with current Script version; never rehydrate deleted Steps.
+      const demo = toScriptVideoDemo({
+        ...attachment,
+        scriptVersion: version,
+        stepVersions: structuredClone(flow.steps),
+        executionDigest,
+      });
+      return { demo, attachment, errors: [], warnings };
     } catch (e) {
-      return { errors: [String((e as Error).message || e)] };
+      return { errors: [String((e as Error).message || e)], warnings };
     }
   }
 
   async function localRow(flow: Flow, version = "1"): Promise<LocalCatalogRow> {
+    // Authoritative executable list — only current flow.steps (never historical Case pins).
     const steps = flow.steps
       .map((ref) => {
         try {
@@ -1102,9 +1129,11 @@ export function createSeoOpsSyncService(options: {
       assets,
       videoDemo: resolved.demo,
     });
-    // The release builder only sees a ready demo. Preserve "missing" exclusively
-    // for no association; a stored but stale/broken association gets its precise error.
-    const reasons = snap.incomplete_reasons.filter(reason => !(hasStoredDemo && reason === MISSING_DEMO_REASON));
+    const health_warnings: string[] = [...(snap.health_warnings ?? []), ...resolved.warnings];
+    // Transport / demo integrity only — Step Health is non-blocking for distribution.
+    const reasons = snap.incomplete_reasons.filter(
+      (reason) => !(hasStoredDemo && reason === MISSING_DEMO_REASON) && !isScriptHealthWarningReason(reason),
+    );
     for (const invalid of store.invalidSteps()) {
       if (
         invalid.flowId !== flow.id ||
@@ -1112,24 +1141,34 @@ export function createSeoOpsSyncService(options: {
       ) {
         continue;
       }
-      // Preserve exact issue class — do not collapse missing ROI into "variable reference".
       if (invalid.reason === "invalid_payload") {
-        reasons.push(`invalid_step:${invalid.stepId}:${invalid.detail || invalid.reason}`);
+        health_warnings.push(`invalid_step:${invalid.stepId}:${invalid.detail || invalid.reason}`);
       } else if (invalid.reason === "missing_variable" || invalid.reason === "legacy_incomplete" || invalid.reason === "inline_conflict") {
-        reasons.push("invalid_variable_ref");
+        health_warnings.push(`invalid_variable_ref:${invalid.stepId}:${invalid.detail || invalid.reason}`);
       } else {
-        reasons.push(`invalid_step:${invalid.stepId}:${invalid.reason}`);
+        health_warnings.push(`invalid_step:${invalid.stepId}:${invalid.reason}`);
       }
     }
+    // Missing ROI files: ship available assets; warn — do not invent files or block packaging.
     if (!complete) {
-      reasons.push(...missing.map((m) => `missing_asset:${m}`));
+      health_warnings.push(...missing.map((m) => `missing_asset:${m}`));
     }
     for (const e of resolved.errors) {
-      if (!reasons.includes(e)) reasons.push(e);
+      if (isScriptHealthWarningReason(e)) health_warnings.push(e);
+      else if (!reasons.includes(e)) reasons.push(e);
     }
-    const incomplete = reasons.length > 0 || snap.incomplete || !complete || !snap.publish_body;
+    const uniqueWarnings = [...new Set(health_warnings)];
+    const uniqueReasons = [...new Set(reasons)];
+    const incomplete = uniqueReasons.length > 0 || !snap.publish_body || (!resolved.demo && !hasStoredDemo);
+    // Has stored demo but resolve failed on file/ownership → still incomplete via reasons.
+    const blockedByDemoFile = hasStoredDemo && !resolved.demo && resolved.errors.length > 0;
     const lineageRaw = store.setting(`seoOpsLineage:${flow.id}`);
     const lineage = lineageRaw ? (JSON.parse(lineageRaw) as string[]) : [];
+    const health_status: ScriptSyncRow["health_status"] = uniqueWarnings.length
+      ? uniqueWarnings.some((w) => w.startsWith("invalid_step:") || w.startsWith("invalid_variable_ref"))
+        ? "invalid_steps"
+        : "warnings"
+      : "valid";
     return {
       script_id: flow.id,
       flow_id: flow.id,
@@ -1138,15 +1177,24 @@ export function createSeoOpsSyncService(options: {
       content_digest: snap.content_digest,
       execution_digest: snap.execution_digest,
       lineage,
-      assets_complete: complete && !incomplete,
-      publish_body: incomplete ? undefined : snap.publish_body ?? undefined,
+      assets_complete: complete,
+      publish_body: incomplete || blockedByDemoFile ? undefined : snap.publish_body ?? undefined,
       name: flow.name,
-      incomplete,
-      incomplete_reasons: [...new Set(reasons)],
+      incomplete: incomplete || blockedByDemoFile,
+      incomplete_reasons: blockedByDemoFile
+        ? [...new Set([...uniqueReasons, ...resolved.errors])]
+        : uniqueReasons,
+      health_warnings: uniqueWarnings,
+      health_status,
       video_attachment: resolved.attachment,
-      demo_status: resolved.demo ? "ready" : hasStoredDemo
-        ? (resolved.errors.some(error => /execution changed|Step versions changed/i.test(error)) ? "outdated" : "error") : "missing",
-      demo_reason: resolved.errors[0],
+      demo_status: resolved.demo
+        ? "ready"
+        : hasStoredDemo
+          ? resolved.errors.some((error) => /missing|unreadable|empty|invalid JSON/i.test(error))
+            ? "error"
+            : "outdated"
+          : "missing",
+      demo_reason: resolved.errors[0] || resolved.warnings[0],
     };
   }
 
@@ -1173,11 +1221,7 @@ export function createSeoOpsSyncService(options: {
           currentExecutionDigest: probe.execution_digest || "",
           verifiedLegacy,
         });
-        if (!release.ok) {
-          out.push({ ...probe, incomplete: true, incomplete_reasons: [...new Set([release.error, ...probe.incomplete_reasons])], release_conflict: release.error,
-            published_version: stored.version, draft_status: "blocked" });
-          continue;
-        }
+        // High-trust: version state always resolves; remote is baseline, never block the catalog.
         if (release.adoptedRemote || (hasLegacyEvidence && release.local.version !== stored.version)) {
           if (hasLegacyEvidence && stored.version && !store.setting(`seoOpsLegacyVersion:${flow.id}`)) {
             store.setSetting(`seoOpsLegacyVersion:${flow.id}`, stored.version);
@@ -1200,6 +1244,8 @@ export function createSeoOpsSyncService(options: {
           name: flow.name,
           incomplete: true,
           incomplete_reasons: [String((e as Error).message || e)],
+          health_warnings: [],
+          health_status: "valid",
         });
       }
     }
@@ -1353,13 +1399,21 @@ export function createSeoOpsSyncService(options: {
         offlinePending: Boolean(options?.offlinePending && l && !incomplete && !skipIds.has(id)),
       });
       const prev = meta.rows[id];
+      const healthNote =
+        l?.health_warnings?.length
+          ? l.health_status === "invalid_steps"
+            ? "Script Health: Invalid Steps — vẫn có thể đồng bộ; Step cần cấu hình trước khi thực thi"
+            : `Script Health: Warnings — ${(l.health_warnings || []).slice(0, 2).join("; ")}`
+          : undefined;
       const message = missingDemo
         ? publishBlockerMessage(l?.incomplete_reasons || [MISSING_DEMO_REASON])
         : incomplete
           ? publishBlockerMessage(l?.incomplete_reasons || []) || "incomplete"
           : error && (l || r)
             ? error
-            : prev?.message;
+            : healthNote ||
+              // Drop stale Invalid Step / incomplete text once health is non-blocking.
+              (prev?.message && /Invalid Step|incomplete/i.test(prev.message) ? healthNote || undefined : prev?.message);
       return {
         script_id: id,
         flow_id: l?.flow_id,
@@ -1376,6 +1430,8 @@ export function createSeoOpsSyncService(options: {
         incomplete,
         demo_status: l?.demo_status,
         demo_reason: l?.demo_reason,
+        health_status: l?.health_status,
+        health_warnings: l?.health_warnings,
         published_version: l?.published_version,
         draft_status: l?.release_conflict ? "blocked" : l?.draft_status,
         draft_version: l?.draft_version,
@@ -1572,21 +1628,23 @@ export function createSeoOpsSyncService(options: {
 
     for (const row of plan.push_to_remote) {
       try {
-        const full = publishable.find((r) => r.script_id === row.script_id);
+        let full = publishable.find((r) => r.script_id === row.script_id);
         if (!full?.publish_body) {
           results.push({ script_id: row.script_id, action: "skip", ok: true, message: "incomplete — no publish body" });
           continue;
         }
         savePendingRelease(full);
-        const published = await client.publish(full.publish_body) as {
-          httpStatus: number;
-          ok?: boolean;
-          outcome?: string;
-          errors?: string[];
-          release?: { content_digest?: string };
-        };
-        const outcome = String(published.outcome ?? "");
-        const publishErrors = Array.isArray(published.errors) ? published.errors : undefined;
+        const publishOnce = async (body: NonNullable<LocalCatalogRow["publish_body"]>) =>
+          client.publish(body) as Promise<{
+            httpStatus: number;
+            ok?: boolean;
+            outcome?: string;
+            errors?: string[];
+            release?: { content_digest?: string };
+          }>;
+        let published = await publishOnce(full.publish_body);
+        let outcome = String(published.outcome ?? "");
+        let publishErrors = Array.isArray(published.errors) ? published.errors : undefined;
         let ok = published.httpStatus < 300 && published.ok !== false;
         let message = ok
           ? (outcome === "idempotent" ? "idempotent — cùng digest đã có trên SEO-OPS" : "pushed")
@@ -1594,13 +1652,48 @@ export function createSeoOpsSyncService(options: {
         if (!ok && (published.httpStatus === 409 || outcome === "conflict")) {
           message = mapSeoOpsApiErrors(publishErrors, message);
         }
+        // Sequence conflict: trust remote, bump one version, retry once — no user version math.
+        const sequenceConflict = /script_version_sequence_conflict/i.test(
+          [...(publishErrors || []), message].join(" "),
+        );
+        if (!ok && sequenceConflict) {
+          const server = remoteById.get(row.script_id);
+          const remoteOrdinal = server?.version
+            ? parsePublishedScriptVersion(server.version).ordinal
+            : 0;
+          const triedOrdinal = parsePublishedScriptVersion(full.version).ordinal;
+          const bump = String(Math.max(remoteOrdinal, triedOrdinal) + 1);
+          const flow = store.flows().find((f) => f.id === full!.flow_id);
+          if (flow && bump !== full.version) {
+            const retried = await localRow(flow, bump);
+            if (retried.publish_body && !retried.incomplete) {
+              full = retried;
+              savePendingRelease(full);
+              published = await publishOnce(retried.publish_body);
+              outcome = String(published.outcome ?? "");
+              publishErrors = Array.isArray(published.errors) ? published.errors : undefined;
+              ok = published.httpStatus < 300 && published.ok !== false;
+              message = ok
+                ? (outcome === "idempotent" ? "idempotent — cùng digest đã có trên SEO-OPS" : "pushed")
+                : mapSeoOpsApiErrors(publishErrors, `HTTP ${published.httpStatus}`);
+              if (!ok && (published.httpStatus === 409 || outcome === "conflict")) {
+                message = mapSeoOpsApiErrors(publishErrors, message);
+              }
+            }
+          }
+        }
+        const publishBody = full.publish_body;
+        if (!publishBody) {
+          results.push({ script_id: row.script_id, action: "skip", ok: true, message: "incomplete — no publish body" });
+          continue;
+        }
         const responseDigest = published.release?.content_digest;
         if (ok && responseDigest && responseDigest.toLowerCase() !== full.content_digest.toLowerCase()) {
           ok = false;
           message = `publish digest mismatch: expected ${full.content_digest}, received ${responseDigest}`;
         }
         if (ok) {
-          for (const asset of full.publish_body.manifest.assets) {
+          for (const asset of publishBody.manifest.assets) {
             const uploaded = await client.uploadAsset({ packageKey: full.package_key, version: full.version,
               assetPath: asset.path, sha256: asset.sha256, binary: await readFile(path.join(assetDir, asset.path)) });
             if (!uploaded.ok) { ok = false; message = `release asset upload failed: ${(uploaded.errors ?? []).join(",")}`; break; }

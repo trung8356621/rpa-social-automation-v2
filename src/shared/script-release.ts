@@ -78,12 +78,25 @@ export type ScriptCatalogSnapshot = {
   execution_digest: string;
   incomplete: boolean;
   incomplete_reasons: string[];
+  /** Step/OCR health — distribution warning only; does not block packaging. */
+  health_warnings: string[];
   /** Present only when Script is publishable (has steps + valid body). */
   publish_body: ScriptPublishBody | null;
   action_tag_key?: string;
   result_type?: "status" | "collection";
   collection_type?: string;
 };
+
+/** Reasons that describe Step health, not package transport integrity. */
+export function isScriptHealthWarningReason(reason: string): boolean {
+  return (
+    reason.startsWith("invalid_step:") ||
+    reason === "invalid_variable_ref" ||
+    reason.startsWith("invalid_variable_ref:") ||
+    reason.startsWith("missing_asset:") ||
+    /matchTo_without_ocr/i.test(reason)
+  );
+}
 
 const PACKAGE_KEY = /^[a-z0-9][a-z0-9._-]{1,126}[a-z0-9]$/;
 const RELEASE_VERSION = /^(?:[1-9][0-9]*|[0-9]+\.[0-9]+\.[0-9]+(?:[.-][A-Za-z0-9.-]+)?)$/;
@@ -355,8 +368,10 @@ export function buildScriptCatalogSnapshot(input: ScriptExportInput): ScriptCata
   }
 
   const { stepPayloads, missing, invalid } = mapStepPayloads(input.flow, input.steps);
+  const health_warnings: string[] = [];
   for (const m of missing) reasons.push(`missing_step:${m}`);
-  for (const inv of invalid) reasons.push(`invalid_step:${inv}`);
+  // Match-To/OCR gaps are Step Health warnings — payloads still ship as authored.
+  for (const inv of invalid) health_warnings.push(`invalid_step:${inv}`);
   if (stepPayloads.length === 0) reasons.push("steps_required");
   if (!input.videoDemo) reasons.push(MISSING_DEMO_REASON);
   if (input.flow.resultType === "collection" && !input.flow.collectionType?.trim()) {
@@ -408,6 +423,7 @@ export function buildScriptCatalogSnapshot(input: ScriptExportInput): ScriptCata
     execution_digest: computeExecutionDigest(body.manifest),
     incomplete,
     incomplete_reasons: [...new Set(reasons)],
+    health_warnings: [...new Set(health_warnings)],
     publish_body,
     action_tag_key: body.manifest.action_tag_key,
     result_type: body.manifest.result_type,
@@ -419,13 +435,11 @@ export function buildScriptCatalogSnapshot(input: ScriptExportInput): ScriptCata
 export function buildScriptPublishBody(input: ScriptExportInput): ScriptPublishBody {
   const { flow, steps, version } = input;
   if (!RELEASE_VERSION.test(version)) throw new Error("SCRIPT_EXPORT: invalid version");
-  const { stepPayloads, missing, invalid } = mapStepPayloads(flow, steps);
+  const { stepPayloads, missing } = mapStepPayloads(flow, steps);
   if (missing.length) {
     throw new Error(`SCRIPT_EXPORT: missing step ${missing[0]}`);
   }
-  if (invalid.length) {
-    throw new Error(`SCRIPT_EXPORT: ${invalid[0]}`);
-  }
+  // Invalid Step health (Match-To/OCR gaps, etc.) ships as authored — catalog/sync warn; runtime still validates.
   if (stepPayloads.length === 0) throw new Error("SCRIPT_EXPORT: steps required");
   const body = assembleBody(input, stepPayloads);
   body.content_digest = computeScriptContentDigest(body);

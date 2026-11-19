@@ -35,7 +35,7 @@ test("interpretSyncForFlow: published / already synced / blocked / connection", 
       published_version: "2",
     }],
   };
-  assert.deepEqual(interpretSyncForFlow(flowId, published), { kind: "published", version: "2" });
+  assert.equal(interpretSyncForFlow(flowId, published).kind, "published");
   assert.equal(
     formatAttachDemoSyncMessage(interpretSyncForFlow(flowId, published)),
     "Demo saved → Published v2",

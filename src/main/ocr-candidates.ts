@@ -1,9 +1,10 @@
 import type { OcrResult, OcrSegment, Rect } from "../shared/contracts.js";
 
 // Exact normalized tokens only: retain accents, digits, +, #, /, _ and hyphens.
+// Pipe/box-drawing edges are OCR chrome around buttons (e.g. "| Lưu nháp |"), not tokens.
 export function normalizeOcrText(text: string) {
   return text.normalize("NFKC").replace(/[\u200B-\u200D\uFEFF]/gu, "")
-    .toLocaleLowerCase("vi").replace(/[“”‘’"'.,!?;:()[\]{}…]/gu, " ")
+    .toLocaleLowerCase("vi").replace(/[“”‘’"'.,!?;:()[\]{}…|│┃¦]/gu, " ")
     .replace(/(^|\s)@(?=[\p{L}\p{N}\s]|$)/gu, "$1").trim().replace(/\s+/gu, " ");
 }
 

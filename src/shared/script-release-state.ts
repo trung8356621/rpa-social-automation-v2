@@ -24,6 +24,10 @@ export type VerifiedLegacyRelease = {
   contentDigest?: string;
 };
 
+/**
+ * High-trust publish versioning: SEO-OPS remote is the baseline.
+ * No conflict blocks — adopt remote when present, bump next integer when content changed.
+ */
 export function resolveScriptReleaseState(input: {
   local: StoredScriptRelease;
   remote?: RemoteScriptRelease;
@@ -32,22 +36,23 @@ export function resolveScriptReleaseState(input: {
 }) {
   const local = { ...input.local };
   let adoptedRemote = false;
-  if (!local.version && input.remote) {
+
+  if (input.remote) {
     parsePublishedScriptVersion(input.remote.version);
+    const remoteChanged =
+      !local.version ||
+      parsePublishedScriptVersion(local.version).ordinal !==
+        parsePublishedScriptVersion(input.remote.version).ordinal ||
+      (Boolean(local.contentDigest) && local.contentDigest !== input.remote.content_digest) ||
+      (Boolean(local.executionDigest) &&
+        Boolean(input.remote.execution_digest) &&
+        local.executionDigest !== input.remote.execution_digest);
+    if (remoteChanged) adoptedRemote = true;
     local.version = input.remote.version;
     local.contentDigest = input.remote.content_digest;
-    local.executionDigest = input.remote.execution_digest;
-    adoptedRemote = true;
-  } else if (local.version && input.remote) {
-    const localOrdinal = parsePublishedScriptVersion(local.version).ordinal;
-    const remoteOrdinal = parsePublishedScriptVersion(input.remote.version).ordinal;
-    if (localOrdinal !== remoteOrdinal || (local.contentDigest && local.contentDigest !== input.remote.content_digest)) {
-      return { ok: false as const, error: "SCRIPT_VERSION_CONFLICT", local, adoptedRemote: false };
-    }
-    local.contentDigest ||= input.remote.content_digest;
-    local.executionDigest ||= input.remote.execution_digest;
-    adoptedRemote = local.contentDigest !== input.local.contentDigest || local.executionDigest !== input.local.executionDigest;
+    if (input.remote.execution_digest) local.executionDigest = input.remote.execution_digest;
   }
+
   if (local.version && !local.executionDigest) {
     if (
       input.verifiedLegacy &&
@@ -59,23 +64,30 @@ export function resolveScriptReleaseState(input: {
       if (input.verifiedLegacy.contentDigest) {
         local.contentDigest = input.verifiedLegacy.contentDigest;
       }
-      if (!input.remote) {
-        local.version = String(parsed.ordinal);
-      }
-    } else {
-      return { ok: false as const, error: "SCRIPT_VERSION_METADATA_INCOMPLETE", local, adoptedRemote };
+      if (!input.remote) local.version = String(parsed.ordinal);
+    } else if (isLegacyPublishedScriptVersion(local.version)) {
+      // Soft recover: normalize legacy label; missing digest means "changed" → bump.
+      local.version = String(parsePublishedScriptVersion(local.version).ordinal);
     }
+    // Missing digest is not a hard block — treat as needing a fresh publish when syncing.
   }
 
-  const changed = Boolean(local.version && local.executionDigest !== input.currentExecutionDigest);
-  const pendingMatches = Boolean(local.pendingVersion && local.pendingExecutionDigest === input.currentExecutionDigest);
-  const targetVersion = pendingMatches
-    ? local.pendingVersion!
-    : !local.version
-      ? "1"
-      : changed
-        ? nextPublishedScriptVersion(local.version)
-        : local.version;
+  const publishedExec = local.executionDigest;
+  const changed = Boolean(
+    local.version && (!publishedExec || publishedExec !== input.currentExecutionDigest),
+  );
+  const expectedNext = !local.version
+    ? "1"
+    : changed
+      ? nextPublishedScriptVersion(local.version)
+      : local.version;
+  // Reuse pending only when it already matches the simple next version.
+  const pendingMatches = Boolean(
+    local.pendingVersion &&
+      local.pendingExecutionDigest === input.currentExecutionDigest &&
+      local.pendingVersion === expectedNext,
+  );
+  const targetVersion = pendingMatches ? local.pendingVersion! : expectedNext;
   const ordinal = local.version ? parsePublishedScriptVersion(local.version).ordinal : undefined;
 
   return {
@@ -84,7 +96,7 @@ export function resolveScriptReleaseState(input: {
     adoptedRemote,
     changed,
     targetVersion,
-    draftStatus: !local.version ? "new" as const : changed ? "changed" as const : "unchanged" as const,
+    draftStatus: !local.version ? ("new" as const) : changed ? ("changed" as const) : ("unchanged" as const),
     draftVersion: changed && ordinal ? `${ordinal}.1` : undefined,
   };
 }
