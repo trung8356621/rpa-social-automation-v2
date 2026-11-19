@@ -22,6 +22,7 @@ import {
   type ScriptHealthIssue,
   type ScriptHealthReport,
 } from "../shared/script-health.js";
+import { flowUiStepNumbers } from "../shared/flow-step-numbers.js";
 import {
   validateZoom,
   validateRect,
@@ -376,6 +377,7 @@ export class Store {
     const issue = this.stepIssue(step.payload, f);
     if (!issue) return;
     const order = (f?.steps.findIndex((r) => r.id === stepId) ?? -1) + 1;
+    const uiNumber = f ? flowUiStepNumbers(f).get(stepId) : undefined;
     const formatted = formatHumanStepError({
       scenarioName: f?.name ?? "Scenario",
       flowId: f?.id,
@@ -386,12 +388,15 @@ export class Store {
       issue,
       payload: step.payload,
     });
+    const where = uiNumber
+      ? `${f?.name ?? "Scenario"} → UI ${uiNumber} · flat Step ${String(order).padStart(2, "0")}: ${step.name} → v${version}`
+      : formatted.headline;
     const error = new Error(
-      `${formatted.headline}\n${formatted.reason}\nGhim version hợp lệ trong Creator trước khi chạy.`,
+      `${where}\n${formatted.reason}\nGhim version hợp lệ trong Creator trước khi chạy.`,
     );
     (error as Error & { technical?: string; healthPath?: string }).technical =
       formatted.technical;
-    (error as Error & { healthPath?: string }).healthPath = formatted.headline;
+    (error as Error & { healthPath?: string }).healthPath = where;
     throw error;
   }
   /** Preflight every pinned Base version on a flow before browser/Play All. */
@@ -695,6 +700,38 @@ export class Store {
     f.groups = groups;
     f.steps = stepIds.map((id) => f.steps.find((s) => s.id === id)!);
     this.saveFlow(f);
+  }
+  /**
+   * Remove a Step reference from the active Flow (and Group membership).
+   * Immutable Step version rows stay in SQLite for historical runs / Test Cases.
+   */
+  removeFlowStep(stepId: string) {
+    const f = this.flow();
+    if (!f) throw new Error("Tạo Flow trước.");
+    if (!f.steps.some((ref) => ref.id === stepId))
+      throw new Error("Step không thuộc Flow đang mở.");
+    f.steps = f.steps.filter((ref) => ref.id !== stepId);
+    f.groups = (f.groups ?? []).map((group) => ({
+      ...group,
+      stepIds: group.stepIds.filter((id) => id !== stepId),
+    }));
+    validateOrganization(f, f.groups ?? [], f.steps.map((ref) => ref.id));
+    this.saveFlow(f);
+    this.refreshInvalidStepRefs();
+  }
+  /** Delete a Group; retain children as standalone or remove them from the Flow. */
+  removeFlowGroup(groupId: string, children: "remove" | "retain") {
+    const f = this.flow();
+    if (!f) throw new Error("Tạo Flow trước.");
+    const group = (f.groups ?? []).find((g) => g.id === groupId);
+    if (!group) throw new Error("Không tìm thấy Group.");
+    const childIds = new Set(group.stepIds);
+    f.groups = (f.groups ?? []).filter((g) => g.id !== groupId);
+    if (children === "remove")
+      f.steps = f.steps.filter((ref) => !childIds.has(ref.id));
+    validateOrganization(f, f.groups ?? [], f.steps.map((ref) => ref.id));
+    this.saveFlow(f);
+    this.refreshInvalidStepRefs();
   }
   setting(key: string): string | undefined {
     return (

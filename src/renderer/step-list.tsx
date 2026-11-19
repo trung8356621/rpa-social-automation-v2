@@ -485,6 +485,39 @@ export function StepList({
                   {g.name}
                 </button>
               ))}
+              <button
+                className="menu-item danger"
+                disabled={locked}
+                onClick={() => {
+                  const step = menu.step!;
+                  if (!window.confirm(`Xóa Step “${step.name}” khỏi Flow?\n\nVersion lịch sử vẫn giữ trong SQLite. Chỉ gỡ khỏi Scenario hiện tại.`))
+                    return;
+                  void update({
+                    type: "deleteFlowStep",
+                    stepId: step.id,
+                    confirmed: true,
+                  }).then(() => popup.close()).catch((error) => {
+                    const message = String((error as Error).message || error);
+                    if (!/STEP_REFERENCED_BY_TEST_CASES/i.test(message)) {
+                      window.alert(message);
+                      return;
+                    }
+                    if (!window.confirm(
+                      `${message.replace(/^STEP_REFERENCED_BY_TEST_CASES:\s*/i, "")}\n\nGỡ pin khỏi Test Case rồi xóa Step khỏi Flow?`,
+                    )) return;
+                    void update({
+                      type: "deleteFlowStep",
+                      stepId: step.id,
+                      confirmed: true,
+                      detachFromTestCases: true,
+                    }).then(() => popup.close()).catch((retryError) => {
+                      window.alert(String((retryError as Error).message || retryError));
+                    });
+                  });
+                }}
+              >
+                Delete Step
+              </button>
             </>
           ) : (
             <>
@@ -525,12 +558,36 @@ export function StepList({
                   </button>
                 </form>
               ) : (
-                <button
-                  className="menu-item"
-                  onClick={() => setMenu({ ...menu, editing: true })}
-                >
-                  ✎ Edit name / slug
-                </button>
+                <>
+                  <button
+                    className="menu-item"
+                    onClick={() => setMenu({ ...menu, editing: true })}
+                  >
+                    ✎ Edit name / slug
+                  </button>
+                  <button
+                    className="menu-item danger"
+                    disabled={locked}
+                    onClick={() => {
+                      const group = groups.find((g) => g.id === menu.groupId);
+                      if (!group) return;
+                      if (!window.confirm(`Xóa Group “${group.name}”?`)) return;
+                      const retain = window.confirm(
+                        `Giữ ${group.stepIds.length} Step con trong Flow (standalone)?\n\nOK = giữ children.\nCancel = gỡ children khỏi Flow (version lịch sử vẫn giữ).`,
+                      );
+                      void update({
+                        type: "deleteFlowGroup",
+                        groupId: group.id,
+                        confirmed: true,
+                        children: retain ? "retain" : "remove",
+                      }).then(() => popup.close()).catch((error) => {
+                        window.alert(String((error as Error).message || error));
+                      });
+                    }}
+                  >
+                    Delete Group
+                  </button>
+                </>
               )}
             </>
           )}

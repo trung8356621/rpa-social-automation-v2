@@ -98,6 +98,24 @@ export class TestLab {
     value.cases.push(item); this.write(value); return item;
   }
   delete(id: string) { this.get(id); const value = this.read(); value.cases = value.cases.filter(c => c.id !== id); this.write(value); }
+  /** Test Cases that pin any version of this Step id (same Scenario). */
+  casesReferencingStep(flowId: string, stepId: string): TestCase[] {
+    return this.read().cases.filter(
+      (item) =>
+        item.flowId === flowId &&
+        (item.stepVersions ?? []).some((ref) => ref.id === stepId),
+    );
+  }
+  /** Drop Step pins from Cases without deleting Case history / lastResult. */
+  detachStepFromCases(flowId: string, stepId: string) {
+    const value = this.read();
+    value.cases = value.cases.map((item) => {
+      if (item.flowId !== flowId) return item;
+      const stepVersions = (item.stepVersions ?? []).filter((ref) => ref.id !== stepId);
+      return { ...item, stepVersions };
+    });
+    this.write(value);
+  }
   move(id: string, groupId?: string) {
     const value = this.read(); this.get(id);
     if (groupId && !value.groups.some(g => g.id === groupId)) throw new Error("Không tìm thấy Test Group.");

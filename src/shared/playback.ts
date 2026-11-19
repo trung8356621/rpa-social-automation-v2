@@ -60,7 +60,7 @@ export async function playSequential(
       const message = error instanceof Error ? error.message : String(error);
       state = {
         status:
-          /variable|Default Pattern|type mismatch|sai kiểu|Zoom|Viewport|không thuộc flow/i.test(
+          /variable|Default Pattern|type mismatch|sai kiểu|Zoom|Viewport|không thuộc flow|thiếu ảnh ROI|Match To|Invalid Step|Ghim version|→ Step |UI \d+/i.test(
             message,
           )
             ? "blocked"

@@ -57,15 +57,11 @@ import {
   logMainEvent,
   logTestBoundary,
 } from "./main-error-log.js";
-import { flowUiStepNumbers } from "../shared/flow-step-numbers.js";
-import {
-  formatPlayAllPreflightBlocked,
-  type PlayAllBeginResult,
-} from "../shared/play-all-preflight.js";
+import { type PlayAllBeginResult } from "../shared/play-all-preflight.js";
 import { Runtime } from "./runtime.js";
 import { startFixture } from "./fixture.js";
 import { localOcr } from "./ocr.js";
-import { inspectUploadFiles, uploadPreflightError, validateUploadFiles, IMAGE_EXTENSIONS } from "./upload-files.js";
+import { inspectUploadFiles, validateUploadFiles, IMAGE_EXTENSIONS } from "./upload-files.js";
 import {
   WEB_WIDTH,
   WEB_HEIGHT,
@@ -884,29 +880,9 @@ async function boot() {
       const steps = flow.steps.map(ref => store.step(ref.id, ref.version));
       outcome.steps = steps.map(step => ({ stepId: step.id, name: step.name, version: step.version,
         status: "PENDING", message: "Chưa chạy." }));
-      // Block before Session/browser/recording — pinned Base versions only.
-      for (const step of steps) {
-        try {
-          store.assertStepExecutable(step.id, step.version, flow);
-        } catch (error) {
-          currentStep = step;
-          const message = error instanceof Error ? error.message : String(error);
-          throw error instanceof Error
-            ? error
-            : new Error(String(error));
-        }
-      }
+      // Case-level only here. Per-Step assert + upload checks run inside Runtime.test
+      // so valid preceding Steps can execute and leave Browser state for debugging.
       batchId = runtime.startPlayAllLog(flow);
-      for (const step of steps) {
-        currentStep = step;
-        const payload = resolvePayload(step.payload, flow);
-        const error = await uploadPreflightError(payload, flow, step.id, step.version);
-        if (error) {
-          outcome.error = error;
-          logMainError(runDir, "upload-preflight", new Error(error.details?.join("; ") || error.message), { runId, batchRunId: batchId, ...error });
-          throw new Error(error.message);
-        }
-      }
       currentStep = undefined;
       await switchBrowserSession(item.sessionId, true, false);
       store.setSetting("currentFlow", flow.id);
@@ -2021,6 +1997,47 @@ async function boot() {
         store.organize(command.groups, command.stepIds);
         return state();
       }
+      case "deleteFlowStep": {
+        isIdle();
+        if (uiPlayAllRunId) throw new Error("Đợi Play All kết thúc trước khi xóa Step.");
+        if (!command.confirmed) throw new Error("Cần xác nhận trước khi xóa Step.");
+        const flow = store.flow();
+        if (!flow) throw new Error("Tạo Flow trước.");
+        if (!flow.steps.some((ref) => ref.id === command.stepId))
+          throw new Error("Step không thuộc Flow đang mở.");
+        const refs = testLab.casesReferencingStep(flow.id, command.stepId);
+        if (refs.length && !command.detachFromTestCases) {
+          throw new Error(
+            `STEP_REFERENCED_BY_TEST_CASES: Step đang được ghim bởi ${refs.length} Test Case (${refs.map((c) => c.name).join(", ")}). ` +
+              "Chọn gỡ pin khỏi Case rồi xóa khỏi Flow, hoặc hủy. Version lịch sử trong SQLite vẫn giữ.",
+          );
+        }
+        if (refs.length && command.detachFromTestCases)
+          testLab.detachStepFromCases(flow.id, command.stepId);
+        store.removeFlowStep(command.stepId);
+        return state();
+      }
+      case "deleteFlowGroup": {
+        isIdle();
+        if (uiPlayAllRunId) throw new Error("Đợi Play All kết thúc trước khi xóa Group.");
+        if (!command.confirmed) throw new Error("Cần xác nhận trước khi xóa Group.");
+        const flow = store.flow();
+        if (!flow) throw new Error("Tạo Flow trước.");
+        const group = (flow.groups ?? []).find((g) => g.id === command.groupId);
+        if (!group) throw new Error("Không tìm thấy Group.");
+        if (command.children === "remove") {
+          for (const stepId of group.stepIds) {
+            const refs = testLab.casesReferencingStep(flow.id, stepId);
+            if (refs.length)
+              throw new Error(
+                `STEP_REFERENCED_BY_TEST_CASES: Không xóa được Group kèm children vì Step đang được ghim bởi Test Case. ` +
+                  "Chọn giữ children (standalone) hoặc gỡ pin trước.",
+              );
+          }
+        }
+        store.removeFlowGroup(command.groupId, command.children);
+        return state();
+      }
       case "saveStep": {
         isIdle();
         store.saveStep(command.name, command.payload, command.id);
@@ -2078,63 +2095,29 @@ async function boot() {
         return;
       }
       case "startPlayAllLog": {
+        // Global prerequisites only — Step validation is per-Step inside Runtime.test.
         isIdle();
         const flow = store.flow();
+        if (!flow) throw new Error("Tạo Flow trước khi Play All.");
+        if (!parseHttpStartUrl(flow.startUrl)) throw new Error(START_URL_REQUIRED);
         const attemptId = randomUUID();
-        // Always open an attempt log — even when preflight rejects before any Step runs.
         beginTestRunLog(attemptId, "Play All");
         logTestBoundary(runDir, "START", {
           runId: attemptId,
           label: "Play All",
           status: "STARTED",
         });
-        const issues = flow ? store.listFlowExecutableIssues(flow) : [];
-        if (issues.length) {
-          const uiNumbers = flow ? flowUiStepNumbers(flow) : new Map<string, string>();
-          const invalidSteps = issues.map((issue) => ({
-            stepId: issue.stepId,
-            version: issue.version,
-            name: issue.name,
-            flatOrder: issue.flatOrder,
-            uiNumber: uiNumbers.get(issue.stepId) ?? String(issue.flatOrder).padStart(2, "0"),
-            reason: issue.reason,
-            reasonCode: issue.reasonCode,
-          }));
-          const message = formatPlayAllPreflightBlocked(invalidSteps);
-          logMainEvent(runDir, "play-all-preflight-blocked", {
-            runId: attemptId,
-            attemptId,
-            code: "PLAY_ALL_PREFLIGHT_BLOCKED",
-            executedSteps: [],
-            invalidSteps,
-          });
-          logTestBoundary(runDir, "END", {
-            runId: attemptId,
-            label: "Play All",
-            status: "PLAY_ALL_PREFLIGHT_BLOCKED",
-            ocrPasses: 0,
-            scrolls: 0,
-          });
-          endTestRunLog(attemptId);
-          const blocked: PlayAllBeginResult = {
-            ok: false,
-            attemptId,
-            code: "PLAY_ALL_PREFLIGHT_BLOCKED",
-            message,
-            invalidSteps,
-          };
-          return blocked;
-        }
-        logMainEvent(runDir, "play-all-preflight-passed", {
+        logMainEvent(runDir, "play-all-begin", {
           runId: attemptId,
           attemptId,
-          stepCount: flow?.steps.length ?? 0,
+          flowId: flow.id,
+          stepCount: flow.steps.length,
+          gate: "per-step",
         });
         uiPlayAllViewportRestore = overlays.enterExecutionMode();
         publishLayout();
         try {
           await settleViewport();
-          // Reuse attemptId as batchRunId so execution Steps share one correlation id.
           uiPlayAllRunId = runtime.startPlayAllLog(undefined, undefined, {
             runId: attemptId,
             openLog: false,

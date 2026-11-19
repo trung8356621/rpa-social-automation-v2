@@ -979,6 +979,7 @@ body[data-panel="shell"] .icon-button:hover {
   border: 0;
   background: transparent;
 }
+.menu-item.danger { color: #e8a090; }
 .group-form label {
   margin: 8px 0;
 }

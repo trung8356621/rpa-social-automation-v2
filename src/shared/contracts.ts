@@ -499,6 +499,20 @@ export type Command =
   | { type: "validateUploadFiles"; files?: unknown; unresolved?: boolean }
   | { type: "crop"; captureId: string; roi: Rect }
   | { type: "saveStep"; id?: string; name: string; payload: Payload }
+  | {
+      type: "deleteFlowStep";
+      stepId: string;
+      confirmed: boolean;
+      /** When true, unpin the Step from referencing Test Cases before removing from Flow. */
+      detachFromTestCases?: boolean;
+    }
+  | {
+      type: "deleteFlowGroup";
+      groupId: string;
+      confirmed: boolean;
+      /** remove = also drop children from Flow; retain = children become standalone. */
+      children: "remove" | "retain";
+    }
   | { type: "selectVersion"; id: string; version: number }
   | { type: "scriptHealthScan" }
   | {

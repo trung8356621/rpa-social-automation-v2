@@ -10,11 +10,7 @@ import {
 } from "../shared/ocr-target-draft";
 import { effectiveMatchTo, matchToLabel } from "../shared/match-to";
 import { playSequential, playbackMeta, playbackResult, type StepPlayback } from "./playback";
-import {
-  PLAY_ALL_PREFLIGHT_BLOCKED,
-  type PlayAllBeginResult,
-  type PlayAllInvalidStep,
-} from "../shared/play-all-preflight";
+import { type PlayAllBeginResult } from "../shared/play-all-preflight";
 import { StepList } from "./step-list";
 import { TargetModal } from "./target-modal";
 import { UiPopover } from "./ui-popover";
@@ -390,11 +386,6 @@ function Creator() {
     Record<string, StepPlayback>
   >({});
   const [activeStepId, setActiveStepId] = useState("");
-  const [playAllPreflight, setPlayAllPreflight] = useState<{
-    attemptId: string;
-    message: string;
-    invalidSteps: PlayAllInvalidStep[];
-  }>();
   const [blockedSteps, setBlockedSteps] = useState<Set<string>>(() => new Set());
   function toggleBlocked(stepId: string) {
     setBlockedSteps(previous => {
@@ -411,7 +402,6 @@ function Creator() {
     if (workspaceRestoring.current) return;
     setStepPlayback({});
     setActiveStepId("");
-    setPlayAllPreflight(undefined);
     setResults([]);
     listRunIds.current.clear();
     setExecution(undefined);
@@ -755,13 +745,6 @@ function Creator() {
       setBusy(false);
     }
   }
-  function openStepForRepair(stepId: string, version: number) {
-    const snap = window.creator.readDraft("state", state).value as State;
-    const step = snap.steps.find((s) => s.id === stepId && s.version === version);
-    if (!step) return;
-    // Open Editor on the broken Step — do not set activeStepId (that means "running").
-    void loadStep(step, true);
-  }
   async function playSteps(steps: Step[], all = false) {
     if (busy || playLock.current || shot || !steps.length) return;
     playLock.current = true;
@@ -769,7 +752,6 @@ function Creator() {
     setResults([]);
     // Always reset chips — otherwise Test Lab / prior Play All statuses linger on other Steps.
     setStepPlayback({});
-    setPlayAllPreflight(undefined);
     let batchRunId: string | undefined;
     let failed = false;
     try {
@@ -777,31 +759,15 @@ function Creator() {
         const snap = window.creator.readDraft("state", state).value as State;
         const start = parseHttpStartUrl(snap.flow?.startUrl);
         if (!start) throw new Error(START_URL_REQUIRED);
-        // Preflight all pinned Steps before viewport/browser work. No Step executes on failure.
+        // Begin batch after global checks only. Each Step validates itself in Runtime.test.
         const begin = await invoke<PlayAllBeginResult>({ type: "startPlayAllLog" });
         if (!begin.ok) {
+          // Defensive: startPlayAllLog no longer full-flow-gates; treat as hard stop.
           failed = true;
-          setPlayAllPreflight({
-            attemptId: begin.attemptId,
-            message: begin.message,
-            invalidSteps: begin.invalidSteps,
-          });
           setMessage(begin.message);
-          // Configuration chips only — never runtime "blocked" / never jump activeStepId.
-          setStepPlayback(Object.fromEntries(begin.invalidSteps.map((issue) => [
-            issue.stepId,
-            {
-              status: "invalid" as const,
-              message: `${PLAY_ALL_PREFLIGHT_BLOCKED} · UI ${issue.uiNumber} · flat ${String(issue.flatOrder).padStart(2, "0")} · ${issue.reason}`,
-              flatOrder: issue.flatOrder,
-              uiNumber: issue.uiNumber,
-              ...playbackMeta("preflight", begin.attemptId),
-            },
-          ])));
           return;
         }
         batchRunId = begin.batchRunId;
-        // Match Test Lab contract: navigate to Script Start URL before Step 1.
         if (!isSameStartPage(snap.url, start.href)) {
           setMessage(`Đang điều hướng Start URL trước Play All: ${start.href}`);
           const navigated = await invoke<State>({ type: "navigate", url: start.href });
@@ -832,6 +798,7 @@ function Creator() {
           setActiveStepId(step.id);
           setStepPlayback((previous) => ({ ...previous, [step.id]: stamped }));
           setMessage(`${step.name}: ${progress.message}`);
+          if (progress.status === "blocked" || progress.status === "fail") failed = true;
         },
         all ? async (step) => {
           if (!blockedSteps.has(step.id)) return false;
@@ -848,13 +815,12 @@ function Creator() {
       failed = true;
       const message = error instanceof Error ? error.message : String(error);
       setMessage(message);
-      // Runtime / transport failures only — preflight is handled above without throwing.
       const run = executionRef.current;
       if (run) {
         setStepPlayback((previous) => ({
           ...previous,
           [run.stepId]: {
-            status: /Viewport|Zoom|không thuộc flow|variable|Match To|thiếu ảnh ROI|→ Step /i.test(message)
+            status: /Viewport|Zoom|không thuộc flow|variable|Match To|thiếu ảnh ROI|→ Step |UI \d+/i.test(message)
               ? "blocked"
               : "fail",
             message,
@@ -2154,24 +2120,9 @@ function Creator() {
             {results.filter(result => result.networkHint).map(result =>
               <p key={result.id} className="network-failure-hint" role="alert">{result.networkHint}</p>)}
             <div className="execution-summary" role="status" aria-label="Lượt chạy hiện tại">
-              {playAllPreflight ? (
-                <div className="play-all-preflight" role="alert">
-                  <b>{PLAY_ALL_PREFLIGHT_BLOCKED}</b>
-                  <p>Chưa thực thi Step nào. attemptId {playAllPreflight.attemptId.slice(0, 8)}</p>
-                  <ul>
-                    {playAllPreflight.invalidSteps.map((issue) => (
-                      <li key={`${issue.stepId}:${issue.version}`}>
-                        <span>UI {issue.uiNumber} · flat Step {String(issue.flatOrder).padStart(2, "0")}: {issue.name} · v{issue.version} — {issue.reason}</span>
-                        <button type="button" disabled={locked} onClick={() => openStepForRepair(issue.stepId, issue.version)}>
-                          Sửa Step
-                        </button>
-                      </li>
-                    ))}
-                  </ul>
-                </div>
-              ) : execution ? <><b>Bản đã chạy: {executionLabel(execution)}</b>
+              {execution ? <><b>Bản đã chạy: {executionLabel(execution)}</b>
                 <p>{stepPlayback[execution.stepId]?.status ?? "running"} · {stepPlayback[execution.stepId]?.message}</p>
-              </> : <small>Play dùng version Base đã ghim trong danh sách; không dùng bản nháp Editor.</small>}
+              </> : <small>Play dùng version Base đã ghim trong danh sách; không dùng bản nháp Editor. Play All validate từng Step khi tới lượt.</small>}
               {results.map(result => <p key={result.id}>
                 v{result.version} · {result.status} · {matchToLabel(result.execution?.matchTo)}
                 {result.execution && <> · OCR {result.execution.ocrPasses} / scroll {result.execution.scrolls} · {result.execution.stopReason}</>}
