@@ -26,9 +26,10 @@ test("Phase 2: Feed Item Collector menu and routing are independent from Collect
   const contracts = read("src/shared/contracts.ts");
   const tabs = read("src/renderer/workspace-tabs.tsx");
 
-  // Menu registration
-  assert.match(shell, /page: "feed-item-collector", label: "Feed Item Collector"/);
+  // Hotfix C1-NAV: Collectors Library + direct Feed Visual Counter / Post Detail Extractor menus.
   assert.match(shell, /page: "collectors", label: "Collectors"/);
+  assert.match(shell, /page: "feed-item-collector", label: "Feed Visual Counter"/);
+  assert.match(shell, /page: "post-detail-collector", label: "Post Detail Extractor"/);
 
   // Contracts
   assert.match(contracts, /"collectors" \| "collector-test-lab" \| "feed-item-collector"/);

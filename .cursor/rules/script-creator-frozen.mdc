@@ -1,0 +1,28 @@
+---
+description: Freeze Script Creator / Publish / Sync; protect shared runtime during Collector work
+alwaysApply: true
+---
+
+# Script Creator Frozen
+
+Script Creator, Script Steps, Play All, Test Lab, Video Demo, Script Publish/Sync and their shared dependencies are **FROZEN**.
+
+Collector development must not modify protected Script code, data, database contracts, release logic or runtime behavior without explicit Product Owner approval.
+
+Shared code may be inspected read-only.
+
+Prefer Collector-side adapters and isolated implementations under `src/renderer/collectors/`, `src/renderer/feed-item-collector/`, `src/renderer/post-detail-collector/`, `src/shared/collectors/`, `src/shared/post-detail-collector/`, and Collector-only `src/main/*` modules.
+
+Before applying changes, verify the modified file list against `docs/agent-guardrails/SCRIPT_BASELINE_MANIFEST.md`. Treat `FROZEN_SCRIPT`, `FROZEN_SHARED`, and `SHARED_REVIEW_REQUIRED` as blocked unless PO approved the exception.
+
+No automatic Git reset, stash, clean, commit, push, migrations or deployment.
+
+If a requested task conflicts with these boundaries, stop and report the conflict rather than silently proceeding.
+
+## Safe vs blocked (quick)
+
+- **OK:** Collector-only UI/logic/tests that do not change Script semantics.
+- **Blocked:** `storage` Script schema, `seo-ops-sync` / script-release digests, Script Test Lab, playback/Play All, Script OCR/runtime path, BrowserCore session/viewport/zoom behavior relied on by Scripts.
+- **Escalate first:** `src/shared/contracts.ts`, `src/main/main.ts`, `src/renderer/main.tsx`, `src/preload/index.cts`, `src/main/browser-core.ts`, `src/main/storage.ts`.
+
+Full policy: `docs/agent-guardrails/SCRIPT_CREATOR_FREEZE.md`.

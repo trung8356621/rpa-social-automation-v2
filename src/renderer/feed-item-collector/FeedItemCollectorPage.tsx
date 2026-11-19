@@ -1,15 +1,21 @@
 import React, { useEffect, useState } from "react";
 import type { BoundaryProbeResult } from "../../shared/boundary-probe";
-import type { State } from "../../shared/contracts";
+import type { Command, State } from "../../shared/contracts";
 import type { UserPermalinkRule } from "../../shared/permalink-rules";
 import {
   collectorReportBrowserHost,
   collectorSetBrowserVisible,
 } from "../collectors/browser-capture";
+import { getActiveCollectorPart } from "../collectors/active-part-session";
 import {
   useFeedCollectorStore,
   setFeedCollectorState,
   computeRunSummaryStats,
+  getBoundFeedItemPartId,
+  hydrateFeedCollectorFromStorage,
+  inspectLegacyVisualFeedData,
+  isBoundVisualFeedPartEmpty,
+  importLegacyVisualFeedIntoBoundPart,
 } from "./store";
 import {
   deriveFrameBoundaryStatus,
@@ -28,14 +34,63 @@ import type {
   LiveIconTemplates,
   RunSummaryStats,
 } from "./types";
+import "../collectors/part-library.css";
 import "./feed-item-collector.css";
 
 type LabState = { connected: boolean; loggedIn: boolean; webContentsId: number; url: string };
 
-export function FeedItemCollectorPage({ invoke, state: parentState }: { invoke: Invoke; state?: State | null }) {
+export function FeedItemCollectorPage({
+  invoke,
+  state: parentState,
+}: {
+  invoke: Invoke;
+  state?: State | null;
+}) {
   const [state, updateStore] = useFeedCollectorStore();
   const [connection, setConnection] = useState<LabState | null>(null);
   const [connStatus, setConnStatus] = useState("Đang kết nối BrowserCore...");
+  const activePart = getActiveCollectorPart();
+  const boundPartId = getBoundFeedItemPartId();
+  const [legacyImportHint, setLegacyImportHint] = useState<{
+    sampleCount: number;
+    actionRowCount: number;
+    domHitCount: number;
+    boundaryFoundCount: number;
+    hasTemplates: boolean;
+  } | null>(null);
+  const [importMessage, setImportMessage] = useState("");
+
+  useEffect(() => {
+    hydrateFeedCollectorFromStorage();
+    const legacy = inspectLegacyVisualFeedData();
+    if (getBoundFeedItemPartId() && isBoundVisualFeedPartEmpty() && (legacy.hasRun || legacy.hasTemplates)) {
+      setLegacyImportHint({
+        sampleCount: legacy.sampleCount,
+        actionRowCount: legacy.actionRowCount,
+        domHitCount: legacy.domHitCount,
+        boundaryFoundCount: legacy.boundaryFoundCount,
+        hasTemplates: legacy.hasTemplates,
+      });
+    } else {
+      setLegacyImportHint(null);
+    }
+  }, []);
+
+  function handleImportLegacy() {
+    const result = importLegacyVisualFeedIntoBoundPart();
+    if (!result.ok) {
+      setImportMessage(
+        result.reason === "part_not_empty"
+          ? "This Part already has Visual data. Import refused to avoid overwrite."
+          : result.reason === "no_legacy_data"
+            ? "No legacy Feed Visual Counter data found to import."
+            : "Import unavailable for this Part session.",
+      );
+      return;
+    }
+    setLegacyImportHint(null);
+    setImportMessage("Imported existing Visual data into this Part. Legacy shared keys were left unchanged.");
+  }
 
   useEffect(() => {
     let active = true;
@@ -59,6 +114,10 @@ export function FeedItemCollectorPage({ invoke, state: parentState }: { invoke: 
       void collectorSetBrowserVisible(invoke, false);
     };
   }, [invoke]);
+
+  function goCollectorsHome() {
+    void invoke<State>({ type: "appPage", page: "collectors" } as Command);
+  }
 
   const goToStep = (step: FeedCollectorStep) => {
     if (step !== 1) {
@@ -135,6 +194,39 @@ export function FeedItemCollectorPage({ invoke, state: parentState }: { invoke: 
 
   return (
     <section className="app-page feed-item-collector-page" aria-label="Feed Item Collector">
+      {boundPartId && activePart ? (
+        <div className="part-active-banner" role="status">
+          <span>
+            Visual Part: <b>{activePart.name}</b> · v{activePart.version} · config isolated from other Parts
+          </span>
+          <button type="button" onClick={goCollectorsHome}>
+            ← Collectors Home
+          </button>
+        </div>
+      ) : null}
+      {legacyImportHint ? (
+        <div className="part-active-banner" role="region" aria-label="Import Existing Visual Data">
+          <span>
+            This Part is empty. Legacy Feed Visual Counter data is still available:
+            {legacyImportHint.hasTemplates ? " templates;" : ""}
+            {legacyImportHint.sampleCount ? ` ${legacyImportHint.sampleCount} samples;` : ""}
+            {legacyImportHint.actionRowCount ? ` ${legacyImportHint.actionRowCount} action rows;` : ""}
+            {legacyImportHint.domHitCount ? ` ${legacyImportHint.domHitCount} DOM hits;` : ""}
+            {legacyImportHint.boundaryFoundCount
+              ? ` ${legacyImportHint.boundaryFoundCount} boundaries found.`
+              : ""}{" "}
+            Import copies into this Part only — does not move or delete the legacy source.
+          </span>
+          <button type="button" className="primary" onClick={handleImportLegacy}>
+            Import Existing Visual Data
+          </button>
+        </div>
+      ) : null}
+      {importMessage ? (
+        <p className="collector-banner" role="status">
+          {importMessage}
+        </p>
+      ) : null}
       {/* Top Bar / Header */}
       <div className="fic-page-header">
         <div className="fic-title-group">

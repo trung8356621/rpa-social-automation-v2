@@ -4,6 +4,13 @@ import {
   type PostDetailOcrFrame,
   type VisualReferenceSample,
 } from "../../shared/post-detail-collector/types";
+import type { VisualPostDetailPartConfig } from "../../shared/collectors/part-library-types";
+import {
+  clearActiveCollectorPart,
+  getActiveCollectorPartId,
+  getPartLibraryRepository,
+  setActiveCollectorPartId,
+} from "../collectors/active-part-session";
 import type { PostDetailCollectorState } from "./types";
 import { extractWorkspaceIdentity, legacyStrategies, mergeUrlWorkspace } from "./url-workspace";
 
@@ -116,44 +123,97 @@ const INITIAL: PostDetailCollectorState = {
 
 let globalState: PostDetailCollectorState = { ...INITIAL };
 const listeners = new Set<(state: PostDetailCollectorState) => void>();
+let boundPartId: string | null = getActiveCollectorPartId();
+
+function snapshotFromState(state: PostDetailCollectorState): Record<string, unknown> {
+  return {
+    runId: state.runId,
+    sourceUrl: state.sourceUrl,
+    browserUrl: state.browserUrl,
+    contentRoi: state.contentRoi,
+    selectedFrameIndex: state.selectedFrameIndex,
+    parentConfigs: state.parentConfigs,
+    variableMappings: state.variableMappings,
+    hiddenExtractedData: state.hiddenExtractedData,
+    engagementResults: Object.fromEntries(
+      Object.entries(state.engagementResults).map(([postId, result]) => [
+        postId,
+        { ...result, previewDataUrl: undefined },
+      ]),
+    ),
+    batchUrlsText: state.batchUrlsText,
+    batchResults: state.batchResults,
+    batchConfigVersion: state.batchConfigVersion,
+    batchValidatedVersion: state.batchValidatedVersion,
+    schemaVersion: state.schemaVersion,
+    majorStep: state.majorStep,
+    processingSubstep: state.processingSubstep,
+    urlItems: state.urlItems,
+    selectedUrlId: state.selectedUrlId,
+    strategies: state.strategies,
+    frames: state.frames.map((f: PostDetailOcrFrame) => ({
+      ...f,
+      screenshotDataUrl: undefined,
+      cropDataUrl: f.cropDataUrl && f.cropDataUrl.length < 200_000 ? f.cropDataUrl : undefined,
+    })),
+    visualReferences: state.visualReferences.map((s) => ({
+      ...s,
+      dataUrl: s.dataUrl && s.dataUrl.length < 200_000 ? s.dataUrl : "",
+    })),
+  };
+}
+
+function stateFromSnapshot(snapshot: Record<string, unknown>): PostDetailCollectorState {
+  const migrated = migratePostDetailState(snapshot as Partial<PostDetailCollectorState>);
+  return {
+    schemaVersion: 2,
+    majorStep: migrated.majorStep ?? 1,
+    processingSubstep: migrated.processingSubstep ?? 3,
+    urlItems: migrated.urlItems ?? [],
+    selectedUrlId: migrated.selectedUrlId ?? null,
+    strategies: migrated.strategies ?? [],
+    step: 1,
+    sourceUrl: migrated.sourceUrl || DEFAULT_POST_DETAIL_FIXTURE_URL,
+    browserUrl: migrated.browserUrl || "",
+    runId: migrated.runId ?? null,
+    visualReferences: migrated.visualReferences ?? [],
+    contentRoi: migrated.contentRoi ?? null,
+    containerResult: null,
+    scanFrames: [],
+    lastMatch: null,
+    lastScreenshot: null,
+    frames: migrated.frames ?? [],
+    selectedFrameIndex: migrated.selectedFrameIndex ?? 0,
+    viewMode: "text",
+    htmlExtraction: null,
+    parentConfigs: migrated.parentConfigs ?? {},
+    savedParentResolution: null,
+    variableMappings: migrated.variableMappings ?? [],
+    hiddenExtractedData: migrated.hiddenExtractedData ?? {},
+    engagementResults: migrated.engagementResults ?? {},
+    batchUrlsText: migrated.batchUrlsText ?? "",
+    batchResults: migrated.batchResults ?? [],
+    batchConfigVersion: migrated.batchConfigVersion ?? 1,
+    batchValidatedVersion: migrated.batchValidatedVersion ?? null,
+  };
+}
 
 function persistLightweight(state: PostDetailCollectorState) {
+  if (boundPartId) {
+    const repo = getPartLibraryRepository();
+    const part = repo.getPart(boundPartId);
+    if (part?.config.kind === "visual_post_detail") {
+      const config: VisualPostDetailPartConfig = {
+        kind: "visual_post_detail",
+        snapshot: snapshotFromState(state),
+      };
+      repo.updatePartConfig(boundPartId, config);
+    }
+    return;
+  }
   if (typeof localStorage === "undefined") return;
   try {
-    localStorage.setItem(
-      POST_DETAIL_STATE_KEY,
-      JSON.stringify({
-        runId: state.runId,
-        sourceUrl: state.sourceUrl,
-        browserUrl: state.browserUrl,
-        contentRoi: state.contentRoi,
-        selectedFrameIndex: state.selectedFrameIndex,
-        parentConfigs: state.parentConfigs,
-        variableMappings: state.variableMappings,
-        hiddenExtractedData: state.hiddenExtractedData,
-        engagementResults: Object.fromEntries(Object.entries(state.engagementResults).map(([postId, result]) => [postId, { ...result, previewDataUrl: undefined }])),
-        batchUrlsText: state.batchUrlsText,
-        batchResults: state.batchResults,
-        batchConfigVersion: state.batchConfigVersion,
-        batchValidatedVersion: state.batchValidatedVersion,
-        schemaVersion: state.schemaVersion,
-        majorStep: state.majorStep,
-        processingSubstep: state.processingSubstep,
-        urlItems: state.urlItems,
-        selectedUrlId: state.selectedUrlId,
-        strategies: state.strategies,
-        // Persist OCR text + metadata; strip huge screenshots from localStorage.
-        frames: state.frames.map((f: PostDetailOcrFrame) => ({
-          ...f,
-          screenshotDataUrl: undefined,
-          cropDataUrl: f.cropDataUrl && f.cropDataUrl.length < 200_000 ? f.cropDataUrl : undefined,
-        })),
-        visualReferences: state.visualReferences.map((s) => ({
-          ...s,
-          dataUrl: s.dataUrl && s.dataUrl.length < 200_000 ? s.dataUrl : "",
-        })),
-      }),
-    );
+    localStorage.setItem(POST_DETAIL_STATE_KEY, JSON.stringify(snapshotFromState(state)));
   } catch {
     /* quota */
   }
@@ -161,6 +221,36 @@ function persistLightweight(state: PostDetailCollectorState) {
 
 export function getPostDetailCollectorState(): PostDetailCollectorState {
   return globalState;
+}
+
+export function getBoundPostDetailPartId(): string | null {
+  return boundPartId;
+}
+
+/** Bind Post Detail editor to an independent Part config. Does not write the legacy shared key. */
+export function bindPostDetailCollectorToPart(partId: string): PostDetailCollectorState {
+  if (boundPartId && boundPartId !== partId) {
+    persistLightweight(globalState);
+  }
+  const repo = getPartLibraryRepository();
+  const part = repo.getPart(partId);
+  if (!part || part.config.kind !== "visual_post_detail") {
+    throw new Error(`Part ${partId} is not a visual post-detail Part`);
+  }
+  boundPartId = partId;
+  setActiveCollectorPartId(partId);
+  globalState = stateFromSnapshot(part.config.snapshot ?? {});
+  listeners.forEach((fn) => fn(globalState));
+  return globalState;
+}
+
+export function unbindPostDetailCollectorFromPart(): void {
+  if (boundPartId) persistLightweight(globalState);
+  boundPartId = null;
+  clearActiveCollectorPart();
+  const loaded = loadPersisted();
+  globalState = stateFromSnapshot(loaded as Record<string, unknown>);
+  listeners.forEach((fn) => fn(globalState));
 }
 
 export function setPostDetailCollectorState(

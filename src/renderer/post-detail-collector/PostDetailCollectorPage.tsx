@@ -1,5 +1,5 @@
 import React, { useEffect, useState } from "react";
-import type { State } from "../../shared/contracts";
+import type { Command, State } from "../../shared/contracts";
 import {
   collectorReportBrowserHost,
   collectorSetBrowserVisible,
@@ -9,6 +9,7 @@ import {
   claimCollectorHostOwner,
   releaseCollectorHostOwner,
 } from "../collectors/collector-host-owner";
+import { getActiveCollectorPart } from "../collectors/active-part-session";
 import { BrowserCaptureStep } from "./BrowserCaptureStep";
 import { BatchValidationStep } from "./BatchValidationStep";
 import { PostProcessingToolbar, PostProcessingToolbarProvider } from "./PostProcessingToolbar";
@@ -23,10 +24,14 @@ import {
 import { SavedParentHtmlStep } from "./SavedParentHtmlStep";
 import { VisualRegionStep } from "./VisualRegionStep";
 import { UrlWorkspaceStep } from "./UrlWorkspaceStep";
-import { usePostDetailCollectorStore } from "./store";
+import {
+  getBoundPostDetailPartId,
+  usePostDetailCollectorStore,
+} from "./store";
 import { legacyStrategies, rankStrategies, upsertStrategyVariation } from "./url-workspace";
 import type { BrowserProbe, Invoke, PostDetailStep, PostDetailUrlItem } from "./types";
 import type { PostDetailSavedParentResolution } from "../../shared/post-detail-collector/types";
+import "../collectors/part-library.css";
 import "./post-detail-collector.css";
 import { playCompletionSound } from "../completion-sound";
 
@@ -68,6 +73,12 @@ export function PostDetailCollectorPage({ invoke, state: parentState }: { invoke
   const autoResolveStarted = React.useRef(false);
   const navigationEpoch = React.useRef(0);
   const activeResolveRunRef = React.useRef<{ epoch: number; targetKey: string } | null>(null);
+  const activePart = getActiveCollectorPart();
+  const boundPartId = getBoundPostDetailPartId();
+
+  function goCollectorsHome() {
+    void invoke<State>({ type: "appPage", page: "collectors" } as Command);
+  }
 
   const cancelActiveResolve = React.useCallback((reason = "Auto Match cancelled.") => {
     navigationEpoch.current += 1;
@@ -563,6 +574,16 @@ export function PostDetailCollectorPage({ invoke, state: parentState }: { invoke
   return (
     <PostProcessingToolbarProvider>
     <section className="app-page post-detail-collector-page" aria-label="Post Detail Collector">
+      {boundPartId && activePart ? (
+        <div className="part-active-banner" role="status">
+          <span>
+            Visual Part: <b>{activePart.name}</b> · v{activePart.version} · config isolated from other Parts
+          </span>
+          <button type="button" onClick={goCollectorsHome}>
+            ← Collectors Home
+          </button>
+        </div>
+      ) : null}
       <div className="pdc-page-header">
         <div className="pdc-title-group">
           <h1>Post Detail Collector</h1>

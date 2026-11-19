@@ -19,13 +19,11 @@ function read(rel: string): string {
   return readFileSync(resolve(rel), "utf8");
 }
 
-test("Post Detail Collector menu sits under Feed Item and is wired", () => {
+test("Post Detail Extractor sidebar and routing remain wired", () => {
   const shell = read("src/renderer/app-shell.tsx");
-  const feedIdx = shell.indexOf('page: "feed-item-collector"');
-  const postIdx = shell.indexOf('page: "post-detail-collector"');
-  assert.ok(feedIdx > 0);
-  assert.ok(postIdx > feedIdx, "Post Detail Collector must be listed after Feed Item Collector");
-  assert.match(shell, /label: "Post Detail Collector"/);
+  assert.match(shell, /page: "collectors", label: "Collectors"/);
+  assert.match(shell, /page: "feed-item-collector", label: "Feed Visual Counter"/);
+  assert.match(shell, /page: "post-detail-collector", label: "Post Detail Extractor"/);
 
   const contracts = read("src/shared/contracts.ts");
   assert.match(contracts, /"feed-item-collector" \| "post-detail-collector"/);
@@ -43,6 +41,10 @@ test("Post Detail Collector menu sits under Feed Item and is wired", () => {
   const renderer = read("src/renderer/main.tsx");
   assert.match(renderer, /appPage === "post-detail-collector" && <PostDetailCollectorPage/);
   assert.match(renderer, /PostDetailCollectorPage/);
+
+  const home = read("src/renderer/collectors/CollectorsHome.tsx");
+  assert.match(home, /post-detail/);
+  assert.match(home, /bindPostDetailCollectorToPart/);
 
   const tabs = read("src/renderer/workspace-tabs.tsx");
   assert.match(tabs, /"post-detail-collector": "Post Detail Collector"/);
