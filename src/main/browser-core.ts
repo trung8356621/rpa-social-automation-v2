@@ -28,6 +28,9 @@ import {
   shouldAcceptFocusSettle,
   type ActiveElementMeta,
 } from "../shared/click-type-settle.js";
+import { CdpDebuggerSession } from "./cdp-debugger-session.js";
+import { captureScreenshotBufferViaCdp } from "./cdp-screenshot.js";
+
 export class InputNotReady extends Error {
   constructor(readonly focus: ReturnType<BrowserCore["inputFocus"]>) {
     super(
@@ -78,6 +81,12 @@ export class BrowserCore {
   /** Serialize CDP screenshots — overlapping capture/detach races hang first extends. */
   private captureGate: Promise<void> = Promise.resolve();
   private preparedVisibleSurfaceKey = "";
+  /**
+   * Shared CDP tenancy for screenshot / recording / file-chooser (C2B.3).
+   * detachWhenIdle:false until typeOnly migrates and Electron GUI verifies idle detach.
+   * Single instance per BrowserCore; rebound on partition switch; discoverable via debugger WeakMap.
+   */
+  private readonly cdpSession = new CdpDebuggerSession({ detachWhenIdle: false });
   zoom = 1;
   visible = true;
   /**
@@ -125,6 +134,7 @@ export class BrowserCore {
     this.currentView = this.createView(partition);
     window.contentView.addChildView(this.view);
     this.view.setBounds(this.bounds);
+    this.cdpSession.bindWebContents(this.view.webContents);
     window.webContents.on("before-mouse-event", () => { this.inputRoute = "editor"; });
     window.webContents.on("before-input-event", () => { this.inputRoute = "editor"; });
     window.webContents.on("focus", () => { this.inputRoute = "editor"; });
@@ -233,10 +243,14 @@ export class BrowserCore {
       next.webContents.close();
       throw error;
     }
+    // Invalidate OLD debugger ownership before currentView points at the new WebContents.
+    // Prevents a window where browser.view is B but cdpSession is still bound to A.
+    this.cdpSession.onViewWillReplace("session-switch");
     this.currentView = next;
     this.partition = partition;
     this.inputRoute = "unknown";
     this.captures.clear();
+    this.cdpSession.bindWebContents(this.view.webContents);
     previous.webContents.close({ waitForBeforeUnload: false });
   }
   async navigate(url: string) {
@@ -347,44 +361,22 @@ export class BrowserCore {
     const zoom = wc.getZoomFactor();
     if (Math.abs(zoom - this.zoom) > 0.001)
       throw new Error("Zoom đã thay đổi. Nạp lại môi trường trước khi test.");
-    let raw: Buffer;
     const wasHidden = !this.visible;
-    let timer: ReturnType<typeof setTimeout> | undefined;
+    if (wasHidden) {
+      // Temporarily wake WebContentsView visibility so Chromium compositor generates
+      // the display surface frame for the scrolled content without stalling.
+      this.view.setVisible(true);
+    }
+    let raw: Buffer;
     try {
-      if (wasHidden) {
-        // Temporarily wake WebContentsView visibility so Chromium compositor generates
-        // the display surface frame for the scrolled content without stalling.
-        this.view.setVisible(true);
-      }
-      if (!wc.debugger.isAttached()) wc.debugger.attach("1.3");
-      await wc.debugger.sendCommand("Page.enable").catch(() => undefined);
-      const frame = await Promise.race([
-        wc.debugger.sendCommand("Page.captureScreenshot", {
-          format: "png",
-          fromSurface: true,
-          captureBeyondViewport: false,
-        }),
-        new Promise<never>((_, reject) => {
-          timer = setTimeout(
-            () =>
-              reject(
-                new Error("Screenshot timeout: không có frame sau 4 giây."),
-              ),
-            4000,
-          );
-        }),
-      ]);
-      raw = Buffer.from(frame.data, "base64");
-    } catch (e) {
-      if (wc.debugger.isAttached()) wc.debugger.detach();
-      try {
-        const image = await wc.capturePage(undefined, { stayHidden: true });
-        raw = image.toPNG();
-      } catch {
-        throw e;
-      }
+      raw = await captureScreenshotBufferViaCdp({
+        cdp: this.cdpSession,
+        capturePagePng: async () => {
+          const image = await wc.capturePage(undefined, { stayHidden: true });
+          return image.toPNG();
+        },
+      });
     } finally {
-      if (timer) clearTimeout(timer);
       if (wasHidden) {
         this.view.setVisible(false);
       }
@@ -407,6 +399,7 @@ export class BrowserCore {
     const height = requireCanonical
       ? this.bounds.height
       : (metadata.height ?? this.bounds.height);
+    // contracts.Capture.backend remains "cdp-surface" (unchanged public shape).
     return {
       id,
       width,
@@ -534,12 +527,12 @@ export class BrowserCore {
     };
   }
   async uploadFiles(files: string[], click: () => void, timeoutMs = 8000) {
-    return chooseUploadFiles(
-      this.view.webContents.debugger,
-      files,
-      click,
-      timeoutMs,
-    );
+    return chooseUploadFiles(this.cdpSession, files, click, timeoutMs);
+  }
+
+  /** Shared adapter instance — Recording resolves the same object via debugger registry. */
+  getCdpSession(): CdpDebuggerSession {
+    return this.cdpSession;
   }
   private requireInputRoute() {
     const focus = this.inputFocus();
@@ -681,6 +674,7 @@ export class BrowserCore {
     await this.view.webContents.session.flushStorageData();
   }
   close() {
+    this.cdpSession.onViewWillReplace("destroy");
     if (!this.view.webContents.isDestroyed()) this.view.webContents.close();
   }
 }

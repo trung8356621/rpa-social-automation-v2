@@ -12,6 +12,7 @@ import {
   resolveScriptPartRefs,
 } from "../../shared/collectors/script-part-refs";
 import { setActiveCollectorPartId } from "./active-part-session";
+import { setActiveCollectorScriptId } from "./active-script-session";
 import { bindFeedCollectorToPart } from "../feed-item-collector/store";
 import { bindPostDetailCollectorToPart } from "../post-detail-collector/store";
 import { usePartLibraryStore } from "./usePartLibraryStore";
@@ -191,6 +192,11 @@ export function CollectorsHome({ locked, navigate }: Props) {
     setFormError("");
   }
 
+  function openScriptWorkspace(script: CollectorScriptDef) {
+    setActiveCollectorScriptId(script.scriptId);
+    navigate("collector-script-workspace");
+  }
+
   if (networkDraft) {
     return (
       <section className="collectors-home" aria-label="Network Part Draft">
@@ -205,8 +211,8 @@ export function CollectorsHome({ locked, navigate }: Props) {
             Network Part · v{networkDraft.version} · status: {networkDraft.status}
           </p>
           <div className="warn-banner" role="status">
-            Not ready — Network capture and extraction are not implemented. This is a saved Draft
-            definition only.
+            Network Part definitions stay Draft here. Live capture runs from a Collector Script
+            Workspace that references this Part — there is no standalone Network Part Editor yet.
           </div>
           <p>
             {networkDraft.config.kind === "network_draft"
@@ -227,7 +233,8 @@ export function CollectorsHome({ locked, navigate }: Props) {
           Primary source for reusable Visual Parts and Collector Scripts. Existing Feed Visual Counter
           data is adopted once into Part Library (content-matched; never duplicated on reload). Sidebar
           Feed Visual Counter / Post Detail Extractor remain temporary debug access. Network Parts are
-          Draft placeholders only. Legacy Collector V1 is not shown here.
+          Draft config references; live Network Capture runs in Collector Script Workspace. Legacy
+          Collector V1 is not shown here.
         </p>
       </div>
 
@@ -353,17 +360,27 @@ export function CollectorsHome({ locked, navigate }: Props) {
                       <span className="part-status-pill draft">{script.status}</span>
                     </td>
                     <td>
-                      <button
-                        type="button"
-                        disabled={locked}
-                        onClick={() => {
-                          setFormError("");
-                          setEditAddPartId(defaultPartId);
-                          setEditScript({ ...script, partRefs: script.partRefs.map((r) => ({ ...r })) });
-                        }}
-                      >
-                        Open
-                      </button>
+                      <div className="collectors-home-row-actions">
+                        <button
+                          type="button"
+                          className="primary"
+                          disabled={locked}
+                          onClick={() => openScriptWorkspace(script)}
+                        >
+                          Workspace
+                        </button>
+                        <button
+                          type="button"
+                          disabled={locked}
+                          onClick={() => {
+                            setFormError("");
+                            setEditAddPartId(defaultPartId);
+                            setEditScript({ ...script, partRefs: script.partRefs.map((r) => ({ ...r })) });
+                          }}
+                        >
+                          Edit
+                        </button>
+                      </div>
                     </td>
                   </tr>
                 ))}
@@ -548,8 +565,31 @@ export function CollectorsHome({ locked, navigate }: Props) {
             <button type="button" onClick={() => setEditScript(null)}>
               Cancel
             </button>
-            <button type="button" className="primary" disabled={locked} onClick={saveScriptEdit}>
+            <button type="button" disabled={locked} onClick={saveScriptEdit}>
               Save
+            </button>
+            <button
+              type="button"
+              className="primary"
+              disabled={locked}
+              onClick={() => {
+                if (!editScript) return;
+                if (!editScript.name.trim()) {
+                  setFormError("Collector Script name is required.");
+                  return;
+                }
+                if (!editScript.partRefs.length) {
+                  setFormError("Select at least one Part.");
+                  return;
+                }
+                const toOpen = { ...editScript, name: editScript.name.trim() };
+                store.saveScript(toOpen);
+                setEditScript(null);
+                setFormError("");
+                openScriptWorkspace(toOpen);
+              }}
+            >
+              Open Workspace
             </button>
           </div>
         </UiPopover>

@@ -5,7 +5,6 @@ import { mkdir, writeFile } from "node:fs/promises";
 import path from "node:path";
 import sharp from "sharp";
 import { EventEmitter } from "node:events";
-import type { Debugger } from "electron";
 import {
   inspectUploadFiles,
   uploadPreflightError,
@@ -14,6 +13,11 @@ import {
 } from "../src/main/upload-files.js";
 import { chooseUploadFiles } from "../src/main/file-chooser.js";
 import { Store, validatePayload } from "../src/main/storage.js";
+import {
+  CdpDebuggerSession,
+  type CdpDebuggerLike,
+  type CdpWebContentsLike,
+} from "../src/main/cdp-debugger-session.js";
 
 test("UPLOAD_FILE validates readable real images, count, paths, duplicates and invalid content", async () => {
   const dir = path.resolve(".local", `unit-upload-${process.pid}`);
@@ -111,26 +115,41 @@ test("UPLOAD_FILE target/files survive version and Override without changing leg
     store.close();
   }
 });
-function fakeDebugger() {
-  const api = new EventEmitter() as EventEmitter & {
-    isAttached: () => boolean;
-    attach: () => void;
-    sendCommand: (method: string, params?: unknown) => Promise<unknown>;
+type MockDebugger = EventEmitter &
+  CdpDebuggerLike & {
+    attached: boolean;
+    detachCalls: number;
+    commands: { method: string; params?: Record<string, unknown> }[];
   };
-  const commands: { method: string; params: any }[] = [];
-  api.isAttached = () => true;
-  api.attach = () => {};
+
+function fakeCdpChooser() {
+  const api = new EventEmitter() as MockDebugger;
+  api.attached = true;
+  api.detachCalls = 0;
+  api.commands = [];
+  api.isAttached = () => api.attached;
+  api.attach = () => {
+    api.attached = true;
+  };
+  api.detach = () => {
+    api.detachCalls += 1;
+    api.attached = false;
+    api.emit("detach", "simulated");
+  };
   api.sendCommand = async (method, params) => {
-    commands.push({ method, params });
+    api.commands.push({ method, params });
     return {};
   };
-  return { api, commands, debuggerApi: api as unknown as Debugger };
+  const wc: CdpWebContentsLike = { debugger: api, isDestroyed: () => false };
+  const cdp = new CdpDebuggerSession({ detachWhenIdle: false });
+  cdp.bindWebContents(wc);
+  return { api, commands: api.commands, cdp };
 }
 test("chooser selects only the event backend id, clicks once, and disables interception", async () => {
-  const { api, commands, debuggerApi } = fakeDebugger();
+  const { api, commands, cdp } = fakeCdpChooser();
   let clicks = 0;
   const result = await chooseUploadFiles(
-    debuggerApi,
+    cdp,
     ["one.png", "two.png"],
     () => {
       clicks++;
@@ -157,18 +176,18 @@ test("chooser selects only the event backend id, clicks once, and disables inter
     method: "Page.setInterceptFileChooserDialog",
     params: { enabled: false },
   });
-  assert.equal(api.listenerCount("message"), 0);
-  assert.equal(api.listenerCount("detach"), 0);
+  assert.equal(cdp.diagnostics().leaseCount, 0);
+  assert.equal(api.detachCalls, 0);
 });
 test("chooser refuses multi files on single picker and missing backend id; timeout cleans up", async () => {
   for (const params of [
     { mode: "selectSingle", backendNodeId: 1 },
     { mode: "selectMultiple" },
   ]) {
-    const { api, commands, debuggerApi } = fakeDebugger();
+    const { api, commands, cdp } = fakeCdpChooser();
     await assert.rejects(
       chooseUploadFiles(
-        debuggerApi,
+        cdp,
         ["one.png", "two.png"],
         () => {
           queueMicrotask(() =>
@@ -182,14 +201,16 @@ test("chooser refuses multi files on single picker and missing backend id; timeo
       commands.some((c) => c.method === "DOM.setFileInputFiles"),
       false,
     );
-    assert.equal(api.listenerCount("message"), 0);
-    assert.equal(commands.at(-1)!.params.enabled, false);
+    assert.equal(cdp.diagnostics().leaseCount, 0);
+    assert.equal(commands.at(-1)!.params!.enabled, false);
+    assert.equal(api.detachCalls, 0);
   }
-  const { api, commands, debuggerApi } = fakeDebugger();
+  const { api, commands, cdp } = fakeCdpChooser();
   await assert.rejects(
-    chooseUploadFiles(debuggerApi, ["one.png"], () => {}, 10),
+    chooseUploadFiles(cdp, ["one.png"], () => {}, 10),
     /Không nhận được file chooser/,
   );
-  assert.equal(api.listenerCount("message"), 0);
-  assert.equal(commands.at(-1)!.params.enabled, false);
+  assert.equal(cdp.diagnostics().leaseCount, 0);
+  assert.equal(commands.at(-1)!.params!.enabled, false);
+  assert.equal(api.detachCalls, 0);
 });

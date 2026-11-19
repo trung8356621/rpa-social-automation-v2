@@ -37,6 +37,8 @@ import { buildPostDetailExtractAboveJs, normalizeExtractionResult, parsePostDeta
 import { buildHighlightSavedParentNodeJs, buildPostDetailActionAnchorProbeJs, buildPostDetailActionDebugJs, buildPostDetailParentProbeJs, buildPostDetailParentSelectJs, buildResolveSavedParentJs, CLEAR_POST_DETAIL_PARENT_HIGHLIGHT_JS, CLEAR_SAVED_PARENT_NODE_HIGHLIGHT_JS, wrapPostDetailProbeScript } from "./post-detail-parent-probe.js";
 import { PostDetailScanInputLock } from "./post-detail-scan-lock.js";
 import { CollectorScrollCaptureController } from "./collector-scroll-capture.js";
+import { CollectorCaptureSessionStorage } from "./collector-capture-session-storage.js";
+import { CollectorNetworkCaptureController } from "./collector-network-capture-controller.js";
 import { BrowserSessions } from "./browser-sessions.js";
 import { matchEndVisual } from "./end-visual-matcher.js";
 import { matchBeginLayout, inspectBeginLayoutTemplate } from "./begin-layout-matcher.js";
@@ -508,6 +510,14 @@ async function boot() {
   );
   const postDetailScanLock = new PostDetailScanInputLock(window, browser);
   const postDetailStorage = new PostDetailRunStorage(project);
+  const collectorCaptureStorage = new CollectorCaptureSessionStorage(project);
+  const collectorNetworkCapture = new CollectorNetworkCaptureController(
+    () => browser.getCdpSession(),
+    collectorCaptureStorage,
+    project,
+    () => activeSessionId,
+    () => browser.view.webContents.getURL(),
+  );
   const layoutAndSyncScanLock = () => {
     overlays.layout();
     postDetailScanLock.syncBounds();
@@ -812,6 +822,7 @@ async function boot() {
     try {
       // Successful URLs are persisted by main-frame navigation events before this
       // flush. Do not re-add a manually removed Domain Tag just by leaving a Session.
+      await collectorNetworkCapture.stopIfActive("browser-session-switch");
       await browser.switchPartition(target.partition);
       activeSessionId = id;
       browserSessions.select(id);
@@ -1694,7 +1705,7 @@ async function boot() {
       case "appPage":
         isIdle();
         if (uiPlayAllRunId) throw new Error("Đợi Play All kết thúc trước khi chuyển màn hình.");
-        if (event.sender !== window.webContents || !["scenarios", "creator", "browser-sessions", "test-lab", "visual-match-lab", "settings", "test-case", "variations", "widget-registry", "workflows", "builds-releases", "collectors", "collector-test-lab", "feed-item-collector", "post-detail-collector"].includes(command.page))
+        if (event.sender !== window.webContents || !["scenarios", "creator", "browser-sessions", "test-lab", "visual-match-lab", "settings", "test-case", "variations", "widget-registry", "workflows", "builds-releases", "collectors", "collector-test-lab", "feed-item-collector", "post-detail-collector", "collector-script-workspace"].includes(command.page))
           throw new Error("Invalid app page");
         overlays.setPage(command.page);
         if (command.page !== "creator") armedTest = undefined;
@@ -3209,6 +3220,48 @@ async function boot() {
         isIdle();
         scrollCapture.cancel(command.sessionId);
         return { ok: true };
+      }
+      case "collectorNetworkCaptureStart": {
+        isIdle();
+        return collectorNetworkCapture.start(command);
+      }
+      case "collectorNetworkCaptureStop": {
+        isIdle();
+        return collectorNetworkCapture.stop(command.reason ?? "manual");
+      }
+      case "collectorNetworkCaptureStatus": {
+        return collectorNetworkCapture.status();
+      }
+      case "collectorNetworkCaptureListSessions": {
+        return collectorNetworkCapture.listSessions({
+          scriptId: command.scriptId,
+          limit: command.limit,
+        });
+      }
+      case "collectorNetworkCaptureListRequests": {
+        if (typeof command.captureSessionId !== "string" || !command.captureSessionId.trim()) {
+          throw new Error("captureSessionId required");
+        }
+        return collectorNetworkCapture.listRequests(
+          command.captureSessionId.trim(),
+          command.offset ?? 0,
+          command.limit ?? 200,
+        );
+      }
+      case "collectorNetworkCaptureReadBodyPreview": {
+        if (
+          typeof command.captureSessionId !== "string" ||
+          !command.captureSessionId.trim() ||
+          typeof command.artifactRef !== "string" ||
+          !command.artifactRef.trim()
+        ) {
+          throw new Error("captureSessionId and artifactRef required");
+        }
+        return collectorNetworkCapture.readBodyPreview(
+          command.captureSessionId.trim(),
+          command.artifactRef.trim(),
+          command.maxBytes,
+        );
       }
       case "collectorInspectDom": {
         isIdle();

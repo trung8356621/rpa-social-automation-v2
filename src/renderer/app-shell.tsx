@@ -27,7 +27,7 @@ export function AppNavigation({ page, collapsed, locked, navigate, toggle }: {
 }) {
   const activeNav = ["scenarios", "test-lab", "creator", "test-case"].includes(page)
     ? "scenarios"
-    : ["collectors", "collector-test-lab"].includes(page)
+    : ["collectors", "collector-test-lab", "collector-script-workspace"].includes(page)
       ? "collectors"
       : page;
   return <div className={`app-sidebar${collapsed ? " collapsed" : ""}`}>

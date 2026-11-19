@@ -179,8 +179,12 @@ test("Collector Library navigation: menus restored; Legacy Collector V1 not surf
   assert.match(home, /Create Part/);
   assert.match(home, /bindFeedCollectorToPart/);
   assert.match(home, /Feed Visual Counter/);
+  assert.match(home, /openScriptWorkspace|Workspace/);
   assert.match(page, /CollectorsHome/);
   assert.match(page, /Collector Library/);
+  const main = read("src/renderer/main.tsx");
+  assert.match(main, /CollectorScriptWorkspace/);
+  assert.match(main, /collector-script-workspace/);
   // Abandoned five-stage wizard must not be mounted from normal Collectors UI.
   assert.doesNotMatch(page, /<CollectorEditor\b/);
   assert.doesNotMatch(page, /from "\.\/CollectorList"|from '\.\/CollectorList'/);

@@ -20,6 +20,7 @@ import { AppNavigation, ScenariosPage } from "./app-shell";
 import { BrowserSessionsPage, SessionSelector } from "./browser-sessions";
 import { TestLabPage, TestCaseEditor, CaseResultView, ExecutionErrorView, type CaseEditorHandle } from "./test-lab";
 import { CollectorsPage } from "./collectors/CollectorsPage";
+import { CollectorScriptWorkspace } from "./collectors/CollectorScriptWorkspace";
 import { VisualMatchLabPage } from "./experiments/visual-match-lab/VisualMatchLabPage";
 import { FeedItemCollectorPage } from "./feed-item-collector/FeedItemCollectorPage";
 import { PostDetailCollectorPage } from "./post-detail-collector/PostDetailCollectorPage";
@@ -231,7 +232,7 @@ function Creator() {
   const creatorVisible = appPage === "creator";
   const activeCaseTab = tabs.find(t => t.id === activeTabId && t.kind === "test-case");
   useEffect(() => {
-    if (["scenarios", "browser-sessions", "test-lab", "visual-match-lab", "settings", "variations", "widget-registry", "workflows", "builds-releases", "collectors", "collector-test-lab", "feed-item-collector", "post-detail-collector"].includes(appPage)) setMainPage(appPage as MainPage);
+    if (["scenarios", "browser-sessions", "test-lab", "visual-match-lab", "settings", "variations", "widget-registry", "workflows", "builds-releases", "collectors", "collector-test-lab", "feed-item-collector", "post-detail-collector", "collector-script-workspace"].includes(appPage)) setMainPage(appPage as MainPage);
   }, [appPage]);
   const [tagRefreshStatus, setTagRefreshStatus] = useState("");
   const [tagRefreshing, setTagRefreshing] = useState(false);
@@ -986,7 +987,7 @@ function Creator() {
   async function changeAppPage(page: AppPage) {
     const next = await invoke<State>({ type: "appPage", page });
     setState(next);
-    if (["scenarios", "browser-sessions", "test-lab", "visual-match-lab", "settings", "variations", "widget-registry", "workflows", "builds-releases", "collectors", "collector-test-lab", "feed-item-collector", "post-detail-collector"].includes(page)) setMainPage(page as MainPage);
+    if (["scenarios", "browser-sessions", "test-lab", "visual-match-lab", "settings", "variations", "widget-registry", "workflows", "builds-releases", "collectors", "collector-test-lab", "feed-item-collector", "post-detail-collector", "collector-script-workspace"].includes(page)) setMainPage(page as MainPage);
     setPageError("");
     window.scrollTo({ left: 0, top: 0 });
   }
@@ -1737,6 +1738,15 @@ function Creator() {
       {shell && appPage === "visual-match-lab" && <VisualMatchLabPage invoke={invoke} />}
       {shell && appPage === "feed-item-collector" && <FeedItemCollectorPage invoke={invoke} state={state} />}
       {shell && appPage === "post-detail-collector" && <PostDetailCollectorPage invoke={invoke} state={state} />}
+      {shell && appPage === "collector-script-workspace" && (
+        <CollectorScriptWorkspace
+          locked={navigationLocked}
+          navigate={navigateApp}
+          invoke={invoke}
+          state={state}
+          onSelectSession={(id) => void selectSession(id)}
+        />
+      )}
       {shell && (appPage === "collectors" || appPage === "collector-test-lab") && (
         <CollectorsPage
           page={appPage}

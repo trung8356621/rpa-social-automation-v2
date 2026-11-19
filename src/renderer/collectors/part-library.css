@@ -224,3 +224,198 @@
   flex: 1 1 12rem;
   min-width: 10rem;
 }
+
+/*
+ * Non-scrolling Workspace shell (Feed Item pattern): host stays fixed;
+ * only .csw-evidence-scroll moves. Prevents native WebContentsView drift.
+ */
+.workspace-page-strip ~ .app-page.collectors-page.collector-script-workspace,
+.app-page.collectors-page.collector-script-workspace {
+  height: calc(100vh - 36px);
+  max-height: calc(100vh - 36px);
+  overflow: hidden;
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  box-sizing: border-box;
+  padding-top: 8px;
+  padding-bottom: 8px;
+}
+
+.collector-script-workspace .csw-workspace-shell {
+  flex: 1 1 auto;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 0.65rem;
+  overflow: hidden;
+}
+
+.collector-script-workspace .csw-fixed-chrome {
+  flex: 0 0 auto;
+  min-width: 0;
+}
+
+.collector-script-workspace .csw-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 1rem;
+  margin-top: 0.35rem;
+}
+
+.collector-script-workspace .csw-browser-panel {
+  flex: 0 0 auto;
+  min-width: 0;
+}
+
+.collector-script-workspace .csw-evidence-scroll {
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow: auto;
+  overscroll-behavior: contain;
+  padding-right: 0.15rem;
+}
+
+.collector-script-workspace .csw-evidence-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 1rem;
+  margin-top: 0;
+  margin-bottom: 0.5rem;
+}
+
+@media (max-width: 960px) {
+  .collector-script-workspace .csw-grid,
+  .collector-script-workspace .csw-evidence-grid {
+    grid-template-columns: 1fr;
+  }
+}
+
+.collector-script-workspace .csw-capture-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+  margin: 0.75rem 0;
+}
+
+.collector-script-workspace .csw-stats {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 0.45rem 0.85rem;
+  margin: 0.5rem 0 0;
+}
+
+.collector-script-workspace .csw-stats dt {
+  margin: 0;
+  color: #90a5bf;
+  font-size: 0.8rem;
+}
+
+.collector-script-workspace .csw-stats dd {
+  margin: 0.1rem 0 0;
+}
+
+.collector-script-workspace .csw-url-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.4rem;
+  margin-bottom: 0.6rem;
+}
+
+.collector-script-workspace .csw-url-row input {
+  flex: 1 1 16rem;
+  min-width: 10rem;
+}
+
+.collector-script-workspace .csw-browser-panel-body {
+  /* Clip horizontally if the window is narrower than 1024; do not scroll the host away. */
+  overflow: hidden;
+  max-width: 100%;
+}
+
+.collector-script-workspace .csw-browser-stage {
+  position: relative;
+  width: 1024px;
+  height: 560px;
+  max-width: 100%;
+  flex-shrink: 0;
+  overflow: hidden;
+  border-radius: 6px;
+  background: #050a08;
+  box-sizing: content-box;
+}
+
+.collector-script-workspace .csw-browser-host {
+  /* Fixed Creator execution viewport (WebContents host hole) — do not stretch. */
+  position: static;
+  width: 1024px;
+  height: 560px;
+  min-width: 1024px;
+  min-height: 560px;
+  max-width: 1024px;
+  max-height: 560px;
+  flex: none;
+  box-sizing: border-box;
+  border: 1px solid #2a3a4f;
+  border-radius: 6px;
+  background: #0a1018;
+}
+
+.collector-script-workspace .csw-visual-panel {
+  margin-top: 0.5rem;
+}
+
+.collector-script-workspace .csw-visual-stats {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(9rem, 1fr));
+  gap: 0.4rem 0.75rem;
+  margin: 0.5rem 0 0;
+}
+
+.collector-script-workspace .csw-visual-stats dt {
+  margin: 0;
+  color: #90a5bf;
+  font-size: 0.78rem;
+}
+
+.collector-script-workspace .csw-visual-stats dd {
+  margin: 0.1rem 0 0;
+}
+
+.collector-script-workspace .csw-observation-list {
+  list-style: none;
+  margin: 0.5rem 0 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 0.4rem;
+}
+
+.collector-script-workspace .csw-observation-list li {
+  padding: 0.45rem 0.55rem;
+  border: 1px solid #2a3a4f;
+  border-radius: 6px;
+  background: #0f1620;
+  font-size: 0.82rem;
+}
+
+.collector-script-workspace .csw-evidence-table td {
+  max-width: 18rem;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.collector-script-workspace .csw-preview {
+  margin: 0;
+  max-height: 28rem;
+  overflow: auto;
+  padding: 0.65rem 0.75rem;
+  border-radius: 6px;
+  background: #0a1018;
+  border: 1px solid #2a3a4f;
+  white-space: pre-wrap;
+  word-break: break-word;
+  font-size: 0.78rem;
+  line-height: 1.35;
+}

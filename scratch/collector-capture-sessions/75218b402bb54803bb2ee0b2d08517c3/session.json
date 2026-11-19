@@ -1,0 +1,43 @@
+{
+  "schemaVersion": 1,
+  "captureSessionId": "75218b402bb54803bb2ee0b2d08517c3",
+  "browserSessionId": "default",
+  "sourceUrl": "https://www.facebook.com/groups/314158368669766",
+  "cdpGeneration": 1,
+  "scriptId": "cscript_676c9172-9652-473f-8588-2a6f0aa3e568",
+  "networkPartId": "part_a7ea07f0-52a4-4b3b-b090-0a2ead512150",
+  "networkPartVersion": 1,
+  "status": "stopped",
+  "startedAt": "2026-11-19T12:08:29.950Z",
+  "filters": {
+    "bodyContentTypeIncludes": [
+      "json",
+      "ndjson",
+      "javascript",
+      "text/plain"
+    ],
+    "maxBodyBytes": 2000000
+  },
+  "limits": {
+    "maxRequestsTracked": 2000,
+    "maxBodyBytes": 2000000,
+    "maxTotalArtifactBytes": 80000000,
+    "maxPendingBodyFetches": 8
+  },
+  "stats": {
+    "requestsTracked": 37,
+    "bodiesSaved": 36,
+    "bodiesSkipped": 1,
+    "parseJsonOk": 0,
+    "parseNdjsonOk": 0,
+    "parseInvalid": 36,
+    "loadFailed": 0,
+    "redirects": 0,
+    "totalArtifactBytes": 2522355,
+    "diagnostics": 2
+  },
+  "artifactRoot": "D:\\work-app\\new\\rpa-social-automation-v2\\scratch\\collector-capture-sessions\\75218b402bb54803bb2ee0b2d08517c3",
+  "diagnostics": [],
+  "endedAt": "2026-11-19T12:11:38.229Z",
+  "stopReason": "manual"
+}

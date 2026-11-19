@@ -9,6 +9,7 @@ export const COLLECTOR_BROWSER_HOST_PAGES = [
   "visual-match-lab",
   "feed-item-collector",
   "post-detail-collector",
+  "collector-script-workspace",
 ] as const satisfies ReadonlyArray<AppPage>;
 
 export function isCollectorBrowserHostPage(page: AppPage): boolean {

@@ -19,7 +19,7 @@ import type {
 } from "./post-detail-collector/types.js";
 export type { ScriptReleaseManifest } from "./script-release.js";
 export type Rect = { x: number; y: number; width: number; height: number };
-export type MainPage = "scenarios" | "browser-sessions" | "test-lab" | "visual-match-lab" | "settings" | "variations" | "widget-registry" | "workflows" | "builds-releases" | "collectors" | "collector-test-lab" | "feed-item-collector" | "post-detail-collector";
+export type MainPage = "scenarios" | "browser-sessions" | "test-lab" | "visual-match-lab" | "settings" | "variations" | "widget-registry" | "workflows" | "builds-releases" | "collectors" | "collector-test-lab" | "feed-item-collector" | "post-detail-collector" | "collector-script-workspace";
 export type AppPage = MainPage | "creator" | "test-case" | "studio-run";
 export type VariableValues = Record<string, string | string[] | number>;
 export type CaseRunStatus = "RUNNING" | "PASS" | "BLOCKED" | "SKIPPED" | "ERROR" | "ACTION_SENT";
@@ -706,6 +706,29 @@ export type Command =
         geometry?: NormalizedRegionGeometry;
       }>;
       groupTag?: string;
+    }
+  /** C2B.6 — Collector Script Workspace Network Capture (invoke-only). */
+  | {
+      type: "collectorNetworkCaptureStart";
+      scriptId: string;
+      networkPartId: string;
+      networkPartVersion: number;
+      sourceUrl?: string;
+    }
+  | { type: "collectorNetworkCaptureStop"; reason?: string }
+  | { type: "collectorNetworkCaptureStatus" }
+  | { type: "collectorNetworkCaptureListSessions"; scriptId?: string; limit?: number }
+  | {
+      type: "collectorNetworkCaptureListRequests";
+      captureSessionId: string;
+      limit?: number;
+      offset?: number;
+    }
+  | {
+      type: "collectorNetworkCaptureReadBodyPreview";
+      captureSessionId: string;
+      artifactRef: string;
+      maxBytes?: number;
     };
 export const DRAFT_KEYS = [
   "variableId",
