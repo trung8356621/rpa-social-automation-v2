@@ -89,7 +89,11 @@ import type {
   BrowserCoreNavigationResult,
   TestCaseRerunPrep,
 } from "../shared/contracts.js";
-import { executeManualSync } from "../shared/sync-ipc.js";
+import { executeManualSync, type ManualSyncResponse } from "../shared/sync-ipc.js";
+import {
+  formatAttachDemoSyncMessage,
+  interpretSyncForFlow,
+} from "../shared/attach-demo-sync.js";
 import {
   buildScriptPublishBody,
   assertScriptPublishBody,
@@ -1037,8 +1041,8 @@ async function boot() {
     assertNotScreenshot(result.recordingPath!);
     const flow = store.flows().find((candidate) => candidate.id === item.flowId);
     if (!flow) throw new Error("VIDEO_DEMO: Scenario/Script not found");
-    if (JSON.stringify(item.stepVersions ?? flow.steps) !== JSON.stringify(flow.steps))
-      throw new Error("VIDEO_DEMO: Test Case pins are outdated — run a Case with current Scenario pins");
+    // User-selected Demo attaches to the current Script pins/digest — Case pin drift must not
+    // block selecting a playable recording. Sync still enforces execution integrity.
     const steps = flow.steps.map((ref) => store.step(ref.id, ref.version));
     const scriptVersion = requestedVersion || store.setting(`seoOpsVersion:${flow.id}`) || "1";
     const { assets, complete, missing } = await collectScriptAssets(flow, steps, assetDir);
@@ -1339,7 +1343,26 @@ async function boot() {
       }
       case "attachScriptVideoDemo": {
         isIdle();
-        return promoteDemo(command.caseId, command.runId, command.reviewed === true, command.scriptVersion);
+        const attachment = await promoteDemo(
+          command.caseId,
+          command.runId,
+          command.reviewed === true,
+          command.scriptVersion,
+        );
+        const syncAfter = command.syncAfter !== false;
+        let sync: ManualSyncResponse | undefined;
+        let syncMessage = "Demo saved";
+        if (syncAfter) {
+          sync = await manualSeoOpsSync("seoOpsSyncFlow", { flowId: attachment.scriptId });
+          const outcome = interpretSyncForFlow(attachment.scriptId, sync);
+          syncMessage = formatAttachDemoSyncMessage(outcome);
+        }
+        return {
+          attachment,
+          sync,
+          syncMessage,
+          state: state(),
+        };
       }
       case "exportFullBackup": {
         isIdle();

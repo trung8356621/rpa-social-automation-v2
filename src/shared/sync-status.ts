@@ -59,6 +59,10 @@ export function publishBlockerMessage(reasons: string[]): string {
       return "Legacy release metadata incomplete — cần khôi phục digest/version metadata đã xác minh";
     if (reason === "SCRIPT_VERSION_CONFLICT") return "Version conflict — local và SEO-OPS không cùng release history";
     if (reason === "invalid_variable_ref") return "Invalid Script — sửa Variable reference trong Step";
+    if (reason.startsWith("invalid_step:")) {
+      const detail = reason.slice("invalid_step:".length);
+      return `Invalid Step — ${detail}`;
+    }
     if (reason.startsWith("missing_asset:")) return `Missing OCR asset — ${reason.slice("missing_asset:".length)}`;
     if (/execution changed|Step versions changed/i.test(reason)) return `${reason} — chạy Test Lab lại cho Draft hiện tại`;
     if (/VIDEO_DEMO/i.test(reason)) return `${reason} — kiểm tra lại Script Demo`;

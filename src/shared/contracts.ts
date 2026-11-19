@@ -424,6 +424,8 @@ export type Command =
       runId: string;
       scriptVersion?: string;
       reviewed: boolean;
+      /** When true (default), run targeted Script Sync after Demo save. */
+      syncAfter?: boolean;
     }
   | {
       type: "exportScriptRelease";

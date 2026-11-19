@@ -1105,16 +1105,21 @@ export function createSeoOpsSyncService(options: {
     // The release builder only sees a ready demo. Preserve "missing" exclusively
     // for no association; a stored but stale/broken association gets its precise error.
     const reasons = snap.incomplete_reasons.filter(reason => !(hasStoredDemo && reason === MISSING_DEMO_REASON));
-    if (
-      store
-        .invalidSteps()
-        .some(
-          (r) =>
-            r.flowId === flow.id &&
-            flow.steps.some((ref) => ref.id === r.stepId && ref.version === r.version),
-        )
-    ) {
-      reasons.push("invalid_variable_ref");
+    for (const invalid of store.invalidSteps()) {
+      if (
+        invalid.flowId !== flow.id ||
+        !flow.steps.some((ref) => ref.id === invalid.stepId && ref.version === invalid.version)
+      ) {
+        continue;
+      }
+      // Preserve exact issue class — do not collapse missing ROI into "variable reference".
+      if (invalid.reason === "invalid_payload") {
+        reasons.push(`invalid_step:${invalid.stepId}:${invalid.detail || invalid.reason}`);
+      } else if (invalid.reason === "missing_variable" || invalid.reason === "legacy_incomplete" || invalid.reason === "inline_conflict") {
+        reasons.push("invalid_variable_ref");
+      } else {
+        reasons.push(`invalid_step:${invalid.stepId}:${invalid.reason}`);
+      }
     }
     if (!complete) {
       reasons.push(...missing.map((m) => `missing_asset:${m}`));

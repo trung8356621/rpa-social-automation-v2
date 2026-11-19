@@ -54,23 +54,18 @@ function demoFor(scriptId: string, digest: string, version = "1.0.0") {
 }
 
 describe("video demo policy", () => {
-  it("auto-recording eligibility: success can become demo; failure cannot", () => {
-    assert.equal(
-      canUseAsScriptDemo({
-        status: "PASS",
-        runId,
-        recordingPath: `${caseId}/${runId}/recording.webm`,
-      }).ok,
-      true,
-    );
-    assert.equal(
-      canUseAsScriptDemo({
-        status: "ERROR",
-        runId,
-        recordingPath: `${caseId}/${runId}/recording.webm`,
-      }).ok,
-      false,
-    );
+  it("user-selected demo: any status with playable recording is eligible", () => {
+    for (const status of ["PASS", "ACTION_SENT", "BLOCKED", "ERROR", "FAILED", "SKIPPED"] as const) {
+      assert.equal(
+        canUseAsScriptDemo({
+          status,
+          runId,
+          recordingPath: `${caseId}/${runId}/recording.webm`,
+        }).ok,
+        true,
+        status,
+      );
+    }
     assert.equal(
       canUseAsScriptDemo({
         status: "PASS",
@@ -79,16 +74,37 @@ describe("video demo policy", () => {
       }).ok,
       false,
     );
+    assert.equal(
+      canUseAsScriptDemo({
+        status: "BLOCKED",
+        runId,
+      }).ok,
+      false,
+    );
+    assert.equal(
+      canUseAsScriptDemo({
+        status: "ERROR",
+        recordingPath: `${caseId}/${runId}/recording.webm`,
+      }).ok,
+      false,
+    );
   });
 
-  it("failed run keeps recording evidence viewable but not attachable", () => {
-    const failed = canUseAsScriptDemo({
-      status: "ERROR",
+  it("failed/partial run with video remains attachable; missing video is not", () => {
+    assert.equal(
+      canUseAsScriptDemo({
+        status: "ERROR",
+        runId,
+        recordingPath: `${caseId}/${runId}/recording.webm`,
+      }).ok,
+      true,
+    );
+    const noVideo = canUseAsScriptDemo({
+      status: "BLOCKED",
       runId,
-      recordingPath: `${caseId}/${runId}/recording.webm`,
     });
-    assert.equal(failed.ok, false);
-    assert.match(failed.reason ?? "", /successful Runs/i);
+    assert.equal(noVideo.ok, false);
+    assert.match(noVideo.reason ?? "", /recording incomplete or missing/i);
   });
 
   it("rejects video from a different Script", () => {

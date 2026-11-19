@@ -239,21 +239,81 @@ export function CaseResultView({ item, state, locked = false, runAgain, compact 
             {screenshotMediaMessage(result, imageError)}
           </div>}
       <div className="case-media-tools"><button disabled={locked || attaching || !demoOk || !videoSource}
-        title={demoOk ? "Gắn recording này làm Script Demo" : "Chỉ Run thành công + recording hoàn chỉnh mới làm được Script Demo"}
+        title={demoOk
+          ? "Chọn recording làm Script Demo rồi Sync Script này lên SEO-OPS (không đổi kết quả Test Run)"
+          : "Cần recording video hợp lệ để chọn làm Script Demo"}
         onClick={() => {
-          if (!result.runId || !window.confirm("Dùng video này làm demo cho đúng Scenario của Test Case?")) return;
-          setAttaching(true); setAttachMsg("");
-          void window.creator.invoke({ type: "attachScriptVideoDemo", caseId: item.id, runId: result.runId,
-            reviewed: true }).then(() => setAttachMsg("Demo saved"))
+          if (!result.runId) return;
+          if (!window.confirm(
+            `Dùng video này làm Script Demo? Kết quả Test Run: ${resultStatus(result.status)}.`,
+          )) return;
+          setAttaching(true); setAttachMsg("Demo saved → Syncing...");
+          void window.creator.invoke({
+            type: "attachScriptVideoDemo",
+            caseId: item.id,
+            runId: result.runId,
+            reviewed: true,
+            syncAfter: true,
+          }).then(async (value) => {
+            const payload = value as { syncMessage?: string; state?: State };
+            setAttachMsg(payload.syncMessage || "Demo saved");
+            // Refresh Script Sync badges after targeted sync (best-effort).
+            void window.creator.invoke({ type: "seoOpsSyncStatus" }).catch(() => undefined);
+          })
             .catch(error => {
               const message = String((error as Error).message || error);
               setAttachMsg(/Scenario\/Script not found/i.test(message) ? "Không tìm thấy Script liên kết với Test Case này."
                 : /video file missing|recording incomplete/i.test(message) ? "Video không tồn tại hoặc chưa hoàn tất. Hãy chạy lại Test Case."
                 : `Không lưu được demo: ${message.replace(/^.*VIDEO_DEMO:\s*/i, "")}`);
             }).finally(() => setAttaching(false));
-        }}>{attaching ? "Đang lưu demo…" : "Use as Script Demo"}</button>
+        }}>{attaching ? "Demo saved → Syncing..." : "Use as Script Demo"}</button>
+        {/Connection failed: Retry Sync/i.test(attachMsg) && (
+          <button
+            type="button"
+            disabled={locked || attaching}
+            onClick={() => {
+              setAttaching(true);
+              setAttachMsg("Demo saved → Syncing...");
+              void window.creator.invoke({ type: "seoOpsSyncFlow", flowId: item.flowId })
+                .then((value) => {
+                  const sync = value as { ok?: boolean; results?: Array<{ script_id: string; action: string; ok: boolean; message?: string }>; error?: { message?: string; category?: string } };
+                  if (!sync?.ok) {
+                    const cat = sync?.error?.category;
+                    setAttachMsg(
+                      cat === "network" || cat === "timeout" || cat === "service_unavailable"
+                        ? "Demo saved → Connection failed: Retry Sync"
+                        : `Demo saved → Sync blocked: ${sync?.error?.message || "sync failed"}`,
+                    );
+                    return;
+                  }
+                  const row = sync.results?.find((entry) => entry.script_id === item.flowId);
+                  if (!row) { setAttachMsg("Demo saved → Sync blocked: No sync result for Script"); return; }
+                  if (row.action === "publish_blocked") {
+                    setAttachMsg(`Demo saved → Sync blocked: ${row.message || "incomplete"}`);
+                    return;
+                  }
+                  if (row.action === "unchanged" || /same_digest|idempotent/i.test(row.message || "")) {
+                    setAttachMsg("Demo saved → Already synchronized");
+                    return;
+                  }
+                  if (row.ok && (row.action === "push" || /pushed/i.test(row.message || ""))) {
+                    setAttachMsg(`Demo saved → Published`);
+                    return;
+                  }
+                  setAttachMsg(`Demo saved → Sync blocked: ${row.message || row.action}`);
+                })
+                .catch((error) => {
+                  setAttachMsg(`Demo saved → Sync blocked: ${String((error as Error).message || error)}`);
+                })
+                .finally(() => setAttaching(false));
+            }}
+          >
+            Retry Sync
+          </button>
+        )}
         {!demoOk && <span className="hint">{canUseAsScriptDemo(result).reason?.replace(/^VIDEO_DEMO:\s*/i, "")}</span>}
-        {attachMsg && <span role={attachMsg === "Demo saved" ? "status" : "alert"}>{attachMsg}</span>}</div>
+        {demoOk && <span className="hint">Use as Script Demo = chọn video + Sync Script này. Kết quả Test Run giữ nguyên.</span>}
+        {attachMsg && <span role={/Published|Already synchronized|^Demo saved$/i.test(attachMsg) ? "status" : /Syncing/i.test(attachMsg) ? "status" : "alert"}>{attachMsg}</span>}</div>
     </section>
     <section className="case-step-results"><h2>Step Results</h2>
       <ol>{result.steps?.map((step, index) => <li key={`${step.stepId}-${step.version}`}>

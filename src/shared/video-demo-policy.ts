@@ -4,19 +4,20 @@ import type { VideoDemoAttachment } from "./video-demo.js";
 
 const SUCCESS: ReadonlySet<string> = new Set(["PASS", "ACTION_SENT"]);
 
-/** Successful Test Runs may become Script demos; failures remain viewable only. */
+/** Successful Test Runs (PASS / ACTION_SENT). Unrelated to Script Demo eligibility. */
 export function isSuccessfulTestRun(status?: string): boolean {
   return SUCCESS.has(status ?? "");
 }
 
+/**
+ * Script Demo is user-selected: any playable Test Lab recording may be attached,
+ * regardless of Test Result status. Integrity only — not a pass/fail gate.
+ */
 export function canUseAsScriptDemo(result: Pick<CaseResult, "status" | "recordingPath" | "recordingError" | "runId">): {
   ok: boolean;
   reason?: string;
 } {
   if (!result.runId) return { ok: false, reason: "VIDEO_DEMO: missing test_run_id" };
-  if (!isSuccessfulTestRun(result.status)) {
-    return { ok: false, reason: "VIDEO_DEMO: only successful Runs (PASS / ACTION_SENT) can be Script Demo" };
-  }
   if (result.recordingError) {
     return { ok: false, reason: `VIDEO_DEMO: recording failed — ${result.recordingError}` };
   }
