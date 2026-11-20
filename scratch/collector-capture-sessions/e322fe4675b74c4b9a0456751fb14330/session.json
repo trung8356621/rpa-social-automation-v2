@@ -24,19 +24,20 @@
     "maxPendingBodyFetches": 8
   },
   "stats": {
-    "requestsTracked": 116,
+    "requestsTracked": 260,
     "bodiesSaved": 0,
-    "bodiesSkipped": 116,
+    "bodiesSkipped": 218,
     "bodiesFetched": 0,
     "parseJsonOk": 0,
     "parseNdjsonOk": 0,
     "parseInvalid": 0,
-    "loadFailed": 0,
+    "loadFailed": 42,
     "redirects": 0,
     "totalArtifactBytes": 0,
     "diagnostics": 1,
     "bodyStatusCounts": {
-      "skipped_filter": 116
+      "skipped_filter": 218,
+      "failed": 42
     }
   },
   "artifactRoot": "D:\\work-app\\new\\rpa-social-automation-v2\\scratch\\collector-capture-sessions\\e322fe4675b74c4b9a0456751fb14330",
