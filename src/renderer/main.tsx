@@ -26,7 +26,14 @@ import { FeedItemCollectorPage } from "./feed-item-collector/FeedItemCollectorPa
 import { PostDetailCollectorPage } from "./post-detail-collector/PostDetailCollectorPage";
 import type { CollectorEditorHandle } from "./collectors/CollectorEditor";
 import { Variables, Groups } from "./flow-controls";
-import { SeoOpsAuthPanel, scriptVersionLabel, syncBadge, type SeoOpsSessionState } from "./seo-ops-panel";
+import {
+  SeoOpsAuthPanel,
+  canAccessAppPage,
+  resolveSeoOpsAuthGate,
+  scriptVersionLabel,
+  syncBadge,
+  type SeoOpsSessionState,
+} from "./seo-ops-panel";
 import {
   applyActionTagsToState,
   formatActionTagsRefreshStatus,
@@ -224,12 +231,16 @@ function Creator() {
 
   const [state, setState] = useDraft<State>("state");
   const [seoOpsAuthenticated, setSeoOpsAuthenticated] = useState(false);
+  const seoOpsAuthenticatedRef = useRef(false);
+  seoOpsAuthenticatedRef.current = seoOpsAuthenticated;
   const [seoOpsSession, setSeoOpsSession] = useState<SeoOpsSessionState>();
   const [seoOpsAutoSyncEnabled, setSeoOpsAutoSyncEnabled] = useState(false);
   const [scriptSyncRows, setScriptSyncRows] = useState<ScriptSyncRow[]>([]);
   const [focusVariableId, setFocusVariableId] = useState<string>();
   const appPage = state?.appPage ?? "scenarios";
-  const creatorVisible = appPage === "creator";
+  const authGate = resolveSeoOpsAuthGate(seoOpsSession, appPage);
+  const seoOpsGateActive = shell && (authGate.validating || authGate.locked);
+  const creatorVisible = !seoOpsGateActive && appPage === "creator";
   const activeCaseTab = tabs.find(t => t.id === activeTabId && t.kind === "test-case");
   useEffect(() => {
     if (["scenarios", "browser-sessions", "test-lab", "visual-match-lab", "settings", "variations", "widget-registry", "workflows", "builds-releases", "collectors", "collector-test-lab", "feed-item-collector", "post-detail-collector", "collector-script-workspace"].includes(appPage)) setMainPage(appPage as MainPage);
@@ -256,7 +267,9 @@ function Creator() {
       setStateRef.current((prev) => applyActionTagsToState(prev, result.tags) ?? prev);
       setTagRefreshStatus(formatActionTagsRefreshStatus(result));
       if (!result.ok && result.authRequired) {
+        seoOpsAuthenticatedRef.current = false;
         setSeoOpsAuthenticated(false);
+        setSeoOpsSession(prev => prev ? { ...prev, authenticated: false, error: result.error || "session_expired" } : prev);
       }
     } catch (e) {
       if (gen !== tagRefreshGen.current) return;
@@ -302,17 +315,25 @@ function Creator() {
     void window.creator.invoke({ type: "seoOpsGetSession" }).then((session) => {
       if (cancelled) return;
       const s = session as { authenticated?: boolean; autoSyncEnabled?: boolean };
-      setSeoOpsAuthenticated(Boolean(s.authenticated));
+      const authed = Boolean(s.authenticated);
+      seoOpsAuthenticatedRef.current = authed;
+      setSeoOpsAuthenticated(authed);
       setSeoOpsAutoSyncEnabled(Boolean(s.autoSyncEnabled));
       setSeoOpsSession(session as SeoOpsSessionState);
     }).catch(error => {
       if (cancelled) return;
+      seoOpsAuthenticatedRef.current = false;
       setSeoOpsAuthenticated(false);
       setSeoOpsSession({ configured: true, baseUrl: "", authenticated: false, autoSyncEnabled: false,
         error: String((error as Error).message || error) });
     });
     return () => { cancelled = true; };
   }, [appPage]);
+
+  useEffect(() => {
+    if (!shell || !authGate.redirectPage) return;
+    void changeAppPage(authGate.redirectPage).catch(() => undefined);
+  }, [shell, authGate.redirectPage]);
   const sidebarCollapsed = state?.sidebarCollapsed ?? false;
   const networkSettings = state?.networkSettings ?? defaultNetworkSettings();
   const networkDelays = networkSettings.presets[networkSettings.mode];
@@ -985,9 +1006,10 @@ function Creator() {
   }
   goToFlowRef.current = goToFlow;
   async function changeAppPage(page: AppPage) {
-    const next = await invoke<State>({ type: "appPage", page });
+    const target: AppPage = shell && !seoOpsAuthenticatedRef.current && page !== "settings" ? "settings" : page;
+    const next = await invoke<State>({ type: "appPage", page: target });
     setState(next);
-    if (["scenarios", "browser-sessions", "test-lab", "visual-match-lab", "settings", "variations", "widget-registry", "workflows", "builds-releases", "collectors", "collector-test-lab", "feed-item-collector", "post-detail-collector", "collector-script-workspace"].includes(page)) setMainPage(page as MainPage);
+    if (["scenarios", "browser-sessions", "test-lab", "visual-match-lab", "settings", "variations", "widget-registry", "workflows", "builds-releases", "collectors", "collector-test-lab", "feed-item-collector", "post-detail-collector", "collector-script-workspace"].includes(target)) setMainPage(target as MainPage);
     setPageError("");
     window.scrollTo({ left: 0, top: 0 });
   }
@@ -1002,6 +1024,7 @@ function Creator() {
       ? { ...tab, sessionId: state?.activeBrowserSessionId, url: browserUrl.current || undefined } : tab));
   }
   function navigateApp(page: AppPage) {
+    if (shell && !canAccessAppPage(seoOpsSession, page)) return;
     if (page === appPage || busy || shot || ocrLoading || workspaceLock.current || pendingNavigationRef.current) return;
     // Pages leave the editor mounted. Drafts are retained, so navigation need not discard them.
     captureActiveTab();
@@ -1683,9 +1706,10 @@ function Creator() {
     });
   }
   const workspaceTabs = <WorkspaceTabs tabs={tabs} activeId={activeTabId} state={state}
-    mainPage={mainPage} locked={navigationLocked || ocrLoading || !!pendingNavigation || stepPlayback[activeStepId]?.status === "running"}
+    mainPage={mainPage} locked={seoOpsGateActive || navigationLocked || ocrLoading || !!pendingNavigation || stepPlayback[activeStepId]?.status === "running"}
     dirty={tabDirty} caseName={id => studioEditors.current.get(id)?.name ?? caseEditors.current.get(id)?.name}
     open={tab => {
+      if (seoOpsGateActive) return;
       if (tab.kind === "creator") openScenario(tab.flowId);
       else if (!navigationLocked && !workspaceLock.current && !pendingNavigationRef.current) {
         workspaceLock.current = true;
@@ -1713,32 +1737,44 @@ function Creator() {
         </div>
       </UiPopover>}
       {shell && navigationWidth > 0 && <AppNavigation page={creatorVisible || appPage === "test-case" || appPage === "studio-run" ? mainPage : appPage} collapsed={navigationWidth === APP_NAV_COLLAPSED}
-        locked={navigationLocked || !state} navigate={navigateApp} toggle={() => void task(async () => {
+        locked={navigationLocked || !state} authLocked={seoOpsGateActive} navigate={navigateApp} toggle={() => void task(async () => {
           setState(await invoke<State>({ type: "appSidebar", collapsed: !sidebarCollapsed }));
         })} />}
       {shell && !creatorVisible && <div className="workspace-page-strip">{workspaceTabs}</div>}
-      {shell && appPage === "studio-run" && <div className="studio-run-status" role="status">Studio execution · local Browser Session · shared V2 Runtime. Wait for the structured result.</div>}
-      {shell && appPage === "scenarios" && <ScenariosPage state={state} name={flowName} setName={setFlowName}
+      {shell && (authGate.validating || (authGate.locked && appPage !== "settings")) && (
+        <section className="app-page seo-ops-loading" aria-label="Validating SEO-OPS session" role="status">
+          <div className="page-heading">
+            <h1>SEO-OPS</h1>
+            <p>Validating SEO-OPS session…</p>
+          </div>
+        </section>
+      )}
+      {shell && !seoOpsGateActive && appPage === "studio-run" && <div className="studio-run-status" role="status">Studio execution · local Browser Session · shared V2 Runtime. Wait for the structured result.</div>}
+      {shell && !seoOpsGateActive && appPage === "scenarios" && <ScenariosPage state={state} name={flowName} setName={setFlowName}
         locked={navigationLocked || ocrLoading} open={openScenario} create={createScenario}
         quickAcceptance={(flowId) => ensureScenarioCase(flowId, true)}
         update={updateWorkspace}
         invoke={invoke}
         seoOpsSession={seoOpsSession}
         autoSyncEnabled={seoOpsAutoSyncEnabled}
-        onSeoOpsSession={session => { setSeoOpsSession(session); setSeoOpsAuthenticated(session.authenticated); }}
+        onSeoOpsSession={session => {
+          seoOpsAuthenticatedRef.current = session.authenticated;
+          setSeoOpsSession(session);
+          setSeoOpsAuthenticated(session.authenticated);
+        }}
         reconnectSeoOps={() => navigateApp("settings")}
         onState={setState}
         navigate={navigateApp}
         sessionControl={<SessionSelector state={state} locked={navigationLocked || stepPlayback[activeStepId]?.status === "running"} select={selectSession} />} />}
-      {shell && appPage === "browser-sessions" && <BrowserSessionsPage state={state} locked={navigationLocked}
+      {shell && !seoOpsGateActive && appPage === "browser-sessions" && <BrowserSessionsPage state={state} locked={navigationLocked}
         update={updateBrowserSessions} open={openSession} />}
-      {shell && appPage === "test-lab" && <TestLabPage state={state} locked={navigationLocked} update={updateWorkspace}
+      {shell && !seoOpsGateActive && appPage === "test-lab" && <TestLabPage state={state} locked={navigationLocked} update={updateWorkspace}
         open={openCase} run={runCase} canRun={canRunCase} create={() => openCase()} canDelete={id => !tabsRef.current.some(t => t.caseId === id)}
         navigate={navigateApp} />}
-      {shell && appPage === "visual-match-lab" && <VisualMatchLabPage invoke={invoke} />}
-      {shell && appPage === "feed-item-collector" && <FeedItemCollectorPage invoke={invoke} state={state} />}
-      {shell && appPage === "post-detail-collector" && <PostDetailCollectorPage invoke={invoke} state={state} />}
-      {shell && appPage === "collector-script-workspace" && (
+      {shell && !seoOpsGateActive && appPage === "visual-match-lab" && <VisualMatchLabPage invoke={invoke} />}
+      {shell && !seoOpsGateActive && appPage === "feed-item-collector" && <FeedItemCollectorPage invoke={invoke} state={state} />}
+      {shell && !seoOpsGateActive && appPage === "post-detail-collector" && <PostDetailCollectorPage invoke={invoke} state={state} />}
+      {shell && !seoOpsGateActive && appPage === "collector-script-workspace" && (
         <CollectorScriptWorkspace
           locked={navigationLocked}
           navigate={navigateApp}
@@ -1747,7 +1783,7 @@ function Creator() {
           onSelectSession={(id) => void selectSession(id)}
         />
       )}
-      {shell && (appPage === "collectors" || appPage === "collector-test-lab") && (
+      {shell && !seoOpsGateActive && (appPage === "collectors" || appPage === "collector-test-lab") && (
         <CollectorsPage
           page={appPage}
           locked={navigationLocked}
@@ -1758,14 +1794,14 @@ function Creator() {
           reportEditor={reportCollector}
         />
       )}
-      {shell && state && tabs.filter(tab => tab.kind === "test-case").map(tab => <div key={tab.id} className="case-editor-host"
+      {shell && !seoOpsGateActive && state && tabs.filter(tab => tab.kind === "test-case").map(tab => <div key={tab.id} className="case-editor-host"
         hidden={tab.id !== activeTabId || appPage !== "test-case"}>
         <TestCaseEditor tabId={tab.id} item={state.testLab?.cases.find(c => c.id === tab.caseId)} state={state}
           locked={navigationLocked} report={reportCase} saved={caseSaved} saving={setBusy} run={runCase}
           runAgain={prepareCaseRerun}
           fix={error => fixExecutionError(error, tab.flowId)} back={() => navigateApp("test-lab")} />
       </div>)}
-      {shell && state && <AdminStudioPage report={reportStudio} page={appPage} state={state} locked={navigationLocked}
+      {shell && !seoOpsGateActive && state && <AdminStudioPage report={reportStudio} page={appPage} state={state} locked={navigationLocked}
         selectedId={tabs.find(t => t.id === activeTabId && t.kind === "studio")?.studioId}
         open={(id, page, label) => {
           captureActiveTab();
@@ -1773,17 +1809,23 @@ function Creator() {
           if (!tabsRef.current.some(t => t.id === tab.id)) updateTabs([...tabsRef.current, tab]);
           setActiveTabId(tab.id); void task(() => changeAppPage(page));
         }} />}
-      {shell && appPage === "settings" && <section className="app-page" aria-label="Settings">
+      {shell && !authGate.validating && appPage === "settings" && <section className="app-page" aria-label="Settings">
         <div className="page-heading"><h1>Settings</h1><p>Cấu hình local cho ứng dụng trên máy này.</p></div>
         <SeoOpsAuthPanel
           locked={navigationLocked}
+          initialSession={seoOpsSession}
+          onLoginSuccess={() => {
+            void task(() => changeAppPage("scenarios"));
+          }}
           invoke={async <T,>(command: Command): Promise<T> => {
             const result = await invoke(command);
             if (command.type === "seoOpsLogin" || command.type === "seoOpsLogout" || command.type === "seoOpsGetSession" || command.type === "seoOpsSetEndpoint") {
               const session = command.type === "seoOpsGetSession" || command.type === "seoOpsSetEndpoint"
                 ? result as { authenticated?: boolean; autoSyncEnabled?: boolean }
                 : await invoke<{ authenticated?: boolean; autoSyncEnabled?: boolean }>({ type: "seoOpsGetSession" });
-              setSeoOpsAuthenticated(Boolean(session.authenticated));
+              const authed = Boolean(session.authenticated);
+              seoOpsAuthenticatedRef.current = authed;
+              setSeoOpsAuthenticated(authed);
               setSeoOpsAutoSyncEnabled(Boolean(session.autoSyncEnabled));
               setSeoOpsSession(session as SeoOpsSessionState);
             }

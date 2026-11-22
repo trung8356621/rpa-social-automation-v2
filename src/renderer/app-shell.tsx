@@ -21,8 +21,8 @@ const menus = [
   { page: "settings", label: "Settings", color: "#a8b2c2", path: "m9 3-1 3-3 1 1 3-2 2 2 2-1 3 3 1 1 3ZM15 12a3 3 0 1 1-6 0 3 3 0 0 1 6 0Z" },
 ] as const;
 
-export function AppNavigation({ page, collapsed, locked, navigate, toggle }: {
-  page: AppPage; collapsed: boolean; locked: boolean;
+export function AppNavigation({ page, collapsed, locked, authLocked = false, navigate, toggle }: {
+  page: AppPage; collapsed: boolean; locked: boolean; authLocked?: boolean;
   navigate: (page: AppPage) => void; toggle: () => void;
 }) {
   const activeNav = ["scenarios", "test-lab", "creator", "test-case"].includes(page)
@@ -37,7 +37,7 @@ export function AppNavigation({ page, collapsed, locked, navigate, toggle }: {
         title={collapsed ? "Mở rộng sidebar" : "Thu gọn sidebar"} onClick={toggle}>{collapsed ? "»" : "«"}</button>
     </div>
     <nav className="app-menu" aria-label="Điều hướng chính">
-      {menus.map(item => <button key={item.page} disabled={locked} title={item.label}
+      {menus.map(item => <button key={item.page} disabled={locked || (authLocked && item.page !== "settings")} title={item.label}
         aria-label={item.label} aria-current={activeNav === item.page ? "page" : undefined}
         onClick={() => navigate(item.page)}>
         <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke={item.color}

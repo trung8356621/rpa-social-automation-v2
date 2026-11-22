@@ -1650,6 +1650,8 @@ body[data-panel="shell"] .app-shell > header > .environment { flex-shrink: 0; }
 .seo-ops-auth h2 { margin: 0 0 8px; font-size: 16px; }
 .seo-ops-auth label { display: block; margin: 10px 0 6px; font-size: 13px; }
 .seo-ops-auth input { width: 100%; margin-top: 4px; }
+.seo-ops-auth-required { margin: 10px 0 4px; padding: 8px 10px; border-radius: 6px; border: 1px solid #5b4a24; background: #261f12; color: #f6d58e; font-size: 13px; }
+.seo-ops-loading { display: flex; align-items: flex-start; padding-top: 24px; }
 .seo-ops-login-form { display: grid; gap: 8px; margin-top: 10px; }
 .seo-ops-user { display: flex; flex-wrap: wrap; gap: 10px; align-items: center; margin-top: 12px; }
 .seo-ops-sync-controls { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }

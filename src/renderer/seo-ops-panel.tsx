@@ -1,5 +1,5 @@
 import React, { useCallback, useEffect, useState } from "react";
-import type { ActionTag, Command, State } from "../shared/contracts";
+import type { ActionTag, AppPage, Command, State } from "../shared/contracts";
 import { mapSeoOpsAuthError, mapSeoOpsAuthErrors } from "../shared/seo-ops-auth";
 import { SEO_OPS_DEFAULT_BASE_URL, SEO_OPS_PRODUCTION_BASE_URL, mapSeoOpsApiError } from "../shared/seo-ops-http";
 import { labelForStatus, type ScriptSyncRow } from "../shared/sync-status";
@@ -13,6 +13,53 @@ export type SeoOpsSessionState = {
   user?: { id: number; email: string; name: string; role: string };
   error?: string;
 };
+
+export type SeoOpsAuthGateState = {
+  validating: boolean;
+  authenticated: boolean;
+  locked: boolean;
+  redirectPage: "settings" | null;
+  requiresLoginMessage: string | null;
+};
+
+export function resolveSeoOpsAuthGate(
+  session: SeoOpsSessionState | undefined,
+  currentPage: AppPage,
+): SeoOpsAuthGateState {
+  if (!session) {
+    return {
+      validating: true,
+      authenticated: false,
+      locked: true,
+      redirectPage: null,
+      requiresLoginMessage: null,
+    };
+  }
+  if (!session.authenticated) {
+    return {
+      validating: false,
+      authenticated: false,
+      locked: true,
+      redirectPage: currentPage === "settings" ? null : "settings",
+      requiresLoginMessage: "Please log in to SEO-OPS to continue",
+    };
+  }
+  return {
+    validating: false,
+    authenticated: true,
+    locked: false,
+    redirectPage: null,
+    requiresLoginMessage: null,
+  };
+}
+
+export function canAccessAppPage(
+  session: SeoOpsSessionState | undefined,
+  targetPage: AppPage,
+): boolean {
+  if (targetPage === "settings") return Boolean(session);
+  return Boolean(session?.authenticated);
+}
 
 export function seoOpsSyncAvailability(session: SeoOpsSessionState | undefined, locked = false, busy = false) {
   if (locked) return { enabled: false, message: "Đợi tác vụ hiện tại kết thúc." };
@@ -31,37 +78,52 @@ export function seoOpsSyncAvailability(session: SeoOpsSessionState | undefined, 
 
 export function SeoOpsAuthPanel({
   locked,
+  initialSession,
+  onLoginSuccess,
   invoke,
 }: {
   locked: boolean;
+  initialSession?: SeoOpsSessionState;
+  onLoginSuccess?: () => void;
   invoke: <T>(command: Command) => Promise<T>;
 }) {
-  const [session, setSession] = useState<SeoOpsSessionState>();
-  const [baseUrl, setBaseUrl] = useState(SEO_OPS_DEFAULT_BASE_URL);
+  const [session, setSession] = useState<SeoOpsSessionState | undefined>(initialSession);
+  const [baseUrl, setBaseUrl] = useState(initialSession?.baseUrl || SEO_OPS_DEFAULT_BASE_URL);
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
   const [busy, setBusy] = useState(false);
-  const [error, setError] = useState("");
+  const [error, setError] = useState(initialSession?.error || "");
 
-  const refresh = useCallback(async () => {
+  const refresh = useCallback(async (): Promise<SeoOpsSessionState> => {
     const next = await invoke<SeoOpsSessionState>({ type: "seoOpsGetSession" });
     setSession(next);
     setBaseUrl(next.baseUrl);
     if (next.error) setError(next.error);
+    return next;
   }, [invoke]);
+
+  useEffect(() => {
+    if (!initialSession) return;
+    setSession(initialSession);
+    if (initialSession.baseUrl) setBaseUrl(initialSession.baseUrl);
+    if (initialSession.error) setError(initialSession.error);
+  }, [initialSession]);
 
   useEffect(() => {
     void refresh().catch((e) => setError(mapSeoOpsAuthError(String((e as Error).message || e))));
   }, [refresh]);
 
-  async function run(work: () => Promise<unknown>) {
+  async function run(work: () => Promise<unknown>, isLogin = false) {
     if (locked || busy) return;
     setBusy(true);
     setError("");
     try {
       await work();
-      await refresh();
+      const next = await refresh();
       setPassword("");
+      if (isLogin && next.authenticated) {
+        onLoginSuccess?.();
+      }
     } catch (e) {
       setError(mapSeoOpsAuthError(String((e as Error).message || e)));
     } finally {
@@ -98,47 +160,52 @@ export function SeoOpsAuthPanel({
           </button>
         </div>
       ) : (
-        <form
-          className="seo-ops-login-form"
-          onSubmit={(e) => {
-            e.preventDefault();
-            void run(async () => {
-              await invoke({ type: "seoOpsSetEndpoint", baseUrl });
-              const result = await invoke<{ ok: boolean; errors?: string[] }>({
-                type: "seoOpsLogin",
-                email,
-                password,
-              });
-              if (!result.ok) throw new Error(mapSeoOpsAuthErrors(result.errors));
-            });
-          }}
-        >
-          <label>
-            Email
-            <input
-              type="email"
-              autoComplete="username"
-              disabled={locked || busy}
-              value={email}
-              onChange={(e) => setEmail(e.target.value)}
-              required
-            />
-          </label>
-          <label>
-            Password
-            <input
-              type="password"
-              autoComplete="current-password"
-              disabled={locked || busy}
-              value={password}
-              onChange={(e) => setPassword(e.target.value)}
-              required
-            />
-          </label>
-          <button className="primary" disabled={locked || busy} type="submit">
-            Đăng nhập SEO-OPS
-          </button>
-        </form>
+        <>
+          <p className="seo-ops-auth-required" role="status">
+            Please log in to SEO-OPS to continue
+          </p>
+          <form
+            className="seo-ops-login-form"
+            onSubmit={(e) => {
+              e.preventDefault();
+              void run(async () => {
+                await invoke({ type: "seoOpsSetEndpoint", baseUrl });
+                const result = await invoke<{ ok: boolean; errors?: string[] }>({
+                  type: "seoOpsLogin",
+                  email,
+                  password,
+                });
+                if (!result.ok) throw new Error(mapSeoOpsAuthErrors(result.errors));
+              }, true);
+            }}
+          >
+            <label>
+              Email
+              <input
+                type="email"
+                autoComplete="username"
+                disabled={locked || busy}
+                value={email}
+                onChange={(e) => setEmail(e.target.value)}
+                required
+              />
+            </label>
+            <label>
+              Password
+              <input
+                type="password"
+                autoComplete="current-password"
+                disabled={locked || busy}
+                value={password}
+                onChange={(e) => setPassword(e.target.value)}
+                required
+              />
+            </label>
+            <button className="primary" disabled={locked || busy} type="submit">
+              Đăng nhập SEO-OPS
+            </button>
+          </form>
+        </>
       )}
       {error && <p role="alert">{error}</p>}
     </section>

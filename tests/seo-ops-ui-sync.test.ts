@@ -5,7 +5,13 @@ import { buildScriptPublishBody } from "../src/shared/script-release.js";
 import { importScriptRelease } from "../src/shared/script-sync.js";
 import { labelForStatus, publishBlockerMessage, statusFromPlanSides } from "../src/shared/sync-status.js";
 import type { Flow, Step } from "../src/shared/contracts.js";
-import { scriptVersionLabel, seoOpsSyncAvailability, syncBadge } from "../src/renderer/seo-ops-panel.js";
+import {
+  canAccessAppPage,
+  resolveSeoOpsAuthGate,
+  scriptVersionLabel,
+  seoOpsSyncAvailability,
+  syncBadge,
+} from "../src/renderer/seo-ops-panel.js";
 
 test("sync status labels cover required UI states", () => {
   for (const code of [
@@ -119,4 +125,86 @@ test("import incomplete when ROI asset digest missing", () => {
   assert.equal(result.incomplete, true);
   assert.equal(result.ready_to_execute, false);
   assert.equal(result.flowPayload, null);
+});
+
+test("SEO-OPS startup auth gate handles validating, valid, missing, expired, login, and logout states", () => {
+  // 1. Validating (loading state, no redirect flicker)
+  const validating = resolveSeoOpsAuthGate(undefined, "scenarios");
+  assert.deepEqual(validating, {
+    validating: true,
+    authenticated: false,
+    locked: true,
+    redirectPage: null,
+    requiresLoginMessage: null,
+  });
+  assert.equal(canAccessAppPage(undefined, "scenarios"), false);
+  assert.equal(canAccessAppPage(undefined, "creator"), false);
+  assert.equal(canAccessAppPage(undefined, "test-lab"), false);
+  assert.equal(canAccessAppPage(undefined, "settings"), false);
+
+  // 2. Valid session on startup
+  const validSession = {
+    configured: true,
+    baseUrl: "http://seo-ops.test",
+    authenticated: true,
+    autoSyncEnabled: false,
+    user: { id: 1, email: "admin@test.local", name: "Admin", role: "admin" },
+  };
+  assert.deepEqual(resolveSeoOpsAuthGate(validSession, "scenarios"), {
+    validating: false,
+    authenticated: true,
+    locked: false,
+    redirectPage: null,
+    requiresLoginMessage: null,
+  });
+  assert.equal(canAccessAppPage(validSession, "scenarios"), true);
+  assert.equal(canAccessAppPage(validSession, "creator"), true);
+  assert.equal(canAccessAppPage(validSession, "test-lab"), true);
+  assert.equal(canAccessAppPage(validSession, "settings"), true);
+
+  // 3. Missing session
+  const missingSession = {
+    configured: true,
+    baseUrl: "http://seo-ops.test",
+    authenticated: false,
+    autoSyncEnabled: false,
+  };
+  assert.deepEqual(resolveSeoOpsAuthGate(missingSession, "scenarios"), {
+    validating: false,
+    authenticated: false,
+    locked: true,
+    redirectPage: "settings",
+    requiresLoginMessage: "Please log in to SEO-OPS to continue",
+  });
+  assert.equal(resolveSeoOpsAuthGate(missingSession, "settings").redirectPage, null);
+  assert.equal(canAccessAppPage(missingSession, "scenarios"), false);
+  assert.equal(canAccessAppPage(missingSession, "creator"), false);
+  assert.equal(canAccessAppPage(missingSession, "test-lab"), false);
+  assert.equal(canAccessAppPage(missingSession, "settings"), true);
+
+  // 4. Expired session while on Creator
+  const expiredSession = {
+    configured: true,
+    baseUrl: "http://seo-ops.test",
+    authenticated: false,
+    autoSyncEnabled: false,
+    error: "Phiên SEO-OPS đã hết hạn. Mở Settings để đăng nhập lại.",
+  };
+  assert.deepEqual(resolveSeoOpsAuthGate(expiredSession, "creator"), {
+    validating: false,
+    authenticated: false,
+    locked: true,
+    redirectPage: "settings",
+    requiresLoginMessage: "Please log in to SEO-OPS to continue",
+  });
+
+  // 5. Logout returns to settings and locks protected pages
+  assert.deepEqual(resolveSeoOpsAuthGate(missingSession, "settings"), {
+    validating: false,
+    authenticated: false,
+    locked: true,
+    redirectPage: null,
+    requiresLoginMessage: "Please log in to SEO-OPS to continue",
+  });
+  assert.equal(canAccessAppPage(missingSession, "scenarios"), false);
 });
