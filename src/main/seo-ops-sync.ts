@@ -27,9 +27,9 @@ import {
   type TokenStore,
 } from "../shared/seo-ops-auth.js";
 import {
-  cloneFlowForNewVersion,
   createHttpScriptSyncClient,
   importScriptRelease,
+  nextSuccessorName,
   planScriptSync,
   type LocalScriptRow,
   type SyncPlan,
@@ -1126,9 +1126,10 @@ export function createSeoOpsSyncService(options: {
       })
       .filter((s): s is Step => Boolean(s));
     const { assets, complete, missing } = await collectLocalAssets(flow, steps);
+    const explicitPkgKey = store.setting(`seoOpsPackageKey:${flow.id}`);
     // Probe execution digest first (video metadata must not affect it).
-    const probe = buildScriptCatalogSnapshot({ flow, steps, version, assets });
-    const legacyProbe = buildScriptCatalogSnapshot({ flow, steps, version, assets: [] });
+    const probe = buildScriptCatalogSnapshot({ flow, steps, version, assets, packageKey: explicitPkgKey });
+    const legacyProbe = buildScriptCatalogSnapshot({ flow, steps, version, assets: [], packageKey: explicitPkgKey });
     const hasStoredDemo = Boolean(store.setting(`videoDemo:${flow.id}`) || store.setting(`videoDemo:${flow.id}:${version}`));
     const resolved = await resolveVideoDemo(flow, version, probe.execution_digest, legacyProbe.execution_digest);
     const snap = buildScriptCatalogSnapshot({
@@ -1137,6 +1138,7 @@ export function createSeoOpsSyncService(options: {
       version,
       assets,
       videoDemo: resolved.demo,
+      packageKey: explicitPkgKey,
     });
     const health_warnings: string[] = [...(snap.health_warnings ?? []), ...resolved.warnings];
     // Transport / demo integrity only — Step Health is non-blocking for distribution.
@@ -1861,6 +1863,179 @@ export function createSeoOpsSyncService(options: {
     } };
   }
 
+  async function uploadReleaseAssets(
+    client: ReturnType<typeof syncClient>,
+    packageKey: string,
+    version: string,
+    assets: Array<{ path: string; sha256: string; kind: string }>,
+  ): Promise<{ ok: boolean; message?: string }> {
+    for (const asset of assets) {
+      const uploaded = await client.uploadAsset({
+        packageKey,
+        version,
+        assetPath: asset.path,
+        sha256: asset.sha256,
+        binary: await readFile(path.join(assetDir, asset.path)),
+      });
+      if (!uploaded.ok) {
+        return { ok: false, message: `release asset upload failed: ${(uploaded.errors ?? []).join(",")}` };
+      }
+    }
+    return { ok: true };
+  }
+
+  async function syncFlowNormal(flowId: string) {
+    if (!tokenStore.getToken()) throw new Error("SEO_OPS: cần đăng nhập trước khi sync");
+    if (syncAllInFlight) throw new Error("SEO_OPS: sync đang chạy — không gửi request trùng");
+
+    const run = (async () => {
+      const flow = store.flows().find((f) => f.id === flowId);
+      if (!flow) throw new Error("Không tìm thấy Script để Sync.");
+      const stored = loadReleaseMeta(flow.id);
+      const local = await localRow(flow, stored.version || "1");
+      if (local.incomplete || !local.publish_body) {
+        const msg = publishBlockerMessage(local.incomplete_reasons || ["incomplete"]);
+        return {
+          plan: { push_to_remote: [], pull_to_local: [], skip: [], conflicts: [] },
+          results: [{ script_id: flow.id, action: "publish_blocked", ok: false, message: msg }],
+          rows: await refreshStatusRows({ force: true }).catch(() => []),
+          summary: { published: 0, downloaded: 0, unchanged: 0, blocked: 1, failed: 1, reports_downloaded: 0 },
+        };
+      }
+
+      const client = syncClient();
+      const manifestForSync = { ...(local.publish_body.manifest as unknown as Record<string, unknown>) };
+      // Omit video_demo unless locally attached so Backend preserves existing Demo association.
+      if (!manifestForSync.video_demo) delete manifestForSync.video_demo;
+
+      let syncRes = await client.sync({
+        mode: "normal",
+        package_key: local.package_key,
+        name: flow.name,
+        schema_version: 1,
+        runtime_compatibility: local.publish_body.runtime_compatibility,
+        dependencies: [],
+        manifest: manifestForSync,
+      });
+
+      // Brand-new local Script not yet in Backend registry: create initial v1 via /scripts/publish.
+      if (!syncRes.ok && syncRes.httpStatus === 404 && syncRes.errors?.includes("script_not_found")) {
+        const published = await client.publish(local.publish_body) as {
+          httpStatus: number;
+          ok?: boolean;
+          outcome?: string;
+          errors?: string[];
+          release?: { package_key?: string; version?: string; content_digest?: string };
+        };
+        const pubOk = published.httpStatus < 300 && published.ok !== false;
+        if (!pubOk) {
+          const msg = mapSeoOpsApiErrors(published.errors, `HTTP ${published.httpStatus}`);
+          const meta = loadMeta();
+          meta.rows[flow.id] = {
+            ...(meta.rows[flow.id] ?? { script_id: flow.id, package_key: local.package_key, name: flow.name, status: "sync_error" }),
+            status: "sync_error",
+            last_sync_at: new Date().toISOString(),
+            last_result: "push_error",
+            message: msg,
+          };
+          saveMeta(meta);
+          return {
+            plan: { push_to_remote: [toPlanRow(local)], pull_to_local: [], skip: [], conflicts: [] },
+            results: [{ script_id: flow.id, action: "push", ok: false, message: msg }],
+            rows: await refreshStatusRows({ force: true }).catch(() => []),
+            summary: { published: 0, downloaded: 0, unchanged: 0, blocked: 0, failed: 1, reports_downloaded: 0 },
+          };
+        }
+        const assetRes = await uploadReleaseAssets(client, local.package_key, local.version, local.publish_body.manifest.assets);
+        if (!assetRes.ok) {
+          return {
+            plan: { push_to_remote: [toPlanRow(local)], pull_to_local: [], skip: [], conflicts: [] },
+            results: [{ script_id: flow.id, action: "push", ok: false, message: assetRes.message }],
+            rows: await refreshStatusRows({ force: true }).catch(() => []),
+            summary: { published: 0, downloaded: 0, unchanged: 0, blocked: 0, failed: 1, reports_downloaded: 0 },
+          };
+        }
+        completeRelease(local);
+        store.setSetting(`seoOpsPackageKey:${flow.id}`, local.package_key);
+        const rows = await refreshStatusRows({ force: true });
+        return {
+          plan: { push_to_remote: [toPlanRow(local)], pull_to_local: [], skip: [], conflicts: [] },
+          results: [{ script_id: flow.id, action: "push", ok: true, message: "synced" }],
+          rows,
+          summary: { published: 1, downloaded: 0, unchanged: 0, blocked: 0, failed: 0, reports_downloaded: 0 },
+        };
+      }
+
+      if (!syncRes.ok) {
+        const msg = mapSeoOpsApiErrors(syncRes.errors, `HTTP ${syncRes.httpStatus}`);
+        const meta = loadMeta();
+        meta.rows[flow.id] = {
+          ...(meta.rows[flow.id] ?? { script_id: flow.id, package_key: local.package_key, name: flow.name, status: "sync_error" }),
+          status: "sync_error",
+          last_sync_at: new Date().toISOString(),
+          last_result: "push_error",
+          message: msg,
+        };
+        saveMeta(meta);
+        return {
+          plan: { push_to_remote: [toPlanRow(local)], pull_to_local: [], skip: [], conflicts: [] },
+          results: [{ script_id: flow.id, action: "push", ok: false, message: msg }],
+          rows: await refreshStatusRows({ force: true }).catch(() => []),
+          summary: { published: 0, downloaded: 0, unchanged: 0, blocked: 0, failed: 1, reports_downloaded: 0 },
+        };
+      }
+
+      if (syncRes.outcome === "synced" && syncRes.assets_complete === false && local.publish_body.manifest.assets.length > 0) {
+        const assetRes = await uploadReleaseAssets(
+          client,
+          syncRes.package_key,
+          syncRes.version,
+          local.publish_body.manifest.assets,
+        );
+        if (!assetRes.ok) {
+          return {
+            plan: { push_to_remote: [toPlanRow(local)], pull_to_local: [], skip: [], conflicts: [] },
+            results: [{ script_id: flow.id, action: "push", ok: false, message: assetRes.message }],
+            rows: await refreshStatusRows({ force: true }).catch(() => []),
+            summary: { published: 0, downloaded: 0, unchanged: 0, blocked: 0, failed: 1, reports_downloaded: 0 },
+          };
+        }
+      }
+
+      completeRelease({
+        ...local,
+        package_key: syncRes.package_key,
+        version: syncRes.version,
+        content_digest: syncRes.content_digest || local.content_digest,
+        execution_digest: syncRes.execution_digest || local.execution_digest,
+      });
+      store.setSetting(`seoOpsPackageKey:${flow.id}`, syncRes.package_key);
+      const rows = await refreshStatusRows({ force: true });
+      const unchanged = syncRes.outcome === "no_changes";
+      return {
+        plan: {
+          push_to_remote: unchanged ? [] : [toPlanRow(local)],
+          pull_to_local: [],
+          skip: unchanged ? [{ script_id: flow.id, reason: "no_changes" }] : [],
+          conflicts: [],
+        },
+        results: [{ script_id: flow.id, action: unchanged ? "unchanged" : "push", ok: true, message: syncRes.outcome }],
+        rows,
+        summary: {
+          published: unchanged ? 0 : 1,
+          downloaded: 0,
+          unchanged: unchanged ? 1 : 0,
+          blocked: 0,
+          failed: 0,
+          reports_downloaded: 0,
+        },
+      };
+    })();
+
+    syncAllInFlight = run.finally(() => { syncAllInFlight = null; });
+    return syncAllInFlight;
+  }
+
   async function syncNewVersion(flowId: string) {
     if (!tokenStore.getToken()) throw new Error("SEO_OPS: cần đăng nhập trước khi sync");
     const existingFlight = newVersionInFlight.get(flowId);
@@ -1869,20 +2044,50 @@ export function createSeoOpsSyncService(options: {
     const run = (async () => {
       const predecessor = store.flows().find((f) => f.id === flowId);
       if (!predecessor) throw new Error("Không tìm thấy Script để tạo phiên bản mới.");
-      if (predecessor.disabled) throw new Error("Script đã ở trạng thái Disabled.");
+      if (predecessor.disabled && !store.setting(`seoOpsNewVersionIdem:${predecessor.id}`)) {
+        throw new Error("Script đã ở trạng thái Disabled.");
+      }
 
-      const successor = cloneFlowForNewVersion(
-        predecessor,
-        store.flows().map((f) => f.name),
-        randomUUID(),
-      );
-      store.saveFlow(successor);
+      const stored = loadReleaseMeta(predecessor.id);
+      const local = await localRow(predecessor, stored.version || "1");
+      if (local.incomplete || !local.publish_body) {
+        return {
+          ok: false,
+          predecessorId: predecessor.id,
+          error: publishBlockerMessage(local.incomplete_reasons || ["incomplete"]),
+        };
+      }
 
-      let syncRes: Awaited<ReturnType<typeof syncAll>>;
+      const idemKeySetting = `seoOpsNewVersionIdem:${predecessor.id}`;
+      let idempotencyKey = store.setting(idemKeySetting);
+      if (!idempotencyKey) {
+        idempotencyKey = `nv:${predecessor.id}:${randomUUID()}`;
+        store.setSetting(idemKeySetting, idempotencyKey);
+      }
+
+      const successorManifest: Record<string, unknown> = {
+        ...(local.publish_body.manifest as unknown as Record<string, unknown>),
+      };
+      delete successorManifest.video_demo;
+      delete successorManifest.script_request_id;
+
+      const successorName = nextSuccessorName(predecessor.name, store.flows().map((f) => f.name));
+      const client = syncClient();
+
+      let syncRes: Awaited<ReturnType<typeof client.sync>>;
       try {
-        syncRes = await syncAll({ flowId: successor.id });
+        syncRes = await client.sync({
+          mode: "new_version",
+          source_package_key: local.package_key,
+          name: successorName,
+          schema_version: 1,
+          runtime_compatibility: local.publish_body.runtime_compatibility,
+          dependencies: [],
+          manifest: successorManifest,
+          idempotency_key: idempotencyKey,
+        });
       } catch (err) {
-        try { store.deleteFlow(successor.id); } catch { /* ignore */ }
+        // Keep idempotency_key for safe network retry.
         return {
           ok: false,
           predecessorId: predecessor.id,
@@ -1890,41 +2095,106 @@ export function createSeoOpsSyncService(options: {
         };
       }
 
-      const pushResult = syncRes.results.find((r) => r.script_id === successor.id);
-      const blocked = (syncRes.summary.blocked > 0 && !pushResult) || pushResult?.action === "publish_blocked";
-      const failed = syncRes.summary.failed > 0 || (pushResult && !pushResult.ok) || blocked;
-      if (failed) {
-        try { store.deleteFlow(successor.id); } catch { /* ignore */ }
+      if (!syncRes.ok) {
+        if (syncRes.httpStatus === 404 || syncRes.httpStatus === 422) {
+          store.db.prepare("DELETE FROM settings WHERE key = ?").run(idemKeySetting);
+        }
         return {
           ok: false,
           predecessorId: predecessor.id,
-          error: pushResult?.message || "Sync New Version thất bại.",
-          sync: syncRes,
+          error: mapSeoOpsApiErrors(syncRes.errors, `HTTP ${syncRes.httpStatus}`),
         };
       }
 
-      // Disable predecessor only after successor is persisted and published.
-      store.saveFlow({
-        ...predecessor,
-        disabled: true,
-        supersededByFlowId: successor.id,
-      });
-      if (predecessor.actionTagKey) {
-        try {
-          const active = JSON.parse(store.setting("activeScriptsByTag") || "{}") as Record<string, string>;
-          if (active[predecessor.actionTagKey] === predecessor.id) {
-            delete active[predecessor.actionTagKey];
-            store.setSetting("activeScriptsByTag", JSON.stringify(active));
-          }
-        } catch { /* ignore */ }
+      if (syncRes.assets_complete === false && local.publish_body.manifest.assets.length > 0) {
+        const assetRes = await uploadReleaseAssets(
+          client,
+          syncRes.package_key,
+          syncRes.version,
+          local.publish_body.manifest.assets,
+        );
+        if (!assetRes.ok) {
+          return {
+            ok: false,
+            predecessorId: predecessor.id,
+            error: assetRes.message || "Asset upload failed",
+          };
+        }
       }
-      await refreshStatusRows({ force: true }).catch(() => undefined);
+
+      const successorId = syncRes.script_id || syncRes.package_key;
+      const resolvedName = String((syncRes.release?.name as string | undefined) || successorName);
+      try {
+        const existingSuccessor = store.flows().find((f) => f.id === successorId);
+        const successor: Flow = existingSuccessor
+          ? { ...existingSuccessor, disabled: false, predecessorFlowId: predecessor.id }
+          : {
+              id: successorId,
+              name: resolvedName,
+              zoom: predecessor.zoom,
+              steps: structuredClone(predecessor.steps),
+              ...(predecessor.variables ? { variables: structuredClone(predecessor.variables) } : {}),
+              ...(predecessor.defaultPattern ? { defaultPattern: structuredClone(predecessor.defaultPattern) } : {}),
+              ...(predecessor.placeholders ? { placeholders: structuredClone(predecessor.placeholders) } : {}),
+              ...(predecessor.groups ? { groups: structuredClone(predecessor.groups) } : {}),
+              ...(predecessor.actionTagId !== undefined ? { actionTagId: predecessor.actionTagId } : {}),
+              ...(predecessor.actionTagKey ? { actionTagKey: predecessor.actionTagKey } : {}),
+              ...(predecessor.resultType ? { resultType: predecessor.resultType } : {}),
+              ...(predecessor.collectionType ? { collectionType: predecessor.collectionType } : {}),
+              ...(predecessor.pathInputs ? { pathInputs: structuredClone(predecessor.pathInputs) } : {}),
+              ...(predecessor.urlPattern ? { urlPattern: predecessor.urlPattern } : {}),
+              ...(predecessor.pathInputValues ? { pathInputValues: structuredClone(predecessor.pathInputValues) } : {}),
+              ...(predecessor.startUrl ? { startUrl: predecessor.startUrl } : {}),
+              predecessorFlowId: predecessor.id,
+              disabled: false,
+            };
+        store.saveFlow(successor);
+        store.setSetting(`seoOpsPackageKey:${successor.id}`, syncRes.package_key);
+        store.setSetting(`seoOpsVersion:${successor.id}`, syncRes.version);
+        if (syncRes.content_digest) store.setSetting(`seoOpsPublishedDigest:${successor.id}`, syncRes.content_digest);
+        if (syncRes.execution_digest) store.setSetting(`seoOpsPublishedExecutionDigest:${successor.id}`, syncRes.execution_digest);
+        // Clear any Demo association on successor.
+        store.db.prepare("DELETE FROM settings WHERE key LIKE ?").run(`videoDemo:${successor.id}%`);
+
+        // Disable predecessor locally only after Backend + successor persistence succeed.
+        store.saveFlow({
+          ...predecessor,
+          disabled: true,
+          supersededByFlowId: successor.id,
+        });
+        if (predecessor.actionTagKey) {
+          try {
+            const active = JSON.parse(store.setting("activeScriptsByTag") || "{}") as Record<string, string>;
+            if (active[predecessor.actionTagKey] === predecessor.id) {
+              delete active[predecessor.actionTagKey];
+              store.setSetting("activeScriptsByTag", JSON.stringify(active));
+            }
+          } catch { /* ignore */ }
+        }
+        store.db.prepare("DELETE FROM settings WHERE key = ?").run(idemKeySetting);
+      } catch (localErr) {
+        // Keep idempotency_key so retry reconciles without creating a duplicate successor on Backend.
+        return {
+          ok: false,
+          predecessorId: predecessor.id,
+          successorId,
+          error: `Backend đã tạo phiên bản mới nhưng lưu local thất bại (${String((localErr as Error).message || localErr)}). Bấm thử lại để đồng bộ.`,
+        };
+      }
+
+      const rows = await refreshStatusRows({ force: true }).catch(() => []);
       return {
         ok: true,
+        outcome: syncRes.outcome,
         predecessorId: predecessor.id,
-        successorId: successor.id,
-        successorName: successor.name,
-        sync: syncRes,
+        successorId,
+        successorName: resolvedName,
+        sync: {
+          plan: { push_to_remote: [], pull_to_local: [], skip: [], conflicts: [] },
+          results: [{ script_id: successorId, action: "push", ok: true, message: syncRes.outcome }],
+          rows,
+          summary: { published: 1, downloaded: 0, unchanged: 0, blocked: 0, failed: 0, reports_downloaded: 0 },
+        },
       };
     })();
 
@@ -1944,6 +2214,7 @@ export function createSeoOpsSyncService(options: {
     logout,
     refreshStatusRows,
     syncAll,
+    syncFlowNormal,
     syncNewVersion,
     loadMeta,
     backupNow,

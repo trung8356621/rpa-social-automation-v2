@@ -190,6 +190,66 @@ export function importScriptRelease(release: Record<string, unknown>): ImportScr
   };
 }
 
+export type ScriptSyncNormalRequest = {
+  mode: "normal";
+  package_key: string;
+  name?: string;
+  description?: string;
+  version?: string;
+  schema_version?: number;
+  runtime_compatibility?: { runner_min: string };
+  dependencies?: unknown[];
+  manifest: Record<string, unknown>;
+};
+
+export type ScriptSyncNewVersionRequest = {
+  mode: "new_version";
+  source_package_key: string;
+  target_package_key?: string;
+  target_script_id?: string;
+  name?: string;
+  description?: string;
+  schema_version?: number;
+  runtime_compatibility?: { runner_min: string };
+  dependencies?: unknown[];
+  manifest: Record<string, unknown>;
+  idempotency_key: string;
+};
+
+export type ScriptSyncApiResponse =
+  | {
+      ok: true;
+      mode: "normal" | "new_version";
+      outcome: "no_changes" | "synced" | "new_version_created";
+      changed: boolean;
+      idempotent: boolean;
+      package_key: string;
+      script_id: string;
+      release_id: number;
+      version: string;
+      previous_release_id?: number;
+      previous_version?: string;
+      status: string;
+      content_digest: string;
+      execution_digest: string;
+      assets_complete?: boolean;
+      demo_preserved?: boolean;
+      demo_required: boolean;
+      predecessor_package_key?: string;
+      predecessor_release_id?: number;
+      predecessor_disabled: boolean;
+      release?: Record<string, unknown>;
+    }
+  | {
+      ok: false;
+      mode: string | null;
+      outcome: "error";
+      errors: string[];
+      suggested_version?: string;
+      existing_digest?: string;
+      successor_package_key?: string;
+    };
+
 export function createHttpScriptSyncClient(options: {
   baseUrl: string;
   getToken: () => string | null;
@@ -245,6 +305,13 @@ export function createHttpScriptSyncClient(options: {
         body: JSON.stringify(body),
       });
       return { httpStatus: response.status, ...json };
+    },
+    async sync(payload: ScriptSyncNormalRequest | ScriptSyncNewVersionRequest): Promise<{ httpStatus: number } & ScriptSyncApiResponse> {
+      const { response, json } = await authed("/scripts/sync", {
+        method: "POST",
+        body: JSON.stringify(payload),
+      });
+      return { httpStatus: response.status, ...(json as ScriptSyncApiResponse) };
     },
     async uploadVideoDemo(input: {
       packageKey: string;

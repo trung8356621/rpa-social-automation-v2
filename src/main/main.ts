@@ -382,7 +382,10 @@ async function boot() {
     command: "seoOpsSyncAll" | "seoOpsSyncFlow",
     options: { flowId?: string },
   ) => {
-    const response = await executeManualSync(() => seoOpsSync.syncAll(options),
+    const response = await executeManualSync(
+      () => (command === "seoOpsSyncFlow" && options.flowId
+        ? seoOpsSync.syncFlowNormal(options.flowId)
+        : seoOpsSync.syncAll(options)),
       (error, detail) => logMainError(runDir, "seo-ops-manual-sync", error, { command, flowId: options.flowId, diagnostic: detail }));
     if (response.ok) {
       const failures = response.results.filter(result => !result.ok && result.action !== "conflict");
