@@ -39,6 +39,7 @@ function seedFlowWithAsset(store: Store, assetDir: string, flowId = "flow-alpha"
           text: "Submit",
           kind: "line",
           bbox: { x: 1, y: 2, width: 10, height: 10 },
+          confidence: 95,
           confirmed: true,
           language: "vie+eng",
         },
