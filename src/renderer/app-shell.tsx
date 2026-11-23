@@ -2,6 +2,7 @@ import React, { useEffect, useRef, useState } from "react";
 import { UiPopover } from "./ui-popover";
 import type { AppPage, Command, Flow, State } from "../shared/contracts";
 import type { ScriptSyncRow } from "../shared/sync-status";
+import type { ManualSyncResponse } from "../shared/sync-ipc";
 import {
   applyActionTagsToState,
   formatActionTagsRefreshStatus,
@@ -9,6 +10,23 @@ import {
 } from "./action-tags-refresh";
 import { SeoOpsSyncControls, scriptVersionLabel, type SeoOpsSessionState } from "./seo-ops-panel";
 import { ScriptHealthPanel } from "./script-health-panel";
+
+export function formatScriptSyncLabel(syncRow?: ScriptSyncRow): "Synced" | "Sync failed" | "Not synced" {
+  if (syncRow?.status === "synced") return "Synced";
+  if (syncRow?.status === "sync_error" || syncRow?.status === "conflict" || syncRow?.status === "incomplete_assets") {
+    return "Sync failed";
+  }
+  return "Not synced";
+}
+
+export function formatScriptDemoLabel(
+  syncRow?: ScriptSyncRow,
+  hasReadyDemo = false,
+): "Selected" | "File Error" | "Demo missing" {
+  if (syncRow?.demo_status === "error") return "File Error";
+  if (syncRow?.demo_status === "ready" || hasReadyDemo) return "Selected";
+  return "Demo missing";
+}
 
 /** Primary Admin nav — Scripts, Collectors, Browser Sessions, Settings. */
 const menus = [
@@ -93,12 +111,17 @@ export function ScenariosPage({ state, name, setName, locked, open, create, quic
     | { kind: "create-script"; tagKey?: string }
     | { kind: "delete-blocked"; flow: Flow; tagKey?: string }
     | { kind: "confirm-delete"; flow: Flow }
+    | { kind: "confirm-new-version"; flow: Flow }
   >();
   const [scriptNameInput, setScriptNameInput] = useState("");
   const [selectedTagKey, setSelectedTagKey] = useState("");
   const [collapsedTags, setCollapsedTags] = useState<Record<string, boolean>>({});
   const [working, setWorking] = useState(false);
   const [error, setError] = useState("");
+  const [syncStatusMessage, setSyncStatusMessage] = useState("");
+  const [openSyncMenuFlowId, setOpenSyncMenuFlowId] = useState<string | null>(null);
+  const [syncingFlowId, setSyncingFlowId] = useState<string | null>(null);
+  const syncInFlightRef = useRef(false);
   const [backupResult, setBackupResult] = useState<BackupResult>();
   const [importResult, setImportResult] = useState<{ status: string; token?: string; message?: string;
     counts?: BackupResult["counts"]; hasExistingData?: boolean; rollbackPath?: string }>();
@@ -238,6 +261,88 @@ export function ScenariosPage({ state, name, setName, locked, open, create, quic
     }
   }
 
+  async function handleNormalSync(flow: Flow) {
+    if (disabled || syncInFlightRef.current || !invoke) return;
+    setOpenSyncMenuFlowId(null);
+    setError("");
+    setSyncStatusMessage("");
+    if (!seoOpsSession?.authenticated) {
+      setError("Cần đăng nhập SEO-OPS tại Settings trước khi Sync.");
+      return;
+    }
+    syncInFlightRef.current = true;
+    setSyncingFlowId(flow.id);
+    setWorking(true);
+    try {
+      const res = await invoke<ManualSyncResponse>({
+        type: "seoOpsSyncFlow",
+        flowId: flow.id,
+      });
+      if (res.rows) setSyncRows(res.rows);
+      else {
+        const refreshed = await invoke<{ rows: ScriptSyncRow[] }>({ type: "seoOpsSyncStatus" });
+        setSyncRows(refreshed.rows);
+      }
+      const pushResult = res.results?.find(r => r.script_id === flow.id);
+      if (!res.ok || (pushResult && !pushResult.ok) || (res.summary?.failed ?? 0) > 0) {
+        const reason = res.error?.message || pushResult?.message || "Sync thất bại.";
+        setError(`Sync failed: ${reason}`);
+      } else {
+        setSyncStatusMessage(`Synced: ${flow.name}`);
+      }
+    } catch (err) {
+      setError(`Sync failed: ${String((err as Error).message || err)}`);
+    } finally {
+      syncInFlightRef.current = false;
+      setSyncingFlowId(null);
+      setWorking(false);
+    }
+  }
+
+  async function handleConfirmNewVersion(flow: Flow) {
+    if (disabled || syncInFlightRef.current || !invoke) return;
+    setError("");
+    setSyncStatusMessage("");
+    if (!seoOpsSession?.authenticated) {
+      setDialog(undefined);
+      setError("Cần đăng nhập SEO-OPS tại Settings trước khi Sync New Version.");
+      return;
+    }
+    syncInFlightRef.current = true;
+    setSyncingFlowId(flow.id);
+    setWorking(true);
+    try {
+      const res = await invoke<{
+        ok: boolean;
+        predecessorId: string;
+        successorId?: string;
+        successorName?: string;
+        error?: string;
+        sync?: ManualSyncResponse;
+        state?: State;
+      }>({ type: "seoOpsSyncNewVersion", flowId: flow.id });
+      if (res.state && onState) onState(res.state);
+      if (res.sync?.rows) setSyncRows(res.sync.rows);
+      else {
+        const refreshed = await invoke<{ rows: ScriptSyncRow[] }>({ type: "seoOpsSyncStatus" });
+        setSyncRows(refreshed.rows);
+      }
+      setDialog(undefined);
+      if (!res.ok) {
+        setError(`Sync failed: ${res.error || "Không thể tạo phiên bản mới."}`);
+      } else {
+        setSyncStatusMessage(`New version created: ${res.successorName || "New Version"} — Demo missing`);
+      }
+    } catch (err) {
+      setDialog(undefined);
+      setError(`Sync failed: ${String((err as Error).message || err)}`);
+    } finally {
+      syncInFlightRef.current = false;
+      setSyncingFlowId(null);
+      setWorking(false);
+    }
+  }
+
   const unassignedFlows = flows.filter(f => !f.actionTagKey || !actionTags.some(t => t.tag_key === f.actionTagKey));
 
   return <section className="app-page scenarios-page" aria-label="Scripts">
@@ -346,6 +451,7 @@ export function ScenariosPage({ state, name, setName, locked, open, create, quic
     </section>}
 
     {error && <p role="alert" style={{ color: "#f87171", background: "rgba(248, 113, 113, 0.1)", padding: "8px 12px", borderRadius: 6, margin: "10px 0" }}>{error}</p>}
+    {syncStatusMessage && <p role="status" style={{ color: "#68d6a6", background: "rgba(104, 214, 166, 0.1)", padding: "8px 12px", borderRadius: 6, margin: "10px 0" }}>{syncStatusMessage}</p>}
 
     {state?.scriptRequests && state.scriptRequests.length > 0 && (
       <section className="script-requests-panel" aria-label="Script Requests" style={{ marginBottom: 16, padding: "12px 16px", borderRadius: 8, border: "1px solid var(--border, #3a3f45)", background: "var(--card-bg, #202428)" }}>
@@ -433,14 +539,10 @@ export function ScenariosPage({ state, name, setName, locked, open, create, quic
           {!isCollapsed && (
             <div className="scenario-items">
               {tagFlows.map(flow => {
-                const isActive = Boolean(activeFlow && flow.id === activeFlow.id);
+                const isActive = Boolean(!flow.disabled && activeFlow && flow.id === activeFlow.id);
                 const demo = state?.scenarioDemos?.[flow.id];
                 const syncRow = syncRows.find(r => r.flow_id === flow.id || r.script_id === flow.id);
-                const demoLabel = syncRow?.demo_status === "error"
-                  ? "File Error"
-                  : syncRow?.demo_status === "ready" || demo?.status === "ready"
-                    ? "Selected"
-                    : "Missing";
+                const demoLabel = formatScriptDemoLabel(syncRow, demo?.status === "ready");
                 const invalidPinned = flow.steps.filter(ref =>
                   (state?.invalidSteps ?? []).some(r => r.stepId === ref.id && r.version === ref.version));
                 const healthLabel = syncRow?.health_status === "invalid_steps" || invalidPinned.length
@@ -448,20 +550,16 @@ export function ScenariosPage({ state, name, setName, locked, open, create, quic
                   : syncRow?.health_status === "warnings"
                     ? "Warnings"
                     : "Valid";
-                const syncLabel = syncRow?.status === "synced"
-                  ? "Published"
-                  : syncRow?.status === "missing_demo" || syncRow?.incomplete
-                    ? "Blocked"
-                    : syncRow?.status === "sync_error"
-                      ? "Failed"
-                      : "Pending";
+                const syncLabel = formatScriptSyncLabel(syncRow);
 
-                return <div className="scenario-item" key={flow.id}>
+                return <div className={`scenario-item${flow.disabled ? " is-disabled" : ""}`} key={flow.id}>
                   <div className="scenario-title-cell">
                     <button className="scenario-title" disabled={disabled} onClick={() => open(flow.id)} title={flow.name}>
                       {flow.name}
                     </button>
-                    {isActive ? (
+                    {flow.disabled ? (
+                      <span className="script-badge badge-disabled" title="Script đã bị vô hiệu hóa bởi phiên bản mới">Disabled</span>
+                    ) : isActive ? (
                       <span className="script-badge badge-active" title="Script Active trên SEO-OPS">Active</span>
                     ) : (
                       <span className="script-badge badge-draft" title="Script Draft">Draft</span>
@@ -486,7 +584,45 @@ export function ScenariosPage({ state, name, setName, locked, open, create, quic
                     Sync: {syncLabel}
                   </small>
                   <small className="script-version" aria-label={`Version ${flow.name}`}>{scriptVersionLabel(syncRows, flow.id)}</small>
-                  {!isActive && (
+                  {!flow.disabled && (
+                    <div className="sync-menu-wrap" style={{ position: "relative", display: "inline-block" }}>
+                      <button
+                        type="button"
+                        className="btn-sync-menu"
+                        disabled={disabled || !invoke || syncingFlowId === flow.id}
+                        aria-haspopup="menu"
+                        aria-expanded={openSyncMenuFlowId === flow.id}
+                        onClick={() => setOpenSyncMenuFlowId(openSyncMenuFlowId === flow.id ? null : flow.id)}
+                        title="Sync Script lên SEO-OPS"
+                      >
+                        {syncingFlowId === flow.id ? "Syncing…" : "Sync ▾"}
+                      </button>
+                      {openSyncMenuFlowId === flow.id && (
+                        <div className="sync-dropdown-menu" role="menu">
+                          <button
+                            type="button"
+                            role="menuitem"
+                            disabled={disabled}
+                            onClick={() => void handleNormalSync(flow)}
+                          >
+                            Sync
+                          </button>
+                          <button
+                            type="button"
+                            role="menuitem"
+                            disabled={disabled}
+                            onClick={() => {
+                              setOpenSyncMenuFlowId(null);
+                              setDialog({ kind: "confirm-new-version", flow });
+                            }}
+                          >
+                            Sync New Version
+                          </button>
+                        </div>
+                      )}
+                    </div>
+                  )}
+                  {!isActive && !flow.disabled && (
                     <button
                       className="btn-activate"
                       disabled={disabled}
@@ -537,11 +673,7 @@ export function ScenariosPage({ state, name, setName, locked, open, create, quic
               {unassignedFlows.map(flow => {
                 const demo = state?.scenarioDemos?.[flow.id];
                 const syncRow = syncRows.find(r => r.flow_id === flow.id || r.script_id === flow.id);
-                const demoLabel = syncRow?.demo_status === "error"
-                  ? "File Error"
-                  : syncRow?.demo_status === "ready" || demo?.status === "ready"
-                    ? "Selected"
-                    : "Missing";
+                const demoLabel = formatScriptDemoLabel(syncRow, demo?.status === "ready");
                 const invalidPinned = flow.steps.filter(ref =>
                   (state?.invalidSteps ?? []).some(r => r.stepId === ref.id && r.version === ref.version));
                 const healthLabel = syncRow?.health_status === "invalid_steps" || invalidPinned.length
@@ -549,19 +681,17 @@ export function ScenariosPage({ state, name, setName, locked, open, create, quic
                   : syncRow?.health_status === "warnings"
                     ? "Warnings"
                     : "Valid";
-                const syncLabel = syncRow?.status === "synced"
-                  ? "Published"
-                  : syncRow?.status === "missing_demo" || syncRow?.incomplete
-                    ? "Blocked"
-                    : syncRow?.status === "sync_error"
-                      ? "Failed"
-                      : "Pending";
-                return <div className="scenario-item" key={flow.id}>
+                const syncLabel = formatScriptSyncLabel(syncRow);
+                return <div className={`scenario-item${flow.disabled ? " is-disabled" : ""}`} key={flow.id}>
                   <div className="scenario-title-cell">
                     <button className="scenario-title" disabled={disabled} onClick={() => open(flow.id)} title={flow.name}>
                       {flow.name}
                     </button>
-                    <span className="script-badge badge-draft">Draft</span>
+                    {flow.disabled ? (
+                      <span className="script-badge badge-disabled" title="Script đã bị vô hiệu hóa bởi phiên bản mới">Disabled</span>
+                    ) : (
+                      <span className="script-badge badge-draft">Draft</span>
+                    )}
                     <span
                       className={`script-badge ${demoLabel === "Selected" ? "badge-demo-ok" : "badge-missing-demo"}`}
                       title={syncRow?.demo_reason || `Demo: ${demoLabel}`}
@@ -582,6 +712,44 @@ export function ScenariosPage({ state, name, setName, locked, open, create, quic
                     Sync: {syncLabel}
                   </small>
                   <small className="script-version">{scriptVersionLabel(syncRows, flow.id)}</small>
+                  {!flow.disabled && (
+                    <div className="sync-menu-wrap" style={{ position: "relative", display: "inline-block" }}>
+                      <button
+                        type="button"
+                        className="btn-sync-menu"
+                        disabled={disabled || !invoke || syncingFlowId === flow.id}
+                        aria-haspopup="menu"
+                        aria-expanded={openSyncMenuFlowId === flow.id}
+                        onClick={() => setOpenSyncMenuFlowId(openSyncMenuFlowId === flow.id ? null : flow.id)}
+                        title="Sync Script lên SEO-OPS"
+                      >
+                        {syncingFlowId === flow.id ? "Syncing…" : "Sync ▾"}
+                      </button>
+                      {openSyncMenuFlowId === flow.id && (
+                        <div className="sync-dropdown-menu" role="menu">
+                          <button
+                            type="button"
+                            role="menuitem"
+                            disabled={disabled}
+                            onClick={() => void handleNormalSync(flow)}
+                          >
+                            Sync
+                          </button>
+                          <button
+                            type="button"
+                            role="menuitem"
+                            disabled={disabled}
+                            onClick={() => {
+                              setOpenSyncMenuFlowId(null);
+                              setDialog({ kind: "confirm-new-version", flow });
+                            }}
+                          >
+                            Sync New Version
+                          </button>
+                        </div>
+                      )}
+                    </div>
+                  )}
                   <button disabled={disabled} onClick={() => open(flow.id)}>Mở Creator</button>
                   <button className="scenario-acceptance" disabled={disabled} onClick={() => quickAcceptance(flow.id)}>Nghiệm thu</button>
                   <button
@@ -714,6 +882,38 @@ export function ScenariosPage({ state, name, setName, locked, open, create, quic
         </div>
         <div className="popover-footer">
           <button className="primary" onClick={() => setDialog(undefined)}>Đã hiểu</button>
+        </div>
+      </UiPopover>
+    )}
+
+    {dialog?.kind === "confirm-new-version" && (
+      <UiPopover
+        variant="modal"
+        label="Sync New Version"
+        className="unsaved-confirm"
+        close={() => { if (!working) setDialog(undefined); }}
+      >
+        <div className="popover-heading">
+          <b>Sync New Version</b>
+          <button disabled={working} onClick={() => setDialog(undefined)}>×</button>
+        </div>
+        <div style={{ padding: "8px 0" }}>
+          <p>
+            Tạo phiên bản Script mới từ <strong>“{dialog.flow.name}”</strong> và publish lên SEO-OPS.
+          </p>
+          <p style={{ color: "#9bb0c7", fontSize: 12 }}>
+            Sau khi publish thành công, Script hiện tại sẽ chuyển sang trạng thái <strong>Disabled</strong> (vẫn hiển thị trong danh sách). Phiên bản mới giữ nguyên Steps, variables, OCR và assets nhưng sẽ cần chọn Demo mới trước khi Activate.
+          </p>
+        </div>
+        <div className="popover-footer">
+          <button disabled={working} onClick={() => setDialog(undefined)}>Hủy</button>
+          <button
+            className="primary"
+            disabled={disabled}
+            onClick={() => void handleConfirmNewVersion(dialog.flow)}
+          >
+            {working ? "Đang Sync…" : "Sync New Version"}
+          </button>
         </div>
       </UiPopover>
     )}

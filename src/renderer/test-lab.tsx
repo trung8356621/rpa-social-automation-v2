@@ -249,18 +249,16 @@ export function CaseResultView({ item, state, locked = false, runAgain, compact 
           if (!window.confirm(
             `Dùng video này làm Script Demo? Kết quả Test Run: ${resultStatus(result.status)}.`,
           )) return;
-          setAttaching(true); setAttachMsg("Demo saved → Syncing...");
+          setAttaching(true); setAttachMsg("");
           void window.creator.invoke({
             type: "attachScriptVideoDemo",
             caseId: item.id,
             runId: result.runId,
             reviewed: true,
-            syncAfter: true,
+            syncAfter: false,
           }).then(async (value) => {
-            const payload = value as { syncMessage?: string; state?: State };
+            const payload = value as { syncMessage?: string };
             setAttachMsg(payload.syncMessage || "Demo saved");
-            // Refresh Script Sync badges after targeted sync (best-effort).
-            void window.creator.invoke({ type: "seoOpsSyncStatus" }).catch(() => undefined);
           })
             .catch(error => {
               const message = String((error as Error).message || error);
@@ -268,31 +266,10 @@ export function CaseResultView({ item, state, locked = false, runAgain, compact 
                 : /video file missing|recording incomplete/i.test(message) ? "Video không tồn tại hoặc chưa hoàn tất. Hãy chạy lại Test Case."
                 : `Không lưu được demo: ${message.replace(/^.*VIDEO_DEMO:\s*/i, "")}`);
             }).finally(() => setAttaching(false));
-        }}>{attaching ? "Demo saved → Syncing..." : "Use as Script Demo"}</button>
-        {/Connection failed: Retry Sync/i.test(attachMsg) && (
-          <button
-            type="button"
-            disabled={locked || attaching}
-            onClick={() => {
-              setAttaching(true);
-              setAttachMsg("Demo saved → Syncing...");
-              void window.creator.invoke({ type: "seoOpsSyncFlow", flowId: item.flowId })
-                .then((value) => {
-                  const outcome = interpretSyncForFlow(item.flowId, value as ManualSyncResponse);
-                  setAttachMsg(formatAttachDemoSyncMessage(outcome));
-                })
-                .catch((error) => {
-                  setAttachMsg(`Demo saved → Sync blocked: ${String((error as Error).message || error)}`);
-                })
-                .finally(() => setAttaching(false));
-            }}
-          >
-            Retry Sync
-          </button>
-        )}
+        }}>{attaching ? "Saving Demo..." : "Use as Script Demo"}</button>
         {!demoOk && <span className="hint">{canUseAsScriptDemo(result).reason?.replace(/^VIDEO_DEMO:\s*/i, "")}</span>}
-        {demoOk && <span className="hint">Use as Script Demo = chọn video + Sync Script này. Kết quả Test Run giữ nguyên.</span>}
-        {attachMsg && <span role={/Published|Already synchronized|^Demo saved$/i.test(attachMsg) ? "status" : /Syncing/i.test(attachMsg) ? "status" : "alert"}>{attachMsg}</span>}</div>
+        {demoOk && <span className="hint">Use as Script Demo = chọn video làm Demo cho Script này (không tự động Sync). Kết quả Test Run giữ nguyên.</span>}
+        {attachMsg && <span role={/^Demo saved$/i.test(attachMsg) ? "status" : "alert"}>{attachMsg}</span>}</div>
     </section>
     <section className="case-step-results"><h2>Step Results</h2>
       <ol>{result.steps?.map((step, index) => <li key={`${step.stepId}-${step.version}`}>

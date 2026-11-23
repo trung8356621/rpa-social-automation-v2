@@ -1,3 +1,4 @@
+import type { Flow } from "./contracts.js";
 import type { ScriptPublishBody } from "./script-release.js";
 import { mapSeoOpsApiErrors, readSeoOpsJson, seoOpsFetch } from "./seo-ops-http.js";
 import {
@@ -310,5 +311,44 @@ export function createHttpScriptSyncClient(options: {
         ready_to_execute: Boolean(json.ready_to_execute),
       };
     },
+  };
+}
+
+export function nextSuccessorName(baseName: string, existingNames: string[]): string {
+  const trimmed = baseName.trim() || "Script";
+  const match = /^(.*?)(?:\s+v(\d+))$/i.exec(trimmed);
+  const stem = match ? match[1].trim() : trimmed;
+  let version = match ? Number(match[2]) + 1 : 2;
+  const taken = new Set(existingNames.map((n) => n.trim().toLowerCase()));
+  while (taken.has(`${stem} v${version}`.toLowerCase())) {
+    version += 1;
+  }
+  return `${stem} v${version}`;
+}
+
+export function cloneFlowForNewVersion(
+  predecessor: Flow,
+  existingNames: string[],
+  newId: string,
+): Flow {
+  return {
+    id: newId,
+    name: nextSuccessorName(predecessor.name, existingNames),
+    zoom: predecessor.zoom,
+    steps: structuredClone(predecessor.steps),
+    ...(predecessor.variables ? { variables: structuredClone(predecessor.variables) } : {}),
+    ...(predecessor.defaultPattern ? { defaultPattern: structuredClone(predecessor.defaultPattern) } : {}),
+    ...(predecessor.placeholders ? { placeholders: structuredClone(predecessor.placeholders) } : {}),
+    ...(predecessor.groups ? { groups: structuredClone(predecessor.groups) } : {}),
+    ...(predecessor.actionTagId !== undefined ? { actionTagId: predecessor.actionTagId } : {}),
+    ...(predecessor.actionTagKey ? { actionTagKey: predecessor.actionTagKey } : {}),
+    ...(predecessor.resultType ? { resultType: predecessor.resultType } : {}),
+    ...(predecessor.collectionType ? { collectionType: predecessor.collectionType } : {}),
+    ...(predecessor.pathInputs ? { pathInputs: structuredClone(predecessor.pathInputs) } : {}),
+    ...(predecessor.urlPattern ? { urlPattern: predecessor.urlPattern } : {}),
+    ...(predecessor.pathInputValues ? { pathInputValues: structuredClone(predecessor.pathInputValues) } : {}),
+    ...(predecessor.startUrl ? { startUrl: predecessor.startUrl } : {}),
+    predecessorFlowId: predecessor.id,
+    disabled: false,
   };
 }

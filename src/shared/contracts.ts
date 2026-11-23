@@ -235,6 +235,9 @@ export type Flow = {
   pathInputValues?: Record<string, string>;
   /** Last resolved Site+Path URL preview persisted with the Script. */
   startUrl?: string;
+  disabled?: boolean;
+  supersededByFlowId?: string;
+  predecessorFlowId?: string;
 };
 export type Capture = {
   id: string;
@@ -443,6 +446,7 @@ export type Command =
   | { type: "seoOpsSyncStatus" }
   | { type: "seoOpsSyncAll" }
   | { type: "seoOpsSyncFlow"; flowId: string }
+  | { type: "seoOpsSyncNewVersion"; flowId: string }
   | { type: "setActiveScript"; tagKey: string; flowId: string }
   | { type: "seoOpsBackupInfo" }
   | { type: "seoOpsRestore"; confirmed: boolean }

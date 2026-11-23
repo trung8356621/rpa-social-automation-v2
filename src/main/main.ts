@@ -1360,18 +1360,9 @@ async function boot() {
           command.reviewed === true,
           command.scriptVersion,
         );
-        const syncAfter = command.syncAfter !== false;
-        let sync: ManualSyncResponse | undefined;
-        let syncMessage = "Demo saved";
-        if (syncAfter) {
-          sync = await manualSeoOpsSync("seoOpsSyncFlow", { flowId: attachment.scriptId });
-          const outcome = interpretSyncForFlow(attachment.scriptId, sync);
-          syncMessage = formatAttachDemoSyncMessage(outcome);
-        }
         return {
           attachment,
-          sync,
-          syncMessage,
+          syncMessage: "Demo saved",
           state: state(),
         };
       }
@@ -1515,18 +1506,12 @@ async function boot() {
         return manualSeoOpsSync(command.type, {});
       case "seoOpsSyncFlow": {
         isIdle();
-        const syncResponse = await manualSeoOpsSync(command.type, { flowId: command.flowId });
-        if (syncResponse.ok) {
-          const syncedFlow = store.flows().find(f => f.id === command.flowId);
-          if (syncedFlow?.actionTagKey) {
-            try {
-              const current = JSON.parse(store.setting("activeScriptsByTag") || "{}") as Record<string, string>;
-              current[syncedFlow.actionTagKey] = syncedFlow.id;
-              store.setSetting("activeScriptsByTag", JSON.stringify(current));
-            } catch { /* ignore */ }
-          }
-        }
-        return syncResponse;
+        return manualSeoOpsSync(command.type, { flowId: command.flowId });
+      }
+      case "seoOpsSyncNewVersion": {
+        isIdle();
+        const res = await seoOpsSync.syncNewVersion(command.flowId);
+        return { ...res, state: state() };
       }
       case "setActiveScript": {
         isIdle();

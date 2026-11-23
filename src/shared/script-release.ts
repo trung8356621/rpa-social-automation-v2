@@ -373,7 +373,6 @@ export function buildScriptCatalogSnapshot(input: ScriptExportInput): ScriptCata
   // Match-To/OCR gaps are Step Health warnings — payloads still ship as authored.
   for (const inv of invalid) health_warnings.push(`invalid_step:${inv}`);
   if (stepPayloads.length === 0) reasons.push("steps_required");
-  if (!input.videoDemo) reasons.push(MISSING_DEMO_REASON);
   if (input.flow.resultType === "collection" && !input.flow.collectionType?.trim()) {
     reasons.push("collection_type_required");
   }
@@ -462,13 +461,14 @@ export function assertScriptPublishBody(body: ScriptPublishBody) {
     }
   }
   const v = body.manifest.video_demo;
-  if (!v) throw new Error("SCRIPT_EXPORT: missing_demo — attach a Test Lab Script Demo first");
-  if (v.audio !== false || v.desktop_capture !== false) {
-    throw new Error("SCRIPT_EXPORT: video demo must be browser-only silent capture");
+  if (v) {
+    if (v.audio !== false || v.desktop_capture !== false) {
+      throw new Error("SCRIPT_EXPORT: video demo must be browser-only silent capture");
+    }
+    if (!v.test_run_id || !v.artifact_ref) throw new Error("SCRIPT_EXPORT: video demo incomplete");
+    if (!v.reviewed) throw new Error("SCRIPT_EXPORT: video demo must be reviewed");
+    if (!v.thumbnail_ref) throw new Error("SCRIPT_EXPORT: video demo thumbnail required");
   }
-  if (!v.test_run_id || !v.artifact_ref) throw new Error("SCRIPT_EXPORT: video demo incomplete");
-  if (!v.reviewed) throw new Error("SCRIPT_EXPORT: video demo must be reviewed");
-  if (!v.thumbnail_ref) throw new Error("SCRIPT_EXPORT: video demo thumbnail required");
   const expectedDigest = computeScriptContentDigest(body);
   if (body.content_digest && body.content_digest.toLowerCase() !== expectedDigest) {
     throw new Error("SCRIPT_EXPORT: content_digest mismatch");

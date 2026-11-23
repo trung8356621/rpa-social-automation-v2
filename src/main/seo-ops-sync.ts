@@ -27,6 +27,7 @@ import {
   type TokenStore,
 } from "../shared/seo-ops-auth.js";
 import {
+  cloneFlowForNewVersion,
   createHttpScriptSyncClient,
   importScriptRelease,
   planScriptSync,
@@ -143,6 +144,14 @@ export function createSeoOpsSyncService(options: {
   let statusRowsInFlight: Promise<ScriptSyncRow[]> | null = null;
   let statusRowsCached: ScriptSyncRow[] | null = null;
   let statusRowsCachedAt = 0;
+  const newVersionInFlight = new Map<string, Promise<{
+    ok: boolean;
+    predecessorId: string;
+    successorId?: string;
+    successorName?: string;
+    error?: string;
+    sync?: Awaited<ReturnType<typeof syncAll>>;
+  }>>();
   const metadataGate = createSeoOpsMetadataGate({
     onBlock: (info) => {
       if (info.reason === "budget" || info.reason === "backoff") {
@@ -1153,15 +1162,9 @@ export function createSeoOpsSyncService(options: {
     if (!complete) {
       health_warnings.push(...missing.map((m) => `missing_asset:${m}`));
     }
-    for (const e of resolved.errors) {
-      if (isScriptHealthWarningReason(e)) health_warnings.push(e);
-      else if (!reasons.includes(e)) reasons.push(e);
-    }
     const uniqueWarnings = [...new Set(health_warnings)];
     const uniqueReasons = [...new Set(reasons)];
-    const incomplete = uniqueReasons.length > 0 || !snap.publish_body || (!resolved.demo && !hasStoredDemo);
-    // Has stored demo but resolve failed on file/ownership → still incomplete via reasons.
-    const blockedByDemoFile = hasStoredDemo && !resolved.demo && resolved.errors.length > 0;
+    const incomplete = uniqueReasons.length > 0 || !snap.publish_body;
     const lineageRaw = store.setting(`seoOpsLineage:${flow.id}`);
     const lineage = lineageRaw ? (JSON.parse(lineageRaw) as string[]) : [];
     const health_status: ScriptSyncRow["health_status"] = uniqueWarnings.length
@@ -1178,12 +1181,10 @@ export function createSeoOpsSyncService(options: {
       execution_digest: snap.execution_digest,
       lineage,
       assets_complete: complete,
-      publish_body: incomplete || blockedByDemoFile ? undefined : snap.publish_body ?? undefined,
+      publish_body: incomplete ? undefined : snap.publish_body ?? undefined,
       name: flow.name,
-      incomplete: incomplete || blockedByDemoFile,
-      incomplete_reasons: blockedByDemoFile
-        ? [...new Set([...uniqueReasons, ...resolved.errors])]
-        : uniqueReasons,
+      incomplete,
+      incomplete_reasons: uniqueReasons,
       health_warnings: uniqueWarnings,
       health_status,
       video_attachment: resolved.attachment,
@@ -1384,7 +1385,6 @@ export function createSeoOpsSyncService(options: {
     const rows: ScriptSyncRow[] = ids.map((id) => {
       const l = localBy[id];
       const r = remoteBy[id];
-      const missingDemo = Boolean(l && hasMissingDemoReason(l.incomplete_reasons || []));
       const incomplete = Boolean(l?.incomplete || (r && r.assets_complete === false));
       const status = statusFromPlanSides({
         hasLocal: !!l,
@@ -1393,8 +1393,8 @@ export function createSeoOpsSyncService(options: {
         conflict: conflictIds.has(id),
         localAhead: pushIds.has(id) && !!r,
         remoteAhead: pullIds.has(id) && !!l,
-        incomplete: incomplete && !missingDemo,
-        missingDemo,
+        incomplete,
+        missingDemo: false,
         error: error && (l || r) && !incomplete ? error : undefined,
         offlinePending: Boolean(options?.offlinePending && l && !incomplete && !skipIds.has(id)),
       });
@@ -1405,15 +1405,13 @@ export function createSeoOpsSyncService(options: {
             ? "Script Health: Invalid Steps — vẫn có thể đồng bộ; Step cần cấu hình trước khi thực thi"
             : `Script Health: Warnings — ${(l.health_warnings || []).slice(0, 2).join("; ")}`
           : undefined;
-      const message = missingDemo
-        ? publishBlockerMessage(l?.incomplete_reasons || [MISSING_DEMO_REASON])
-        : incomplete
-          ? publishBlockerMessage(l?.incomplete_reasons || []) || "incomplete"
-          : error && (l || r)
-            ? error
-            : healthNote ||
-              // Drop stale Invalid Step / incomplete text once health is non-blocking.
-              (prev?.message && /Invalid Step|incomplete/i.test(prev.message) ? healthNote || undefined : prev?.message);
+      const message = incomplete
+        ? publishBlockerMessage(l?.incomplete_reasons || []) || "incomplete"
+        : error && (l || r)
+          ? error
+          : healthNote ||
+            // Drop stale Invalid Step / incomplete text once health is non-blocking.
+            (prev?.message && /Invalid Step|incomplete/i.test(prev.message) ? healthNote || undefined : prev?.message);
       return {
         script_id: id,
         flow_id: l?.flow_id,
@@ -1615,7 +1613,7 @@ export function createSeoOpsSyncService(options: {
     const plan: SyncPlan = { push_to_remote: [], pull_to_local: [], skip: [], conflicts: [] };
     for (const row of publishable) {
       const server = remoteById.get(row.script_id);
-      if (server && server.content_digest.toLowerCase() === row.content_digest.toLowerCase() && server.demo_status === "ready") {
+      if (server && server.content_digest.toLowerCase() === row.content_digest.toLowerCase()) {
         plan.skip.push({ script_id: row.script_id, reason: "same_digest" });
       } else {
         plan.push_to_remote.push(toPlanRow(row));
@@ -1852,7 +1850,7 @@ export function createSeoOpsSyncService(options: {
     const reports = await fetchReports();
     await fetchActionTags();
     await fetchScriptRequests();
-    const rows = await refreshStatusRows();
+    const rows = await refreshStatusRows({ force: true });
     return { plan, results, rows, summary: {
       published: results.filter(r => r.action === "push" && r.ok).length,
       downloaded: results.filter(r => r.action === "pull" && r.ok).length,
@@ -1863,6 +1861,81 @@ export function createSeoOpsSyncService(options: {
     } };
   }
 
+  async function syncNewVersion(flowId: string) {
+    if (!tokenStore.getToken()) throw new Error("SEO_OPS: cần đăng nhập trước khi sync");
+    const existingFlight = newVersionInFlight.get(flowId);
+    if (existingFlight) return existingFlight;
+
+    const run = (async () => {
+      const predecessor = store.flows().find((f) => f.id === flowId);
+      if (!predecessor) throw new Error("Không tìm thấy Script để tạo phiên bản mới.");
+      if (predecessor.disabled) throw new Error("Script đã ở trạng thái Disabled.");
+
+      const successor = cloneFlowForNewVersion(
+        predecessor,
+        store.flows().map((f) => f.name),
+        randomUUID(),
+      );
+      store.saveFlow(successor);
+
+      let syncRes: Awaited<ReturnType<typeof syncAll>>;
+      try {
+        syncRes = await syncAll({ flowId: successor.id });
+      } catch (err) {
+        try { store.deleteFlow(successor.id); } catch { /* ignore */ }
+        return {
+          ok: false,
+          predecessorId: predecessor.id,
+          error: String((err as Error).message || err),
+        };
+      }
+
+      const pushResult = syncRes.results.find((r) => r.script_id === successor.id);
+      const blocked = (syncRes.summary.blocked > 0 && !pushResult) || pushResult?.action === "publish_blocked";
+      const failed = syncRes.summary.failed > 0 || (pushResult && !pushResult.ok) || blocked;
+      if (failed) {
+        try { store.deleteFlow(successor.id); } catch { /* ignore */ }
+        return {
+          ok: false,
+          predecessorId: predecessor.id,
+          error: pushResult?.message || "Sync New Version thất bại.",
+          sync: syncRes,
+        };
+      }
+
+      // Disable predecessor only after successor is persisted and published.
+      store.saveFlow({
+        ...predecessor,
+        disabled: true,
+        supersededByFlowId: successor.id,
+      });
+      if (predecessor.actionTagKey) {
+        try {
+          const active = JSON.parse(store.setting("activeScriptsByTag") || "{}") as Record<string, string>;
+          if (active[predecessor.actionTagKey] === predecessor.id) {
+            delete active[predecessor.actionTagKey];
+            store.setSetting("activeScriptsByTag", JSON.stringify(active));
+          }
+        } catch { /* ignore */ }
+      }
+      await refreshStatusRows({ force: true }).catch(() => undefined);
+      return {
+        ok: true,
+        predecessorId: predecessor.id,
+        successorId: successor.id,
+        successorName: successor.name,
+        sync: syncRes,
+      };
+    })();
+
+    newVersionInFlight.set(flowId, run);
+    try {
+      return await run;
+    } finally {
+      newVersionInFlight.delete(flowId);
+    }
+  }
+
   return {
     config,
     setConfig,
@@ -1871,6 +1944,7 @@ export function createSeoOpsSyncService(options: {
     logout,
     refreshStatusRows,
     syncAll,
+    syncNewVersion,
     loadMeta,
     backupNow,
     markBackupDirty,
