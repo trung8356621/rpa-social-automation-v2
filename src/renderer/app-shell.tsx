@@ -278,17 +278,18 @@ export function ScenariosPage({ state, name, setName, locked, open, create, quic
         type: "seoOpsSyncFlow",
         flowId: flow.id,
       });
-      if (res.rows) setSyncRows(res.rows);
-      else {
+      if (!res.ok) {
         const refreshed = await invoke<{ rows: ScriptSyncRow[] }>({ type: "seoOpsSyncStatus" });
         setSyncRows(refreshed.rows);
-      }
-      const pushResult = res.results?.find(r => r.script_id === flow.id);
-      if (!res.ok || (pushResult && !pushResult.ok) || (res.summary?.failed ?? 0) > 0) {
-        const reason = res.error?.message || pushResult?.message || "Sync thất bại.";
-        setError(`Sync failed: ${reason}`);
+        setError(`Sync failed: ${res.error?.message || "Sync thất bại."}`);
       } else {
-        setSyncStatusMessage(`Synced: ${flow.name}`);
+        setSyncRows(res.rows);
+        const pushResult = res.results.find((r) => r.script_id === flow.id);
+        if ((pushResult && !pushResult.ok) || (res.summary?.failed ?? 0) > 0) {
+          setError(`Sync failed: ${pushResult?.message || "Sync thất bại."}`);
+        } else {
+          setSyncStatusMessage(`Synced: ${flow.name}`);
+        }
       }
     } catch (err) {
       setError(`Sync failed: ${String((err as Error).message || err)}`);
@@ -322,7 +323,7 @@ export function ScenariosPage({ state, name, setName, locked, open, create, quic
         state?: State;
       }>({ type: "seoOpsSyncNewVersion", flowId: flow.id });
       if (res.state && onState) onState(res.state);
-      if (res.sync?.rows) setSyncRows(res.sync.rows);
+      if (res.sync?.ok) setSyncRows(res.sync.rows);
       else {
         const refreshed = await invoke<{ rows: ScriptSyncRow[] }>({ type: "seoOpsSyncStatus" });
         setSyncRows(refreshed.rows);

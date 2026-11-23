@@ -35,7 +35,13 @@ function seedFlowWithAsset(store: Store, assetDir: string, flowId = "flow-alpha"
       target: {
         asset: assetRel,
         roi: { x: 1, y: 2, width: 10, height: 10 },
-        ocr: { text: "Submit", mode: "exact" },
+        ocr: {
+          text: "Submit",
+          kind: "line",
+          bbox: { x: 1, y: 2, width: 10, height: 10 },
+          confirmed: true,
+          language: "vie+eng",
+        },
       },
     },
   };
