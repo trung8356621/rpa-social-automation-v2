@@ -46,7 +46,6 @@ import {
 } from "../shared/video-demo.js";
 import {
   assertDemoBelongsToScript,
-  assertExecutionDigestMatches,
   hasMissingDemoReason,
   MISSING_DEMO_REASON,
 } from "../shared/video-demo-policy.js";
@@ -1049,29 +1048,7 @@ export function createSeoOpsSyncService(options: {
     } catch (e) {
       return { errors: [String((e as Error).message || e)], warnings };
     }
-    // Digest / historical pins are advisory — Demo is user-selected media, not a pass certificate.
-    try {
-      assertExecutionDigestMatches(attachment, executionDigest);
-    } catch {
-      if (
-        legacyExecutionDigest &&
-        attachment.executionDigest?.toLowerCase() === legacyExecutionDigest.toLowerCase()
-      ) {
-        // legacy empty-asset digest still accepted silently
-      } else {
-        warnings.push(
-          "VIDEO_DEMO: execution digest differs from current Script — user-selected media kept",
-        );
-      }
-    }
-    const expected = flow.steps.map((ref) => `${ref.id}:${ref.version}`).sort();
-    const actual = (attachment.stepVersions ?? []).map((ref) => `${ref.id}:${ref.version}`).sort();
-    if (expected.length !== actual.length || expected.some((ref, index) => ref !== actual[index])) {
-      warnings.push(
-        "VIDEO_DEMO: Demo metadata Step pins differ from current Script — release uses current flow.steps only",
-      );
-      // Do not restore historical pins into the Script; keep attachment as media metadata.
-    }
+    // VIDEO_DEMO is optional explanatory media for humans — never warn on digest or step-pin diffs.
     if (!testRunsDir) {
       errors.push("VIDEO_DEMO: test-runs directory unavailable");
       return { errors, warnings };
@@ -1193,11 +1170,9 @@ export function createSeoOpsSyncService(options: {
       demo_status: resolved.demo
         ? "ready"
         : hasStoredDemo
-          ? resolved.errors.some((error) => /missing|unreadable|empty|invalid JSON/i.test(error))
-            ? "error"
-            : "outdated"
+          ? "error"
           : "missing",
-      demo_reason: resolved.errors[0] || resolved.warnings[0],
+      demo_reason: resolved.errors[0],
     };
   }
 
@@ -1412,8 +1387,8 @@ export function createSeoOpsSyncService(options: {
         : error && (l || r)
           ? error
           : healthNote ||
-            // Drop stale Invalid Step / incomplete text once health is non-blocking.
-            (prev?.message && /Invalid Step|incomplete/i.test(prev.message) ? healthNote || undefined : prev?.message);
+            // Drop stale Invalid Step / incomplete / VIDEO_DEMO warning text once health is non-blocking.
+            (prev?.message && /Invalid Step|incomplete|VIDEO_DEMO:/i.test(prev.message) ? healthNote || undefined : prev?.message);
       return {
         script_id: id,
         flow_id: l?.flow_id,
@@ -1633,6 +1608,26 @@ export function createSeoOpsSyncService(options: {
           results.push({ script_id: row.script_id, action: "skip", ok: true, message: "incomplete — no publish body" });
           continue;
         }
+        // When remote already has an immutable release at or above local version with a different digest,
+        // allocate the next version up front rather than attempting to overwrite an immutable release.
+        const remoteServer = remoteById.get(row.script_id);
+        if (
+          remoteServer?.version &&
+          remoteServer.content_digest.toLowerCase() !== full.content_digest.toLowerCase()
+        ) {
+          const remoteOrdinal = parsePublishedScriptVersion(remoteServer.version).ordinal;
+          const localOrdinal = parsePublishedScriptVersion(full.version).ordinal;
+          if (localOrdinal <= remoteOrdinal) {
+            const flow = store.flows().find((f) => f.id === full!.flow_id);
+            const nextVersion = String(remoteOrdinal + 1);
+            if (flow) {
+              const bumped = await localRow(flow, nextVersion);
+              if (bumped.publish_body && !bumped.incomplete) {
+                full = bumped;
+              }
+            }
+          }
+        }
         savePendingRelease(full);
         const publishOnce = async (body: NonNullable<LocalCatalogRow["publish_body"]>) =>
           client.publish(body) as Promise<{
@@ -1642,6 +1637,10 @@ export function createSeoOpsSyncService(options: {
             errors?: string[];
             release?: { content_digest?: string };
           }>;
+        if (!full.publish_body) {
+          results.push({ script_id: row.script_id, action: "skip", ok: true, message: "incomplete — no publish body" });
+          continue;
+        }
         let published = await publishOnce(full.publish_body);
         let outcome = String(published.outcome ?? "");
         let publishErrors = Array.isArray(published.errors) ? published.errors : undefined;
@@ -1652,11 +1651,15 @@ export function createSeoOpsSyncService(options: {
         if (!ok && (published.httpStatus === 409 || outcome === "conflict")) {
           message = mapSeoOpsApiErrors(publishErrors, message);
         }
-        // Sequence conflict: trust remote, bump one version, retry once — no user version math.
-        const sequenceConflict = /script_version_sequence_conflict/i.test(
-          [...(publishErrors || []), message].join(" "),
-        );
-        if (!ok && sequenceConflict) {
+        // Bounded version-conflict recovery for both version_digest_conflict and script_version_sequence_conflict.
+        const MAX_VERSION_CONFLICT_RETRIES = 3;
+        let conflictRetries = 0;
+        const isVersionConflict = (errs?: string[], msg?: string) =>
+          /script_version_sequence_conflict|version_digest_conflict/i.test(
+            [...(errs || []), msg || ""].join(" "),
+          );
+        while (!ok && isVersionConflict(publishErrors, message) && conflictRetries < MAX_VERSION_CONFLICT_RETRIES) {
+          conflictRetries += 1;
           const server = remoteById.get(row.script_id);
           const remoteOrdinal = server?.version
             ? parsePublishedScriptVersion(server.version).ordinal
@@ -1664,22 +1667,20 @@ export function createSeoOpsSyncService(options: {
           const triedOrdinal = parsePublishedScriptVersion(full.version).ordinal;
           const bump = String(Math.max(remoteOrdinal, triedOrdinal) + 1);
           const flow = store.flows().find((f) => f.id === full!.flow_id);
-          if (flow && bump !== full.version) {
-            const retried = await localRow(flow, bump);
-            if (retried.publish_body && !retried.incomplete) {
-              full = retried;
-              savePendingRelease(full);
-              published = await publishOnce(retried.publish_body);
-              outcome = String(published.outcome ?? "");
-              publishErrors = Array.isArray(published.errors) ? published.errors : undefined;
-              ok = published.httpStatus < 300 && published.ok !== false;
-              message = ok
-                ? (outcome === "idempotent" ? "idempotent — cùng digest đã có trên SEO-OPS" : "pushed")
-                : mapSeoOpsApiErrors(publishErrors, `HTTP ${published.httpStatus}`);
-              if (!ok && (published.httpStatus === 409 || outcome === "conflict")) {
-                message = mapSeoOpsApiErrors(publishErrors, message);
-              }
-            }
+          if (!flow || bump === full.version) break;
+          const retried = await localRow(flow, bump);
+          if (!retried.publish_body || retried.incomplete) break;
+          full = retried;
+          savePendingRelease(full);
+          published = await publishOnce(retried.publish_body);
+          outcome = String(published.outcome ?? "");
+          publishErrors = Array.isArray(published.errors) ? published.errors : undefined;
+          ok = published.httpStatus < 300 && published.ok !== false;
+          message = ok
+            ? (outcome === "idempotent" ? "idempotent — cùng digest đã có trên SEO-OPS" : "pushed")
+            : mapSeoOpsApiErrors(publishErrors, `HTTP ${published.httpStatus}`);
+          if (!ok && (published.httpStatus === 409 || outcome === "conflict")) {
+            message = mapSeoOpsApiErrors(publishErrors, message);
           }
         }
         const publishBody = full.publish_body;
