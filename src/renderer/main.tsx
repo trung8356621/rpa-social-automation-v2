@@ -72,6 +72,19 @@ import "./style.css";
 import { useDraft, captureEditorDraft, restoreEditorDraft, type EditorDraft } from "./draft";
 import { targetEnvironment } from "../shared/visual-environment";
 import { WEB_WIDTH, WEB_HEIGHT, TOP_HEIGHT, workspaceLayout, APP_NAV_COLLAPSED, APP_NAV_EXPANDED } from "../shared/geometry";
+import {
+  CROP_ROI_CONFIRM_LABEL,
+  CROP_ROI_FIELD_LABELS,
+  CROP_ROI_GROUP_LABEL,
+  canConfirmCropRoi,
+  cropRoiFieldsFromRect,
+  displayToImagePoint,
+  emptyCropRoiFields,
+  parseCropRoiFields,
+  roiFromDragPoints,
+  type CropRoiFieldKey,
+  type CropRoiFields,
+} from "../shared/crop-roi-input";
 import { defaultNetworkSettings, NETWORK_LABELS } from "../shared/network-mode";
 import { installAdminUiZoomShortcuts } from "./ui-zoom";
 document.documentElement.style.setProperty("--web-height", `${WEB_HEIGHT}px`);
@@ -390,6 +403,8 @@ function Creator() {
   const [shot, setShot] = useDraft<Capture>("shot");
   const [cropMode, setCropMode] = useDraft("cropMode", false);
   const [roi, setRoi] = useDraft<Rect>("roi");
+  const [roiFields, setRoiFields] = useDraft<CropRoiFields>("roiFields", emptyCropRoiFields());
+  const [roiInputError, setRoiInputError] = useDraft("roiInputError", "");
   const [message, setMessage] = useDraft(
     "message",
     "Tạo flow, chọn Action rồi crop target nếu cần.",
@@ -873,6 +888,31 @@ function Creator() {
     setShot(undefined);
     setCropMode(false);
     setRoi(undefined);
+    setRoiFields(emptyCropRoiFields());
+    setRoiInputError("");
+  }
+  function applyRoiFromDrag(next: Rect | undefined) {
+    setRoi(next);
+    setRoiFields(next ? cropRoiFieldsFromRect(next) : emptyCropRoiFields());
+    setRoiInputError("");
+  }
+  function applyNumericRoiField(key: CropRoiFieldKey, value: string) {
+    if (!shot) return;
+    const next: CropRoiFields = { ...roiFields, [key]: value };
+    setRoiFields(next);
+    if ([next.x, next.y, next.width, next.height].every((part) => part.trim() === "")) {
+      setRoi(undefined);
+      setRoiInputError("");
+      return;
+    }
+    const parsed = parseCropRoiFields(next, shot.width, shot.height);
+    if (parsed.ok) {
+      setRoi(parsed.roi);
+      setRoiInputError("");
+      return;
+    }
+    setRoi(undefined);
+    setRoiInputError(parsed.error);
   }
   async function capture() {
     if (!state?.flow) {
@@ -883,9 +923,11 @@ function Creator() {
     await invoke({ type: "browserVisible", visible: false, cropOverlay: true });
     setShot(image);
     setRoi(undefined);
+    setRoiFields(emptyCropRoiFields());
+    setRoiInputError("");
     setCropMode(true);
     setMessage(
-      `Kéo ROI trên ảnh ${image.width}×${image.height} DIP. Giữ nguyên viewport trong lúc crop.`,
+      `Kéo ROI hoặc nhập X/Y/Width/Height trên ảnh ${image.width}×${image.height} DIP. Giữ nguyên viewport trong lúc crop.`,
     );
   }
   async function inspect(image: Capture) {
@@ -1394,17 +1436,15 @@ function Creator() {
     });
   }
   function point(e: React.PointerEvent) {
-    const r = e.currentTarget.getBoundingClientRect();
-    return {
-      x: Math.max(
-        0,
-        Math.min(
-          shot?.width ?? state?.browserBounds.width ?? WEB_WIDTH,
-          e.clientX - r.left,
-        ),
-      ),
-      y: Math.max(0, Math.min(shot?.height ?? WEB_HEIGHT, e.clientY - r.top)),
-    };
+    const imageWidth = shot?.width ?? state?.browserBounds.width ?? WEB_WIDTH;
+    const imageHeight = shot?.height ?? WEB_HEIGHT;
+    return displayToImagePoint(
+      e.clientX,
+      e.clientY,
+      e.currentTarget.getBoundingClientRect(),
+      imageWidth,
+      imageHeight,
+    );
   }
   const needsTarget = [
     "QUICK_TAG",
@@ -2137,17 +2177,50 @@ function Creator() {
               <>
                 <span className="capture-instructions" role="note">
                   {cropMode
-                    ? "Kéo để chọn ROI trên ảnh. Esc để hủy."
+                    ? roiInputError
+                      ? roiInputError
+                      : "Kéo hoặc nhập X/Y/Width/Height để chọn ROI. Esc để hủy."
                     : "Đang xem ảnh kiểm thử. Esc để quay lại."}
                 </span>
                 {cropMode && (
-                  <button
-                    className="primary"
-                    disabled={!roi || roi.width < 4 || roi.height < 4 || busy}
-                    onClick={() => void task(saveCrop)}
-                  >
-                    Dùng ROI {roi ? `${roi.width}×${roi.height}` : ""}
-                  </button>
+                  <>
+                    <fieldset className="crop-roi-numeric" aria-label={CROP_ROI_GROUP_LABEL}>
+                      <legend className="sr-only">{CROP_ROI_GROUP_LABEL}</legend>
+                      {(
+                        [
+                          ["x", "X"],
+                          ["y", "Y"],
+                          ["width", "Width"],
+                          ["height", "Height"],
+                        ] as const
+                      ).map(([key, visible]) => (
+                        <label key={key} className="crop-roi-numeric-field">
+                          <span>{visible}</span>
+                          <input
+                            type="number"
+                            inputMode="numeric"
+                            step={1}
+                            aria-label={CROP_ROI_FIELD_LABELS[key]}
+                            name={`crop-roi-${key}`}
+                            value={roiFields[key]}
+                            disabled={busy}
+                            onChange={(e) => applyNumericRoiField(key, e.target.value)}
+                          />
+                        </label>
+                      ))}
+                    </fieldset>
+                    <button
+                      className="primary"
+                      aria-label={CROP_ROI_CONFIRM_LABEL}
+                      disabled={
+                        !canConfirmCropRoi(roi, shot.width, shot.height) || busy
+                      }
+                      onClick={() => void task(saveCrop)}
+                    >
+                      {CROP_ROI_CONFIRM_LABEL}
+                      {roi ? ` ${roi.width}×${roi.height}` : ""}
+                    </button>
+                  </>
                 )}
                 <button disabled={busy} onClick={() => void task(closeShot)}>
                   Quay lại browser · Esc
@@ -2389,25 +2462,18 @@ function Creator() {
                 if (!cropMode) return;
                 drag.current = point(e);
                 e.currentTarget.setPointerCapture(e.pointerId);
-                setRoi(undefined);
+                applyRoiFromDrag(undefined);
               }}
               onPointerMove={(e) => {
                 if (!drag.current || !cropMode) return;
-                const p = point(e),
-                  s = drag.current;
-                setRoi({
-                  x: Math.round(Math.min(p.x, s.x)),
-                  y: Math.round(Math.min(p.y, s.y)),
-                  width: Math.round(Math.abs(p.x - s.x)),
-                  height: Math.round(Math.abs(p.y - s.y)),
-                });
+                applyRoiFromDrag(roiFromDragPoints(drag.current, point(e)));
               }}
               onPointerUp={() => {
                 drag.current = undefined;
               }}
               onPointerCancel={() => {
                 drag.current = undefined;
-                setRoi(undefined);
+                applyRoiFromDrag(undefined);
               }}
               onLostPointerCapture={() => {
                 drag.current = undefined;

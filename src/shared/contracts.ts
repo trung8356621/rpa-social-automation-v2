@@ -757,6 +757,8 @@ export const DRAFT_KEYS = [
   "shot",
   "cropMode",
   "roi",
+  "roiFields",
+  "roiInputError",
   "message",
   "busy",
   "results",

@@ -507,6 +507,29 @@ aside > button {
   flex: 1;
   color: #b9d8ef;
 }
+.crop-roi-numeric {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin: 0;
+  padding: 0 4px;
+  border: 0;
+  min-width: 0;
+}
+.crop-roi-numeric-field {
+  display: flex;
+  align-items: center;
+  gap: 3px;
+  font-size: 11px;
+  color: #b9d8ef;
+  white-space: nowrap;
+}
+.crop-roi-numeric-field input {
+  width: 56px;
+  min-width: 48px;
+  padding: 2px 4px;
+  font-size: 12px;
+}
 .flow-guide,
 .flow-active {
   padding: 9px;
