@@ -5,6 +5,7 @@ import {
   confirmedOcrFromSegment,
   ocrKindFromTarget,
   ocrModalStatus,
+  requiresOcrConfirmation,
   sameOcrSelection,
   type OcrKind,
 } from "../shared/ocr-target-draft";
@@ -947,7 +948,9 @@ function Creator() {
       captureId: shot.id,
       roi,
     });
-    setTarget({ asset: t.asset, roi: t.roi, environment: t.environment });
+    setTarget({ asset: t.asset, roi: t.roi, environment: t.environment, matchTo: "none" });
+    setOcrKind("none");
+    setOcrFocusSegment(undefined);
     setOcrResult(undefined);
     setOcrError("");
     setTargetImage(t.dataUrl);
@@ -957,9 +960,9 @@ function Creator() {
       setMessage("ROI QUICK_TAG đã lưu. Khai báo số hàng và kiểm tra chấm click tại tâm hàng đầu; không xác minh danh tính.");
       return;
     }
-    await readOcr(t.asset);
+    // Image-only by default (Match To: None). Do not auto-run OCR or imply confirmation is required.
     setMessage(
-      "ROI đã lưu. Chọn và xác nhận một dòng/từ OCR, hoặc giữ image-only; sau đó lưu Base/Override.",
+      "ROI đã lưu — Image-only target (OCR không bắt buộc). Có thể chọn chữ OCR nếu cần, rồi lưu Base/Override.",
     );
   }
   async function readOcr(asset: string) {
@@ -2727,8 +2730,13 @@ function Creator() {
                           <option value="word">Từng từ</option>
                         </select>
                       </label>
-                      {ocrKind === "none" && <p className="hint">Nhận diện bằng ảnh — kết quả OCR scan (nếu có) không phải selection đã lưu.</p>}
-                      {ocrKind !== "none" && !target.ocr?.confirmed && !ocrResult && !ocrLoading &&
+                      {ocrKind === "none" && (
+                        <p className="hint">
+                          Image-only target — OCR không bắt buộc. Match To: None không yêu cầu xác nhận chữ.
+                        </p>
+                      )}
+                      {requiresOcrConfirmation({ ocrKind: ocrKind === "block" ? "line" : ocrKind, matchTo: target.matchTo })
+                        && !target.ocr?.confirmed && !ocrResult && !ocrLoading &&
                         <p className="hint">Đọc lại OCR rồi bấm một đoạn chữ để xác nhận. Chỉ chọn mode chưa đủ để Save.</p>}
 
                       {ocrLoading && <p role="note">Đang đọc OCR trên máy…</p>}
@@ -2737,10 +2745,10 @@ function Creator() {
                           {ocrError}
                         </p>
                       )}
-                      {ocrKind !== "none" && ocrResult && !ocrResult.segments.length && (
-                        <p className="hint">
-                          ROI không có chữ đọc được. Có thể lưu image-only cho
-                          nút icon.
+                      {requiresOcrConfirmation({ ocrKind: ocrKind === "block" ? "line" : ocrKind, matchTo: target.matchTo })
+                        && ocrResult && !ocrResult.segments.length && (
+                        <p className="hint" role="status">
+                          ROI không có chữ đọc được. Có thể chuyển về “Không dùng chữ” và lưu image-only.
                         </p>
                       )}
                       {ocrKind !== "none" && ocrResult && ocrResult.segments.length > 0 && (

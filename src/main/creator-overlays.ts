@@ -112,6 +112,11 @@ export class CreatorOverlays {
   toggle(panel: "editor" | "debug") {
     return this.setExpanded(panel, !this.expanded[panel]);
   }
+  /**
+   * Capture / Play historically entered a canonical 560px viewport.
+   * Creator BrowserCore is now always 560px tall, so this no longer resizes the
+   * view; layout() still runs for consistency and sameRect skips redundant setBounds.
+   */
   enterExecutionMode() {
     this.executionDepth++;
     this.layout();

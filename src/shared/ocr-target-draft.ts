@@ -89,5 +89,18 @@ export function ocrModalStatus(input: {
       label: `OCR chưa xác nhận: đã chọn “${kindLabelVi(input.ocrKind)}” — bấm một đoạn chữ bên dưới rồi Xong / Lưu.`,
     };
   }
-  return { code: "none", label: "OCR chưa dùng (image-only)." };
+  return {
+    code: "none",
+    label: "Image-only target — OCR không bắt buộc",
+  };
+}
+
+/** Image-only / Match To none never requires OCR confirmation to save. */
+export function requiresOcrConfirmation(input: {
+  ocrKind: "none" | OcrKind;
+  matchTo?: VisualTarget["matchTo"];
+}): boolean {
+  if (input.ocrKind !== "none") return true;
+  const matchTo = input.matchTo;
+  return matchTo === "top" || matchTo === "middle" || matchTo === "bottom";
 }

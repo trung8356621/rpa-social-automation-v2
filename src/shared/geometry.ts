@@ -67,14 +67,19 @@ export function assertCanonicalScreenshot(width?: number, height?: number) {
 export const EDITOR_WIDTH = 352;
 export const APP_NAV_EXPANDED = 208;
 export const APP_NAV_COLLAPSED = 56;
-/** Preserve the native viewport. Controls move to its right, never over it. */
+/**
+ * Preserve the native viewport. Controls move to its right, never over it.
+ * Creator BrowserCore content height is always WEB_HEIGHT (560) — browse, capture,
+ * crop, and Play/Test Lab share one coordinate system. `executionMode` is retained
+ * for call-site compatibility and no longer changes browser height.
+ */
 export function workspaceLayout(
   editorOpen: boolean,
   debugOpen: boolean,
   contentWidth: number,
   contentHeight: number,
   sidebarCollapsed = false,
-  executionMode = false,
+  _executionMode = false,
 ) {
   const requestedNav = sidebarCollapsed ? APP_NAV_COLLAPSED : APP_NAV_EXPANDED;
   const navigationWidth = contentWidth >= WEB_WIDTH + SIDE_WIDTH + requestedNav ? requestedNav
@@ -83,6 +88,7 @@ export function workspaceLayout(
   const controlsWidth = SIDE_WIDTH + (editorBeside ? EDITOR_WIDTH : 0);
   const x = navigationWidth + Math.max(0, Math.floor((contentWidth - navigationWidth - WEB_WIDTH - controlsWidth) / 2));
   const workspaceHeight = Math.max(WEB_HEIGHT, contentHeight - TOP_HEIGHT);
+  void _executionMode;
   return {
     navigationWidth,
     minWidth: navigationWidth + WEB_WIDTH + controlsWidth,
@@ -94,7 +100,7 @@ export function workspaceLayout(
       x,
       y: TOP_HEIGHT,
       width: WEB_WIDTH,
-      height: executionMode ? WEB_HEIGHT : workspaceHeight,
+      height: WEB_HEIGHT,
     },
     workspaceHeight,
     debug: {

@@ -32,7 +32,7 @@ test("Creator chrome is 3 rows totaling TOP_HEIGHT 128", () => {
   assert.equal(TOP_HEIGHT, 128);
 });
 
-test("common desktop sizes fill Creator height while execution stays canonical", () => {
+test("Creator BrowserCore height is fixed 560 across browse and execution modes", () => {
   for (const editor of [true, false])
     for (const debug of [true, false])
       for (const size of [
@@ -52,12 +52,12 @@ test("common desktop sizes fill Creator height while execution stays canonical",
           x: layout.browser.x,
           y: TOP_HEIGHT,
           width: WEB_WIDTH,
-          height: layout.workspaceHeight,
+          height: WEB_HEIGHT,
         });
-        assert.equal(layout.browser.y + layout.browser.height, size[1]);
+        // Browse vs Capture/Play: same BrowserCore geometry (no shrink-to-560 transition).
         assert.deepEqual(
           workspaceLayout(editor, debug, size[0], size[1], false, true).browser,
-          { ...layout.browser, height: WEB_HEIGHT },
+          layout.browser,
         );
         assert.equal(layout.debug.x, layout.browser.x);
         assert.equal(layout.debug.y + layout.debug.height, size[1]);
