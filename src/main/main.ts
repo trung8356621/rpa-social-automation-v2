@@ -113,6 +113,7 @@ import { collectScriptAssets, createSeoOpsSyncService } from "./seo-ops-sync.js"
 import { resolveUrlFromActionTag } from "../shared/action-tag-url.js";
 import { isSameStartPage, parseHttpStartUrl, START_URL_REQUIRED } from "../shared/start-url.js";
 import { createHash } from "node:crypto";
+import { parseQaProfileArg, resolveCreatorDataDirName } from "../shared/creator-data-path.js";
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const project = path.resolve(root, "..");
@@ -122,38 +123,32 @@ const engagementCaptureCheck = process.argv.includes("--engagement-capture-check
 const creatorWorkspaceRestoreCheck = process.argv.includes("--creator-workspace-restore-check");
 const engagementOcrReplay = process.argv.includes("--engagement-ocr-replay");
 const qaIsolated = process.argv.includes("--qa-isolated");
+const qaProfileName = parseQaProfileArg(process.argv);
 const phase =
   process.argv.find((a) => a.startsWith("--phase="))?.split("=")[1] || "first";
 // All mutable POC data stays inside new/.local; no access to old/.
+// --qa-profile=<name> → stable `.local/qa-profile-<name>` (survives restart).
+// --qa-isolated alone remains PID-scoped for backward compatibility.
 const dataPath = path.join(
   project,
   ".local",
-  selfTest
-    ? [
-        "creator-ui",
-        "creator-native",
-        "playback-ui",
-        "overlay",
-        "ux",
-        "ocr",
-        "typing",
-        "upload",
-        "address",
-      ].includes(phase)
-      ? `test-${phase}-${process.pid}`
-      : "test-session"
-    : postDetailBrowserCheck
-      ? `post-detail-check-${process.pid}`
-      : creatorWorkspaceRestoreCheck
-        ? `creator-workspace-restore-check-${process.pid}`
-      : engagementCaptureCheck || engagementOcrReplay
-        ? `engagement-capture-check-${process.pid}`
-      : qaIsolated
-        ? `qa-isolated-${process.pid}`
-      : "creator",
+  resolveCreatorDataDirName({
+    argv: process.argv,
+    pid: process.pid,
+    selfTest,
+    phase,
+    postDetailBrowserCheck,
+    creatorWorkspaceRestoreCheck,
+    engagementCaptureCheck,
+    engagementOcrReplay,
+    qaIsolated,
+  }),
 );
 app.setPath("userData", dataPath);
 app.setPath("sessionData", path.join(dataPath, "chromium"));
+if (qaIsolated || qaProfileName) {
+  console.log(`[QA_PROFILE] userData=${dataPath}`);
+}
 
 type EngagementActionRect = { x: number; y: number; width: number; height: number };
 
@@ -424,7 +419,7 @@ async function boot() {
                 : 47832
       : postDetailBrowserCheck
         ? 47838
-        : qaIsolated
+        : qaIsolated || qaProfileName
           ? 47841
           : 47831,
   );
