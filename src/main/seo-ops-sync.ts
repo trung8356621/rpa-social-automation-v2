@@ -1383,15 +1383,21 @@ export function createSeoOpsSyncService(options: {
             ? "Script Health: Invalid Steps — vẫn có thể đồng bộ; Step cần cấu hình trước khi thực thi"
             : `Script Health: Warnings — ${(l.health_warnings || []).slice(0, 2).join("; ")}`
           : undefined;
+      // Digests already match ⇒ remote is current. Drop stale "cần Sync" / reassignment banners.
       const message = incomplete
         ? publishBlockerMessage(l?.incomplete_reasons || []) || "incomplete"
         : error && (l || r)
           ? error
-          : healthNote ||
-            // Drop stale Invalid Step / incomplete / VIDEO_DEMO warning text once health is non-blocking.
-            (prev?.message && /Invalid Step|incomplete|VIDEO_DEMO:|No Steps|Missing demo|script_video_demo_required/i.test(prev.message)
-              ? healthNote || undefined
-              : prev?.message);
+          : status === "synced"
+            ? healthNote || undefined
+            : healthNote ||
+              // Drop stale Invalid Step / incomplete / VIDEO_DEMO warning text once health is non-blocking.
+              (prev?.message && /Invalid Step|incomplete|VIDEO_DEMO:|No Steps|Missing demo|script_video_demo_required/i.test(prev.message)
+                ? healthNote || undefined
+                : prev?.message);
+      const last_result = status === "synced" && prev?.last_result === "action_tag_reassigned"
+        ? "synced"
+        : prev?.last_result;
       return {
         script_id: id,
         flow_id: l?.flow_id,
@@ -1403,7 +1409,7 @@ export function createSeoOpsSyncService(options: {
         remote_digest: r?.content_digest,
         status,
         last_sync_at: prev?.last_sync_at,
-        last_result: prev?.last_result,
+        last_result,
         message,
         incomplete,
         demo_status: l?.demo_status,

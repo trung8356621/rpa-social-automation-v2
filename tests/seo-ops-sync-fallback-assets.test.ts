@@ -68,6 +68,108 @@ test("HTML 404 on /scripts/sync is API_UNEXPECTED_RESPONSE not missing Script", 
   assert.equal(detail.code, "API_UNEXPECTED_RESPONSE");
 });
 
+test("refreshStatusRows clears stale Action Tag reassignment banner when digests already match", async () => {
+  const { dir, store, assetDir } = makeTempEnv();
+  const flow = seedFlow(store, assetDir, "flow-synced");
+  const testRunsDir = path.join(dir, "test-runs");
+  fs.mkdirSync(testRunsDir, { recursive: true });
+  fs.writeFileSync(path.join(testRunsDir, "demo.webm"), Buffer.from("demo"));
+  fs.writeFileSync(path.join(testRunsDir, "thumb.jpg"), Buffer.from("thumb"));
+  store.setSetting(`videoDemo:${flow.id}`, JSON.stringify({
+    scriptId: flow.id,
+    testRunId: "run-1",
+    artifactRef: "demo.webm",
+    thumbnailRef: "thumb.jpg",
+    reviewed: true,
+    audio: false,
+    desktopCapture: false,
+    attachedAt: "2026-01-01T00:00:00.000Z",
+    sha256: createHash("sha256").update("demo").digest("hex"),
+  }));
+
+  let remoteDigest = "";
+  const server = http.createServer((req, res) => {
+    const url = req.url || "";
+    const chunks: Buffer[] = [];
+    req.on("data", (c) => chunks.push(c));
+    req.on("end", () => {
+      if (req.method === "GET" && url.endsWith("/scripts")) {
+        res.writeHead(200, { "Content-Type": "application/json" });
+        res.end(JSON.stringify({
+          ok: true,
+          scripts: [{
+            script_id: flow.id,
+            package_key: flow.id,
+            version: "1",
+            name: flow.name,
+            content_digest: remoteDigest || "pending",
+            execution_digest: "a".repeat(64),
+            assets_complete: true,
+            action_tag_key: flow.actionTagKey,
+          }],
+        }));
+        return;
+      }
+      if (req.method === "POST" && url.endsWith("/scripts/sync/plan")) {
+        const body = JSON.parse(Buffer.concat(chunks).toString("utf8") || "{}");
+        const local = (body.local_scripts || [])[0];
+        remoteDigest = String(local?.content_digest || remoteDigest || "pending");
+        res.writeHead(200, { "Content-Type": "application/json" });
+        res.end(JSON.stringify({
+          ok: true,
+          plan: {
+            push_to_remote: [],
+            pull_to_local: [],
+            skip: [{ script_id: flow.id, reason: "same_digest" }],
+            conflicts: [],
+          },
+        }));
+        return;
+      }
+      if (req.method === "GET" && /execution-reports|script-requests|action-tags/.test(url)) {
+        res.writeHead(200, { "Content-Type": "application/json" });
+        res.end(JSON.stringify({ ok: true, reports: [], next_after_id: 0, script_requests: [], action_tags: [] }));
+        return;
+      }
+      res.writeHead(404, { "Content-Type": "application/json" });
+      res.end(JSON.stringify({ ok: false, errors: ["not_found"] }));
+    });
+  });
+  await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
+  const { port } = server.address() as { port: number };
+  try {
+    store.setSetting("seoOpsBaseUrl", `http://127.0.0.1:${port}`);
+    // Seed stale reassignment diagnostics while digests will match via plan.skip.
+    store.setSetting("seoOpsSyncMeta", JSON.stringify({
+      rows: {
+        [flow.id]: {
+          script_id: flow.id,
+          package_key: flow.id,
+          name: flow.name,
+          status: "synced",
+          last_result: "action_tag_reassigned",
+          message: "Action Tag → qa_sandbox_facebook.qa_sandbox_facebook_publish; cần Sync để cập nhật SEO-OPS",
+        },
+      },
+    }));
+    const sync = createSeoOpsSyncService({
+      store,
+      assetDir,
+      testRunsDir,
+      tokenStore: { getToken: () => "tok", setToken: () => undefined },
+    });
+    const rows = await sync.refreshStatusRows({ force: true });
+    const row = rows.find((r) => r.script_id === flow.id);
+    assert.equal(row?.status, "synced", JSON.stringify(row));
+    assert.equal(row?.message, undefined, JSON.stringify(row));
+    assert.equal(row?.last_result, "synced");
+  } finally {
+    store.close();
+    fs.rmSync(dir, { recursive: true, force: true });
+    await new Promise<void>((resolve, reject) => server.close((e) => (e ? reject(e) : resolve())));
+  }
+});
+
 test("individual Sync falls back to publish when /scripts/sync returns HTML 404", async () => {
   const { dir, store, assetDir } = makeTempEnv();
   const publishCalls: unknown[] = [];
