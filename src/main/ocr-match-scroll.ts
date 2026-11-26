@@ -1,6 +1,10 @@
 import type { Rect } from "../shared/contracts.js";
 import type { WebContents } from "electron";
 import { TargetNotConfident } from "./target-resolver.js";
+import {
+  chooseOcrScrollCandidateIndex,
+  computeOcrSearchRegion,
+} from "./ocr-scroll-region.js";
 
 // Private isolated JS world: keep one container reference without modifying Facebook DOM.
 const WORLD = 1001;
@@ -22,6 +26,8 @@ export async function advanceOcrSearch(
   goal?: number;
 }> {
   const progress = await contents.executeJavaScriptInIsolatedWorld(WORLD, [{ code: `(() => {
+    const chooseOcrScrollCandidateIndex = ${chooseOcrScrollCandidateIndex.toString()};
+    const computeOcrSearchRegion = ${computeOcrSearchRegion.toString()};
     const visible = el => {
       const r = el.getBoundingClientRect(), style = getComputedStyle(el);
       return r.width > 0 && r.height > 0 && r.bottom > 0 && r.top < innerHeight &&
@@ -38,22 +44,22 @@ export async function advanceOcrSearch(
         for (let el = modal.parentElement; el && el !== document.body && el !== root; el = el.parentElement)
           ancestors.push(el);
       }
-      const candidates = [scope, ...ancestors, ...scope.querySelectorAll('*')].filter(el =>
+      const elements = [scope, ...ancestors, ...scope.querySelectorAll('*')].filter(el =>
         visible(el) && el.clientHeight > 100 && el.scrollHeight > el.clientHeight + 1 &&
         /auto|scroll/.test(getComputedStyle(el).overflowY));
       const active = document.activeElement;
-      const focused = candidates.filter(el => active !== document.body && el.contains(active));
-      const pool = focused.length ? focused : candidates;
-      pool.sort((a,b) => {
-        const area = el => {
-          const r = el.getBoundingClientRect();
-          return Math.max(0, Math.min(innerHeight,r.bottom)-Math.max(0,r.top)) *
-            Math.max(0, Math.min(innerWidth,r.right)-Math.max(0,r.left));
+      const metrics = elements.map(el => {
+        const r = el.getBoundingClientRect();
+        return {
+          isModal: el === modal,
+          containsFocus: active !== document.body && el.contains(active),
+          visibleArea: Math.max(0, Math.min(innerHeight,r.bottom)-Math.max(0,r.top)) *
+            Math.max(0, Math.min(innerWidth,r.right)-Math.max(0,r.left)),
         };
-        return area(b)-area(a);
       });
+      const index = chooseOcrScrollCandidateIndex(metrics);
       // A modal with no scrollable content must never fall back to the page behind it.
-      const el = pool[0] || (!modal ? root : null);
+      const el = index !== null ? elements[index] : (!modal ? root : null);
       if (!el) return { blocked: true };
       const fraction = ${JSON.stringify(matchTo)} === 'top' ? 1/3 : ${JSON.stringify(matchTo)} === 'middle' ? 2/3 : 1;
       state = globalThis.__creatorOcrScroll = { el, modal, fraction,
@@ -64,16 +70,20 @@ export async function advanceOcrSearch(
     const before = el.scrollTop;
     const goal = Math.max(0, el.scrollHeight * state.fraction - el.clientHeight);
     const region = () => {
-      const r = el === document.scrollingElement
-        ? { left: 0, top: 0, right: innerWidth, bottom: innerHeight }
-        : el.getBoundingClientRect();
-      const left = Math.max(0,r.left), top = Math.max(0,r.top);
-      const right = Math.min(innerWidth,r.right);
-      // The fraction limits how far the scan advances, never which visible pixels can be OCR'd.
-      const bottom = Math.min(innerHeight,r.bottom);
-      return { x: Math.ceil(left*${zoom}), y: Math.ceil(top*${zoom}),
-        width: Math.max(0,Math.floor(right*${zoom})-Math.ceil(left*${zoom})),
-        height: Math.max(0,Math.floor(bottom*${zoom})-Math.ceil(top*${zoom})) };
+      const scrollBox = el.getBoundingClientRect();
+      // Modal OCR covers dialog chrome/footer (e.g. Publish) even when a nested
+      // composer pane is the scroll element. Fraction only limits scroll distance.
+      return computeOcrSearchRegion({
+        zoom: ${zoom},
+        viewportWidth: innerWidth,
+        viewportHeight: innerHeight,
+        modalBox: state.modal ? (() => {
+          const r = state.modal.getBoundingClientRect();
+          return { left: r.left, top: r.top, right: r.right, bottom: r.bottom };
+        })() : null,
+        scrollBox: { left: scrollBox.left, top: scrollBox.top, right: scrollBox.right, bottom: scrollBox.bottom },
+        scrollIsPageRoot: el === document.scrollingElement,
+      });
     };
     if (${recenterY !== undefined}) {
       const viewport = region();
