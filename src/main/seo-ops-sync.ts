@@ -68,6 +68,7 @@ import {
   parsePublishedScriptVersion,
 } from "../shared/script-version.js";
 import { resolveScriptReleaseState, type StoredScriptRelease } from "../shared/script-release-state.js";
+import { planActionTagReassignment } from "../shared/script-action-tag-reassign.js";
 
 export type SeoOpsConfig = {
   baseUrl: string;
@@ -1388,7 +1389,9 @@ export function createSeoOpsSyncService(options: {
           ? error
           : healthNote ||
             // Drop stale Invalid Step / incomplete / VIDEO_DEMO warning text once health is non-blocking.
-            (prev?.message && /Invalid Step|incomplete|VIDEO_DEMO:/i.test(prev.message) ? healthNote || undefined : prev?.message);
+            (prev?.message && /Invalid Step|incomplete|VIDEO_DEMO:|No Steps|Missing demo|script_video_demo_required/i.test(prev.message)
+              ? healthNote || undefined
+              : prev?.message);
       return {
         script_id: id,
         flow_id: l?.flow_id,
@@ -1445,15 +1448,46 @@ export function createSeoOpsSyncService(options: {
     const payload = imported.flowPayload;
     const scriptId = String(payload.id);
 
-    // Validate assets on disk before any local mutation.
+    // Ensure ROI assets exist locally before mutating Scripts. Download missing
+    // digests from SEO-OPS (Desktop profiles often lack historical targets/).
     const assets = Array.isArray(payload.assets) ? payload.assets : [];
+    const packageKey = String(release.package_key ?? payload.package_key ?? scriptId);
+    const version = String(release.version ?? payload.version ?? "");
     const missing: string[] = [];
     for (const asset of assets) {
       const a = asset as Record<string, unknown>;
       const rel = String(a.path ?? "");
       if (!rel) continue;
+      const absPath = path.join(assetDir, rel);
       try {
-        await access(path.join(assetDir, rel));
+        await access(absPath);
+        continue;
+      } catch {
+        // try remote download below
+      }
+      if (!packageKey || !version) {
+        missing.push(rel);
+        continue;
+      }
+      try {
+        const dl = await adminApi(
+          `/scripts/asset?package_key=${encodeURIComponent(packageKey)}&version=${encodeURIComponent(version)}&asset_path=${encodeURIComponent(rel)}`,
+        );
+        if (dl && typeof (dl as { asset_base64?: unknown }).asset_base64 === "string") {
+          const buf = Buffer.from(String((dl as { asset_base64: string }).asset_base64), "base64");
+          const expectedSha = String(a.sha256 ?? "").toLowerCase();
+          if (expectedSha) {
+            const got = createHash("sha256").update(buf).digest("hex");
+            if (got !== expectedSha) {
+              missing.push(rel);
+              continue;
+            }
+          }
+          await mkdir(path.dirname(absPath), { recursive: true });
+          await writeFile(absPath, buf);
+        } else {
+          missing.push(rel);
+        }
       } catch {
         missing.push(rel);
       }
@@ -1850,9 +1884,15 @@ export function createSeoOpsSyncService(options: {
     meta.last_result = results.some(r => !r.ok) ? "partial"
       : results.some(r => r.action === "publish_blocked") ? "blocked" : "ok";
     saveMeta(meta);
-    const reports = await fetchReports();
-    await fetchActionTags();
-    await fetchScriptRequests();
+    // Reports/tags refresh must not erase a completed Script sync result.
+    let reports: unknown[] = [];
+    try {
+      reports = await fetchReports();
+    } catch {
+      reports = [];
+    }
+    try { await fetchActionTags(); } catch { /* ignore */ }
+    try { await fetchScriptRequests(); } catch { /* ignore */ }
     const rows = await refreshStatusRows({ force: true });
     return { plan, results, rows, summary: {
       published: results.filter(r => r.action === "push" && r.ok).length,
@@ -1909,62 +1949,29 @@ export function createSeoOpsSyncService(options: {
       // Omit video_demo unless locally attached so Backend preserves existing Demo association.
       if (!manifestForSync.video_demo) delete manifestForSync.video_demo;
 
-      let syncRes = await client.sync({
-        mode: "normal",
-        package_key: local.package_key,
-        name: flow.name,
-        schema_version: 1,
-        runtime_compatibility: local.publish_body.runtime_compatibility,
-        dependencies: [],
-        manifest: manifestForSync,
-      });
+      let syncRes: Awaited<ReturnType<typeof client.sync>>;
+      try {
+        syncRes = await client.sync({
+          mode: "normal",
+          package_key: local.package_key,
+          name: flow.name,
+          schema_version: 1,
+          runtime_compatibility: local.publish_body.runtime_compatibility,
+          dependencies: [],
+          manifest: manifestForSync,
+        });
+      } catch (error) {
+        // readSeoOpsJson throws on HTML/SPA 404 — treat as missing unified sync endpoint.
+        const technical = String((error as Error).message || error);
+        if (/status=404/i.test(technical)) {
+          return await runSyncAll({ flowId });
+        }
+        throw error;
+      }
 
-      // Brand-new local Script not yet in Backend registry: create initial v1 via /scripts/publish.
-      if (!syncRes.ok && syncRes.httpStatus === 404 && syncRes.errors?.includes("script_not_found")) {
-        const published = await client.publish(local.publish_body) as {
-          httpStatus: number;
-          ok?: boolean;
-          outcome?: string;
-          errors?: string[];
-          release?: { package_key?: string; version?: string; content_digest?: string };
-        };
-        const pubOk = published.httpStatus < 300 && published.ok !== false;
-        if (!pubOk) {
-          const msg = mapSeoOpsApiErrors(published.errors, `HTTP ${published.httpStatus}`);
-          const meta = loadMeta();
-          meta.rows[flow.id] = {
-            ...(meta.rows[flow.id] ?? { script_id: flow.id, package_key: local.package_key, name: flow.name, status: "sync_error" }),
-            status: "sync_error",
-            last_sync_at: new Date().toISOString(),
-            last_result: "push_error",
-            message: msg,
-          };
-          saveMeta(meta);
-          return {
-            plan: { push_to_remote: [toPlanRow(local)], pull_to_local: [], skip: [], conflicts: [] },
-            results: [{ script_id: flow.id, action: "push", ok: false, message: msg }],
-            rows: await refreshStatusRows({ force: true }).catch(() => []),
-            summary: { published: 0, downloaded: 0, unchanged: 0, blocked: 0, failed: 1, reports_downloaded: 0 },
-          };
-        }
-        const assetRes = await uploadReleaseAssets(client, local.package_key, local.version, local.publish_body.manifest.assets);
-        if (!assetRes.ok) {
-          return {
-            plan: { push_to_remote: [toPlanRow(local)], pull_to_local: [], skip: [], conflicts: [] },
-            results: [{ script_id: flow.id, action: "push", ok: false, message: assetRes.message }],
-            rows: await refreshStatusRows({ force: true }).catch(() => []),
-            summary: { published: 0, downloaded: 0, unchanged: 0, blocked: 0, failed: 1, reports_downloaded: 0 },
-          };
-        }
-        completeRelease(local);
-        store.setSetting(`seoOpsPackageKey:${flow.id}`, local.package_key);
-        const rows = await refreshStatusRows({ force: true });
-        return {
-          plan: { push_to_remote: [toPlanRow(local)], pull_to_local: [], skip: [], conflicts: [] },
-          results: [{ script_id: flow.id, action: "push", ok: true, message: "synced" }],
-          rows,
-          summary: { published: 1, downloaded: 0, unchanged: 0, blocked: 0, failed: 0, reports_downloaded: 0 },
-        };
+      // JSON 404 (script_not_found or missing route) also uses catalog/publish path.
+      if (!syncRes.ok && syncRes.httpStatus === 404) {
+        return await runSyncAll({ flowId });
       }
 
       if (!syncRes.ok) {
@@ -2207,6 +2214,74 @@ export function createSeoOpsSyncService(options: {
     }
   }
 
+  function reassignActionTag(input: {
+    flowId: string;
+    destinationTagKey: string;
+    destinationTagId?: number;
+    allowDestinationSiblings?: boolean;
+  }) {
+    let activeScriptsByTag: Record<string, string> = {};
+    try {
+      activeScriptsByTag = JSON.parse(store.setting("activeScriptsByTag") || "{}") as Record<string, string>;
+    } catch {
+      activeScriptsByTag = {};
+    }
+    const plan = planActionTagReassignment({
+      flow: store.flows().find((f) => f.id === input.flowId),
+      tags: getEffectiveActionTags(),
+      flows: store.flows(),
+      activeScriptsByTag,
+      destinationTagKey: input.destinationTagKey,
+      destinationTagId: input.destinationTagId,
+      allowDestinationSiblings: input.allowDestinationSiblings,
+    });
+    if (!plan.ok) return { ok: false as const, conflict: plan.conflict };
+
+    store.db.exec("BEGIN IMMEDIATE");
+    try {
+      const flow = store.flows().find((f) => f.id === input.flowId);
+      if (!flow) throw new Error("FLOW_NOT_FOUND");
+      const previousTagKey = flow.actionTagKey;
+      store.updateFlowMeta(flow.id, {
+        actionTagKey: plan.nextTagKey,
+        actionTagId: plan.nextTagId,
+      });
+      // Drop Active binding for the old tag if this Script held it. Do not auto-activate destination.
+      if (previousTagKey && activeScriptsByTag[previousTagKey] === flow.id) {
+        delete activeScriptsByTag[previousTagKey];
+        store.setSetting("activeScriptsByTag", JSON.stringify(activeScriptsByTag));
+      }
+      // Force Sync status to reflect local change vs remote package (same script_id/package_key).
+      store.db.prepare("DELETE FROM settings WHERE key = ?").run(`seoOpsPublishedDigest:${flow.id}`);
+      store.db.prepare("DELETE FROM settings WHERE key = ?").run(`seoOpsPublishedExecutionDigest:${flow.id}`);
+      const meta = loadMeta();
+      meta.rows[flow.id] = {
+        ...(meta.rows[flow.id] ?? {
+          script_id: flow.id,
+          package_key: flow.id,
+          name: flow.name,
+          status: "local_changes",
+        }),
+        status: "local_changes",
+        last_result: "action_tag_reassigned",
+        message: `Action Tag → ${plan.nextTagKey}; cần Sync để cập nhật SEO-OPS`,
+        incomplete: false,
+      };
+      saveMeta(meta);
+      store.db.exec("COMMIT");
+    } catch (error) {
+      store.db.exec("ROLLBACK");
+      throw error;
+    }
+    statusRowsCached = null;
+    statusRowsCachedAt = 0;
+    return {
+      ok: true as const,
+      plan,
+      flow: store.flows().find((f) => f.id === input.flowId),
+    };
+  }
+
   return {
     config,
     setConfig,
@@ -2217,6 +2292,7 @@ export function createSeoOpsSyncService(options: {
     syncAll,
     syncFlowNormal,
     syncNewVersion,
+    reassignActionTag,
     loadMeta,
     backupNow,
     markBackupDirty,

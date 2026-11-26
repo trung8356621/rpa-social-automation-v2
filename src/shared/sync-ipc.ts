@@ -61,6 +61,9 @@ export function syncIpcDiagnostic(error: unknown): SyncIpcDiagnostic {
     return { code: "AUTHORIZATION_FAILURE", category: "authorization", message: "Tài khoản không có quyền sử dụng Social Automation.", technicalMessage };
   if (/unauthenticated|unauthorized|\b401\b|category=authentication/i.test(technicalMessage))
     return { code: "AUTHENTICATION_FAILURE", category: "authentication", message: "Phiên đăng nhập SEO-OPS không hợp lệ hoặc không đủ quyền.", technicalMessage };
+  // HTML/SPA 404 on an API path is an unexpected transport response, not a missing Script release.
+  if (/SEO_OPS_HTTP:.*status=404.*content-type=text\/html/i.test(technicalMessage))
+    return { code: "API_UNEXPECTED_RESPONSE", category: "sync", message: "SEO-OPS trả về trang HTML/redirect thay vì dữ liệu API JSON.", technicalMessage };
   if (/category=not_found|\b404\b|not_found|package_not_found|script_not_found/i.test(technicalMessage))
     return { code: "NOT_FOUND", category: "not_found", message: "Không tìm thấy Script/release trên SEO-OPS.", technicalMessage };
   if (/category=conflict|\b409\b|version_digest_conflict|script_version_sequence_conflict|package_kind_conflict/i.test(technicalMessage))

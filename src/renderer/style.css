@@ -1604,12 +1604,12 @@ body[data-panel="shell"] .app-shell > header > .environment { flex-shrink: 0; }
 .backup-result li + li { margin-top: 8px; }
 .backup-result details code { display: block; margin-top: 5px; overflow-wrap: anywhere; }
 .scenario-groups { display: flex; flex-direction: column; gap: 14px; }
-.scenario-folder { border: 1px solid #32475f; border-radius: 8px; background: #162639; }
+.scenario-folder { border: 1px solid #32475f; border-radius: 8px; background: #162639; overflow: visible; }
 .scenario-folder-heading { display: flex; align-items: center; justify-content: space-between; padding: 4px 10px; background: #1c3045; border-radius: 8px; }
 .scenario-folder-heading > button { flex: 1; text-align: left; background: transparent; border: 0; }
 .scenario-folder-heading small, .scenario-item > small { color: #9bb0c7; white-space: nowrap; }
-.scenario-items { padding: 5px 14px; }
-.scenario-item { display: flex; align-items: center; gap: 14px; padding: 8px 0; border-bottom: 1px solid #2a3b52; }
+.scenario-items { padding: 5px 14px; overflow: visible; }
+.scenario-item { display: flex; align-items: center; gap: 14px; padding: 8px 0; border-bottom: 1px solid #2a3b52; overflow: visible; position: relative; }
 .scenario-item:last-child { border-bottom: 0; }
 .scenario-title-cell { flex: 1; min-width: 0; display: flex; align-items: center; gap: 8px; }
 .scenario-title-cell .scenario-title { min-width: 0; max-width: fit-content; text-align: left; border: 0; background: transparent; padding: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 14px; }
@@ -1721,7 +1721,7 @@ body[data-panel="shell"] .app-shell > header > .environment { flex-shrink: 0; }
   border-radius: 8px;
   background: #141d28;
   margin-bottom: 14px;
-  overflow: hidden;
+  overflow: visible;
 }
 .tag-folder-heading {
   display: flex;
@@ -1801,12 +1801,19 @@ body[data-panel="shell"] .app-shell > header > .environment { flex-shrink: 0; }
 .scenario-item.is-disabled {
   opacity: 0.72;
 }
+.sync-menu-wrap {
+  position: relative;
+  z-index: 40;
+  flex-shrink: 0;
+}
 .sync-dropdown-menu {
   position: absolute;
-  top: calc(100% + 4px);
+  top: auto;
+  bottom: calc(100% + 4px);
   right: 0;
-  z-index: 30;
-  min-width: 155px;
+  z-index: 50;
+  min-width: 168px;
+  max-width: min(240px, 70vw);
   display: grid;
   gap: 2px;
   padding: 4px;
@@ -1814,12 +1821,14 @@ body[data-panel="shell"] .app-shell > header > .environment { flex-shrink: 0; }
   border: 1px solid #334155;
   background: #161b22;
   box-shadow: 0 8px 20px rgba(0, 0, 0, 0.45);
+  overflow: visible;
 }
 .sync-dropdown-menu button {
   text-align: left;
   width: 100%;
   padding: 6px 10px;
   font-size: 12px;
+  white-space: nowrap;
 }
 .script-badge.badge-missing-demo {
   background: #3d2b14;

@@ -13,9 +13,15 @@ import { ScriptHealthPanel } from "./script-health-panel";
 
 export function formatScriptSyncLabel(syncRow?: ScriptSyncRow): "Synced" | "Sync failed" | "Not synced" {
   if (syncRow?.status === "synced") return "Synced";
-  if (syncRow?.status === "sync_error" || syncRow?.status === "conflict" || syncRow?.status === "incomplete_assets") {
+  if (
+    syncRow?.status === "sync_error" ||
+    syncRow?.status === "conflict" ||
+    syncRow?.status === "incomplete_assets" ||
+    syncRow?.status === "missing_demo"
+  ) {
     return "Sync failed";
   }
+  // local_only / local_changes / remote_* / pending remain Not synced until digests match.
   return "Not synced";
 }
 
@@ -112,9 +118,12 @@ export function ScenariosPage({ state, name, setName, locked, open, create, quic
     | { kind: "delete-blocked"; flow: Flow; tagKey?: string }
     | { kind: "confirm-delete"; flow: Flow }
     | { kind: "confirm-new-version"; flow: Flow }
+    | { kind: "change-action-tag"; flow: Flow }
   >();
   const [scriptNameInput, setScriptNameInput] = useState("");
   const [selectedTagKey, setSelectedTagKey] = useState("");
+  const [reassignTagKey, setReassignTagKey] = useState("");
+  const [reassignAllowSiblings, setReassignAllowSiblings] = useState(false);
   const [collapsedTags, setCollapsedTags] = useState<Record<string, boolean>>({});
   const [working, setWorking] = useState(false);
   const [error, setError] = useState("");
@@ -296,6 +305,47 @@ export function ScenariosPage({ state, name, setName, locked, open, create, quic
     } finally {
       syncInFlightRef.current = false;
       setSyncingFlowId(null);
+      setWorking(false);
+    }
+  }
+
+  async function handleReassignActionTag(flow: Flow) {
+    if (disabled || !invoke || !reassignTagKey.trim()) return;
+    setWorking(true);
+    setError("");
+    setSyncStatusMessage("");
+    try {
+      const res = await invoke<{
+        ok: boolean;
+        conflict?: { code: string; message: string };
+        plan?: { nextTagKey: string; warnings: string[]; requiresSync: true };
+        state?: State;
+      }>({
+        type: "reassignScriptActionTag",
+        flowId: flow.id,
+        destinationTagKey: reassignTagKey,
+        destinationTagId: actionTags.find((t) => t.tag_key === reassignTagKey)?.id,
+        allowDestinationSiblings: reassignAllowSiblings,
+      });
+      if (res.state && onState) onState(res.state);
+      if (!res.ok) {
+        setError(res.conflict?.message || "Không đổi được Action Tag.");
+        if (res.conflict?.code === "DESTINATION_HAS_SCRIPTS") {
+          setReassignAllowSiblings(true);
+        }
+        return;
+      }
+      const refreshed = await invoke<{ rows: ScriptSyncRow[] }>({ type: "seoOpsSyncStatus" });
+      setSyncRows(refreshed.rows);
+      const warn = (res.plan?.warnings || []).join(" ");
+      setSyncStatusMessage(
+        `Đã đổi Action Tag → ${res.plan?.nextTagKey}. Cần Sync để cập nhật SEO-OPS.` +
+          (warn ? ` ${warn}` : ""),
+      );
+      setDialog(undefined);
+    } catch (err) {
+      setError(`Đổi Action Tag thất bại: ${String((err as Error).message || err)}`);
+    } finally {
       setWorking(false);
     }
   }
@@ -619,6 +669,19 @@ export function ScenariosPage({ state, name, setName, locked, open, create, quic
                           >
                             Sync New Version
                           </button>
+                          <button
+                            type="button"
+                            role="menuitem"
+                            disabled={disabled}
+                            onClick={() => {
+                              setOpenSyncMenuFlowId(null);
+                              setReassignTagKey(flow.actionTagKey || actionTags[0]?.tag_key || "");
+                              setReassignAllowSiblings(false);
+                              setDialog({ kind: "change-action-tag", flow });
+                            }}
+                          >
+                            Change Action Tag
+                          </button>
                         </div>
                       )}
                     </div>
@@ -747,6 +810,19 @@ export function ScenariosPage({ state, name, setName, locked, open, create, quic
                           >
                             Sync New Version
                           </button>
+                          <button
+                            type="button"
+                            role="menuitem"
+                            disabled={disabled}
+                            onClick={() => {
+                              setOpenSyncMenuFlowId(null);
+                              setReassignTagKey(flow.actionTagKey || actionTags[0]?.tag_key || "");
+                              setReassignAllowSiblings(false);
+                              setDialog({ kind: "change-action-tag", flow });
+                            }}
+                          >
+                            Change Action Tag
+                          </button>
                         </div>
                       )}
                     </div>
@@ -857,6 +933,69 @@ export function ScenariosPage({ state, name, setName, locked, open, create, quic
             onClick={submitCreateScript}
           >
             Tạo Script
+          </button>
+        </div>
+      </UiPopover>
+    )}
+
+    {dialog?.kind === "change-action-tag" && (
+      <UiPopover
+        variant="modal"
+        label="Change Action Tag"
+        className="unsaved-confirm"
+        close={() => { if (!working) setDialog(undefined); }}
+      >
+        <div className="popover-heading">
+          <b>Change Action Tag</b>
+          <button disabled={working} onClick={() => setDialog(undefined)}>×</button>
+        </div>
+        <div style={{ display: "grid", gap: 12, padding: "8px 0" }}>
+          <p style={{ margin: 0 }}>
+            Script <strong>“{dialog.flow.name}”</strong> giữ nguyên ID, Steps, ROI và lịch sử.
+            Chỉ đổi Action Tag — không đổi tên Script.
+          </p>
+          <div>
+            <small style={{ color: "#8c9ba8" }}>Tag hiện tại</small>
+            <div><code>{dialog.flow.actionTagKey || "(chưa gắn)"}</code></div>
+          </div>
+          <label>
+            Action Tag đích
+            <select
+              disabled={working || actionTags.length === 0}
+              value={reassignTagKey}
+              onChange={(e) => setReassignTagKey(e.target.value)}
+              style={{ width: "100%", marginTop: 4 }}
+            >
+              {actionTags.map((t) => (
+                <option key={t.tag_key} value={t.tag_key}>
+                  {t.tag_key}{t.name ? ` (${t.name})` : ""}
+                </option>
+              ))}
+            </select>
+          </label>
+          {reassignAllowSiblings && (
+            <label style={{ display: "flex", gap: 8, alignItems: "flex-start" }}>
+              <input
+                type="checkbox"
+                checked={reassignAllowSiblings}
+                disabled={working}
+                onChange={(e) => setReassignAllowSiblings(e.target.checked)}
+              />
+              <span>Tag đích đã có Script khác — vẫn gắn thêm (không ghi đè Script hiện có).</span>
+            </label>
+          )}
+          <p className="hint" style={{ margin: 0 }}>
+            Sau khi đổi tag, trạng thái Sync chuyển Pending/Not synced. Hãy Sync thủ công — không tự publish.
+          </p>
+        </div>
+        <div className="popover-footer">
+          <button disabled={working} onClick={() => setDialog(undefined)}>Hủy</button>
+          <button
+            className="primary"
+            disabled={working || !reassignTagKey || reassignTagKey === dialog.flow.actionTagKey}
+            onClick={() => void handleReassignActionTag(dialog.flow)}
+          >
+            Đổi Action Tag
           </button>
         </div>
       </UiPopover>

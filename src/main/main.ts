@@ -1511,6 +1511,16 @@ async function boot() {
         const res = await seoOpsSync.syncNewVersion(command.flowId);
         return { ...res, state: state() };
       }
+      case "reassignScriptActionTag": {
+        isIdle();
+        const res = seoOpsSync.reassignActionTag({
+          flowId: command.flowId,
+          destinationTagKey: command.destinationTagKey,
+          destinationTagId: command.destinationTagId,
+          allowDestinationSiblings: command.allowDestinationSiblings,
+        });
+        return { ...res, state: state() };
+      }
       case "setActiveScript": {
         isIdle();
         let current: Record<string, string> = {};

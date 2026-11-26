@@ -447,6 +447,13 @@ export type Command =
   | { type: "seoOpsSyncAll" }
   | { type: "seoOpsSyncFlow"; flowId: string }
   | { type: "seoOpsSyncNewVersion"; flowId: string }
+  | {
+      type: "reassignScriptActionTag";
+      flowId: string;
+      destinationTagKey: string;
+      destinationTagId?: number;
+      allowDestinationSiblings?: boolean;
+    }
   | { type: "setActiveScript"; tagKey: string; flowId: string }
   | { type: "seoOpsBackupInfo" }
   | { type: "seoOpsRestore"; confirmed: boolean }
