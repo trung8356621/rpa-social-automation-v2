@@ -6,6 +6,7 @@ import { copyFile, mkdir } from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import type { OcrResult, OcrSegment, Rect } from "../shared/contracts.js";
+import { chipAlreadyCovered, findChromaticButtonChips } from "./ocr-button-chips.js";
 
 const require = createRequire(import.meta.url);
 const { createWorker, OEM, PSM } = Tesseract;
@@ -120,6 +121,49 @@ export class LocalOcr implements OcrEngine {
       height = metadata.height!;
     if (!width || !height || width * height > 1024 * 560)
       throw new Error("Ảnh OCR vượt giới hạn ROI/viewport.");
+    const primary = await this.readRegionOnce(image, width, height);
+    // Full-viewport SPARSE_TEXT misses white labels on solid chromatic buttons
+    // (e.g. Publish). Tight chip crops restore them without changing Match To.
+    const chips = await findChromaticButtonChips(image);
+    if (!chips.length) return primary;
+    const segments = [...primary.segments];
+    const texts = primary.text ? [primary.text] : [];
+    const confidences = [primary.confidence];
+    for (const chip of chips) {
+      if (chipAlreadyCovered(chip, primary.segments)) continue;
+      const crop = await sharp(image)
+        .extract({ left: chip.x, top: chip.y, width: chip.width, height: chip.height })
+        .png()
+        .toBuffer();
+      const chipOcr = await this.readRegionOnce(crop, chip.width, chip.height);
+      if (!chipOcr.segments.length) continue;
+      confidences.push(chipOcr.confidence);
+      if (chipOcr.text) texts.push(chipOcr.text);
+      for (const segment of chipOcr.segments) {
+        segments.push({
+          ...segment,
+          id: String(segments.length),
+          bbox: {
+            ...segment.bbox,
+            x: segment.bbox.x + chip.x,
+            y: segment.bbox.y + chip.y,
+          },
+        });
+      }
+    }
+    if (segments.length === primary.segments.length) return primary;
+    return {
+      text: texts.join("\n"),
+      confidence: confidences.reduce((a, b) => a + b, 0) / confidences.length,
+      segments,
+      language: "vie+eng",
+    };
+  }
+  private async readRegionOnce(
+    image: Buffer,
+    width: number,
+    height: number,
+  ): Promise<OcrResult> {
     const scale = 2;
     // Keep grayscale after upscale, but do not normalize: sharp.normalize() can
     // crush low-contrast gray placeholder text on light UI chips (Facebook).

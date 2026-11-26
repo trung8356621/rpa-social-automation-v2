@@ -545,7 +545,13 @@ export class Runtime {
                 logMainEvent(this.runDir, "ocr-pass", { ...execution, outcome: error.outcome, captureId: current.id,
                   context: error.resolution?.context, attempts: error.resolution?.attempts, searchRegion, recovery: error.recovery });
                 if (Date.now() >= deadline) throw new TargetNotConfident("TIME_LIMIT: hết thời gian quét OCR.", candidateTrace ?? lastSearchTrace);
-                if (reached || scrolls >= 40) throw new TargetNotConfident("SCROLL_LIMIT: hết giới hạn quét OCR.", candidateTrace ?? lastSearchTrace);
+                if (reached || scrolls >= 40) {
+                  // Destination reached with OCR miss ≠ scroll budget exhaustion.
+                  const reason = reached && scrolls < 40
+                    ? "OCR_TARGET_MISSING_AT_DESTINATION: đã tới đích Match To nhưng OCR không nhận ra chữ mục tiêu."
+                    : "SCROLL_LIMIT: hết giới hạn quét OCR.";
+                  throw new TargetNotConfident(reason, candidateTrace ?? lastSearchTrace);
+                }
                 // Do not scan past a recognized edge target. Move it into a safe area,
                 // then use a fresh screenshot/OCR/context result, at most twice.
                 if (error.recovery || recoveryExpected) {
@@ -602,7 +608,10 @@ export class Runtime {
                   current = await this.browser.capture();
                   continue;
                 }
-                throw new TargetNotConfident(`${progress.reason ?? "SCROLL_STALLED"}: lastOCR=${lastSearchTrace?.ocrOutcome ?? "NOT_FOUND"}; bestCandidate=${candidateTrace?.ocrOutcome ?? "NOT_FOUND"}@OCR${candidatePass}; chưa gửi action.`, candidateTrace ?? lastSearchTrace);
+                const stopCode = progress.reason === "DESTINATION_REACHED"
+                  ? "OCR_TARGET_MISSING_AT_DESTINATION"
+                  : (progress.reason ?? "SCROLL_STALLED");
+                throw new TargetNotConfident(`${stopCode}: lastOCR=${lastSearchTrace?.ocrOutcome ?? "NOT_FOUND"}; bestCandidate=${candidateTrace?.ocrOutcome ?? "NOT_FOUND"}@OCR${candidatePass}; chưa gửi action.`, candidateTrace ?? lastSearchTrace);
               }
             }
             await new Promise((r) => setTimeout(r, matchTo ? 250 : 200));
