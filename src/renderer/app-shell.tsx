@@ -8,6 +8,7 @@ import {
   formatActionTagsRefreshStatus,
   refreshActionTagsFromSeoOps,
 } from "./action-tags-refresh";
+import { RecoveryHandlerRequests } from "./recovery-handler-requests";
 import { SeoOpsSyncControls, scriptVersionLabel, type SeoOpsSessionState } from "./seo-ops-panel";
 import { ScriptHealthPanel } from "./script-health-panel";
 
@@ -466,6 +467,8 @@ export function ScenariosPage({ state, name, setName, locked, open, create, quic
         />
       )}
     </div>
+
+    {invoke && <RecoveryHandlerRequests invoke={invoke} onState={onState} locked={disabled} />}
 
     {backupResult && <section className={`backup-result ${backupResult.status}`} role={backupResult.status === "incomplete" || backupResult.status === "failed" ? "alert" : "status"}>
       <b>{backupResult.status === "working" ? "Đang export"

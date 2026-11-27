@@ -1849,6 +1849,19 @@ async function boot() {
         }
         return state();
       }
+      case "listRecoveryHandlerRequests":
+        return seoOpsSync.listRecoveryHandlerRequests();
+      case "claimRecoveryHandlerRequest":
+        isIdle();
+        return seoOpsSync.claimRecoveryHandlerRequest(command.requestUuid);
+      case "openRecoveryHandlerDraft": {
+        isIdle();
+        const flow = await seoOpsSync.openRecoveryHandlerDraft(command.requestUuid);
+        store.setSetting("currentFlow", flow.id);
+        browser.setZoom(flow.zoom);
+        overlays.page = "creator";
+        return state();
+      }
       case "createScriptFromRequest": {
         isIdle();
         const flow = await seoOpsSync.createScriptFromRequest(command.requestId);

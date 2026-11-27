@@ -908,6 +908,25 @@ export function createSeoOpsSyncService(options: {
     return scriptRequestsInFlight;
   }
 
+  async function listRecoveryHandlerRequests() {
+    const body = await adminApi("/recovery-handler-requests");
+    return body.requests as RecoveryHandlerRequest[];
+  }
+
+  async function claimRecoveryHandlerRequest(requestUuid: string) {
+    await adminApi(`/recovery-handler-requests/${encodeURIComponent(requestUuid)}/claim`, { method: "POST" });
+  }
+
+  async function openRecoveryHandlerDraft(requestUuid: string) {
+    const request = (await listRecoveryHandlerRequests()).find((row) => row.request_uuid === requestUuid);
+    if (!request?.error_tag || request.status !== "developing") {
+      throw new Error("Claim the Recovery Handler request before opening a draft.");
+    }
+    const id = `recovery-${request.request_uuid}`;
+    return store.flows().find((flow) => flow.id === id)
+      ?? store.newFlow(`Recovery Handler · ${request.error_tag.name}`, 1, { id, resultType: "status" });
+  }
+
   async function createScriptFromRequest(requestId: string): Promise<Flow> {
     const requests = getCachedScriptRequests();
     const req = requests.find((r) => r.request_id === requestId);
@@ -2312,6 +2331,9 @@ export function createSeoOpsSyncService(options: {
     getEffectiveActionTags,
     fetchScriptRequests,
     getCachedScriptRequests,
+    listRecoveryHandlerRequests,
+    claimRecoveryHandlerRequest,
+    openRecoveryHandlerDraft,
     createScriptFromRequest,
     metadataGateStats: () => metadataGate.stats(),
     resetMetadataGateForTests: () => {
@@ -2321,5 +2343,13 @@ export function createSeoOpsSyncService(options: {
     },
   };
 }
+
+export type RecoveryHandlerRequest = {
+  request_uuid: string;
+  status: string;
+  notes: string | null;
+  error_tag: { id: string; name: string; platform: string; site_scope: string | null } | null;
+  created_at: string | null;
+};
 
 export type SeoOpsSyncService = ReturnType<typeof createSeoOpsSyncService>;

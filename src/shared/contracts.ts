@@ -510,6 +510,9 @@ export type Command =
       pathInputValues?: Record<string, string>;
       startUrl?: string;
     }
+  | { type: "listRecoveryHandlerRequests" }
+  | { type: "claimRecoveryHandlerRequest"; requestUuid: string }
+  | { type: "openRecoveryHandlerDraft"; requestUuid: string }
   | { type: "createScriptFromRequest"; requestId: string }
   | { type: "seoOpsSyncActionTags" }
   | { type: "seoOpsGetActionTags" }
