@@ -1,0 +1,254 @@
+{
+  "file": ".local/qa-profile-facebook-sandbox/captures/d99eb08f-5a92-45bf-a464-d86fd8bb6574.png",
+  "full": {
+    "label": "full_viewport",
+    "textPreview": "Create post\n\n2 Select groups (1)\n\n[ ] Post anonymously\n\n| QA test post 2026-11-26 09:02|\n\n29 / 10000\n\nAdd to your post\n\n(2ÿ Photo/Video\n\nAR, Tag People\n\n® Feeling/Activity\n\n© Check In\n\n°+ More Options",
+    "confidence": 83,
+    "segmentCount": 60,
+    "publishCandidates": [],
+    "publishish": [
+      {
+        "text": "Create post",
+        "kind": "line",
+        "confidence": 89,
+        "bbox": {
+          "x": 232,
+          "y": 42,
+          "width": 87,
+          "height": 17
+        }
+      },
+      {
+        "text": "post",
+        "kind": "word",
+        "confidence": 96,
+        "bbox": {
+          "x": 286,
+          "y": 42,
+          "width": 33,
+          "height": 17
+        }
+      },
+      {
+        "text": "[ ] Post anonymously",
+        "kind": "line",
+        "confidence": 55,
+        "bbox": {
+          "x": 396,
+          "y": 101,
+          "width": 143,
+          "height": 20
+        }
+      },
+      {
+        "text": "Post",
+        "kind": "word",
+        "confidence": 96,
+        "bbox": {
+          "x": 424,
+          "y": 105,
+          "width": 26,
+          "height": 11
+        }
+      },
+      {
+        "text": "| QA test post 2026-11-26 09:02|",
+        "kind": "line",
+        "confidence": 85,
+        "bbox": {
+          "x": 236,
+          "y": 155,
+          "width": 226,
+          "height": 22
+        }
+      },
+      {
+        "text": "post",
+        "kind": "word",
+        "confidence": 97,
+        "bbox": {
+          "x": 302,
+          "y": 162,
+          "width": 30,
+          "height": 15
+        }
+      },
+      {
+        "text": "Add to your post",
+        "kind": "line",
+        "confidence": 95,
+        "bbox": {
+          "x": 244,
+          "y": 303,
+          "width": 112,
+          "height": 14
+        }
+      },
+      {
+        "text": "post",
+        "kind": "word",
+        "confidence": 96,
+        "bbox": {
+          "x": 328,
+          "y": 304,
+          "width": 28,
+          "height": 13
+        }
+      }
+    ]
+  },
+  "crops": [
+    {
+      "label": "button_tight",
+      "textPreview": "",
+      "confidence": 0,
+      "segmentCount": 0,
+      "publishCandidates": [],
+      "publishish": []
+    },
+    {
+      "label": "button_pad",
+      "textPreview": "",
+      "confidence": 0,
+      "segmentCount": 0,
+      "publishCandidates": [],
+      "publishish": []
+    },
+    {
+      "label": "footer_row",
+      "textPreview": "(@ Mention\n\n® Emoji\n\nLit Poll\n\nDraft saves automatically",
+      "confidence": 78,
+      "segmentCount": 13,
+      "publishCandidates": [],
+      "publishish": []
+    },
+    {
+      "label": "modal_lower",
+      "textPreview": "Add to your post\n\n(2ÿ Photo/Video\n\nAR, Tag People\n\n© Check In\n\n°+ More Options\n\n(@ Mention\n\nLit Poll\n\n® Emoji\n\nDraft saves automatically",
+      "confidence": 80,
+      "segmentCount": 33,
+      "publishCandidates": [],
+      "publishish": [
+        {
+          "text": "Add to your post",
+          "kind": "line",
+          "confidence": 95,
+          "bbox": {
+            "x": 244,
+            "y": 303,
+            "width": 112,
+            "height": 14
+          }
+        },
+        {
+          "text": "post",
+          "kind": "word",
+          "confidence": 96,
+          "bbox": {
+            "x": 328,
+            "y": 304,
+            "width": 28,
+            "height": 13
+          }
+        }
+      ]
+    },
+    {
+      "label": "search_modal_est",
+      "textPreview": "Create post\n\n2 Select groups (1)\n\n[ ] Post anonymously\n\n| QA test post 2026-11-26 09:02|\n\n29 / 10000\n\nAdd to your post\n\n(2ÿ Photo/Video\n\nAR, Tag People\n\n® Feeling/Activity\n\n© Check In\n\n°+ More Options",
+      "confidence": 83,
+      "segmentCount": 60,
+      "publishCandidates": [],
+      "publishish": [
+        {
+          "text": "Create post",
+          "kind": "line",
+          "confidence": 92,
+          "bbox": {
+            "x": 232,
+            "y": 42,
+            "width": 87,
+            "height": 17
+          }
+        },
+        {
+          "text": "post",
+          "kind": "word",
+          "confidence": 96,
+          "bbox": {
+            "x": 286,
+            "y": 42,
+            "width": 33,
+            "height": 17
+          }
+        },
+        {
+          "text": "[ ] Post anonymously",
+          "kind": "line",
+          "confidence": 55,
+          "bbox": {
+            "x": 396,
+            "y": 101,
+            "width": 143,
+            "height": 20
+          }
+        },
+        {
+          "text": "Post",
+          "kind": "word",
+          "confidence": 96,
+          "bbox": {
+            "x": 424,
+            "y": 105,
+            "width": 26,
+            "height": 11
+          }
+        },
+        {
+          "text": "| QA test post 2026-11-26 09:02|",
+          "kind": "line",
+          "confidence": 85,
+          "bbox": {
+            "x": 236,
+            "y": 155,
+            "width": 226,
+            "height": 22
+          }
+        },
+        {
+          "text": "post",
+          "kind": "word",
+          "confidence": 97,
+          "bbox": {
+            "x": 302,
+            "y": 162,
+            "width": 30,
+            "height": 15
+          }
+        },
+        {
+          "text": "Add to your post",
+          "kind": "line",
+          "confidence": 95,
+          "bbox": {
+            "x": 244,
+            "y": 303,
+            "width": 112,
+            "height": 14
+          }
+        },
+        {
+          "text": "post",
+          "kind": "word",
+          "confidence": 96,
+          "bbox": {
+            "x": 328,
+            "y": 304,
+            "width": 28,
+            "height": 13
+          }
+        }
+      ]
+    }
+  ]
+}

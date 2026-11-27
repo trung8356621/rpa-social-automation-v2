@@ -1,0 +1,411 @@
+[
+  {
+    "image": "5c4a6cbf-8481-42ed-a77e-ebed573aa421_f455a02c-0e26-4823-aa9a-992435085f20.png",
+    "sha256": "e791713e512be268cba7ce8e7b789977bbcf3641249ffa077559e95c2b77837b",
+    "language": "Japanese",
+    "layout": "confirmation",
+    "method": "opencv+ocr-evidence",
+    "modal_bbox": [
+      635,
+      13,
+      361,
+      241
+    ],
+    "modal_confidence": 0.99,
+    "buttons": [
+      {
+        "bbox": [
+          721,
+          191,
+          62,
+          46
+        ],
+        "center": [
+          752,
+          214
+        ],
+        "kind": "confirmation",
+        "confidence": 0.9,
+        "ocr_support": {
+          "has_text": false,
+          "confidence": 0
+        }
+      },
+      {
+        "bbox": [
+          658,
+          191,
+          53,
+          46
+        ],
+        "center": [
+          684,
+          214
+        ],
+        "kind": "confirmation",
+        "confidence": 0.901,
+        "ocr_support": {
+          "has_text": false,
+          "confidence": 0
+        }
+      }
+    ],
+    "evaluation": {
+      "modal_detected": true,
+      "modal_iou": 0.9931,
+      "correct": 2,
+      "expected": 2,
+      "outside": 0,
+      "false_positives": 0,
+      "matches": [
+        1,
+        0
+      ],
+      "reasons": []
+    }
+  },
+  {
+    "image": "75cf440e-0107-4d66-9d04-64b8722ddfbf_e75294e9-c532-4c0e-8ce1-d0452b635020.png",
+    "sha256": "e3cbcc5dfc14798b72347fc20d68f760964ca29c319e924cd628f1c5c72044c5",
+    "language": "Vietnamese",
+    "layout": "confirmation",
+    "method": "opencv+ocr-evidence",
+    "modal_bbox": [
+      13,
+      13,
+      308,
+      241
+    ],
+    "modal_confidence": 0.99,
+    "buttons": [
+      {
+        "bbox": [
+          212,
+          191,
+          86,
+          46
+        ],
+        "center": [
+          255,
+          214
+        ],
+        "kind": "confirmation",
+        "confidence": 0.892,
+        "ocr_support": {
+          "has_text": true,
+          "confidence": 65
+        }
+      },
+      {
+        "bbox": [
+          149,
+          191,
+          53,
+          46
+        ],
+        "center": [
+          175,
+          214
+        ],
+        "kind": "confirmation",
+        "confidence": 0.902,
+        "ocr_support": {
+          "has_text": false,
+          "confidence": 0
+        }
+      }
+    ],
+    "evaluation": {
+      "modal_detected": true,
+      "modal_iou": 0.9894,
+      "correct": 2,
+      "expected": 2,
+      "outside": 0,
+      "false_positives": 0,
+      "matches": [
+        1,
+        0
+      ],
+      "reasons": []
+    }
+  },
+  {
+    "image": "745fe592-f30d-468c-ae77-271abfaa11e6_1c8b5408-878e-4897-9ea0-559ac90de51a.png",
+    "sha256": "3ab97e8aa1aad2f11824c244e3068e62f4f11108c08f66ce793006eed69bdd64",
+    "language": "German",
+    "layout": "confirmation",
+    "method": "opencv+ocr-evidence",
+    "modal_bbox": [
+      567,
+      306,
+      429,
+      241
+    ],
+    "modal_confidence": 0.991,
+    "buttons": [
+      {
+        "bbox": [
+          721,
+          484,
+          61,
+          46
+        ],
+        "center": [
+          751,
+          507
+        ],
+        "kind": "confirmation",
+        "confidence": 0.893,
+        "ocr_support": {
+          "has_text": false,
+          "confidence": 0
+        }
+      },
+      {
+        "bbox": [
+          792,
+          484,
+          50,
+          46
+        ],
+        "center": [
+          817,
+          507
+        ],
+        "kind": "confirmation",
+        "confidence": 0.901,
+        "ocr_support": {
+          "has_text": false,
+          "confidence": 0
+        }
+      }
+    ],
+    "evaluation": {
+      "modal_detected": true,
+      "modal_iou": 0.9895,
+      "correct": 2,
+      "expected": 2,
+      "outside": 0,
+      "false_positives": 0,
+      "matches": [
+        0,
+        1
+      ],
+      "reasons": []
+    }
+  },
+  {
+    "image": "dd549ac9-938c-4baa-82cb-85be98676059_e7a95096-0070-46a4-807e-4a0a2964dedb.png",
+    "sha256": "986f6abef8222ae2b669f5f0c1e2853ad6e60a062dd4f8b9feed315b207e1fb3",
+    "language": "Thai",
+    "layout": "confirmation",
+    "method": "opencv+ocr-evidence",
+    "modal_bbox": [
+      13,
+      280,
+      374,
+      267
+    ],
+    "modal_confidence": 0.991,
+    "buttons": [
+      {
+        "bbox": [
+          36,
+          484,
+          90,
+          46
+        ],
+        "center": [
+          81,
+          507
+        ],
+        "kind": "confirmation",
+        "confidence": 0.892,
+        "ocr_support": {
+          "has_text": true,
+          "confidence": 63
+        }
+      },
+      {
+        "bbox": [
+          136,
+          484,
+          70,
+          46
+        ],
+        "center": [
+          171,
+          507
+        ],
+        "kind": "confirmation",
+        "confidence": 0.889,
+        "ocr_support": {
+          "has_text": true,
+          "confidence": 63
+        }
+      }
+    ],
+    "evaluation": {
+      "modal_detected": true,
+      "modal_iou": 0.991,
+      "correct": 2,
+      "expected": 2,
+      "outside": 0,
+      "false_positives": 0,
+      "matches": [
+        0,
+        1
+      ],
+      "reasons": []
+    }
+  },
+  {
+    "image": "e4cf6917-bed5-4992-af72-d2b5ae2c7c56_8ebab4dc-8838-41b8-8798-81e20660529d.png",
+    "sha256": "3f6dd07940cc1ff07f0213a4eab18d9d022c18b5b2df6121f0f3aa39d451e71c",
+    "language": "German",
+    "layout": "confirmation",
+    "method": "opencv+ocr-evidence",
+    "modal_bbox": [
+      13,
+      13,
+      464,
+      274
+    ],
+    "modal_confidence": 0.992,
+    "buttons": [
+      {
+        "bbox": [
+          36,
+          224,
+          212,
+          46
+        ],
+        "center": [
+          142,
+          247
+        ],
+        "kind": "confirmation",
+        "confidence": 0.898,
+        "ocr_support": {
+          "has_text": true,
+          "confidence": 91
+        }
+      },
+      {
+        "bbox": [
+          36,
+          168,
+          212,
+          46
+        ],
+        "center": [
+          142,
+          191
+        ],
+        "kind": "confirmation",
+        "confidence": 0.898,
+        "ocr_support": {
+          "has_text": true,
+          "confidence": 92
+        }
+      }
+    ],
+    "evaluation": {
+      "modal_detected": true,
+      "modal_iou": 0.9885,
+      "correct": 2,
+      "expected": 2,
+      "outside": 0,
+      "false_positives": 0,
+      "matches": [
+        1,
+        0
+      ],
+      "reasons": []
+    }
+  },
+  {
+    "image": "37b07128-e44e-4707-a8f7-df41b3bdb979_252e730f-8ebb-41aa-987a-7255baf8b06d.png",
+    "sha256": "9440504c5573f0ae628d2c58aed5188b6ceba360beff4758e2f81bbea60078a2",
+    "language": "French",
+    "layout": "x",
+    "method": "opencv+ocr-evidence",
+    "modal_bbox": [
+      13,
+      307,
+      462,
+      240
+    ],
+    "modal_confidence": 0.992,
+    "buttons": [
+      {
+        "bbox": [
+          413,
+          316,
+          50,
+          46
+        ],
+        "center": [
+          438,
+          339
+        ],
+        "kind": "x",
+        "confidence": 0.941
+      }
+    ],
+    "evaluation": {
+      "modal_detected": true,
+      "modal_iou": 0.9853,
+      "correct": 1,
+      "expected": 1,
+      "outside": 0,
+      "false_positives": 0,
+      "matches": [
+        0
+      ],
+      "reasons": []
+    }
+  },
+  {
+    "image": "f99394ff-19c0-4c8b-b80e-ee5010d4c008_ac986f63-5c50-46a3-99be-1b3ceb278fc9.png",
+    "sha256": "661f6ba360f3f7d7a4198dff912e1763165c39b75e5199721f04ad298ee3fd23",
+    "language": "Korean",
+    "layout": "x",
+    "method": "opencv+ocr-evidence",
+    "modal_bbox": [
+      498,
+      314,
+      498,
+      233
+    ],
+    "modal_confidence": 0.994,
+    "buttons": [
+      {
+        "bbox": [
+          937,
+          405,
+          50,
+          46
+        ],
+        "center": [
+          962,
+          428
+        ],
+        "kind": "x",
+        "confidence": 0.941
+      }
+    ],
+    "evaluation": {
+      "modal_detected": true,
+      "modal_iou": 0.9679,
+      "correct": 1,
+      "expected": 1,
+      "outside": 0,
+      "false_positives": 0,
+      "matches": [
+        0
+      ],
+      "reasons": []
+    }
+  }
+]

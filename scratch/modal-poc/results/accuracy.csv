@@ -1,0 +1,4 @@
+metric,correct,total
+Modal IoU >= 0.90,7,7
+x control centers,2,2
+confirmation control centers,10,10

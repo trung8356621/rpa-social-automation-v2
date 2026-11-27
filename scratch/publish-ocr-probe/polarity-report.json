@@ -1,0 +1,162 @@
+[
+  {
+    "crop": "full",
+    "variant": "gray",
+    "has": false,
+    "textPreview": "Create post\n\n2 Select groups (1)\n\n[ ] Post anonymously\n\n| QA test post 2026-11-26 09:02|\n\n29 / 10000\n\nAdd to your post\n\n(2ÿ Photo/Video\n\nAR, Tag People\n\n® Feeling/Activity\n\n© Check",
+    "hits": [],
+    "conf": 83
+  },
+  {
+    "crop": "full",
+    "variant": "gray_neg",
+    "has": false,
+    "textPreview": "Create post\n\n2 Select groups (1)\n\n[ ] Post anonymously\n\n| QA test post 2026-11-26 09:02|\n\n29 / 10000\n\nAdd to your post\n\n(2ÿ Photo/Video\n\nAR, Tag People\n\n® Feeling/Activity\n\n© Check",
+    "hits": [],
+    "conf": 83
+  },
+  {
+    "crop": "full",
+    "variant": "gray_norm",
+    "has": false,
+    "textPreview": "Create post\n\n2 Select groups (1)\n\nO Post anonymously\n\n| QA test post 2026-11-26 09:02|\n\n29 / 10000\n\nAdd to your post\n\nE35 Photo/Video\n\nAR, Tag People\n\n® Feeling/Activity\n\n© Check I",
+    "hits": [],
+    "conf": 84
+  },
+  {
+    "crop": "full",
+    "variant": "gray_neg_norm",
+    "has": false,
+    "textPreview": "Create post\n\n2 Select groups (1)\n\nO Post anonymously\n\n| QA test post 2026-11-26 09:02|\n\n29 / 10000\n\nAdd to your post\n\n(2ÿ Photo/Video\n\nAR, Tag People\n\n® Feeling/Activity\n\n© Check I",
+    "hits": [],
+    "conf": 84
+  },
+  {
+    "crop": "full",
+    "variant": "gray_neg_thr",
+    "has": false,
+    "textPreview": "Create post\n\n2, Select groups (1)\n\n[| Post anonymously\n\n| QA test post 2026-11-26 09:02]\n\n29 100006\n\nAdd to your post\n\n55 Photo/Video\n\nA, Tag People\n\n® Feeling/Activity\n\n© Check In",
+    "hits": [],
+    "conf": 86
+  },
+  {
+    "crop": "button_pad",
+    "variant": "gray",
+    "has": false,
+    "textPreview": "",
+    "hits": [],
+    "conf": 0
+  },
+  {
+    "crop": "button_pad",
+    "variant": "gray_neg",
+    "has": false,
+    "textPreview": "",
+    "hits": [],
+    "conf": 0
+  },
+  {
+    "crop": "button_pad",
+    "variant": "gray_norm",
+    "has": false,
+    "textPreview": "",
+    "hits": [],
+    "conf": 0
+  },
+  {
+    "crop": "button_pad",
+    "variant": "gray_neg_norm",
+    "has": false,
+    "textPreview": "",
+    "hits": [],
+    "conf": 0
+  },
+  {
+    "crop": "button_pad",
+    "variant": "gray_neg_thr",
+    "has": false,
+    "textPreview": "",
+    "hits": [],
+    "conf": 0
+  },
+  {
+    "crop": "button_tight",
+    "variant": "gray",
+    "has": false,
+    "textPreview": "",
+    "hits": [],
+    "conf": 0
+  },
+  {
+    "crop": "button_tight",
+    "variant": "gray_neg",
+    "has": false,
+    "textPreview": "",
+    "hits": [],
+    "conf": 0
+  },
+  {
+    "crop": "button_tight",
+    "variant": "gray_norm",
+    "has": false,
+    "textPreview": "",
+    "hits": [],
+    "conf": 0
+  },
+  {
+    "crop": "button_tight",
+    "variant": "gray_neg_norm",
+    "has": false,
+    "textPreview": "",
+    "hits": [],
+    "conf": 0
+  },
+  {
+    "crop": "button_tight",
+    "variant": "gray_neg_thr",
+    "has": false,
+    "textPreview": "",
+    "hits": [],
+    "conf": 0
+  },
+  {
+    "crop": "footer_row",
+    "variant": "gray",
+    "has": false,
+    "textPreview": "(@ Mention\n\n® Emoji\n\nLit Poll\n\nDraft saves automatically\n",
+    "hits": [],
+    "conf": 78
+  },
+  {
+    "crop": "footer_row",
+    "variant": "gray_neg",
+    "has": false,
+    "textPreview": "(@ Mention\n\n® Emoji\n\nLl Poll\n\nDraft saves automatically\n",
+    "hits": [],
+    "conf": 79
+  },
+  {
+    "crop": "footer_row",
+    "variant": "gray_norm",
+    "has": false,
+    "textPreview": "( Mention\n\n® Emoji\n\nLit Poll\n\nDraft saves automatically\n",
+    "hits": [],
+    "conf": 79
+  },
+  {
+    "crop": "footer_row",
+    "variant": "gray_neg_norm",
+    "has": false,
+    "textPreview": "( Mention\n\n Emoji\n\nLit Poll\n\nDraft saves automatically\n",
+    "hits": [],
+    "conf": 77
+  },
+  {
+    "crop": "footer_row",
+    "variant": "gray_neg_thr",
+    "has": false,
+    "textPreview": "@ Mention\n\n® Emoji\n\nkh Poll\n\nDraft saves automatically\n",
+    "hits": [],
+    "conf": 88
+  }
+]

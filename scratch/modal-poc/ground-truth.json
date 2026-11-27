@@ -1,0 +1,172 @@
+[
+  {
+    "job": "5c4a6cbf-8481-42ed-a77e-ebed573aa421",
+    "attempt": "f455a02c-0e26-4823-aa9a-992435085f20",
+    "language": "Japanese",
+    "kind": "confirmation",
+    "modal": [
+      634,
+      12,
+      362,
+      242
+    ],
+    "controls": [
+      [
+        660,
+        192,
+        48,
+        44
+      ],
+      [
+        722,
+        192,
+        59,
+        44
+      ]
+    ]
+  },
+  {
+    "job": "75cf440e-0107-4d66-9d04-64b8722ddfbf",
+    "attempt": "e75294e9-c532-4c0e-8ce1-d0452b635020",
+    "language": "Vietnamese",
+    "kind": "confirmation",
+    "modal": [
+      12,
+      12,
+      310,
+      242
+    ],
+    "controls": [
+      [
+        151,
+        192,
+        48,
+        44
+      ],
+      [
+        214,
+        192,
+        82,
+        44
+      ]
+    ]
+  },
+  {
+    "job": "745fe592-f30d-468c-ae77-271abfaa11e6",
+    "attempt": "1c8b5408-878e-4897-9ea0-559ac90de51a",
+    "language": "German",
+    "kind": "confirmation",
+    "modal": [
+      566,
+      305,
+      430,
+      243
+    ],
+    "controls": [
+      [
+        723,
+        485,
+        58,
+        44
+      ],
+      [
+        793,
+        485,
+        48,
+        44
+      ]
+    ]
+  },
+  {
+    "job": "dd549ac9-938c-4baa-82cb-85be98676059",
+    "attempt": "e7a95096-0070-46a4-807e-4a0a2964dedb",
+    "language": "Thai",
+    "kind": "confirmation",
+    "modal": [
+      12,
+      280,
+      376,
+      268
+    ],
+    "controls": [
+      [
+        38,
+        486,
+        86,
+        44
+      ],
+      [
+        138,
+        486,
+        66,
+        44
+      ]
+    ]
+  },
+  {
+    "job": "e4cf6917-bed5-4992-af72-d2b5ae2c7c56",
+    "attempt": "8ebab4dc-8838-41b8-8798-81e20660529d",
+    "language": "German",
+    "kind": "confirmation",
+    "modal": [
+      12,
+      12,
+      466,
+      276
+    ],
+    "controls": [
+      [
+        37,
+        170,
+        210,
+        44
+      ],
+      [
+        37,
+        225,
+        210,
+        44
+      ]
+    ]
+  },
+  {
+    "job": "37b07128-e44e-4707-a8f7-df41b3bdb979",
+    "attempt": "252e730f-8ebb-41aa-987a-7255baf8b06d",
+    "language": "French",
+    "kind": "x",
+    "modal": [
+      12,
+      306,
+      465,
+      242
+    ],
+    "controls": [
+      [
+        415,
+        317,
+        48,
+        44
+      ]
+    ]
+  },
+  {
+    "job": "f99394ff-19c0-4c8b-b80e-ee5010d4c008",
+    "attempt": "ac986f63-5c50-46a3-99be-1b3ceb278fc9",
+    "language": "Korean",
+    "kind": "x",
+    "modal": [
+      488,
+      312,
+      508,
+      236
+    ],
+    "controls": [
+      [
+        938,
+        406,
+        48,
+        44
+      ]
+    ]
+  }
+]
